@@ -541,6 +541,146 @@ describe("PresenceImpl", () => {
 		);
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
+
+	test("invalidate() resets lastSetTime so first set() after reconnect is not throttled", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		presence.set({ status: "active" });
+		expect(conn.dispatched.length).toBe(1);
+
+		// Without resetting lastSetTime, the second set would compute
+		// elapsed < THROTTLE_INTERVAL_MS and be throttled/delayed.
+		presence.invalidate();
+		presence.set({ status: "away" });
+
+		// With the fix, second set dispatches immediately.
+		expect(conn.dispatched.length).toBe(2);
+	});
+
+	test("replaySubscriptions unsubscribes user if client unsubscribed before promise resolves", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+
+		let subscribeCall = 0;
+		const handleSubscribe = (msg: Record<string, unknown>) => {
+			if (msg.type !== "PresenceSubscribe") return null;
+			subscribeCall++;
+			if (subscribeCall === 1) {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [],
+				} as OkResponse);
+			}
+			if (subscribeCall === 2) return replayPromise;
+			return null;
+		};
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			conn.dispatched.push(msg);
+			return (
+				handleSubscribe(msg) ??
+				Promise.resolve({ type: "ok", id: 0 } as OkResponse)
+			);
+		};
+
+		const unsubscribe = presence.subscribe(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(
+			conn.dispatched.filter((m) => m.type === "PresenceSubscribe").length,
+		).toBe(1);
+
+		conn.dispatched.length = 0;
+
+		presence.invalidate();
+		presence.replaySubscriptions();
+
+		unsubscribe();
+
+		resolveReplay({
+			type: "ok",
+			id: 0,
+			subId: 200,
+			users: [],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const unsubMsgs = conn.dispatched.filter(
+			(m) => m.type === "PresenceUnsubscribe",
+		);
+		expect(unsubMsgs.length).toBe(1);
+		expect(unsubMsgs[0].subId).toBe(200);
+	});
+
+	test("replaySubscriptions unsubscribes shared if client unsubscribed before promise resolves", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+
+		let subscribeCall = 0;
+		const handleSubscribeShared = (msg: Record<string, unknown>) => {
+			if (msg.type !== "PresenceSubscribeShared") return null;
+			subscribeCall++;
+			if (subscribeCall === 1) {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+				} as OkResponse);
+			}
+			if (subscribeCall === 2) return replayPromise;
+			return null;
+		};
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			conn.dispatched.push(msg);
+			return (
+				handleSubscribeShared(msg) ??
+				Promise.resolve({ type: "ok", id: 0 } as OkResponse)
+			);
+		};
+
+		const unsubscribe = presence.subscribeShared(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(
+			conn.dispatched.filter((m) => m.type === "PresenceSubscribeShared")
+				.length,
+		).toBe(1);
+
+		conn.dispatched.length = 0;
+
+		presence.invalidate();
+		presence.replaySubscriptions();
+
+		unsubscribe();
+
+		resolveReplay({
+			type: "ok",
+			id: 0,
+			subId: 200,
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const unsubMsgs = conn.dispatched.filter(
+			(m) => m.type === "PresenceUnsubscribeShared",
+		);
+		expect(unsubMsgs.length).toBe(1);
+		expect(unsubMsgs[0].subId).toBe(200);
+	});
 });
 
 describe("SchemaDictionary presence encode/decode", () => {
@@ -629,5 +769,27 @@ describe("SchemaDictionary presence encode/decode", () => {
 			fieldFlags: [[3]],
 		});
 		expect(schema.hasPresenceUserFields()).toBe(false);
+	});
+
+	test("decodePresenceUserValue handles null-with-nested-key conflict without crashing", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["users"],
+			fields: [["id", "name"]],
+			fieldFlags: [[3, 0]],
+			presenceUserFields: ["cursor", "cursor__x", "cursor__y", "status"],
+		});
+
+		// Wire data that maps to flat keys "cursor" (null) and "cursor__x" (100).
+		// Without the null check in unflattenPresenceData, typeof null === "object"
+		// bypasses the initialization block and throws TypeError.
+		expect(() =>
+			schema.decodePresenceUserValue({
+				0: null,
+				1: 100,
+				2: 200,
+				3: "active",
+			}),
+		).not.toThrow();
 	});
 });

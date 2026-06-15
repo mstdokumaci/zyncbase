@@ -250,11 +250,7 @@ export class PresenceImpl implements Presence {
 			this.userSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribe" })
 				.then((ok) => {
-					if (gen !== this.userSubGen) return;
-					this.userSubPromise = null;
-					this.userSubId = ok.subId ?? null;
-					this.populateUserCacheFromSnapshot(ok);
-					this.fireUserCallbacks();
+					this.handleUserSubscribeResponse(gen, ok);
 				})
 				.catch((err) => {
 					if (gen !== this.userSubGen) return;
@@ -273,13 +269,7 @@ export class PresenceImpl implements Presence {
 				.then((ok) => {
 					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
-					this.sharedSubId = ok.subId ?? null;
-					if (ok.shared != null) {
-						this.sharedCache = ok.shared as Record<string, unknown>;
-					} else {
-						this.sharedCache = null;
-					}
-					this.fireSharedCallbacks();
+					this.handleSharedSubscribeResponse(ok);
 				})
 				.catch((err) => {
 					if (gen !== this.sharedSubGen) return;
@@ -420,5 +410,6 @@ export class PresenceImpl implements Presence {
 			this.throttleTimer = null;
 		}
 		this.pendingSetData = null;
+		this.lastSetTime = 0;
 	}
 }

@@ -380,6 +380,10 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
 
     var path: ?Payload = null;
     var value: ?Payload = null;
+    errdefer {
+        if (path) |p| p.free(allocator);
+        if (value) |v| v.free(allocator);
+    }
     var confirm: ?[]const u8 = null;
     var write_id: ?[]const u8 = null;
 
@@ -420,6 +424,7 @@ pub fn extractStoreBatchPayloads(
     const map_len = try readMapHeader(bytes, &pos);
 
     var ops: ?Payload = null;
+    errdefer if (ops) |o| o.free(allocator);
     var confirm: ?[]const u8 = null;
     var write_id: ?[]const u8 = null;
 
@@ -502,6 +507,7 @@ pub fn extractPresenceSetFast(bytes: []const u8, allocator: std.mem.Allocator) !
     const map_len = try readMapHeader(bytes, &pos);
 
     var data: ?Payload = null;
+    errdefer if (data) |d| d.free(allocator);
 
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
@@ -550,6 +556,7 @@ pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Alloca
     const map_len = try readMapHeader(bytes, &pos);
 
     var data: ?Payload = null;
+    errdefer if (data) |d| d.free(allocator);
 
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);

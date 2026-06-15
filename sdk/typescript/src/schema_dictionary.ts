@@ -589,6 +589,7 @@ function unflattenPresenceData(
 			const part = parts[i];
 			if (
 				current[part] === undefined ||
+				current[part] === null ||
 				typeof current[part] !== "object" ||
 				Array.isArray(current[part])
 			) {
