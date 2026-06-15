@@ -56,7 +56,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	set(data: Record<string, unknown>): void {
-		const now = Date.now();
+		const now = performance.now();
 		const elapsed = now - this.lastSetTime;
 
 		if (elapsed >= THROTTLE_INTERVAL_MS) {
@@ -68,7 +68,7 @@ export class PresenceImpl implements Presence {
 				this.throttleTimer = setTimeout(() => {
 					this.throttleTimer = null;
 					if (this.pendingSetData) {
-						this.lastSetTime = Date.now();
+						this.lastSetTime = performance.now();
 						this.sendSet(this.pendingSetData);
 						this.pendingSetData = null;
 					}

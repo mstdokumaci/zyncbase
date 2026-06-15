@@ -252,11 +252,8 @@ pub const PresenceManager = struct {
         };
 
         if (is_new) {
+            errdefer _ = self.shared_state.remove(namespace_id);
             result.value_ptr.* = try PresenceRecord.init(self.allocator, self.shared_fields.len);
-            errdefer {
-                result.value_ptr.deinit(self.allocator);
-                _ = self.shared_state.remove(namespace_id);
-            }
             shared_cleanup = true;
         }
 
