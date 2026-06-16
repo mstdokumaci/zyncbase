@@ -211,6 +211,7 @@ pub const PresenceManager = struct {
                 const cloned_patch = try patch.deepClone(self.allocator);
                 existing.patch = cloned_patch;
             }
+            existing.is_leave = false;
             if (!existing.is_new_user) {
                 existing.is_new_user = is_new_user;
                 if (is_new_user) {

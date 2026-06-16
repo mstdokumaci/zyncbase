@@ -9,6 +9,7 @@ const storage_types = @import("storage_engine.zig");
 const typed = @import("typed.zig");
 const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
+const PendingUserUpdate = @import("presence/manager.zig").PresenceManager.PendingUserUpdate;
 
 fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.Record {
     const values = try allocator.alloc(typed.Value, 6);
@@ -530,4 +531,81 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const path = path_opt.?;
     try testing.expectEqual(@as(u64, 1), path.arr[0].uint);
     try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
+}
+
+test "encodePresenceBroadcast - update event round-trips with correct map size" {
+    const allocator = testing.allocator;
+
+    var patch = Payload.mapPayload(allocator);
+    defer patch.free(allocator);
+    try patch.mapPut("cursor__x", Payload{ .float = 100.5 });
+
+    const update = PendingUserUpdate{
+        .namespace_id = 1,
+        .user_id = typed.zeroDocId,
+        .patch = patch,
+        .is_new_user = false,
+        .joined_at = 0,
+        .is_leave = false,
+    };
+
+    const bytes = try wire.encodePresenceBroadcast(allocator, 42, &.{update});
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const decoded = try msgpack.decode(allocator, &reader);
+    defer decoded.free(allocator);
+
+    try testing.expect(decoded == .map);
+    const type_val = (try decoded.mapGet("type")) orelse return error.MissingType;
+    try testing.expectEqualStrings("PresenceBroadcast", type_val.str.value());
+    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
+    try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
+    const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
+    try testing.expect(users_val == .arr);
+    try testing.expectEqual(@as(usize, 1), users_val.arr.len);
+
+    const user_entry = users_val.arr[0];
+    try testing.expect(user_entry == .map);
+    var key_count: usize = 0;
+    var it = user_entry.map.iterator();
+    while (it.next()) |_| key_count += 1;
+    try testing.expectEqual(@as(usize, 3), key_count);
+
+    const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
+    try testing.expectEqualStrings("update", event_val.str.value());
+    try testing.expect((try user_entry.mapGet("data")) != null);
+}
+
+test "encodePresenceBroadcast - leave event round-trips with correct map size" {
+    const allocator = testing.allocator;
+
+    const update = PendingUserUpdate{
+        .namespace_id = 1,
+        .user_id = typed.zeroDocId,
+        .patch = null,
+        .is_new_user = false,
+        .joined_at = 0,
+        .is_leave = true,
+    };
+
+    const bytes = try wire.encodePresenceBroadcast(allocator, 7, &.{update});
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const decoded = try msgpack.decode(allocator, &reader);
+    defer decoded.free(allocator);
+
+    try testing.expect(decoded == .map);
+    const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
+    const user_entry = users_val.arr[0];
+
+    var key_count: usize = 0;
+    var it = user_entry.map.iterator();
+    while (it.next()) |_| key_count += 1;
+    try testing.expectEqual(@as(usize, 2), key_count);
+
+    const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
+    try testing.expectEqualStrings("leave", event_val.str.value());
+    try testing.expect((try user_entry.mapGet("data")) == null);
 }

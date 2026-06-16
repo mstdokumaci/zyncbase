@@ -501,7 +501,14 @@ pub fn encodePresenceBroadcast(
         // join events have data + joinedAt, update events have data only, leave events have neither
         const is_leave = update.is_leave;
         const is_join = update.is_new_user and update.patch != null;
-        const map_size: usize = if (is_leave) 2 else if (is_join) 4 else 3;
+        const map_size: usize = blk: {
+            var size: usize = 2;
+            if (update.patch != null) {
+                size += 1;
+                if (is_join) size += 1;
+            }
+            break :blk size;
+        };
         try msgpack.encodeMapHeader(writer, map_size);
 
         try writer.writeAll(Keys.user_id);

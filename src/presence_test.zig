@@ -770,3 +770,75 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         try testing.expect(user_batches.items[0].updates.items[0].is_leave);
     }
 }
+
+test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+
+    // Join user
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
+    });
+    defer patch.free(allocator);
+    try manager.setUser(1, user_id, patch);
+
+    // Flush to clear pending
+    {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            user_batches.deinit(allocator);
+        }
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            shared_batches.deinit(allocator);
+        }
+        try manager.drainPendingBatches(&user_batches, &shared_batches);
+    }
+
+    // Update (existing user, not new)
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 42.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(!manager.pending_user_updates.items[0].is_new_user);
+    try testing.expect(!manager.pending_user_updates.items[0].is_leave);
+
+    // Remove user — converts pending update to is_leave=true, patch=null
+    try manager.removeUser(1, user_id);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_leave);
+    try testing.expect(manager.pending_user_updates.items[0].patch == null);
+
+    // Set user again — coalesces with the leave-converted pending update
+    var patch3 = try makePresencePatch(allocator, &.{
+        .{ .idx = 1, .value = .{ .float = 99.0 } },
+    });
+    defer patch3.free(allocator);
+    try manager.setUser(1, user_id, patch3);
+
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(!manager.pending_user_updates.items[0].is_leave);
+    try testing.expect(manager.pending_user_updates.items[0].is_new_user);
+    try testing.expect(manager.pending_user_updates.items[0].patch != null);
+}
