@@ -100,6 +100,7 @@ function setDeepProperty(
 		} else {
 			if (
 				current[part] === undefined ||
+				current[part] === null ||
 				typeof current[part] !== "object" ||
 				Array.isArray(current[part])
 			) {

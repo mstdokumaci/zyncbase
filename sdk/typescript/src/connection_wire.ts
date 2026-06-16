@@ -214,7 +214,7 @@ export class ConnectionWireCodec {
 
 		if (type === "PresenceSet" && wire.data && typeof wire.data === "object") {
 			wire.data = this.schema.encodePresenceUserValue(
-				wire.data as Record<string, unknown>,
+				wire.data as Record<string, JsonValue>,
 			);
 		} else if (
 			type === "PresenceSetShared" &&
@@ -222,7 +222,7 @@ export class ConnectionWireCodec {
 			typeof wire.data === "object"
 		) {
 			wire.data = this.schema.encodePresenceSharedValue(
-				wire.data as Record<string, unknown>,
+				wire.data as Record<string, JsonValue>,
 			);
 		}
 

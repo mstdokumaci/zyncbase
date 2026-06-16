@@ -124,64 +124,166 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     );
 }
 
+const max_presence_fields: usize = 500;
+
 fn parsePresenceTier(
     allocator: Allocator,
     tier_val: std.json.Value,
     fields_list: *std.ArrayListUnmanaged(types.PresenceField),
 ) !void {
     if (tier_val != .object) return error.InvalidSchema;
-    var it = tier_val.object.iterator();
+    var ctx = PresenceFieldContext{ .fields_list = fields_list };
+    try parseObjectFields(allocator, tier_val, "", PresenceFieldContext, &ctx);
+}
+
+/// Shared recursive object-field parser. Flattens nested objects using `__` prefix.
+/// Parameterized via comptime Ctx for store vs presence field logic.
+fn parseObjectFields(
+    allocator: Allocator,
+    fields_value: std.json.Value,
+    prefix: []const u8,
+    comptime Ctx: type,
+    ctx: *Ctx,
+) !void {
+    if (fields_value != .object) return error.InvalidSchema;
+
+    var it = fields_value.object.iterator();
     while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (!isValidFieldIdentifier(key)) return error.InvalidFieldName;
-        const val = entry.value_ptr.*;
-        if (val != .object) return error.InvalidSchema;
+        const field_name = entry.key_ptr.*;
+        const field_def = entry.value_ptr.*;
+        if (!isValidFieldIdentifier(field_name)) return error.InvalidFieldName;
+        if (field_def != .object) return error.InvalidFieldDefinition;
 
-        const type_val = val.object.get("type") orelse return error.InvalidSchema;
-        if (type_val != .string) return error.InvalidSchema;
+        try ctx.preValidate(field_name, field_def);
 
-        if (std.mem.eql(u8, type_val.string, "object")) {
-            // Nested object - parse fields (1 level only)
-            const nested_fields_val = val.object.get("fields") orelse return error.InvalidSchema;
-            if (nested_fields_val != .object) return error.InvalidSchema;
+        const type_value = field_def.object.get("type") orelse return error.MissingFieldType;
+        if (type_value != .string) return error.InvalidFieldType;
 
-            var nested_it = nested_fields_val.object.iterator();
-            while (nested_it.next()) |nested_entry| {
-                const nested_key = nested_entry.key_ptr.*;
-                const nested_val = nested_entry.value_ptr.*;
-                if (nested_val != .object) return error.InvalidSchema;
+        const full_name = if (prefix.len > 0)
+            try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, field_name })
+        else
+            try allocator.dupe(u8, field_name);
+        errdefer allocator.free(full_name);
 
-                const nested_type_val = nested_val.object.get("type") orelse return error.InvalidSchema;
-                if (nested_type_val != .string) return error.InvalidSchema;
-                if (std.mem.eql(u8, nested_type_val.string, "object")) {
-                    return error.InvalidSchema; // Enforce max 1 level of nesting!
-                }
-
-                if (!isValidFieldIdentifier(nested_key)) return error.InvalidFieldName;
-
-                const flat_name = try std.fmt.allocPrint(allocator, "{s}__{s}", .{ key, nested_key });
-                errdefer allocator.free(flat_name);
-
-                const f_type = try mapPrimitiveType(nested_type_val.string);
-                try fields_list.append(allocator, .{
-                    .name = flat_name,
-                    .declared_type = f_type,
-                });
-            }
+        if (std.mem.eql(u8, type_value.string, "object")) {
+            try ctx.preObjectValidate(full_name);
+            const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;
+            if (nested_fields != .object) return error.InvalidSchema;
+            try parseObjectFields(allocator, nested_fields, full_name, Ctx, ctx);
+            allocator.free(full_name);
         } else {
-            // Direct field definition
-
-            const f_name = try allocator.dupe(u8, key);
-            errdefer allocator.free(f_name);
-
-            const f_type = try mapPrimitiveType(type_val.string);
-            try fields_list.append(allocator, .{
-                .name = f_name,
-                .declared_type = f_type,
-            });
+            const declared_type = try Ctx.fieldType(type_value.string);
+            try ctx.emitField(allocator, full_name, declared_type, field_def);
         }
     }
 }
+
+/// Context for store-field parsing (handles required_set, array items, references, etc.)
+const StoreFieldContext = struct {
+    fields: *std.ArrayListUnmanaged(types.Field),
+    required_set: *std.StringHashMap(bool),
+    reserve_external_id: bool,
+
+    fn preValidate(ctx: *@This(), name: []const u8, def: std.json.Value) !void {
+        if (system.isSystemColumn(name)) return error.ReservedFieldName;
+        if (ctx.reserve_external_id and std.mem.eql(u8, name, "external_id")) return error.ReservedFieldName;
+        try rejectUnknownFieldKeys(def);
+    }
+
+    fn preObjectValidate(ctx: *@This(), full_name: []const u8) !void {
+        if (ctx.required_set.contains(full_name)) return error.InvalidRequiredField;
+    }
+
+    fn fieldType(type_str: []const u8) !types.FieldType {
+        return mapType(type_str);
+    }
+
+    fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, field_def: std.json.Value) !void {
+        var storage_type = declared_type;
+        var required = false;
+        if (ctx.required_set.getPtr(full_name)) |seen| {
+            seen.* = true;
+            required = true;
+        }
+
+        var items_type: ?types.FieldType = null;
+        if (declared_type == .array) {
+            const items_value = field_def.object.get("items") orelse return error.MissingArrayItems;
+            if (items_value != .string) return error.InvalidArrayItems;
+            items_type = try mapPrimitiveType(items_value.string);
+        }
+
+        const indexed = if (field_def.object.get("indexed")) |value| blk: {
+            if (value != .bool) return error.InvalidFieldDefinition;
+            break :blk value.bool;
+        } else false;
+
+        const references = if (field_def.object.get("references")) |value| blk: {
+            if (value != .string) return error.InvalidReference;
+            if (!isValidTableIdentifier(value.string)) return error.InvalidTableName;
+            break :blk try allocator.dupe(u8, value.string);
+        } else null;
+        errdefer if (references) |ref| allocator.free(ref);
+
+        if (references != null) {
+            if (declared_type != .text) return error.InvalidFieldType;
+            storage_type = .doc_id;
+        }
+
+        const on_delete: ?types.OnDelete = if (field_def.object.get("onDelete")) |value| blk: {
+            if (value != .string) return error.InvalidOnDelete;
+            break :blk try parseOnDelete(value.string);
+        } else if (references != null) .restrict else null;
+
+        if (on_delete) |on_del| {
+            if (on_del == .set_null and required) return error.InvalidOnDelete;
+        }
+
+        const metadata = if (field_def.object.get("metadata")) |value|
+            try json.cloneMetadata(allocator, value)
+        else
+            null;
+        errdefer if (metadata) |md| md.deinit(allocator);
+
+        const name_quoted = try quoteIdentifier(allocator, full_name);
+        errdefer allocator.free(name_quoted);
+
+        try ctx.fields.append(allocator, .{
+            .name = full_name,
+            .name_quoted = name_quoted,
+            .declared_type = declared_type,
+            .storage_type = storage_type,
+            .items_type = items_type,
+            .required = required,
+            .indexed = indexed,
+            .references = references,
+            .on_delete = on_delete,
+            .kind = .user,
+            .metadata = metadata,
+        });
+    }
+};
+
+/// Context for presence-field parsing (no nesting limit, max 500 flat fields)
+const PresenceFieldContext = struct {
+    fields_list: *std.ArrayListUnmanaged(types.PresenceField),
+
+    fn preValidate(_: *@This(), _: []const u8, _: std.json.Value) !void {}
+
+    fn preObjectValidate(_: *@This(), _: []const u8) !void {}
+
+    fn fieldType(type_str: []const u8) !types.FieldType {
+        return mapPrimitiveType(type_str);
+    }
+
+    fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, _: std.json.Value) !void {
+        if (ctx.fields_list.items.len >= max_presence_fields) return error.InvalidSchema;
+        try ctx.fields_list.append(allocator, .{
+            .name = full_name,
+            .declared_type = declared_type,
+        });
+    }
+};
 
 pub fn initFromTables(
     allocator: Allocator,
@@ -412,101 +514,12 @@ fn parseFields(
     prefix: []const u8,
     reserve_external_id: bool,
 ) !void {
-    if (fields_value != .object) return error.InvalidSchema;
-
-    var it = fields_value.object.iterator();
-    while (it.next()) |entry| {
-        const field_name = entry.key_ptr.*;
-        const field_def = entry.value_ptr.*;
-
-        if (!isValidFieldIdentifier(field_name)) return error.InvalidFieldName;
-        if (system.isSystemColumn(field_name)) return error.ReservedFieldName;
-        if (reserve_external_id and std.mem.eql(u8, field_name, "external_id")) return error.ReservedFieldName;
-        if (field_def != .object) return error.InvalidFieldDefinition;
-        try rejectUnknownFieldKeys(field_def);
-
-        const type_value = field_def.object.get("type") orelse return error.MissingFieldType;
-        if (type_value != .string) return error.InvalidFieldType;
-
-        const full_name = if (prefix.len > 0)
-            try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, field_name })
-        else
-            try allocator.dupe(u8, field_name);
-        errdefer allocator.free(full_name);
-
-        if (std.mem.eql(u8, type_value.string, "object")) {
-            if (required_set.contains(full_name)) return error.InvalidRequiredField;
-            const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;
-            try parseFields(allocator, nested_fields, fields, required_set, full_name, reserve_external_id);
-            allocator.free(full_name);
-            continue;
-        }
-
-        const declared_type = try mapType(type_value.string);
-        var storage_type = declared_type;
-
-        var required = false;
-        if (required_set.getPtr(full_name)) |seen| {
-            seen.* = true;
-            required = true;
-        }
-
-        var items_type: ?types.FieldType = null;
-        if (declared_type == .array) {
-            const items_value = field_def.object.get("items") orelse return error.MissingArrayItems;
-            if (items_value != .string) return error.InvalidArrayItems;
-            items_type = try mapPrimitiveType(items_value.string);
-        }
-
-        const indexed = if (field_def.object.get("indexed")) |value| blk: {
-            if (value != .bool) return error.InvalidFieldDefinition;
-            break :blk value.bool;
-        } else false;
-
-        const references = if (field_def.object.get("references")) |value| blk: {
-            if (value != .string) return error.InvalidReference;
-            if (!isValidTableIdentifier(value.string)) return error.InvalidTableName;
-            break :blk try allocator.dupe(u8, value.string);
-        } else null;
-        errdefer if (references) |ref| allocator.free(ref);
-
-        if (references != null) {
-            if (declared_type != .text) return error.InvalidFieldType;
-            storage_type = .doc_id;
-        }
-
-        const on_delete: ?types.OnDelete = if (field_def.object.get("onDelete")) |value| blk: {
-            if (value != .string) return error.InvalidOnDelete;
-            break :blk try parseOnDelete(value.string);
-        } else if (references != null) .restrict else null;
-
-        if (on_delete) |on_del| {
-            if (on_del == .set_null and required) return error.InvalidOnDelete;
-        }
-
-        const metadata = if (field_def.object.get("metadata")) |value|
-            try json.cloneMetadata(allocator, value)
-        else
-            null;
-        errdefer if (metadata) |md| md.deinit(allocator);
-
-        const name_quoted = try quoteIdentifier(allocator, full_name);
-        errdefer allocator.free(name_quoted);
-
-        try fields.append(allocator, .{
-            .name = full_name,
-            .name_quoted = name_quoted,
-            .declared_type = declared_type,
-            .storage_type = storage_type,
-            .items_type = items_type,
-            .required = required,
-            .indexed = indexed,
-            .references = references,
-            .on_delete = on_delete,
-            .kind = .user,
-            .metadata = metadata,
-        });
-    }
+    var ctx = StoreFieldContext{
+        .fields = fields,
+        .required_set = required_set,
+        .reserve_external_id = reserve_external_id,
+    };
+    try parseObjectFields(allocator, fields_value, prefix, StoreFieldContext, &ctx);
 }
 
 pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: usize) !types.Table {

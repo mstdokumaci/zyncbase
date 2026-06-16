@@ -60,7 +60,7 @@ Presence fields are defined in `schema.json` under the top-level `presence` key,
 > [!NOTE]
 > **Implicit schema**: If the `presence` key is omitted from `schema.json`, the server synthesizes a minimal default: `{ "user": { "status": { "type": "string", "enum": ["active", "idle", "away"] } }, "shared": {} }`. Presence is always usable — `presence.set({ status: "active" })` works immediately without any schema configuration. Defining an explicit `presence` section is recommended for applications with custom fields (cursor positions, typing indicators, etc.).
 
-**Nesting**: One level of object nesting is supported. `cursor: { x, y }` is flattened to `cursor__x` and `cursor__y` on the wire — the same `__` convention as the store. Developers always work with nested objects; the SDK handles flattening and unflattening transparently.
+**Nesting**: Arbitrary depth of object nesting is supported. `cursor: { x, y }` is flattened to `cursor__x` and `cursor__y` on the wire — the same `__` convention as the store. A hard limit of 500 flat fields is enforced per presence tier. Developers always work with nested objects; the SDK handles flattening and unflattening transparently.
 
 **Field constraints**: All standard schema constraints apply — `enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`. Unknown field indices in a `PresenceSet` or `PresenceSetShared` message are rejected with `SCHEMA_VALIDATION_FAILED`.
 

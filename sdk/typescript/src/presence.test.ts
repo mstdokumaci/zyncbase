@@ -781,7 +781,7 @@ describe("SchemaDictionary presence encode/decode", () => {
 		});
 
 		// Wire data that maps to flat keys "cursor" (null) and "cursor__x" (100).
-		// Without the null check in unflattenPresenceData, typeof null === "object"
+		// Without the null check in path.ts's setDeepProperty, typeof null === "object"
 		// bypasses the initialization block and throws TypeError.
 		expect(() =>
 			schema.decodePresenceUserValue({

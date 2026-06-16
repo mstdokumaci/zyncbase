@@ -7,7 +7,8 @@
 import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
-import { joinFieldPath, splitFieldPath } from "./path.js";
+import { flatten, joinFieldPath, splitFieldPath, unflatten } from "./path.js";
+import type { JsonValue } from "./types.js";
 
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
@@ -377,9 +378,9 @@ export class SchemaDictionary {
 	 * then maps field names to their integer indices.
 	 */
 	encodePresenceUserValue(
-		data: Record<string, unknown>,
+		data: Record<string, JsonValue>,
 	): Record<number, unknown> {
-		const flat = flattenPresenceData(data);
+		const flat = flatten(data);
 		const result: Record<number, unknown> = {};
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceUserFieldToIndex.get(key);
@@ -398,9 +399,9 @@ export class SchemaDictionary {
 	 * Encode a nested presence data object into an integer-keyed wire map for shared state.
 	 */
 	encodePresenceSharedValue(
-		data: Record<string, unknown>,
+		data: Record<string, JsonValue>,
 	): Record<number, unknown> {
-		const flat = flattenPresenceData(data);
+		const flat = flatten(data);
 		const result: Record<number, unknown> = {};
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceSharedFieldToIndex.get(key);
@@ -420,8 +421,8 @@ export class SchemaDictionary {
 	 */
 	decodePresenceUserValue(
 		wireData: Record<number, unknown>,
-	): Record<string, unknown> {
-		const flat: Record<string, unknown> = {};
+	): Record<string, JsonValue> {
+		const flat: Record<string, JsonValue> = {};
 		for (const [key, value] of Object.entries(wireData)) {
 			const index = Number(key);
 			const fieldName = this.presenceUserFields[index];
@@ -431,9 +432,9 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			flat[fieldName] = value;
+			flat[fieldName] = value as JsonValue;
 		}
-		return unflattenPresenceData(flat);
+		return unflatten(flat);
 	}
 
 	/**
@@ -441,8 +442,8 @@ export class SchemaDictionary {
 	 */
 	decodePresenceSharedValue(
 		wireData: Record<number, unknown>,
-	): Record<string, unknown> {
-		const flat: Record<string, unknown> = {};
+	): Record<string, JsonValue> {
+		const flat: Record<string, JsonValue> = {};
 		for (const [key, value] of Object.entries(wireData)) {
 			const index = Number(key);
 			const fieldName = this.presenceSharedFields[index];
@@ -452,9 +453,9 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			flat[fieldName] = value;
+			flat[fieldName] = value as JsonValue;
 		}
-		return unflattenPresenceData(flat);
+		return unflatten(flat);
 	}
 
 	/**
@@ -546,58 +547,3 @@ export class SchemaDictionary {
  * Example:
  *   { cursor: { x: 1, y: 2 }, status: "active" } → { "cursor__x": 1, "cursor__y": 2, "status": "active" }
  */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	if (typeof value !== "object" || value === null) return false;
-	const proto = Object.getPrototypeOf(value);
-	return proto === Object.prototype || proto === null;
-}
-
-function flattenPresenceData(
-	obj: Record<string, unknown>,
-	prefix = "",
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	for (const key of Object.keys(obj)) {
-		const fullKey = prefix ? `${prefix}__${key}` : key;
-		const value = obj[key];
-		if (isPlainObject(value)) {
-			const nested = flattenPresenceData(value, fullKey);
-			for (const nestedKey of Object.keys(nested)) {
-				result[nestedKey] = nested[nestedKey];
-			}
-		} else {
-			result[fullKey] = value;
-		}
-	}
-	return result;
-}
-
-/**
- * Reconstruct a nested object from "__"-separated flat keys.
- *
- * Example:
- *   { "cursor__x": 1, "cursor__y": 2 } → { cursor: { x: 1, y: 2 } }
- */
-function unflattenPresenceData(
-	flat: Record<string, unknown>,
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	for (const key of Object.keys(flat)) {
-		const parts = key.split("__");
-		let current = result;
-		for (let i = 0; i < parts.length - 1; i++) {
-			const part = parts[i];
-			if (
-				current[part] === undefined ||
-				current[part] === null ||
-				typeof current[part] !== "object" ||
-				Array.isArray(current[part])
-			) {
-				current[part] = {};
-			}
-			current = current[part] as Record<string, unknown>;
-		}
-		current[parts[parts.length - 1]] = flat[key];
-	}
-	return result;
-}
