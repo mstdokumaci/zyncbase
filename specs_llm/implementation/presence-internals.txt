@@ -1,10 +1,10 @@
 Presence Internals API Design requirements user awareness ephemeral state [ADR-033]-two-tier-presence-system two-tier presence architecture covers architectural details performance strategy implementation ZyncBase presence system Architecture Presence scoped `presenceNamespace server maintains two-memory structures per namespace user state map shared state map data ephemeral no SQLite involvement operations require ready presence scope namespace string resolved_zync_namespaces.id external identity resolved `users.id` true identity resolution uses presence namespace ID ADR-029.```
 [WebSocket Client] ──▶ [PresenceManager (In-Memory)]
                                 │
-               ┌────────────────┼────────────────┐
-               │                │                │
-         [UserStateMap]  [SharedStateMap]  [HistoryBuffer]
-     (userId → FieldMap)  (FieldMap)      (Last 5 Seconds)
+                ┌───────────────┴───────────────┐
+                │                               │
+        [UserStateMap]                  [SharedStateMap]
+    (userId → PresenceRecord)           (PresenceRecord)
 ```Schema Wire Encoding Presence schema parsing startup server loads.json produces two flat field arrays flattening nested objects `__ one level nesting enforced deeper nesting startup failure```
 presence.user:
   cursor.x  → cursor__x  → index 0
@@ -16,7 +16,7 @@ presence.user:
 presence.shared:
   slide     → slide      → index 0
   playing   → playing    → index 1
-```arrays stored `PresenceManager` as `user_fields u8 `shared_fields: u8` SchemaSync payload extension message extended with two flat arrays```
+```arrays stored on `PresenceManager` as `user_fields `shared_fields: each carries flattened name declared `FieldType` SchemaSync payload extension message extended with two flat arrays```
 {
   "type":               "SchemaSync",
   "tables":             [...],
@@ -41,16 +41,19 @@ const PresenceManager = struct {
     // Also acquired by the flush loop thread during flushBatch.
     data_mutex: std.Thread.Mutex,
 
-    // Typed schema built at startup
-    user_fields:   []const []const u8,  // flattened user field names
-    shared_fields: []const []const u8,  // flattened shared field names
+    // Typed schema built at startup (names + declared types)
+    user_fields:   []const schema_mod.PresenceField,
+    shared_fields: []const schema_mod.PresenceField,
 
-    // User state: namespace_id → (users.id → FieldMap)
-    // FieldMap is []?Value indexed by field index
-    user_state: HashMap(i64, HashMap(DocId, FieldMap)),
+    // User state: namespace_id → (users.id → PresenceRecord)
+    // PresenceRecord is []?typed.Value indexed by field index
+    user_state: HashMap(i64, HashMap(DocId, PresenceRecord)),
 
-    // Shared state: namespace_id → FieldMap
-    shared_state: HashMap(i64, FieldMap),
+    // User join timestamps: namespace_id → (users.id → joined_at_ms)
+    user_joined_at: HashMap(i64, HashMap(DocId, i64)),
+
+    // Shared state: namespace_id → PresenceRecord
+    shared_state: HashMap(i64, PresenceRecord),
 
     // Grace period tracking: namespace_id → timestamp_ms when it became empty
     // Entries cleared when a user joins; evicted by flush loop after grace_ms
@@ -68,45 +71,52 @@ const PresenceManager = struct {
         self: *PresenceManager,
         namespace_id: i64,
         user_id: DocId,
-        field_map: FieldMap,  // integer-keyed merge delta from wire
+        patch: msgpack.Payload,  // sparse integer-keyed merge delta from wire
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
         // Validate field indices against user_fields.len
-        // Validate value types against schema
+        // Validate value types against schema via typed.valueFromPayload
         // Merge into existing record (patch, not replace)
         var ns = try self.user_state.getOrPut(namespace_id);
         var user_record = try ns.value_ptr.getOrPut(user_id);
-        try mergeFieldMap(user_record.value_ptr, field_map);
+        const is_new_user = !user_record.found_existing;
+        if (is_new_user) {
+            // Record join timestamp
+            var joined_ns = try self.user_joined_at.getOrPut(namespace_id);
+            try joined_ns.value_ptr.put(user_id, std.time.milliTimestamp());
+        }
+        try mergeFromPayload(user_record.value_ptr, self.user_fields, patch);
 
         // Queue for 50ms batch broadcast
         try self.pending_user_updates.append(.{
             .namespace_id = namespace_id,
             .user_id      = user_id,
-            .field_map    = field_map,
+            .patch        = patch,
+            .is_new_user  = is_new_user,  // true → "join" event, false → "update" event
         });
     }
 
     pub fn setShared(
         self: *PresenceManager,
         namespace_id: i64,
-        field_map: FieldMap,
+        patch: msgpack.Payload,  // sparse integer-keyed merge delta from wire
         conn_id: ConnectionId,
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
         // Validate field indices against shared_fields.len
-        // Validate value types against schema
+        // Validate value types against schema via typed.valueFromPayload
         // Merge into shared record (patch, not replace)
         var record = try self.shared_state.getOrPut(namespace_id);
-        try mergeFieldMap(record.value_ptr, field_map);
+        try mergeFromPayload(record.value_ptr, self.shared_fields, patch);
 
         // Queue for broadcast to shared_subscribers
         try self.pending_shared_updates.append(.{
             .namespace_id = namespace_id,
-            .field_map    = field_map,
+            .patch        = patch,
             .source_conn  = conn_id,
         });
     }
@@ -123,16 +133,17 @@ const PresenceManager = struct {
         var subs = try self.user_subscribers.getOrPut(namespace_id);
         try subs.value_ptr.append(conn_id);
 
-        // Return current user records
+        // Return current user records with join timestamps
         const users = self.user_state.get(namespace_id);
-        return .{ .users = users };
+        const joined = self.user_joined_at.get(namespace_id);
+        return .{ .users = users, .joined_at = joined };
     }
 
     pub fn onSubscribeShared(
         self: *PresenceManager,
         namespace_id: i64,
         conn_id: ConnectionId,
-    ) !?FieldMap {
+    ) !?*const PresenceRecord {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
@@ -155,10 +166,9 @@ const PresenceManager = struct {
         const ns = self.user_state.getPtr(namespace_id) orelse return;
         _ = ns.remove(user_id);
 
-        // Also remove from subscriber list
-        if (self.user_subscribers.getPtr(namespace_id)) |subs| {
-            // Remove this conn_id from subs if it was a subscriber
-            // (handled separately by connection cleanup)
+        // Clean up join timestamp
+        if (self.user_joined_at.getPtr(namespace_id)) |joined| {
+            _ = joined.remove(user_id);
         }
 
         // If namespace is now empty, record empty timestamp for grace period
@@ -170,7 +180,8 @@ const PresenceManager = struct {
         try self.pending_user_updates.append(.{
             .namespace_id = namespace_id,
             .user_id      = user_id,
-            .field_map    = null,  // null signals leave
+            .patch        = null,  // null signals leave
+            .is_new_user  = false,
         });
     }
 
@@ -241,24 +252,39 @@ const PresenceManager = struct {
         }
     }
 };
-```FieldMap value type integer-keyed map field values wire format```zig
-const FieldValue = union(enum) {
-    int:    i64,
-    float:  f64,
-    bool:   bool,
-    string: []const u8,
-    null,
+```PresenceRecord Accumulated-memory state user shared record dense array indexed by field position `typed.Record optional slots`null field Allocated created mutated via merge```zig
+const PresenceRecord = struct {
+    values: []?typed.Value,  // length == schema field count for the tier
+
+    pub fn deinit(self: *PresenceRecord, allocator: Allocator) void {
+        for (self.values) |*slot| {
+            if (slot.*) |*v| v.deinit(allocator);
+        }
+        allocator.free(self.values);
+    }
 };
-
-// Indexed by field index (u8 is sufficient — presence schemas have < 256 fields)
-const FieldMap = []?FieldValue;
-
-fn mergeFieldMap(dest: *FieldMap, patch: FieldMap) !void {
-    for (patch, 0..) |val, i| {
-        if (val) |v| dest.*[i] = v;
+```Merge wire payload Iterates sparse entries patch Validates field index bounds value types schema Patches dense `PresenceRecord```zig
+fn mergeFromPayload(
+    record: *PresenceRecord,
+    allocator: Allocator,
+    fields: []const schema_mod.PresenceField,
+    patch: msgpack.Payload,
+) !void {
+    if (patch != .map) return error.InvalidPayload;
+    var it = patch.map.iterator();
+    while (it.next()) |entry| {
+        const f_idx = msgpack.extractPayloadUint(entry.key_ptr.*)
+            orelse return error.InvalidFieldIndex;
+        if (f_idx >= fields.len) return error.InvalidFieldIndex;
+        const field = fields[f_idx];
+        const new_value = try typed.valueFromPayload(
+            allocator, field.declared_type, null, entry.value_ptr.*,
+        );
+        if (record.values[f_idx]) |*old| old.deinit(allocator);
+        record.values[f_idx] = new_value;
     }
 }
-```Operational Logic `setUser `setShared` perform field-level merges incoming `FieldMap integer-keyed array wire payload patched over record Fields absent `null slots not touched ` 0 101.0 updates `cursor__x` other fields unchanged first `setUser` call new user creates zero-initialized record applies patch `setShared` no record creates Client-side throttling High-frequency `presence.set() calls throttled to ~60fps server receives ~60 messages per second.setShared not throttled shared state changes infrequent Server-side batching `PresenceManager` flushes every 50ms user updates shared state updates grouped sent bulk grouped by namespace triggers pass over subscriber list broadcast cost batch Automatic user cleanup on disconnect WebSocket connection cleanup path calls `removeUser` removes user record queues `leave broadcast records `namespace_empty_at` grace period timer starts namespace switch old user record removed before new scope resolvesGrace period mechanism last user leaves namespace `removeUser` records `namespace_empty_at = Shared state remains alive in RAM 50ms loop checks `namespace_empty_at` >= 5000ms removes shared state entry user joins namespace grace period 0 → 1) `namespace_empty_at deleted grace timer cancelled shared state preserved zero timer infrastructure 50ms loop runs unconditionally grace check negligible normal operation Shared state RAM-only Server restart clears shared state grace grace period protects against client disconnections not server restarts Authorization at accept time `setUser `setShared` message handler evaluates authorization rule `presenceWrite` `PresenceSet `PresenceRemove `presenceSharedWrite `PresenceSetShared `FieldMap` as `$data` field-value authorization decode path Wire payload arrives integer-keyed map true Message handler looks field names `presenceUserFields"typing Auth rule evaluator receives$data.status = "active"$data.true Rule evaluated RAM against decoded field values Field type index validation at accept time unknown mistyped fields rejected `SCHEMA_VALIDATION_FAILED before state mutation Client-Side State Management Local caches SDK maintains two-memory caches for active presence namespace Populated `userCache: Map<userId PresenceEntry `PresenceSubscribe `PresenceBroadcast events.get(( callback `sharedCache: FieldMap null `PresenceSubscribeShared `SharedStateBroadcast.getShared( `subscribeShared( Cache update logic`PresenceBroadcast insert new entry `userCache `data field full initial user record merge `data patch into Unknown `userId treated as join delete entry for `userId callback `subscribe() fired after cache mutation with updated user list`SharedStateBroadcast Merge `data patch into `sharedCache callback `subscribeShared() fired with updated shared state object unflattens `cursor__x to Synchronous getters `presence.get(userId) `presence.getAll.getShared( perform local cache lookups No network round-trip return stale empty results if no subscription active Subscription invalidation on namespace switch `setPresenceNamespace resolves `sharedCache cleared `subscribe( callbacks deregistered developer responsible re-subscribing new namespace Validation Success Criteria Performance targets `PresenceSet` latency < 1ms `presence.get() `getShared() < 100μs (local cache Broadcast batch interval 50ms ± 5ms Grace period accuracy 5000ms ± 50ms Verification```bash
+```Operational Logic Merge semantics `setUser `setShared` perform field-level merges incoming wire payload integer-keyed `msgpack.Payload map store `StoreSet values message handler iterates present entries validates field index patches `PresenceRecord` Fields absent patch not touched 0 101.0 updates `cursor__x` other fields unchanged first `setUser` call new user creates zero-initialized record applies patch `setShared` namespace no shared record creates Client-side throttling High-frequency `presence.set() calls throttled to ~60fps server receives ~60 presence messages per second `presence.setShared( not throttled shared state changes infrequent Server-side batching `PresenceManager flushes every 50ms user updates shared state updates grouped sent bulk grouped by namespace triggers pass subscriber list broadcast cost(subscribers batch Automatic user cleanup on disconnect WebSocket connection cleanup path calls `removeUser` removes user record queues `leave broadcast records `namespace_empty_at_id grace period timer startsnamespace switch old user record removed before new resolves Grace period mechanism last user leaves `removeUser` records `namespace_empty_at Shared state remains alive in RAM 50ms loop checks `namespace_empty_at >= 5000ms removes shared state user joins namespace grace period `namespace_empty_at deleted grace timer cancelled shared state preserved zero timer infrastructure 50ms loop runs unconditionally grace check negligible normal Shared state RAM-only restart clears shared state grace period protects against client disconnections not server restarts Authorization accept time `setUser `setShared message handler evaluates authorization rule `presenceWrite` for `PresenceSet `PresenceRemove `presenceSharedWrite incoming integer-keyed `Payload map passed to auth rule evaluator `value_payload no decode step `resolveIncomingValueField pattern resolves$data.* references iterating map entries matching keys by integer value decoding via `typed.valueFromPayload_typedecode path Wire payload arrives integer-keyed map 2: true Auth rule evaluator receives$data.status "active.typing true `Payload map Rule evaluated in RAM against decoded field values Field type index validation accept time unknown mistyped fields rejected `SCHEMA_VALIDATION_FAILED before state mutation Client-Side State Management Local caches SDK maintains two caches for active presence namespace `userCache: Map<userId PresenceEntry `PresenceSubscribe response `PresenceBroadcast events.get `sharedCache: Record null `PresenceSubscribeShared `SharedStateBroadcast events Cache update logic`PresenceBroadcast handling broadcast message contains `users` array multiple events per message 50ms flush "join insert new entry `userCache `joinedAt `data` field full initial user record merge `data patch into `userCache entry for `userId Unknown `userId treated as join "leave delete entry `userCache for `userIdprocessing entries batch callback `subscribe()` fired with updated user list`SharedStateBroadcast Merge `data patch into `sharedCache callback `subscribeShared() fired with updated shared state object unflattens `cursor__x to Synchronous getters `presence.get(userId.getShared( perform local cache lookups No network round-trip return stale empty results if no subscription active Subscription invalidation on namespace switch `setPresenceNamespace resolves `userCache `sharedCache cleared `subscribe(( callbacks deregistered developer re-subscribing new namespace Validation Success Criteria Performance targets `PresenceSet` latency < 1ms `presence.get()` `getShared()` < 100μs cache Broadcast batch interval 50ms ± 5ms Grace period accuracy 5000ms ± 50ms Verification```bash
 # Unit tests for PresenceManager (set/merge/remove/shared/grace period)
 zig build test -Dtest-filter="presence"
 

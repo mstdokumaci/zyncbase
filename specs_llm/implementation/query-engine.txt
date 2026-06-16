@@ -170,7 +170,7 @@ pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, alloc
     }
     return matches.toOwnedSlice();
 }
-```Presence Awareness ZyncBase presence system tracks user state online status real-time presence data stored in-memory state management batching history buffers see [Presence Internals Authorization Optimization Problem SQL queries authorization WebSocket bottleneck```
+```Presence Awareness ZyncBase presence system tracks user state online status real-time presence data stored in-memory state management broadcast batching see [Presence Internals Authorization Optimization Problem SQL queries authorization WebSocket bottleneck```
 Cursor movement (100/sec) × SQL query (1ms) = 100ms latency
 ```Permission Snapshots scoped readiness```zig
 fn onStoreScopeReady(conn: *Connection) !void {
