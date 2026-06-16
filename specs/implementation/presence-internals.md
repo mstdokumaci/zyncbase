@@ -27,7 +27,7 @@ Presence operations require a ready presence scope: the namespace string has bee
 
 ### Presence schema parsing (server startup)
 
-At startup, the server loads the `presence` section of `schema.json` and produces two flat field arrays (one for `user`, one for `shared`) by flattening nested objects with `__`. Max one level of nesting is enforced; deeper nesting causes startup failure.
+At startup, the server loads the `presence` section of `schema.json` and produces two flat field arrays (one for `user`, one for `shared`) by flattening nested objects with `__`. Arbitrary depth is supported; a hard limit of 500 flat fields is enforced per presence tier.
 
 ```
 presence.user:

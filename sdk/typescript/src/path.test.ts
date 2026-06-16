@@ -112,4 +112,11 @@ describe("flatten / unflatten", () => {
 			{ numRuns: 100 },
 		);
 	});
+
+	test("unflatten handles null-with-nested-key conflict without crashing", () => {
+		expect(() => unflatten({ cursor: null, cursor__x: 100 })).not.toThrow();
+		expect(unflatten({ cursor: null, cursor__x: 100 })).toEqual({
+			cursor: { x: 100 },
+		});
+	});
 });

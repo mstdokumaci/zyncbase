@@ -340,7 +340,7 @@ Two tiers are supported:
 
 ### Presence field constraints
 
-- **Nesting**: One level of object nesting is supported (`cursor: { x, y }`). Deeper nesting is rejected at server startup.
+- **Nesting**: Arbitrary depth of object nesting is supported (`cursor: { x, y }`). A hard limit of 500 flat fields is enforced per presence tier at server startup.
 - **Flattening**: Nested objects are flattened on the wire using `__` (`cursor__x`, `cursor__y`). The SDK handles this transparently.
 - **Required**: Presence fields are never required. Both tiers use field-level merge semantics.
 - **Supported types**: `string`, `number`, `integer`, `boolean`. All standard constraints apply (`enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`).
@@ -642,7 +642,7 @@ const users = await zyncbase.query('users', {
 - Nested objects cannot contain arrays of objects (arrays must be at the leaf level)
 - Total recursion depth is limited by the maximum number of SQLite columns (typically 2000)
 - Field names must not contain `__` — that sequence is reserved for the flattening separator
-- `presence` fields support only **one level** of nesting (`cursor: { x, y }` is valid; deeper nesting is rejected at server startup)
+- `presence` fields support **arbitrary nesting depth** (bounded to 500 flat fields total per tier)
 
 ### Arrays
 

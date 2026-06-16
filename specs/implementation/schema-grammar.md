@@ -111,7 +111,7 @@ ZyncBase uses a **flat relational storage engine**. Nested objects are logically
 
 - **Separator**: `__` (double underscore).
 - **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*`, cannot contain `__`, and cannot use reserved system field names.
-- **Recursion**: Unlimited depth is supported for `object` types within `store` field definitions. For `presence` field definitions, **only one level of nesting is permitted** (e.g., `cursor: { x, y }` is valid; `cursor: { pos: { x, y } }` is rejected at startup).
+- **Recursion**: Unlimited depth is supported for `object` types within both `store` and `presence` field definitions. For `presence`, a hard limit of 500 flat fields is enforced at server startup to guard against pathological schemas.
 
 Example:
 ```json
@@ -152,7 +152,7 @@ Presence fields support a subset of the store field grammar:
 | Property | Applicable Types | Description |
 |:---|:---:|:---|
 | `type` | all | **Required.** One of: `string`, `integer`, `number`, `boolean`, `object`. |
-| `fields` | `object` | **Required for `object` type.** Map of sub-field names to scalar field definitions. Max one level of nesting. |
+| `fields` | `object` | **Required for `object` type.** Map of sub-field names to scalar field definitions. Arbitrary depth is supported (bounded to 500 flat fields total). |
 | `enum` | `string`, `integer` | List of allowed values. |
 | `pattern` | `string` | Regex pattern validation. |
 | `minLength` | `string` | Minimum character length. |
@@ -177,7 +177,7 @@ Presence fields do NOT support: `indexed`, `references`, `onDelete`, `items` (no
 
 #### Presence Nesting
 
-One level of `object` nesting is supported. Sub-fields within an `object` are flattened using the `__` separator for wire encoding (`cursor: { x, y }` → `cursor__x`, `cursor__y`). Deeper nesting (an `object` containing another `object`) is rejected at server startup.
+Arbitrary depth of `object` nesting is supported (bounded to 500 flat fields total). Sub-fields are flattened using the `__` separator for wire encoding (`cursor: { x, y }` → `cursor__x`, `cursor__y`). The SDK handles flattening and unflattening transparently.
 
 ### Implicit Presence Schema
 
@@ -220,7 +220,6 @@ These arrays are emitted in the `SchemaSync` message on every new connection.
 | `InvalidPresenceShared` | `presence.shared` is present but not an object. |
 | `InvalidPresenceFieldName` | Presence field name violates naming constraints. |
 | `InvalidPresenceFieldType` | Presence field `type` is missing, not a string, or not one of the supported types. |
-| `PresenceNestingTooDeep` | A presence `object` field contains another `object` field (max one level). |
 | `InvalidPresenceObjectField` | A presence `object` field is missing `fields`, or `fields` is not an object. |
 
 ---

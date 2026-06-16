@@ -1139,7 +1139,7 @@ Additionally, analysis of presence use cases revealed a gap in the single-tier d
    - `presence.user`: fields owned by each user individually. One record per connected user per namespace. Automatically cleaned up on disconnect.
    - `presence.shared`: fields representing namespace-level ephemeral state. One record for the entire namespace. Survives for the namespace session lifetime (see point 8).
 
-3. **Flat wire format with `__` separator.** Nested presence fields (max one level of nesting enforced at schema load time) are flattened using the same `__` convention as the store (`cursor: { x, y }` → `cursor__x`, `cursor__y`). The SDK transparently flattens outbound and unflattens inbound data. Developers always interact with the nested object form.
+3. **Flat wire format with `__` separator.** Nested presence fields are flattened using the same `__` convention as the store (`cursor: { x, y }` → `cursor__x`, `cursor__y`). The SDK transparently flattens outbound and unflattens inbound data. Developers always interact with the nested object form. Arbitrary nesting depth is supported (bounded to 500 flat fields per tier).
 
 4. **Integer-keyed wire encoding for all presence messages.** `PresenceSet` and `PresenceSetShared` send integer-keyed maps. `PresenceBroadcast` and `SharedStateBroadcast` deliver integer-keyed data. The existing `SchemaDictionary` machinery is extended with presence-specific index maps built from the `SchemaSync` arrays.
 
@@ -1216,6 +1216,6 @@ Complete message specifications are in [Wire Protocol](../implementation/wire-pr
 - ✅ Grace period on shared state cleanup without timer infrastructure cost.
 - ⚠️ Presence is usable immediately via the implicit schema. Defining an explicit `presence` section in `schema.json` is recommended for custom fields and type safety.
 - ⚠️ Presence schema field changes trigger `schemaChange` on connected clients — same reconnect requirement as store schema changes.
-- ⚠️ Max one level of nesting in presence field definitions is enforced. Deeper nesting is rejected at server startup.
+- ⚠️ A hard limit of 500 flat fields per presence tier is enforced at server startup to guard against pathological schemas.
 - ⚠️ Shared state is RAM-only and does not survive server restart, regardless of grace period state.
 
