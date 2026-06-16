@@ -1,35 +1,19 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-
-fn field(comptime name: []const u8, declared_type: schema.FieldType) schema.Field {
-    return .{
-        .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .declared_type = declared_type,
-        .storage_type = declared_type,
-    };
-}
-
-fn table(comptime name: []const u8, fields: []const schema.Field) schema.Table {
-    return .{
-        .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .fields = fields,
-    };
-}
+const schema_helpers = @import("schema_test_helpers.zig");
 
 test "schema_index: direct table fixtures build lookup maps" {
     const allocator = std.testing.allocator;
 
     var task_fields = [_]schema.Field{
-        field("title", .text),
-        field("priority", .integer),
+        schema_helpers.makeField("title", .text),
+        schema_helpers.makeField("priority", .integer),
     };
     var tables = [_]schema.Table{
-        table("tasks", &task_fields),
+        schema_helpers.makeTable("tasks", &task_fields),
     };
 
-    var runtime_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
+    var runtime_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer runtime_schema.deinit();
 
     const users = runtime_schema.tableByIndex(0) orelse return error.TestExpectedValue;
@@ -44,10 +28,10 @@ test "schema_index: direct table fixtures build lookup maps" {
 test "schema_index: exposes field kinds and writable ranges" {
     const allocator = std.testing.allocator;
 
-    var fields = [_]schema.Field{field("title", .text)};
-    var tables = [_]schema.Table{table("posts", &fields)};
+    var fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
+    var tables = [_]schema.Table{schema_helpers.makeTable("posts", &fields)};
 
-    var runtime_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
+    var runtime_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer runtime_schema.deinit();
 
     const posts = runtime_schema.table("posts") orelse return error.TestExpectedValue;

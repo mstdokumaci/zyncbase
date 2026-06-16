@@ -9,9 +9,11 @@ const connection_mod = @import("connection.zig");
 const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
+const PresenceManager = @import("presence.zig").PresenceManager;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
+const typed = @import("typed.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -21,6 +23,7 @@ pub const MessageHandler = struct {
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     store_service: *StoreService,
+    presence_manager: *PresenceManager,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
     auth_config: *const authorization.AuthConfig,
@@ -35,6 +38,7 @@ pub const MessageHandler = struct {
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
         store_service: *StoreService,
+        presence_manager: *PresenceManager,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
         auth_config: *const authorization.AuthConfig,
@@ -47,6 +51,7 @@ pub const MessageHandler = struct {
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
             .store_service = store_service,
+            .presence_manager = presence_manager,
             .subscription_engine = subscription_engine,
             .security_config = security_config,
             .auth_config = auth_config,
@@ -174,15 +179,33 @@ pub const MessageHandler = struct {
             .store_remove => try self.handleStoreRemove(arena_allocator, conn, envelope.id, message),
             .store_batch => try self.handleStoreBatch(arena_allocator, conn, envelope.id, message),
             .auth_refresh => try self.handleAuthRefresh(arena_allocator, conn, envelope.id, message),
+            .presence_set_namespace => try self.handlePresenceSetNamespace(arena_allocator, conn, envelope.id, message),
+            .presence_set => try self.handlePresenceSet(arena_allocator, conn, envelope.id, message),
+            .presence_set_shared => try self.handlePresenceSetShared(arena_allocator, conn, envelope.id, message),
+            .presence_subscribe => try self.handlePresenceSubscribe(arena_allocator, conn, envelope.id, message),
+            .presence_unsubscribe => try self.handlePresenceUnsubscribe(arena_allocator, conn, envelope.id, message),
+            .presence_subscribe_shared => try self.handlePresenceSubscribeShared(arena_allocator, conn, envelope.id, message),
+            .presence_unsubscribe_shared => try self.handlePresenceUnsubscribeShared(arena_allocator, conn, envelope.id, message),
+            .presence_remove => try self.handlePresenceRemove(arena_allocator, conn, envelope.id, message),
         };
     }
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         self.violation_tracker.clearViolations(conn.id);
 
+        // Capture presence state before resetSessionLocked clears it
+        const presence_ns = conn.presence_namespace_id;
+        const presence_user = conn.user_doc_id;
+
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
+
+        if (presence_ns != connection_mod.unset_namespace_id) {
+            self.presence_manager.removeAllForConnection(presence_ns, presence_user, conn.id) catch |err| {
+                std.log.err("Failed to clean up presence on disconnect: {}", .{err});
+            };
+        }
     }
 
     fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
@@ -242,7 +265,7 @@ pub const MessageHandler = struct {
             return error.RequestSuperseded;
         }
 
-        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, false);
         return null;
     }
 
@@ -534,6 +557,225 @@ pub const MessageHandler = struct {
         return try wire.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }
 
+    // === Presence message handlers ===
+
+    fn handlePresenceSetNamespace(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = wire.extractPresenceSetNamespaceFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const external_user_id = try conn.dupeExternalUserId(arena_allocator);
+        const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
+        errdefer _ = conn.resetPresenceScopeIfSeq(scope_seq);
+
+        if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
+            try authorization.authorizePresenceNamespace(
+                arena_allocator,
+                self.auth_config,
+                req.namespace,
+                scope.user_doc_id,
+                external_user_id,
+                conn.getSessionClaimsPtr(),
+            );
+            if (conn.setPresenceScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
+                return try wire.encodeSuccess(arena_allocator, msg_id);
+            }
+            return error.RequestSuperseded;
+        }
+
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, true);
+        return null;
+    }
+
+    fn handlePresenceSet(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = wire.extractPresenceSetFast(message, arena_allocator) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+
+        try authorization.authorizePresenceWrite(
+            arena_allocator,
+            self.auth_config,
+            conn.presence_namespace orelse return error.SessionNotReady,
+            session.user_doc_id,
+            conn.getExternalUserId() orelse return error.SessionNotReady,
+            conn.getSessionClaimsPtr(),
+            self.schema.presence_user_fields,
+            &req.data,
+        );
+
+        try self.presence_manager.setUser(session.namespace_id, session.user_doc_id, req.data);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handlePresenceSetShared(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = wire.extractPresenceSetSharedFast(message, arena_allocator) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+
+        try authorization.authorizePresenceSharedWrite(
+            arena_allocator,
+            self.auth_config,
+            conn.presence_namespace orelse return error.SessionNotReady,
+            session.user_doc_id,
+            conn.getExternalUserId() orelse return error.SessionNotReady,
+            conn.getSessionClaimsPtr(),
+            self.schema.presence_shared_fields,
+            &req.data,
+        );
+
+        try self.presence_manager.setShared(session.namespace_id, req.data, conn.id);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handlePresenceSubscribe(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        _ = wire.extractPresenceSubscribeFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+        const sub_id = try conn.allocateSubscriptionId();
+
+        var snapshot = try self.presence_manager.onSubscribeUser(session.namespace_id, conn.id, sub_id);
+        defer snapshot.deinit(self.presence_manager.allocator);
+
+        return try wire.encodePresenceUserSnapshot(arena_allocator, msg_id, sub_id, snapshot.users.items);
+    }
+
+    fn handlePresenceUnsubscribe(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = wire.extractPresenceUnsubscribeFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+        self.presence_manager.onUnsubscribeUser(session.namespace_id, conn.id);
+        _ = req; // sub_id not tracked separately for presence
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handlePresenceSubscribeShared(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        _ = wire.extractPresenceSubscribeSharedFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+        const sub_id = try conn.allocateSubscriptionId();
+
+        var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id, sub_id);
+        defer if (shared) |*s| s.deinit(self.presence_manager.allocator);
+
+        return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |*s| s else null);
+    }
+
+    fn handlePresenceUnsubscribeShared(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = wire.extractPresenceUnsubscribeSharedFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+        self.presence_manager.onUnsubscribeShared(session.namespace_id, conn.id);
+        _ = req; // sub_id not tracked separately for presence
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handlePresenceRemove(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        _ = wire.extractPresenceRemoveFast(message) catch {
+            return error.InvalidMessageFormat;
+        };
+
+        const session = try requirePresenceSession(conn);
+        try self.presence_manager.removeUser(session.namespace_id, session.user_doc_id);
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed.DocId } {
+        if (!conn.presence_ready) return error.SessionNotReady;
+        if (conn.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
+        return .{
+            .namespace_id = conn.presence_namespace_id,
+            .user_doc_id = conn.user_doc_id,
+        };
+    }
+
+    fn resetPresenceScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
+        const namespace_owned = try conn.allocator.dupe(u8, namespace);
+        var transferred = false;
+        errdefer if (!transferred) conn.allocator.free(namespace_owned);
+
+        // Capture old presence state before beginPresenceScopeResolutionLocked resets it
+        const old_ns = conn.presence_namespace_id;
+        const old_user = conn.user_doc_id;
+
+        conn.beginPresenceScopeResolutionLocked(namespace_owned);
+        transferred = true;
+        const scope_seq = conn.presence_scope_seq;
+
+        // Unsubscribe from old namespace before switching to the new one
+        if (old_ns != connection_mod.unset_namespace_id) {
+            self.presence_manager.onUnsubscribeUser(old_ns, conn.id);
+            self.presence_manager.onUnsubscribeShared(old_ns, conn.id);
+            self.presence_manager.removeUser(old_ns, old_user) catch |err| {
+                std.log.err("Failed to remove user presence from old namespace during switch: {}", .{err});
+            };
+        }
+
+        return scope_seq;
+    }
+
     fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) !void {
         const disconnect_msg = wire.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
@@ -558,6 +800,14 @@ const MsgType = enum {
     store_remove,
     store_batch,
     auth_refresh,
+    presence_set_namespace,
+    presence_set,
+    presence_set_shared,
+    presence_subscribe,
+    presence_unsubscribe,
+    presence_subscribe_shared,
+    presence_unsubscribe_shared,
+    presence_remove,
 };
 
 fn classifyMsgType(t: []const u8) ?MsgType {
@@ -574,6 +824,18 @@ fn classifyMsgType(t: []const u8) ?MsgType {
         'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
         'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
         'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
+        'n' => {
+            // Presence messages: "Presence..." has 'n' at index 5
+            if (std.mem.eql(u8, t, "PresenceSetNamespace")) return .presence_set_namespace;
+            if (std.mem.eql(u8, t, "PresenceSetShared")) return .presence_set_shared;
+            if (std.mem.eql(u8, t, "PresenceSet")) return .presence_set;
+            if (std.mem.eql(u8, t, "PresenceSubscribeShared")) return .presence_subscribe_shared;
+            if (std.mem.eql(u8, t, "PresenceSubscribe")) return .presence_subscribe;
+            if (std.mem.eql(u8, t, "PresenceUnsubscribeShared")) return .presence_unsubscribe_shared;
+            if (std.mem.eql(u8, t, "PresenceUnsubscribe")) return .presence_unsubscribe;
+            if (std.mem.eql(u8, t, "PresenceRemove")) return .presence_remove;
+            return null;
+        },
         else => if (std.mem.eql(u8, t, "AuthRefresh")) return .auth_refresh else null,
     };
 }

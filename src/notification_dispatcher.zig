@@ -161,26 +161,9 @@ pub const NotificationDispatcher = struct {
                 continue;
             };
 
-            const conn = cm.acquireConnection(match.connection_id) catch |err| {
-                std.log.debug("Failed to acquire connection {} for notification: {}", .{ match.connection_id, err });
-                continue;
-            };
-            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-
-            conn.send(out.items) catch |err| switch (err) {
-                error.Dropped => {
-                    std.log.warn("Connection {} dropped by uWS, closing", .{match.connection_id});
-                    conn.ws.close();
-                },
-                error.Full => {
-                    std.log.warn("Connection {} outbox full (slow client), closing", .{match.connection_id});
-                    conn.ws.close();
-                },
-                else => {
-                    std.log.err("Connection {} unexpected send error: {}", .{ match.connection_id, err });
-                    conn.ws.close();
-                },
-            };
+            // Use centralized send behavior on ConnectionManager which handles
+            // send errors and closes slow/dropped clients.
+            cm.sendToConnection(match.connection_id, out.items);
         }
     }
 

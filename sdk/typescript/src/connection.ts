@@ -23,6 +23,11 @@ import type {
 type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
 type DeltaHandler = (delta: StoreDelta) => void;
+type PresenceBroadcastHandler = (
+	msg:
+		| import("./types.js").PresenceBroadcast
+		| import("./types.js").SharedStateBroadcast,
+) => void;
 
 type ConnectionStatus =
 	| "connecting"
@@ -45,6 +50,9 @@ export class ConnectionManager {
 
 	private messageHandler: MessageHandler | null = null;
 	private deltaHandler: DeltaHandler | null = null;
+	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
+	private connectedWithUserIdHandler: ((userId: string | null) => void) | null =
+		null;
 
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,6 +68,7 @@ export class ConnectionManager {
 	private schemaSyncReject: ((reason?: unknown) => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
+	private userId: string | null = null;
 	private _refreshInFlight: Promise<void> | null = null;
 
 	constructor(options: ClientOptions) {
@@ -82,7 +91,16 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	setPresenceNamespace(ns: string): void {
+	getUserId(): string | null {
+		return this.userId;
+	}
+
+	onConnectedWithUserId(handler: (userId: string | null) => void): void {
+		this.connectedWithUserIdHandler = handler;
+	}
+
+	async setPresenceNamespace(ns: string): Promise<void> {
+		await this.dispatch({ type: "PresenceSetNamespace", namespace: ns });
 		this.presenceNamespace = ns;
 	}
 
@@ -134,13 +152,28 @@ export class ConnectionManager {
 
 			ws.onopen = () => {
 				this.setStoreNamespace(this.storeNamespace)
+					.then(() => this.setPresenceNamespace(this.presenceNamespace))
 					.then(() => {
 						this.reconnectAttempt = 0;
 						this.setStatus("connected");
 						this.emit("connected");
 						resolve();
 					})
-					.catch(reject);
+					.catch((err) => {
+						if (this.ws) {
+							const ws = this.ws;
+							this.ws = null;
+							ws.onclose = null;
+							ws.onerror = null;
+							ws.onmessage = null;
+							ws.close();
+						}
+						this.pending.rejectAll(err);
+						this.rejectSchemaSync(err);
+						this.setStatus("disconnected", { error: err });
+						this.emit("error", err);
+						reject(err);
+					});
 			};
 
 			ws.onerror = () => this.handleSocketError(reject);
@@ -249,6 +282,10 @@ export class ConnectionManager {
 
 	onDelta(handler: DeltaHandler): void {
 		this.deltaHandler = handler;
+	}
+
+	onPresenceBroadcast(handler: PresenceBroadcastHandler): void {
+		this.presenceBroadcastHandler = handler;
 	}
 
 	disconnect(): void {
@@ -415,6 +452,10 @@ export class ConnectionManager {
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
 				break;
+			case "PresenceBroadcast":
+			case "SharedStateBroadcast":
+				this.presenceBroadcastHandler?.(msg);
+				break;
 			case "WriteCommitted":
 			case "WriteError":
 				// Routed to StoreImpl via messageHandler below.
@@ -425,8 +466,10 @@ export class ConnectionManager {
 	}
 
 	private handleConnected(msg: ConnectedMessage): void {
+		this.userId = msg.userId;
 		if (msg.storeNamespace) this.storeNamespace = msg.storeNamespace;
 		if (msg.presenceNamespace) this.presenceNamespace = msg.presenceNamespace;
+		this.connectedWithUserIdHandler?.(msg.userId);
 		if (this.options.debug) {
 			console.log(`[SDK] Connected as userId=${msg.userId}`);
 		}

@@ -35,6 +35,9 @@ pub const evaluateCondition = evaluate_mod.evaluateCondition;
 pub const evaluateConditionStrict = evaluate_mod.evaluateConditionStrict;
 pub const evaluateConditionWithDoc = evaluate_mod.evaluateConditionWithDoc;
 pub const authorizeStoreNamespace = evaluate_mod.authorizeStoreNamespace;
+pub const authorizePresenceNamespace = evaluate_mod.authorizePresenceNamespace;
+pub const authorizePresenceWrite = evaluate_mod.authorizePresenceWrite;
+pub const authorizePresenceSharedWrite = evaluate_mod.authorizePresenceSharedWrite;
 
 pub const buildDocPredicate = doc_predicate_mod.buildDocPredicate;
 pub const authorizeWriteCondition = doc_predicate_mod.authorizeWriteCondition;

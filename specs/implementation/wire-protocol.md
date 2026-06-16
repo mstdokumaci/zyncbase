@@ -638,25 +638,30 @@ Notifies the SDK that a tracked or confirmed write failed after acceptance. This
 
 #### `PresenceBroadcast`
 
-Notifies user-presence subscribers about presence changes in their namespace. Delivered in 50ms batches.
+Notifies user-presence subscribers about presence changes in their namespace. Delivered in 50ms batches. Multiple user events within a batch window are grouped into a single message with a `users` array.
 
 ```
 {
   "type":   "PresenceBroadcast",
   "subId":  789,           // Integer subscription ID
-  "event":  "update",     // "join" | "update" | "leave"
-  "userId": <bin16>,      // Internal users.id as 16-byte binary
-  "data":   { 0: 101.0, 1: 201.0 }    // Integer-keyed merge delta. Present for "join" and "update"
+  "users":  [
+    {
+      "userId":   <bin16>,   // Internal users.id as 16-byte binary
+      "event":    "join",    // "join" | "update" | "leave"
+      "data":     { 0: 101.0, 1: 201.0 },  // Integer-keyed field map. Present for "join" and "update", absent for "leave"
+      "joinedAt": 1234567890               // Unix timestamp ms. Present only for "join" events
+    }
+  ]
 }
 ```
 
 **Event types:**
 
-| `event` | `data` | Description |
-|---------|--------|-------------|
-| `"join"` | Full user field map (all set fields) | A user entered the namespace. |
-| `"update"` | Merge delta (only changed fields) | A user called `presence.set()`. SDK merges into local cache. |
-| `"leave"` | Absent | A user disconnected or called `presence.remove()`. |
+| `event` | `data` | `joinedAt` | Description |
+|---------|--------|------------|-------------|
+| `"join"` | Full user field map (all set fields) | Present | A user entered the namespace. |
+| `"update"` | Merge delta (only changed fields) | Absent | A user called `presence.set()`. SDK merges into local cache. |
+| `"leave"` | Absent | Absent | A user disconnected or called `presence.remove()`. |
 
 The SDK decodes `data` using `presenceUserFields` indices from `SchemaSync` and unflattens nested objects before delivering to `subscribe()` callbacks.
 
@@ -878,6 +883,6 @@ The `Connected` message may include a `protocolVersion` field if explicit versio
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `WriteCommitted` | — | Push (no `id`, SDK-consumed) |
 | S→C | `WriteError` | — | Push (no `id`) |
-| S→C | `PresenceBroadcast` | — | Push (no `id`); integer-keyed `data`, `bin16` userId |
+| S→C | `PresenceBroadcast` | — | Push (no `id`); `users` array with `userId` (bin16), `event`, `data` (integer-keyed), `joinedAt` |
 | S→C | `SharedStateBroadcast` | — | Push (no `id`); integer-keyed shared state delta |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |

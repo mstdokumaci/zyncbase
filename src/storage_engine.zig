@@ -479,6 +479,7 @@ pub const StorageEngine = struct {
         scope_seq: u64,
         namespace: []const u8,
         external_user_id: []const u8,
+        is_presence: bool,
     ) !void {
         try self.ensureRunning();
 
@@ -496,6 +497,7 @@ pub const StorageEngine = struct {
                 .external_user_id = external_user_id_owned,
                 .timestamp = std.time.timestamp(),
                 .result_buffer = self.sessionResolutionBuffer(),
+                .is_presence = is_presence,
             },
         };
 

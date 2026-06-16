@@ -2,12 +2,14 @@
 
 import { ConnectionManager } from "./connection.js";
 import type { ZyncBaseError } from "./errors.js";
+import { PresenceImpl } from "./presence.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
 import type {
 	ClientOptions,
 	JsonValue,
 	LifecycleEvent,
+	Presence,
 	Store,
 	StoreSubscribe,
 } from "./types.js";
@@ -15,10 +17,12 @@ import { generateUUIDv7 } from "./uuid.js";
 
 export class ZyncBaseClient {
 	readonly store: Store;
+	readonly presence: Presence;
 	readonly utils: { id: () => string };
 
 	private readonly conn: ConnectionManager;
 	private readonly tracker: SubscriptionTracker;
+	private readonly presenceImpl: PresenceImpl;
 	/** Error callbacks registered via client.on('error', cb). */
 	private readonly errorCallbacks: Array<(err: ZyncBaseError) => void> = [];
 
@@ -41,6 +45,15 @@ export class ZyncBaseClient {
 		};
 
 		this.store = new StoreImpl(this.conn, this.tracker, emitError);
+		this.presenceImpl = new PresenceImpl(this.conn, emitError);
+		this.presence = this.presenceImpl;
+
+		// When the server sends a Connected message, forward the userId to PresenceImpl
+		// so that presence.getAll() can filter out the local user by default.
+		this.conn.onConnectedWithUserId((userId) => {
+			this.presenceImpl.setLocalUserId(userId);
+		});
+
 		this.utils = { id: generateUUIDv7 };
 
 		// On reconnect: replay subscriptions
@@ -78,8 +91,12 @@ export class ZyncBaseClient {
 
 	/** Switch the active presence namespace. */
 	async setPresenceNamespace(namespace: string): Promise<void> {
-		this.conn.setPresenceNamespace(namespace);
-		// TODO: Clear presence in old namespace and join new one once Presence API is implemented.
+		const oldNs = this.conn.getPresenceNamespace();
+		if (oldNs === namespace) return;
+
+		this.presenceImpl.invalidate();
+		await this.conn.setPresenceNamespace(namespace);
+		this.presenceImpl.replaySubscriptions();
 	}
 
 	/**
@@ -121,6 +138,8 @@ export class ZyncBaseClient {
 	 * Called each time the ConnectionManager emits "connected" or after a namespace switch.
 	 */
 	private async _handleReconnect(): Promise<void> {
+		this.presenceImpl.replaySubscriptions();
+
 		const subIds = this.tracker.allSubIds();
 		if (subIds.length === 0) return;
 

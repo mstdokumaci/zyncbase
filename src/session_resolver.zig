@@ -86,9 +86,16 @@ pub const SessionResolver = struct {
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
         if (result.err) |err| {
-            if (!conn.isScopeSeqCurrent(result.scope_seq)) {
-                self.sendStaleScopeError(conn, result.msg_id);
-                return;
+            if (result.is_presence) {
+                if (!conn.isPresenceScopeSeqCurrent(result.scope_seq)) {
+                    self.sendStaleScopeError(conn, result.msg_id);
+                    return;
+                }
+            } else {
+                if (!conn.isScopeSeqCurrent(result.scope_seq)) {
+                    self.sendStaleScopeError(conn, result.msg_id);
+                    return;
+                }
             }
             self.sendError(conn, result.msg_id, err);
             return;
@@ -100,12 +107,24 @@ pub const SessionResolver = struct {
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const pending_namespace = (conn.dupePendingStoreNamespaceIfSeq(arena.allocator(), result.scope_seq) catch |err| {
-            self.sendError(conn, result.msg_id, err);
-            return;
-        }) orelse {
-            self.sendStaleScopeError(conn, result.msg_id);
-            return;
+        const pending_namespace = if (result.is_presence) blk: {
+            const ns = conn.dupePendingPresenceNamespaceIfSeq(arena.allocator(), result.scope_seq) catch |err| {
+                self.sendError(conn, result.msg_id, err);
+                return;
+            } orelse {
+                self.sendStaleScopeError(conn, result.msg_id);
+                return;
+            };
+            break :blk ns;
+        } else blk: {
+            const ns = conn.dupePendingStoreNamespaceIfSeq(arena.allocator(), result.scope_seq) catch |err| {
+                self.sendError(conn, result.msg_id, err);
+                return;
+            } orelse {
+                self.sendStaleScopeError(conn, result.msg_id);
+                return;
+            };
+            break :blk ns;
         };
 
         const external_user_id = conn.dupeExternalUserId(arena.allocator()) catch |err| {
@@ -113,15 +132,28 @@ pub const SessionResolver = struct {
             return;
         };
 
-        authorization.authorizeStoreNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr()) catch |err| {
-            _ = conn.resetStoreScopeIfSeq(result.scope_seq);
-            self.sendError(conn, result.msg_id, err);
-            return;
-        };
+        if (result.is_presence) {
+            authorization.authorizePresenceNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr()) catch |err| {
+                _ = conn.resetPresenceScopeIfSeq(result.scope_seq);
+                self.sendError(conn, result.msg_id, err);
+                return;
+            };
 
-        if (!conn.setStoreScopeIfSeq(result.scope_seq, result.namespace_id, result.user_doc_id)) {
-            self.sendStaleScopeError(conn, result.msg_id);
-            return;
+            if (!conn.setPresenceScopeIfSeq(result.scope_seq, result.namespace_id, result.user_doc_id)) {
+                self.sendStaleScopeError(conn, result.msg_id);
+                return;
+            }
+        } else {
+            authorization.authorizeStoreNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr()) catch |err| {
+                _ = conn.resetStoreScopeIfSeq(result.scope_seq);
+                self.sendError(conn, result.msg_id, err);
+                return;
+            };
+
+            if (!conn.setStoreScopeIfSeq(result.scope_seq, result.namespace_id, result.user_doc_id)) {
+                self.sendStaleScopeError(conn, result.msg_id);
+                return;
+            }
         }
 
         const msg = wire.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {

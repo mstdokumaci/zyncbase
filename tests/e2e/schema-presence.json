@@ -1,0 +1,38 @@
+{
+	"version": "0.0.1",
+	"store": {
+		"tasks": {
+			"fields": {
+				"title": {
+					"type": "string"
+				}
+			}
+		}
+	},
+	"presence": {
+		"user": {
+			"cursor": {
+				"type": "object",
+				"fields": {
+					"x": { "type": "number" },
+					"y": { "type": "number" }
+				}
+			},
+			"status": {
+				"type": "string",
+				"enum": ["active", "idle", "away"]
+			},
+			"name": {
+				"type": "string"
+			}
+		},
+		"shared": {
+			"slide": {
+				"type": "integer"
+			},
+			"playing": {
+				"type": "boolean"
+			}
+		}
+	}
+}

@@ -4,7 +4,8 @@
 			"pattern": "*",
 			"storeFilter": true,
 			"presenceRead": true,
-			"presenceWrite": true
+			"presenceWrite": true,
+			"presenceSharedWrite": true
 		}
 	],
 	"store": [

@@ -42,12 +42,6 @@ pub const WriteOutcomeDispatcher = struct {
     }
 
     fn deliverResult(self: *WriteOutcomeDispatcher, result: WriteOutcomeResult, cm: *ConnectionManager) void {
-        const conn = cm.acquireConnection(result.conn_id) catch |err| {
-            std.log.debug("Failed to acquire connection {} for write outcome: {}", .{ result.conn_id, err });
-            return;
-        };
-        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-
         const arena = self.memory_strategy.acquireArena() catch |arena_err| {
             std.log.err("WriteOutcomeDispatcher acquireArena failed: {}", .{arena_err});
             return;
@@ -67,10 +61,7 @@ pub const WriteOutcomeDispatcher = struct {
             };
         };
 
-        conn.send(msg) catch {
-            std.log.warn("Connection {}: dropped while sending write outcome, closing", .{conn.id});
-            conn.ws.close();
-        };
+        cm.sendToConnection(result.conn_id, msg);
     }
 
     pub fn deinit(self: *WriteOutcomeDispatcher) void {

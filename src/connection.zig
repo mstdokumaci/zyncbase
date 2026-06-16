@@ -88,6 +88,11 @@ pub const Connection = struct {
     user_doc_id: typed.DocId,
     store_ready: bool,
     scope_seq: u64,
+    presence_namespace: ?[]const u8,
+    pending_presence_namespace: ?[]const u8,
+    presence_namespace_id: i64,
+    presence_ready: bool,
+    presence_scope_seq: u64,
     subscription_ids: std.ArrayListUnmanaged(u64),
     next_subscription_id: u64,
     ws: WebSocket,
@@ -107,6 +112,11 @@ pub const Connection = struct {
         self.user_doc_id = typed.zeroDocId;
         self.store_ready = false;
         self.scope_seq = 0;
+        self.presence_namespace = null;
+        self.pending_presence_namespace = null;
+        self.presence_namespace_id = unset_namespace_id;
+        self.presence_ready = false;
+        self.presence_scope_seq = 0;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
         self.ref_count = std.atomic.Value(usize).init(0);
@@ -144,6 +154,7 @@ pub const Connection = struct {
         if (self.session) |*sess| sess.deinit(self.allocator);
         self.session = null;
         self.resetStoreScopeLocked();
+        self.resetPresenceScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
         self.outbox.deinit(self.allocator);
@@ -156,6 +167,7 @@ pub const Connection = struct {
         }
         self.session = sess;
         self.resetStoreScopeLocked();
+        self.resetPresenceScopeLocked();
     }
 
     pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed.Value), token_expires_at: i64) void {
@@ -197,9 +209,24 @@ pub const Connection = struct {
         self.scope_seq +%= 1;
     }
 
+    pub fn resetPresenceScopeLocked(self: *Connection) void {
+        if (self.presence_namespace) |ns| self.allocator.free(ns);
+        if (self.pending_presence_namespace) |ns| self.allocator.free(ns);
+        self.presence_namespace_id = unset_namespace_id;
+        self.presence_namespace = null;
+        self.pending_presence_namespace = null;
+        self.presence_ready = false;
+        self.presence_scope_seq +%= 1;
+    }
+
     pub fn beginStoreScopeResolutionLocked(self: *Connection, namespace: []const u8) void {
         self.resetStoreScopeLocked();
         self.pending_store_namespace = namespace;
+    }
+
+    pub fn beginPresenceScopeResolutionLocked(self: *Connection, namespace: []const u8) void {
+        self.resetPresenceScopeLocked();
+        self.pending_presence_namespace = namespace;
     }
 
     pub fn resetStoreScope(self: *Connection) void {
@@ -270,6 +297,46 @@ pub const Connection = struct {
         };
     }
 
+    pub fn resetPresenceScope(self: *Connection) void {
+        self.resetPresenceScopeLocked();
+    }
+
+    pub fn setPresenceScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId) bool {
+        if (self.presence_scope_seq != expected_scope_seq) return false;
+        if (self.presence_namespace) |ns| self.allocator.free(ns);
+        self.presence_namespace = self.pending_presence_namespace;
+        self.pending_presence_namespace = null;
+        self.presence_namespace_id = namespace_id;
+        self.user_doc_id = user_doc_id;
+        self.presence_ready = true;
+        return true;
+    }
+
+    pub fn resetPresenceScopeIfSeq(self: *Connection, expected_scope_seq: u64) bool {
+        if (self.presence_scope_seq != expected_scope_seq) return false;
+        self.resetPresenceScopeLocked();
+        return true;
+    }
+
+    pub fn isPresenceScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
+        return self.presence_scope_seq == expected_scope_seq;
+    }
+
+    pub fn getPresenceNamespace(self: *Connection) ?[]const u8 {
+        return self.presence_namespace;
+    }
+
+    pub fn dupePresenceNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
+        const namespace = self.presence_namespace orelse return null;
+        return @as(?[]const u8, try allocator.dupe(u8, namespace));
+    }
+
+    pub fn dupePendingPresenceNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64) !?[]const u8 {
+        if (self.presence_scope_seq != expected_scope_seq) return null;
+        const namespace = self.pending_presence_namespace orelse return null;
+        return @as(?[]const u8, try allocator.dupe(u8, namespace));
+    }
+
     /// Allocate the next subscription ID in O(1) time.
     pub fn allocateSubscriptionId(self: *Connection) !u64 {
         if (self.next_subscription_id == 0) return error.SubscriptionIdExhausted;
@@ -329,6 +396,10 @@ pub const Connection = struct {
 
     pub fn deinit(self: *Connection) void {
         if (self.session) |*sess| sess.deinit(self.allocator);
+        if (self.store_namespace) |ns| self.allocator.free(ns);
+        if (self.pending_store_namespace) |ns| self.allocator.free(ns);
+        if (self.presence_namespace) |ns| self.allocator.free(ns);
+        if (self.pending_presence_namespace) |ns| self.allocator.free(ns);
         self.subscription_ids.deinit(self.allocator);
         self.outbox.deinit(self.allocator);
     }

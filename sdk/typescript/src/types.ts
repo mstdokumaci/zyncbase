@@ -197,6 +197,53 @@ export interface StoreLoadMore {
 	table_index?: string | number;
 }
 
+// ─── Outbound wire messages: presence ─────────────────────────────────────────
+
+export interface PresenceSetNamespace {
+	type: "PresenceSetNamespace";
+	id: number;
+	namespace: string;
+}
+
+export interface PresenceSet {
+	type: "PresenceSet";
+	id: number;
+	data: Record<number, unknown>; // Integer-keyed field map
+}
+
+export interface PresenceSetShared {
+	type: "PresenceSetShared";
+	id: number;
+	data: Record<number, unknown>; // Integer-keyed field map
+}
+
+export interface PresenceSubscribe {
+	type: "PresenceSubscribe";
+	id: number;
+}
+
+export interface PresenceUnsubscribe {
+	type: "PresenceUnsubscribe";
+	id: number;
+	subId: number;
+}
+
+export interface PresenceSubscribeShared {
+	type: "PresenceSubscribeShared";
+	id: number;
+}
+
+export interface PresenceUnsubscribeShared {
+	type: "PresenceUnsubscribeShared";
+	id: number;
+	subId: number;
+}
+
+export interface PresenceRemove {
+	type: "PresenceRemove";
+	id: number;
+}
+
 /** Union of all outbound message types. */
 export type OutboundMessage =
 	| AuthRefresh
@@ -207,7 +254,15 @@ export type OutboundMessage =
 	| StoreQuery
 	| StoreSubscribe
 	| StoreUnsubscribe
-	| StoreLoadMore;
+	| StoreLoadMore
+	| PresenceSetNamespace
+	| PresenceSet
+	| PresenceSetShared
+	| PresenceSubscribe
+	| PresenceUnsubscribe
+	| PresenceSubscribeShared
+	| PresenceUnsubscribeShared
+	| PresenceRemove;
 
 // ─── Inbound wire messages ────────────────────────────────────────────────────
 
@@ -222,6 +277,17 @@ export interface OkResponse {
 	subId?: number;
 	hasMore?: boolean;
 	namespace_id?: number;
+	// PresenceSubscribe response fields:
+	users?: PresenceUserSnapshot[];
+	// PresenceSubscribeShared response fields:
+	shared?: Record<number, unknown> | null;
+}
+
+/** User entry in PresenceSubscribe snapshot. */
+export interface PresenceUserSnapshot {
+	userId: Uint8Array; // bin16 on wire
+	data: Record<number, unknown>; // Integer-keyed field map
+	joinedAt: number; // Unix timestamp ms
 }
 
 export interface ErrorResponse {
@@ -249,6 +315,8 @@ export interface SchemaSync {
 	tables: string[];
 	fields: string[][];
 	fieldFlags: number[][];
+	presenceUserFields?: string[];
+	presenceSharedFields?: string[];
 }
 
 export interface ConnectedMessage {
@@ -274,6 +342,62 @@ export interface WriteError {
 	batchIndex?: number;
 }
 
+/** Server push — batched user presence changes. No request id. */
+export interface PresenceBroadcast {
+	type: "PresenceBroadcast";
+	subId: number;
+	users: PresenceBroadcastEntry[];
+}
+
+/** Single user entry in a PresenceBroadcast. */
+export interface PresenceBroadcastEntry {
+	userId: Uint8Array; // bin16 on wire
+	event: "join" | "update" | "leave";
+	data?: Record<string, unknown>; // Decoded string-keyed field map; present for join/update
+	joinedAt?: number; // Unix timestamp ms; present only for join
+}
+
+/** Server push — shared state changes. No request id. */
+export interface SharedStateBroadcast {
+	type: "SharedStateBroadcast";
+	subId: number;
+	data: Record<string, unknown> | Record<string, unknown>[]; // Single decoded patch or array of patches
+}
+
+/** Decoded presence entry exposed to SDK consumers. */
+export interface PresenceEntry {
+	userId: string; // Decoded UUID string
+	data: Record<string, unknown>; // Unflattened, string-keyed
+	joinedAt: number; // Unix timestamp ms
+}
+
+/** Options for presence.getAll(). */
+export interface PresenceGetAllOptions {
+	includeSelf?: boolean;
+}
+
+/** Public Presence API interface. */
+export interface Presence {
+	/** Set your user presence data. Fire-and-forget. Throttled to ~60fps. */
+	set(data: Record<string, unknown>): void;
+	/** Merge fields into namespace-level shared state. Fire-and-forget. */
+	setShared(data: Record<string, unknown>): void;
+	/** Subscribe to user presence changes. Returns unsubscribe function. */
+	subscribe(callback: (users: PresenceEntry[]) => void): () => void;
+	/** Subscribe to shared state changes. Returns unsubscribe function. */
+	subscribeShared(
+		callback: (shared: Record<string, unknown> | null) => void,
+	): () => void;
+	/** Synchronous local lookup of a specific user's presence. */
+	get(userId: string): PresenceEntry | undefined;
+	/** Synchronous local lookup of all users' presence. */
+	getAll(options?: PresenceGetAllOptions): PresenceEntry[];
+	/** Synchronous local lookup of current shared state. */
+	getShared(): Record<string, unknown> | null;
+	/** Remove your presence record. */
+	remove(): void;
+}
+
 /** Union of all inbound message types. */
 export type InboundMessage =
 	| OkResponse
@@ -282,4 +406,6 @@ export type InboundMessage =
 	| SchemaSync
 	| ConnectedMessage
 	| WriteCommitted
-	| WriteError;
+	| WriteError
+	| PresenceBroadcast
+	| SharedStateBroadcast;

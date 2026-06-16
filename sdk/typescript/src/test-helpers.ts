@@ -78,6 +78,7 @@ export class AutoMockWebSocket {
 		Promise.resolve().then(() => {
 			if (this.onopen) this.onopen();
 			this._autoRespondOk(1);
+			this._autoRespondOk(2);
 		});
 	}
 
@@ -193,9 +194,10 @@ export function makeManager(options?: Partial<ClientOptions>): {
 	return { manager, mockWs };
 }
 
-/** Trigger the ok response for the initial StoreSetNamespace (id=1). */
+/** Trigger ok responses for initial StoreSetNamespace (id=1) and PresenceSetNamespace (id=2). */
 export function triggerNamespaceOk(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
 }
 
 /** Full connect flow: acquire ticket + open + namespace ok. */

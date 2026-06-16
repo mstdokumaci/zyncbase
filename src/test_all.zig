@@ -58,6 +58,7 @@ test {
     _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
+    _ = @import("presence_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

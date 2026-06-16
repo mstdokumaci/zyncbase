@@ -1,5 +1,6 @@
 const std = @import("std");
 const schema_mod = @import("schema.zig");
+const parse = @import("schema/parse.zig");
 const Schema = schema_mod.Schema;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const ddl_generator = @import("ddl_generator.zig");
@@ -83,6 +84,19 @@ pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []
         .is_users_table = std.mem.eql(u8, name, "users"),
         .namespaced = !std.mem.eql(u8, name, "users"),
     };
+}
+
+pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const schema_mod.Table) !Schema {
+    return parse.initFromTables(
+        allocator,
+        version,
+        null,
+        tables,
+        &[_]schema_mod.PresenceField{},
+        &[_]schema_mod.PresenceField{},
+        &[_][]const u8{},
+        &[_][]const u8{},
+    );
 }
 
 pub const TableDef = struct {
@@ -201,6 +215,10 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         .allocator = allocator,
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = runtime_tables,
+        .presence_user_fields = &.{},
+        .presence_shared_fields = &.{},
+        .presence_user_fields_names = &.{},
+        .presence_shared_fields_names = &.{},
     };
     errdefer result.deinit();
 
