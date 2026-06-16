@@ -5,7 +5,7 @@ Presence Internals API Design requirements user awareness ephemeral state [ADR-0
                 │                               │
         [UserStateMap]                  [SharedStateMap]
     (userId → PresenceRecord)           (PresenceRecord)
-```Schema Wire Encoding Presence schema parsing startup server loads.json produces two flat field arrays flattening nested objects `__ one level nesting enforced deeper nesting startup failure```
+```Schema Wire Encoding Presence schema parsing startup server loads `presence.json produces two flat field arrays flattening nested objects `__` Arbitrary depth supported 500 flat fields per presence tier```
 presence.user:
   cursor.x  → cursor__x  → index 0
   cursor.y  → cursor__y  → index 1
