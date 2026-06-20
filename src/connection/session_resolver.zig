@@ -1,14 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const connection_mod = @import("connection.zig");
+const connection_mod = @import("state.zig");
 const Connection = connection_mod.Connection;
-const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const session_resolution = @import("session_resolution_buffer.zig");
+const ConnectionManager = @import("manager.zig").ConnectionManager;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const session_resolution = @import("resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
-const wire = @import("wire.zig");
-const authorization = @import("authorization.zig");
+const wire = @import("../wire.zig");
+const authorization = @import("../authorization.zig");
 
 pub const SessionResolver = struct {
     resolution_buffer: *SessionResolutionBuffer,

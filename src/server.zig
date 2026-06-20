@@ -12,10 +12,11 @@ const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
-const SessionResolver = @import("session_resolver.zig").SessionResolver;
+const connection = @import("connection.zig");
+const SessionResolver = connection.SessionResolver;
 const WriteOutcomeDispatcher = @import("write_outcome_dispatcher.zig").WriteOutcomeDispatcher;
-const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const ConnectionManager = connection.ConnectionManager;
+const ViolationTracker = connection.ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const authorization = @import("authorization.zig");
@@ -25,12 +26,11 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
 const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
-const ticket_exchange_mod = @import("ticket_exchange.zig");
-const TicketExchange = ticket_exchange_mod.TicketExchange;
+const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwksCache = @import("jwt_validator.zig").JwksCache;
-const Session = @import("session.zig").Session;
+const Session = connection.Session;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Atomic global server reference for signal handlers (written once before registration,
@@ -399,7 +399,7 @@ pub const ZyncBaseServer = struct {
 
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
-            self.websocket_server.post("/auth/ticket", te, ticket_exchange_mod.handleAuthTicket);
+            self.websocket_server.post("/auth/ticket", te, connection.handleAuthTicket);
         }
 
         // Register WebSocket handlers with server as user data

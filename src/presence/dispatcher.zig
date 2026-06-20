@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ConnectionManager = @import("../connection_manager.zig").ConnectionManager;
+const connection = @import("../connection.zig");
+const ConnectionManager = connection.ConnectionManager;
 const PresenceManager = @import("manager.zig").PresenceManager;
 const wire = @import("../wire.zig");
 

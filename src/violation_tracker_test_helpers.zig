@@ -1,4 +1,4 @@
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
 
 pub fn getViolationCount(tracker: *ViolationTracker, connection_id: u64) u32 {
     tracker.mutex.lock();

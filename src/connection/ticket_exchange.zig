@@ -1,10 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const JwtValidator = @import("jwt_validator.zig").JwtValidator;
-const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
+const JwtValidator = @import("../jwt_validator.zig").JwtValidator;
+const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
-const typed = @import("typed.zig");
-const c = @import("uwebsockets_wrapper.zig").c;
+const typed = @import("../typed.zig");
+const c = @import("../uwebsockets_wrapper.zig").c;
 
 pub const TicketExchange = struct {
     allocator: Allocator,

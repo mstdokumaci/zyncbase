@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("typed.zig");
+const typed = @import("../typed.zig");
 const DocId = typed.DocId;
 
 pub const SessionResolutionResult = struct {
