@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const TicketExchange = @import("ticket_exchange.zig").TicketExchange;
+const connection = @import("connection.zig");
+const TicketExchange = connection.TicketExchange;
 const typed = @import("typed.zig");
 
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};

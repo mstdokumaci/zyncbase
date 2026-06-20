@@ -1,12 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Connection = @import("connection.zig").Connection;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const MessageHandler = @import("message_handler.zig").MessageHandler;
-const Schema = @import("schema.zig").Schema;
-const wire = @import("wire.zig");
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const Connection = @import("state.zig").Connection;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MessageHandler = @import("../message_handler.zig").MessageHandler;
+const Schema = @import("../schema.zig").Schema;
+const wire = @import("../wire.zig");
+const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).

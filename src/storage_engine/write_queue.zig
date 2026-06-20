@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const SessionResolutionBuffer = @import("../session_resolution_buffer.zig").SessionResolutionBuffer;
+const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const typed = @import("../typed.zig");
 
 pub const CheckpointMode = enum {

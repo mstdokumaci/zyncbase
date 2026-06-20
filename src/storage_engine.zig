@@ -21,7 +21,7 @@ const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const filter_eval = @import("filter_eval.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
-const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
+const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
 const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
 
 pub const StorageError = storage_errors.StorageError;

@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const session_resolution = @import("session_resolution_buffer.zig");
+const session_resolution = @import("connection/resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
 const violation_tracker_helpers = @import("violation_tracker_test_helpers.zig");
 
 test "ConnectionViolationTracker: basic functionality" {
