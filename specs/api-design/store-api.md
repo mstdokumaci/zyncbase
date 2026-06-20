@@ -33,6 +33,9 @@ Creates a new document within a collection. The SDK generates a canonical lowerc
 ```typescript
 const id = await client.store.create('elements', { type: 'rect', x: 10 })
 ```
+
+**Required Field Validation**: The SDK performs early validation before sending the request. If any required fields (as defined in the schema) are missing from `value`, the call throws `SCHEMA_VALIDATION_FAILED` with `details: { missingFields: [...] }`. Field names in the error use dot notation (e.g., `address.city`) for readability. Note: `store.set` does not perform this validation since it supports partial updates.
+
 **Returns**: `Promise<string>` resolving to the generated ID after the create is accepted. Use `confirm: "committed"` when the caller needs writer-thread confirmation.
 
 Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.

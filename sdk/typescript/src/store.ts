@@ -2,6 +2,8 @@
 
 import type { OutboundRequest } from "./connection_wire.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { flatten, splitFieldPath } from "./path.js";
+import type { SchemaDictionary } from "./schema_dictionary.js";
 import {
 	buildBatch,
 	buildCreate,
@@ -35,6 +37,7 @@ export interface StoreConnection {
 	dispatch(msg: OutboundRequest): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
+	readonly schemaDictionary: SchemaDictionary;
 }
 
 interface SubscribeState {
@@ -89,6 +92,7 @@ export class StoreImpl {
 		value: JsonValue,
 		options?: WriteOptions,
 	): Promise<string> {
+		this.validateRequiredFields(collection, value);
 		const id = generateUUIDv7();
 		const command = buildCreate(collection, value, id, options);
 		await this.dispatchWrite(
@@ -347,6 +351,57 @@ export class StoreImpl {
 			pending.reject(err);
 		}
 		this.inFlightWrites.clear();
+	}
+
+	private validateRequiredFields(collection: string, value: JsonValue): void {
+		const schema = this.conn.schemaDictionary;
+		if (!schema.isReady()) return;
+		if (!this.isObjectRecord(value)) return;
+
+		const tableIndex = schema.getTableIndex(collection);
+		const fields = schema.getFields(tableIndex);
+		const flatValue = flatten(value);
+
+		const missingFields = this.findMissingRequiredFields(
+			schema,
+			tableIndex,
+			fields,
+			flatValue,
+		);
+
+		if (missingFields.length > 0) {
+			throw new ZyncBaseError(
+				`Missing required field(s): ${missingFields.join(", ")}`,
+				{
+					code: ErrorCodes.SCHEMA_VALIDATION_FAILED,
+					category: "validation",
+					retryable: false,
+					details: { missingFields },
+				},
+			);
+		}
+	}
+
+	private isObjectRecord(value: JsonValue): value is Record<string, JsonValue> {
+		return value !== null && typeof value === "object" && !Array.isArray(value);
+	}
+
+	private findMissingRequiredFields(
+		schema: SchemaDictionary,
+		tableIndex: number,
+		fields: string[],
+		flatValue: Record<string, JsonValue>,
+	): string[] {
+		const missing: string[] = [];
+		for (let fi = 0; fi < fields.length; fi++) {
+			if (schema.isSystemField(tableIndex, fi)) continue;
+			if (!schema.isRequiredField(tableIndex, fi)) continue;
+			const fieldName = fields[fi];
+			if (flatValue[fieldName] == null) {
+				missing.push(splitFieldPath(fieldName).join("."));
+			}
+		}
+		return missing;
 	}
 
 	private handleInboundMessage(msg: InboundMessage): void {

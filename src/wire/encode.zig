@@ -310,6 +310,7 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
             var flags: u8 = 0;
             if (field.isSystem()) flags |= 0b01;
             if (field.storage_type == .doc_id) flags |= 0b10;
+            if (field.required) flags |= 0b100;
             try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
     }

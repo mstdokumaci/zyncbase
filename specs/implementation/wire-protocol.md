@@ -754,7 +754,7 @@ Provides the structural dictionary for integer-based routing for both store and 
     ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
   ],
   "fieldFlags": [
-    [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id
+    [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id, bit 2 = required
     [3, 1, 0, 0, 1, 1]
   ],
   "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],

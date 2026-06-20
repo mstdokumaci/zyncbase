@@ -175,7 +175,7 @@ export class SchemaDictionary {
 	getTableName(index: number): string {
 		if (index < 0 || index >= this.tables.length) {
 			throw new SchemaError(
-				`SchemaDictionary: table index ${index} out of range (0..${this.tables.length - 1})`,
+				`SchemaDictionary: table index ${index} out of range`,
 				"TABLE_NOT_FOUND",
 			);
 		}
@@ -184,7 +184,7 @@ export class SchemaDictionary {
 
 	/** Get the field name for a given table and field index. Throws if out of range. */
 	getFieldName(tableIndex: number, fieldIndex: number): string {
-		if (tableIndex < 0 || tableIndex >= this.fields.length) {
+		if (tableIndex < 0 || tableIndex >= this.tables.length) {
 			throw new SchemaError(
 				`SchemaDictionary: table index ${tableIndex} out of range`,
 				"TABLE_NOT_FOUND",
@@ -370,6 +370,24 @@ export class SchemaDictionary {
 		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
 	}
 
+	isRequiredField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b100) !== 0;
+	}
+
+	isSystemField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b01) !== 0;
+	}
+
+	getFields(tableIndex: number): string[] {
+		if (tableIndex < 0 || tableIndex >= this.tables.length) {
+			throw new SchemaError(
+				`SchemaDictionary: table index ${tableIndex} out of range`,
+				"TABLE_NOT_FOUND",
+			);
+		}
+		return this.fields[tableIndex];
+	}
+
 	// ─── Presence Encoding / Decoding ─────────────────────────────────────
 
 	/**
@@ -498,7 +516,7 @@ export class SchemaDictionary {
 	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
 
 	private getFieldFlags(tableIndex: number, fieldIndex: number): number {
-		if (tableIndex < 0 || tableIndex >= this.fields.length) {
+		if (tableIndex < 0 || tableIndex >= this.tables.length) {
 			throw new SchemaError(
 				`SchemaDictionary: table index ${tableIndex} out of range`,
 				"TABLE_NOT_FOUND",
@@ -539,11 +557,3 @@ export class SchemaDictionary {
 		return hasher.h64ToString(canonical).padStart(16, "0");
 	}
 }
-
-/**
- * Flatten a nested presence data object using "__" as the key separator.
- * Only flattens one level deep (presence schema allows max 1 level of nesting).
- *
- * Example:
- *   { cursor: { x: 1, y: 2 }, status: "active" } → { "cursor__x": 1, "cursor__y": 2, "status": "active" }
- */
