@@ -360,14 +360,13 @@ export class StoreImpl {
 
 		const tableIndex = schema.getTableIndex(collection);
 		const fields = schema.getFields(tableIndex);
-		const flatValue = flatten(value as Record<string, JsonValue>);
-		const providedKeys = new Set(Object.keys(flatValue));
+		const flatValue = flatten(value);
 
 		const missingFields = this.findMissingRequiredFields(
 			schema,
 			tableIndex,
 			fields,
-			providedKeys,
+			flatValue,
 		);
 
 		if (missingFields.length > 0) {
@@ -383,7 +382,7 @@ export class StoreImpl {
 		}
 	}
 
-	private isObjectRecord(value: JsonValue): boolean {
+	private isObjectRecord(value: JsonValue): value is Record<string, JsonValue> {
 		return value !== null && typeof value === "object" && !Array.isArray(value);
 	}
 
@@ -391,14 +390,14 @@ export class StoreImpl {
 		schema: SchemaDictionary,
 		tableIndex: number,
 		fields: string[],
-		providedKeys: Set<string>,
+		flatValue: Record<string, JsonValue>,
 	): string[] {
 		const missing: string[] = [];
 		for (let fi = 0; fi < fields.length; fi++) {
 			if (schema.isSystemField(tableIndex, fi)) continue;
 			if (!schema.isRequiredField(tableIndex, fi)) continue;
 			const fieldName = fields[fi];
-			if (!providedKeys.has(fieldName)) {
+			if (flatValue[fieldName] == null) {
 				missing.push(splitFieldPath(fieldName).join("."));
 			}
 		}

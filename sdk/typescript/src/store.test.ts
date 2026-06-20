@@ -460,6 +460,37 @@ describe("StoreImpl", () => {
 			});
 		});
 
+		test("create treats explicit undefined as missing", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store } = makeStore([], schema);
+
+			await expect(
+				store.create("posts", {
+					title: undefined as unknown as JsonValue,
+					body: "Hello",
+				}),
+			).rejects.toMatchObject({
+				code: "SCHEMA_VALIDATION_FAILED",
+				message: expect.stringContaining("address.city"),
+			});
+		});
+
+		test("create rejects null for required fields", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store } = makeStore([], schema);
+
+			await expect(
+				store.create("posts", {
+					title: null,
+					body: "Hello",
+					address: { city: "London" },
+				}),
+			).rejects.toMatchObject({
+				code: "SCHEMA_VALIDATION_FAILED",
+				message: expect.stringContaining("title"),
+			});
+		});
+
 		test("create skips validation when schema is not ready", async () => {
 			const schema = new SchemaDictionary();
 			const { store, messages } = makeStore([], schema);
