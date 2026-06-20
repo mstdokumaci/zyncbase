@@ -370,6 +370,24 @@ export class SchemaDictionary {
 		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
 	}
 
+	isRequiredField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b100) !== 0;
+	}
+
+	isSystemField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b01) !== 0;
+	}
+
+	getFields(tableIndex: number): string[] {
+		if (tableIndex >= this.fields.length) {
+			throw new SchemaError(
+				`SchemaDictionary: table index ${tableIndex} out of range`,
+				"TABLE_NOT_FOUND",
+			);
+		}
+		return this.fields[tableIndex];
+	}
+
 	// ─── Presence Encoding / Decoding ─────────────────────────────────────
 
 	/**

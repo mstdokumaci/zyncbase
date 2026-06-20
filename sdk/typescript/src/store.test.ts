@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { OutboundRequest } from "./connection_wire.js";
+import { SchemaDictionary } from "./schema_dictionary.js";
 import { type StoreConnection, StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
 import type {
@@ -41,12 +42,17 @@ function makeCommittedDispatch(
 	};
 }
 
-function makeStore(responses: Array<OkResponse | Error> = []) {
+function makeStore(
+	responses: Array<OkResponse | Error> = [],
+	schemaDictionary?: SchemaDictionary,
+) {
 	const messages: OutboundRequest[] = [];
 	const errors: unknown[] = [];
 	const pendingResponses = [...responses];
 	let messageHandler: ((msg: InboundMessage) => void) | null = null;
 	const disconnectHandlers: Array<() => void> = [];
+
+	const schema = schemaDictionary ?? new SchemaDictionary();
 
 	const conn: StoreConnection = {
 		dispatch: async (msg: OutboundRequest): Promise<OkResponse> => {
@@ -62,6 +68,7 @@ function makeStore(responses: Array<OkResponse | Error> = []) {
 			if (event === "disconnected")
 				disconnectHandlers.push(handler as () => void);
 		},
+		schemaDictionary: schema,
 	};
 
 	const tracker = new SubscriptionTracker();
@@ -74,7 +81,7 @@ function makeStore(responses: Array<OkResponse | Error> = []) {
 		for (const h of disconnectHandlers) h();
 	};
 
-	return { store, tracker, messages, errors, conn, push, disconnect };
+	return { store, tracker, messages, errors, conn, push, disconnect, schema };
 }
 
 async function flushPromises(): Promise<void> {
@@ -345,6 +352,122 @@ describe("StoreImpl", () => {
 
 		await expect(writePromise).rejects.toMatchObject({
 			code: "CONNECTION_FAILED",
+		});
+	});
+
+	describe("required field validation", () => {
+		async function setupSchemaWithRequiredFields() {
+			const schema = new SchemaDictionary();
+			await schema.processSchemaSync({
+				tables: ["posts"],
+				fields: [
+					[
+						"id",
+						"namespace_id",
+						"owner_id",
+						"title",
+						"body",
+						"address__city",
+						"created_at",
+						"updated_at",
+					],
+				],
+				fieldFlags: [
+					[
+						0b01, // id: system
+						0b01, // namespace_id: system
+						0b01, // owner_id: system
+						0b100, // title: required
+						0b00, // body: not required
+						0b100, // address__city: required (nested)
+						0b01, // created_at: system
+						0b01, // updated_at: system
+					],
+				],
+			});
+			return schema;
+		}
+
+		test("create throws SCHEMA_VALIDATION_FAILED when required fields are missing", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store } = makeStore([], schema);
+
+			await expect(
+				store.create("posts", { body: "Hello" }),
+			).rejects.toMatchObject({
+				code: "SCHEMA_VALIDATION_FAILED",
+				message: "Missing required field(s): title, address.city",
+			});
+		});
+
+		test("create includes missingFields in error details", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store } = makeStore([], schema);
+
+			try {
+				await store.create("posts", { body: "Hello" });
+				expect.fail("should have thrown");
+			} catch (err) {
+				expect(
+					(err as { details?: { missingFields?: string[] } }).details,
+				).toBeDefined();
+				expect(
+					(err as { details?: { missingFields?: string[] } }).details
+						?.missingFields,
+				).toEqual(["title", "address.city"]);
+			}
+		});
+
+		test("create succeeds when all required fields are present", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store, messages } = makeStore([], schema);
+
+			const id = await store.create("posts", {
+				title: "Hello",
+				body: "World",
+				address: { city: "London" },
+			});
+
+			expect(id).toBeDefined();
+			expect(messages).toHaveLength(1);
+			expect(messages[0]).toMatchObject({
+				type: "StoreSet",
+				path: ["posts", id],
+			});
+		});
+
+		test("create with nested required field shows dot notation in error", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store } = makeStore([], schema);
+
+			await expect(
+				store.create("posts", { title: "Hello" }),
+			).rejects.toMatchObject({
+				message: "Missing required field(s): address.city",
+			});
+		});
+
+		test("set does NOT validate required fields", async () => {
+			const schema = await setupSchemaWithRequiredFields();
+			const { store, messages } = makeStore([], schema);
+
+			await store.set("posts.p1", { body: "partial update" });
+
+			expect(messages).toHaveLength(1);
+			expect(messages[0]).toMatchObject({
+				type: "StoreSet",
+				path: ["posts", "p1"],
+			});
+		});
+
+		test("create skips validation when schema is not ready", async () => {
+			const schema = new SchemaDictionary();
+			const { store, messages } = makeStore([], schema);
+
+			const id = await store.create("posts", { anything: "goes" });
+
+			expect(id).toBeDefined();
+			expect(messages).toHaveLength(1);
 		});
 	});
 });
