@@ -22,8 +22,8 @@ Use Zig as the primary implementation language for the core engine.
 - **C/C++ Interop**: Zero-cost FFI allows seamless integration with uWebSockets and other battle-tested C/C++ libraries.
 
 **Principles Alignment**: 
-- #1 Real-time First
-- #8 Predictable Performance
+- P-RTF (Real-time First)
+- P-PPF (Predictable Performance)
 
 **Consequences**:
 - ✅ Best-in-class performance and predictable latency.
@@ -50,8 +50,8 @@ Use uWebSockets (written in C++) as the networking foundation.
 - **Proven with Zig**: Successful integration demonstrated by Bun; direct C++ integration via Zig FFI has zero wrapper overhead.
 
 **Principles Alignment**: 
-- #1 Real-time First
-- #8 Predictable Performance
+- P-RTF (Real-time First)
+- P-PPF (Predictable Performance)
 
 **Consequences**:
 - ✅ Extremely low latency and high throughput.
@@ -77,9 +77,10 @@ Use SQLite exclusively as the storage layer, with no other database adapters.
 - **Full-Text Search**: Built-in FTS5 extension provides efficient text indexing without external engines.
 
 **Principles Alignment**: 
-- #3 Self-Hosting First
-- #4 Predictable Costs
-- #8 Predictable Performance
+- P-SHF (Self-Hosting First)
+- P-PRC (Predictable Costs)
+- P-PPF (Predictable Performance)
+- P-SOT (SQLite as Source of Truth)
 
 **Consequences**:
 - ✅ Simplest operational model and deployment.
@@ -104,7 +105,8 @@ Exclusively use SQLite in Write-Ahead Logging (WAL) mode.
 - **Sequential I/O**: WAL optimizes I/O patterns, improving write performance.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
+- P-SOT (SQLite as Source of Truth)
 
 **Consequences**:
 - ✅ True parallel reads utilizing all CPU cores.
@@ -131,7 +133,8 @@ Implement a multi-threaded core with read/write separation:
 - Matches the performance characteristics of Bun and uWebSockets.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
+- P-VSF (Vertical Scaling First)
 
 **Consequences**:
 - ✅ Full utilization of system resources.
@@ -157,8 +160,9 @@ No. ZyncBase is designed exclusively for vertical scaling (single server, all CP
 - Avoids the performance and consistency overhead of P2P/Raft/Paxos.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
-- #3 Self-Hosting First
+- P-PPF (Predictable Performance)
+- P-SHF (Self-Hosting First)
+- P-VSF (Vertical Scaling First)
 
 **Consequences**:
 - ✅ Best-in-class single-node performance.
@@ -169,6 +173,9 @@ No. ZyncBase is designed exclusively for vertical scaling (single server, all CP
 ---
 
 ## ADR-007: Optimistic Writes by Default
+
+> **SUPERSEDED** by [ADR-031](#adr-031-mutation-acknowledgement-and-realtime-consistency-semantics).  
+> This decision has been replaced. The original text is preserved for historical context.
 
 **Date**: 2026-03-09  
 
@@ -184,7 +191,7 @@ All writes (`store.set`, `store.remove`) are optimistic by default.
 - Simplifies UI code (no waiting for API responses).
 
 **Principles Alignment**: 
-- #1 Real-time First
+- P-RTF (Real-time First)
 
 **Consequences**:
 - ✅ Instant UI feedback.
@@ -209,8 +216,8 @@ No. Validation is enforced strictly on the server. The Client SDK uses TypeScrip
 - Server must validate anyway for security; client validation is redundant.
 
 **Principles Alignment**: 
-- #9 Secure by Default
-- #5 TypeScript-First
+- P-SBD (Secure by Default)
+- P-TSF (TypeScript-First)
 
 **Consequences**:
 - ✅ Smaller SDK bundle size.
@@ -236,8 +243,8 @@ ZyncBase follows a "Zero-Zig" philosophy where all core functionality is managed
 For the full philosophy and its impact on architectural decisions, see the [Zero-Zig Philosophy in Core Principles](./core-principles.md#zero-zig-philosophy).
 
 **Principles Alignment**: 
-- #3 Self-Hosting First
-- #5 TypeScript-First
+- P-SHF (Self-Hosting First)
+- P-TSF (TypeScript-First)
 
 **Consequences**:
 - ✅ No compilation needed; instant setup.
@@ -260,7 +267,7 @@ Use a Prisma-inspired JSON syntax (implicit AND, lowercase operators).
 - Clean syntax with no prefixes or complex nesting required for simple queries.
 
 **Principles Alignment**: 
-- #5 TypeScript-First
+- P-TSF (TypeScript-First)
 
 **Consequences**:
 - ✅ Familiarity and ease of use.
@@ -284,7 +291,7 @@ Utilize atomic reference counting for the in-memory cache.
 - Note: Must use proper atomic operations; global mutex fallbacks are unacceptable.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -299,8 +306,8 @@ Risk of stack overflow from malicious client payloads with deep nesting.
 Use an iterative (not recursive) MessagePack parser with hard limits on nesting depth and payload size.
 
 **Principles Alignment**: 
-- #9 Secure by Default
-- #8 Predictable Performance
+- P-SBD (Secure by Default)
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -315,7 +322,7 @@ Wire protocol needs to be both efficient and accessible for debugging.
 MessagePack for production (smaller, faster), JSON mode for debug.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -330,7 +337,7 @@ Should we enable per-message deflate compression?
 No compression in v1.0. MessagePack is already compact. Compression adds CPU overhead and latency.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -349,11 +356,14 @@ SDK explicitly separates methods into `client.store.*` and `client.presence.*`.
 - Prevents accidental misuse of presence for durable data.
 
 **Principles Alignment**: 
-- #5 TypeScript-First
+- P-TSF (TypeScript-First)
 
 ---
 
 ## ADR-016: Bun Hook Server
+
+> **SUPERSEDED** by [ADR-032](#adr-032-config-driven-authentication-and-external-permission-claims).  
+> This decision has been replaced. The original text is preserved for historical context.
 
 **Date**: 2026-03-09  
 
@@ -364,8 +374,8 @@ How to handle complex relational authorization without bloating the Zig core?
 Provide an out-of-the-box Bun-based Hook Server for complex logic. Stateless checks remain in `authorization.json`.
 
 **Principles Alignment**: 
-- #7 Declarative Security
-- #5 TypeScript-First
+- P-DES (Declarative Security)
+- P-TSF (TypeScript-First)
 
 **Consequences**:
 - ✅ Unlimited flexibility using full TypeScript.
@@ -390,8 +400,8 @@ Server-Time Last-Write-Wins (LWW) at the Path Level.
 - **Order Guarantee**: Single vertically-scaled server guarantees total global order (ADR-006).
 
 **Principles Alignment**: 
-- #1 Real-time First
-- #8 Predictable Performance
+- P-RTF (Real-time First)
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -407,8 +417,8 @@ MVP supports specific operators (eq, ne, gt, etc.) but excludes Regex, FTS, and 
 - **Simplicity**: Guarantees predictable performance for the writer loop.
 
 **Principles Alignment**: 
-- #8 Predictable Performance
-- #9 Secure by Default
+- P-PPF (Predictable Performance)
+- P-SBD (Secure by Default)
 
 **Consequences**:
 - ⚠️ Developers must rely on computed properties or application-side search for complex search.
@@ -441,8 +451,8 @@ See [Query Grammar](../implementation/query-grammar.md) for the full wire encodi
 - Nested path flattening (`address.city` → `address__city`) happens in TypeScript where it's trivial.
 
 **Principles Alignment**: 
-- #5 TypeScript-First
-- #8 Predictable Performance
+- P-TSF (TypeScript-First)
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -467,7 +477,8 @@ Establish strict targets for ZyncBase v1.0.
 | Cold start time | < 100ms | To ready state |
 
 **Principles Alignment**: 
-- #8 Predictable Performance
+- P-PPF (Predictable Performance)
+- P-VSF (Vertical Scaling First)
 
 ---
 
@@ -483,8 +494,8 @@ Exclusively use fine-grained change detection with in-memory AST evaluation.
 - Sub-100ms sync requires avoiding disk loop during broadcast phase.
 
 **Principles Alignment**: 
-- #1 Real-time First
-- #8 Predictable Performance
+- P-RTF (Real-time First)
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -496,8 +507,8 @@ Exclusively use fine-grained change detection with in-memory AST evaluation.
 Implement a 6-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate-Limit, Server) that dictates automatic SDK behavior.
 
 **Principles Alignment**: 
-- #5 TypeScript-First
-- #9 Secure by Default
+- P-TSF (TypeScript-First)
+- P-SBD (Secure by Default)
 
 ---
 
@@ -537,10 +548,13 @@ Subscription engine replaces the lock-free cache for application data reads. Loc
 
 **Deferred**: In-memory SQLite for warm-start/fast `loadMore`; SDK subset query matching; specialized per-field index structures (interval trees, trigrams, tries).
 
-**Principles Alignment**:  
-- #1 Real-time First
-- #5 TypeScript-First
-- #8 Predictable Performance
+**Principles Alignment**: 
+- P-RTF (Real-time First)
+- P-SAT (Subscriptions as Authority for Client State)
+- P-TSF (TypeScript-First)
+- P-PPF (Predictable Performance)
+- P-SOT (SQLite as Source of Truth)
+- P-SAT (Subscriptions as Authority for Client State)
 
 **Supersedes / Modifies**:  
 - Narrows ADR-005: Lock-free cache role reduced to auth/schema metadata.
@@ -593,8 +607,8 @@ ZyncBase treats schema-defined typed arrays (`type: "array"` + primitive `items`
 - Faster membership/equality behavior in SQL and in-memory evaluation.
 
 **Principles Alignment**:  
-- #5 TypeScript-First  
-- #8 Predictable Performance
+- P-TSF (TypeScript-First)  
+- P-PPF (Predictable Performance)
 
 ---
 
@@ -620,9 +634,9 @@ Replace all schema-defined string identifiers with dense integer mappings over t
 - **Forward Compatibility**: Sending the dictionary arrays from the server dynamically guarantees that older, stale mobile clients can automatically adapt to newly injected fields without breaking. 
 
 **Principles Alignment**:  
-- #8 Predictable Performance
-- #1 Real-time First
-- #5 TypeScript-First
+- P-PPF (Predictable Performance)
+- P-RTF (Real-time First)
+- P-TSF (TypeScript-First)
 
 ---
 
@@ -643,8 +657,9 @@ Implement a hidden internal system table `_zync_namespaces (id INTEGER PRIMARY K
 - Wire protocol remains stateful and optimized (no strings sent per data message).
 
 **Principles Alignment**:  
-- #8 Predictable Performance  
-- #5 TypeScript-First
+- P-PPF (Predictable Performance)  
+- P-TSF (TypeScript-First)
+- P-SOT (SQLite as Source of Truth)
 
 ---
 
@@ -674,9 +689,9 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 - Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation and same-row SQL predicate injection, preventing the "slow query" problem in the auth layer.
 
 **Principles Alignment**:  
-- #1 Primitives over Magic (Exposing `users` as a standard collection instead of a hidden config)
-- #8 Predictable Performance  
-- #9 Secure by Default
+- P-POM (Primitives over Magic) — exposing `users` as a standard collection instead of a hidden config
+- P-PPF (Predictable Performance)  
+- P-SBD (Secure by Default)
 
 ---
 
@@ -703,8 +718,8 @@ By default, all ZyncBase collections are horizontally partitioned by a `namespac
 - Avoids broad `namespace_id = :active_namespace_id OR namespace_id = 0` predicates in hot paths. Each table has exactly one namespace predicate selected from schema metadata: active namespace for namespaced tables, `0` for global tables.
 
 **Principles Alignment**:  
-- #1 Primitives over Magic
-- #3 SQLite as the Source of Truth
+- P-POM (Primitives over Magic)
+- P-SOT (SQLite as Source of Truth)
 
 ---
 
@@ -735,9 +750,9 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 - Avoids special anonymous-user shortcuts that bypass SQLite and later break foreign keys, authorization, or auditability.
 
 **Principles Alignment**:  
-- #1 Primitives over Magic
-- #3 SQLite as the Source of Truth
-- #7 Secure by Default
+- P-POM (Primitives over Magic)
+- P-SOT (SQLite as Source of Truth)
+- P-SBD (Secure by Default)
 
 ---
 
@@ -1074,10 +1089,10 @@ The clearer boundary is that ZyncBase is a resource server. It validates externa
 10. Tenant or project switching does not require a new JWT if the active JWT contains compatible scoped grant arrays. For very large or frequently changing permission sets, the application should mint narrower active-context tokens.
 
 **Principles Alignment**:
-- #3 Self-Hosting First: no required Bun process or extra runtime.
-- #5 TypeScript-First: applications can still use any JS/TS identity layer, but ZyncBase does not run it.
-- #7 Declarative Security: all ZyncBase-side authorization remains in JSON.
-- #8 Predictable Performance: authorization has no foreign calls, joins, or hidden database reads.
+- P-SHF (Self-Hosting First): no required Bun process or extra runtime.
+- P-TSF (TypeScript-First): applications can still use any JS/TS identity layer, but ZyncBase does not run it.
+- P-DES (Declarative Security): all ZyncBase-side authorization remains in JSON.
+- P-PPF (Predictable Performance): authorization has no foreign calls, joins, or hidden database reads.
 
 **Consequences**:
 
@@ -1200,10 +1215,10 @@ Complete message specifications are in [Wire Protocol](../implementation/wire-pr
 - `$data` in presence auth rules is consistent with `$value` in store write rules. The plumbing is identical — the incoming integer-keyed map is decoded and made available to the rule evaluator before the write is accepted.
 
 **Principles Alignment**:
-- #1 Real-time First
-- #5 TypeScript-First
-- #8 Predictable Performance
-- #9 Secure by Default
+- P-RTF (Real-time First)
+- P-TSF (TypeScript-First)
+- P-PPF (Predictable Performance)
+- P-SBD (Secure by Default)
 
 **Consequences**:
 

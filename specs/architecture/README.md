@@ -5,7 +5,7 @@ This directory contains the foundational design documents, principles, and archi
 ---
 
 ## 🏗️ [Core Principles](./core-principles.md)
-The high-level philosophy and "North Star" goals for the project. These nine principles guide every technical trade-off and feature design, focusing on real-time performance, self-hosting, and developer experience.
+The high-level philosophy and "North Star" goals for the project. These thirteen principles guide every technical trade-off and feature design, focusing on real-time performance, self-hosting, and developer experience.
 
 ## 📜 [Architecture Decision Records (ADRs)](./adrs.md)
 A chronological log of significant architectural decisions. Each ADR documents the context, the decision made, the rationale behind it, and the consequences.
