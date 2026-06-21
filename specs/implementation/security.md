@@ -1,180 +1,65 @@
-# Security Model
+# Security
 
-**Drivers**: [Auth System](./auth-system.md), [Auth Exchange](./auth-exchange.md), [Networking Implementation](./networking.md)
+**Drivers**: [ADR-016](../architecture/adrs.md#adr-016-authentication-authorization-and-the-trust-boundary), [ADR-015](../architecture/adrs.md#adr-015-scoped-session-management), [Auth Exchange](./auth-exchange.md), [Auth System](./auth-system.md), [Error Taxonomy](./error-taxonomy.md)
 
-This document describes the security mechanisms implemented inside ZyncBase. It covers the defense-in-depth layer model, the specific parser limits enforced in Zig, native authentication and authorization, and the rate limiter data structures.
+Security is layered: transport admission, parser/resource limits, authentication, scoped session resolution, authorization, and teardown all fail closed. Client and SDK checks are convenience only; server-side validation is authoritative.
 
----
+## Source Files
 
-## Defense-in-Depth Layer Model
+| File | Responsibility |
+|------|----------------|
+| `src/config_loader.zig` | Security config values such as origins, message limits, and rate limits. |
+| `src/uwebsockets_wrapper.zig`, `src/uws_bridge.cpp` | Transport callbacks and origin/frame admission surface. |
+| `src/message_handler.zig` | Rate limiting, parser error handling, scoped session gate, and error propagation. |
+| `src/connection/violations.zig` | Repeated malformed/security-violation tracking. |
+| `src/connection/ticket_exchange.zig` | HTTP ticket exchange and session projection. |
+| `src/jwt_validator.zig` | JWT/JWKS validation and key caching. |
+| `src/authorization/*` | Namespace, store, write, read, and presence authorization. |
+| `src/wire/decode.zig` | Envelope/request extraction and message shape validation. |
+| `src/msgpack_utils.zig` | MessagePack decoding limits and helpers. |
 
-ZyncBase enforces security at seven layers, each implemented in a specific component:
+## Security Layers
 
-```
-Layer 1: TLS (uWebSockets / OpenSSL)          — encrypts all client traffic
-Layer 2: Rate Limiting (ConnectionLimiter)       — per-IP connection and message limits
-Layer 3: Input Validation (MessagePack parser)   — enforces size/depth/type limits before any allocation
-Layer 4: Authentication (AuthExchange)           — ticket validation on every new connection
-Layer 5: Authorization (authorization.json)      — native session, namespace, and same-row policy checks
-Layer 6: Namespace Isolation (StorageLayer)      — every query is scoped to namespace_id
-Layer 7: Audit Logging (SecurityLogger)          — structured log entry for every security event
-```
+| Layer | Owner | Rule |
+|-------|-------|------|
+| Transport admission | networking wrapper/server config | Accept only configured WebSocket endpoint/origins and binary frames. |
+| Parser limits | `msgpack_utils`, `wire/decode` | Reject malformed, oversized, or deeply nested payloads before domain routing. |
+| Rate limiting | `MessageHandler`, `Connection` | Apply per-connection token bucket before envelope routing. |
+| Authentication | `ticket_exchange`, `jwt_validator` | Trust only validated tickets/tokens and projected session claims. |
+| Scoped session | `Connection`, `SessionResolver` | Store/presence operations require resolved namespace/user scope. |
+| Authorization | `authorization/*` | Namespace/read/write/presence checks are server-side and fail closed. |
+| Teardown | `MessageHandler`, `ConnectionManager`, presence/subscriptions | Disconnect removes connection-owned state and subscriptions. |
 
-Each layer is independent. A failure or bypass at one layer does not grant access — the next layer still applies.
+## Important Types
 
----
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `ConnectionViolationTracker` | connection id | Counts repeated malformed/security-sensitive messages and triggers close threshold. |
+| `JwtValidator` | JWKS cache, validation config | Validates token issuer/audience/signature/expiration. |
+| `TicketExchange` | JWT validator, session mapping | Converts a validated HTTP auth request into a short-lived WebSocket ticket/session. |
+| `AuthConfig` | schema, authorization parser | Runtime authorization rule set from `authorization.json`. |
+| `EvalContext` | session, namespace, record/document values | Resolves authorization operands and conditions. |
+| `ReadAuthInput` / `WriteAuthInput` | query/schema/session data | Builds read predicates and write authorization decisions. |
 
-## MessagePack Parser Limits
+## Fail-Closed Rules
 
-The parser enforces these limits before allocating any memory for the parsed value. Exceeding any limit closes the connection after `violation_threshold` violations.
+- Missing auth configuration or missing namespace/store rule denies access unless an explicit default rule says otherwise.
+- Store operations require store scope readiness; presence operations require presence scope readiness.
+- Namespace switching is rejected for incompatible `users.namespaced` scope.
+- Authorization predicate lowering failure denies the operation.
+- Unknown fields, invalid operators, and schema mismatches fail before storage mutation.
+- Public error codes and retry behavior are centralized in [Error Taxonomy](./error-taxonomy.md).
 
-```zig
-pub const ParserConfig = struct {
-    max_depth:         usize = 32,
-    max_size:          usize = 10 * 1024 * 1024,  // 10 MB
-    max_string_length: usize = 1 * 1024 * 1024,   // 1 MB
-    max_array_length:  usize = 100_000,
-    max_map_size:      usize = 100_000,
-};
-```
+## Resource Limits
 
-The parser is iterative (not recursive). It uses an explicit stack bounded by `max_depth`, so stack overflow is impossible regardless of input nesting.
-
-### Violation Handling
-
-```zig
-pub const ViolationTracker = struct {
-    count:     u32 = 0,
-    threshold: u32 = 3,
-
-    /// Returns true when the connection must be closed.
-    pub fn record(self: *ViolationTracker, err: ParserError) bool {
-        self.count += 1;
-        logSecurityEvent(.msgpack_violation, err);
-        return self.count >= self.threshold;
-    }
-};
-```
-
-After `threshold` violations the connection is closed with code `4000 + @intFromError(err)`.
-
----
-
-## Native Authorization Contract
-
-ZyncBase evaluates `authorization.json` in the Zig core. Authorization has no foreign runtime, no circuit breaker, and no application-code callback path.
-
-Rules can inspect:
-
-- `$session` claims projected from a validated JWT or anonymous identity
-- `$namespace` parts parsed from the active namespace
-- `$path` collection name
-- `$value` incoming mutation payload
-- same-row `$doc` fields lowered into storage predicates
-
-Rules cannot perform relationship traversal, joins, external API calls, or user-row permission reads. Those facts must be encoded in trusted token claims or same-row data before ZyncBase evaluates the request.
-
-When authorization fails, ZyncBase denies the operation with `NAMESPACE_UNAUTHORIZED` or `PERMISSION_DENIED`. It never fails open.
-
----
-
-## Rate Limiter Data Structures
-
-### Connection Limiter (per IP)
-
-```zig
-pub const ConnectionLimiter = struct {
-    // ip_str -> active connection count
-    counts: std.StringHashMap(u32),
-    max_per_ip: u32 = 100,
-
-    pub fn allow(self: *ConnectionLimiter, ip: []const u8) bool {
-        const entry = self.counts.getOrPutValue(ip, 0) catch return false;
-        if (entry.value_ptr.* >= self.max_per_ip) return false;
-        entry.value_ptr.* += 1;
-        return true;
-    }
-
-    pub fn release(self: *ConnectionLimiter, ip: []const u8) void {
-        if (self.counts.getPtr(ip)) |count| {
-            if (count.* > 0) count.* -= 1;
-        }
-    }
-};
-```
-
-### Message Rate Limiter (per connection, token bucket)
-
-```zig
-pub const RateLimiter = struct {
-    tokens:      f64,
-    max_tokens:  f64 = 100.0,
-    refill_rate: f64 = 100.0, // tokens per second
-    last_refill: i64,
-
-    pub fn consume(self: *RateLimiter) bool {
-        const now = std.time.milliTimestamp();
-        const elapsed_s = @as(f64, @floatFromInt(now - self.last_refill)) / 1000.0;
-        self.tokens = @min(self.max_tokens, self.tokens + elapsed_s * self.refill_rate);
-        self.last_refill = now;
-
-        if (self.tokens >= 1.0) {
-            self.tokens -= 1.0;
-            return true;
-        }
-        return false;
-    }
-};
-```
-
----
-
-## Namespace Isolation
-
-Every SQLite query generated by the query engine includes a `WHERE namespace_id = ?` clause. The `namespace_id` is set from the ready store scope, never from client-supplied data in the operation payload. Cross-namespace access requires an explicit authorization grant from the resolved `$session` claims and `authorization.json`.
-
-`$session.userId` is also scoped server state. It is resolved through the `users` table before store or presence operations are accepted, and it is never derived directly from a raw JWT subject or SDK client ID.
-
----
-
-## Invariants & Error Conditions
-
-| Invariant | Description |
-|-----------|-------------|
-| Fail-secure | Authentication and authorization failures deny access — never grant it |
-| Parser-before-alloc | No heap allocation occurs for message content until all parser limits pass |
-| Namespace scoping | `namespace_id` in every query comes from `AuthContext`, not from the wire message |
-| Violation threshold | A connection is closed after exactly `violation_threshold` parser violations |
-
-| Error | Behaviour |
-|-------|-----------|
-| `error.AuthFailed` | Deny connection or refresh, return `AUTH_FAILED` to client |
-| `error.PermissionDenied` | Deny operation, return `PERMISSION_DENIED` to client |
-| `error.MaxDepthExceeded` | Record violation; close connection if threshold reached |
-| `error.MaxSizeExceeded` | Record violation; close connection if threshold reached |
-
----
-
-## Validation & Success Criteria
-
-- [ ] TSan clean on all auth and rate-limiter paths
-- [ ] Parser rejects depth > 32 and size > 10 MB (unit tests in `src/msgpack_parser_test.zig`)
-- [ ] Auth rules deny invalid namespace and same-row permission attempts (unit tests)
-- [ ] Ticket validation rejects expired or reused tickets (unit tests)
-- [ ] Connection limiter blocks connection 101 from same IP (unit test)
-
-### Verification Commands
-```bash
-zig test src/msgpack_parser_test.zig
-zig build test -Dtest-filter="auth"
-zig test src/rate_limiter_test.zig
-zig build test -Dsanitize=thread
-```
-
----
+- Message size/depth/string/array/map limits are parser concerns, not domain concerns.
+- Rate limiting returns a public `RATE_LIMITED` error with optional `retryAfter`.
+- Repeated malformed/security-sensitive payloads close the connection.
+- Allocator exhaustion is treated as request/server failure, never as partial authorization success.
 
 ## See Also
-- [Auth System](./auth-system.md) — Native authorization rules
-- [Auth Exchange](./auth-exchange.md) — Ticket handshake and session projection
-- [Sanitizers](./sanitizers.md) — TSan and GPA coverage
-- [Networking Implementation](./networking.md) — TLS and connection lifecycle
+
+- [Auth Exchange](./auth-exchange.md)
+- [Auth System](./auth-system.md)
+- [Auth Grammar](./auth-grammar.md)
+- [Message Handler](./message-handler.md)

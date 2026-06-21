@@ -1,40 +1,79 @@
-# ZyncBase Schema Grammar
+# Schema Grammar
 
-This document defines the formal grammar and property specification for `schema.json`.
+**Drivers**: [ADR-003](../architecture/adrs.md#adr-003-configuration-first-design-zero-zig), [ADR-011](../architecture/adrs.md#adr-011-data-ownership-and-namespace-tenancy), [ADR-012](../architecture/adrs.md#adr-012-typed-array-fields-as-canonical-sorted-sets), [Storage](./storage.md), [Query Grammar](./query-grammar.md)
 
-## Root Structure
-
-| Key | Type | Description |
-|:---|:---:|:---|
-| `version` | `string` | Semver version of the schema (`MAJOR.MINOR.PATCH`). |
-| `store` | `object` | Map of table names to table definitions. |
-| `presence` | `object` | Optional. Typed ephemeral presence field definitions. When absent, the server synthesizes an implicit minimal schema (see [Implicit Presence Schema](#implicit-presence-schema)). Contains `user` and/or `shared` keys. |
+This document defines the schema configuration format (`schema.json`), system table behavior, validation constraints, and serialization layout for storage and wire communication.
 
 ---
 
-## Table Definition
+## Source Files
 
-| Key | Type | Description |
-|:---|:---:|:---|
-| `fields` | `object` | Map of field names to field definitions. |
-| `required` | `array<string>` | List of required field names (supports dot notation for nested fields). |
-| `namespaced` | `boolean` | If `true` (default), rows are scoped to the active namespace. If `false`, rows are stored under reserved global namespace ID `0` and are visible across namespaces. The `users` collection defaults to `false`. |
+| File | Responsibility |
+|------|----------------|
+| `src/schema/types.zig` | Defines table, field, array, index, and validation structure models. |
+| `src/schema/parse.zig` | Deserializes `schema.json`, validates naming rules, and performs dependency validation. |
+| `src/schema/format.zig` | Serializes schema definitions for JSON export or remote sync payloads. |
+| `src/schema/system.zig` | Injects implicit system tables (e.g. `users`) and implicit presence models. |
+| `src/ddl_generator.zig` | Translates the parsed schema state into relational SQLite `CREATE TABLE` and `CREATE INDEX` queries. |
 
-### Table Name Constraints
+## Important Types
 
-- Must be a valid JSON key.
-- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
-- Must not contain `__`.
-- Must not start with `_zync_`; that prefix is reserved for internal system tables.
-- The name `users` is reserved for the hybrid system collection.
-- SQLite reserved keywords are allowed because ZyncBase quotes identifiers in generated SQL.
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `Schema` | `Table` map, `PresenceSchema` | Root runtime schema context. |
+| `Table` | `Field` map, required field list | Metadata for a persistent collection (e.g. `namespaced` state). |
+| `Field` | type enum, constraints | Metadata for a table column, foreign keys, and indices. |
+| `PresenceSchema` | user field map, shared field map | Typed ephemeral presence layout definitions. |
 
-### Reserved System Collections
+---
 
-#### `users`
-The `users` collection is a special hybrid system table. It is always present in the database to map external identity claims (e.g., Auth0 `sub`) to internal `BLOB(16)` UUIDv7s, ensuring `owner_id` on all tables remains a compact binary format.
+## Table & Field Properties Reference
 
-**Implicit JSON:**
+### Table Properties
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `fields` | `object` | - | Map of field names to field definitions. |
+| `required` | `array<string>` | `[]` | List of required field names (supports dot notation for nested fields). |
+| `namespaced` | `boolean` | `true` | If `true`, rows are scoped to the active namespace. If `false`, rows are stored globally under namespace ID `0`. |
+
+### Field Properties
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `array`, `object`. |
+| `indexed` | `boolean` | `false` | Creates a database index for this column. |
+| `references` | `string` | `null` | Target table name for foreign key reference. Stored as `BLOB(16)` internally. |
+| `onDelete` | `string` | `"restrict"` | Foreign key delete rule: `set_null`, `cascade`, `restrict`. |
+| `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). |
+| `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
+
+---
+
+## Supported Field Types
+
+| JSON Type | SQLite Storage Type | Flattening Behavior | Description |
+|:---|:---:|:---|:---|
+| `string` | `TEXT` | Flat column | UTF-8 string value. |
+| `integer` | `INTEGER` | Flat column | 64-bit signed integer value. |
+| `number` | `REAL` | Flat column | 64-bit floating point value. |
+| `boolean` | `INTEGER` | Flat column | Boolean value (stored as 0 or 1). |
+| `array` | `BLOB` | Flat column | Persistent canonical sorted-set representation. |
+| `object` | (None) | Flat columns | Nested variables are flattened using `__` separator. |
+
+---
+
+## System Table: `users`
+
+The `users` collection is a special, hybrid system table:
+- **Scope**: Defaults to `"namespaced": false` (stored globally under namespace ID `0`).
+- **Implicit Columns**:
+  - `id`: `BLOB(16)` UUIDv7 (Primary Key).
+  - `external_id`: `TEXT` (maps external subjects/anonymous subjects).
+  - `owner_id`: Always equal to `id`.
+- **Single-Namespace Constraint**: If `users` is configured with `"namespaced": true`, the first `SetNamespace` binds the connection to a single namespace. Changing namespaces is rejected with `NAMESPACE_SWITCH_REJECTED`.
+- **Identity Resolver**: Creating a scoped session auto-upserts the identity mapping, generating a UUIDv7 user row if missing.
+
 ```json
 {
   "users": {
@@ -44,144 +83,48 @@ The `users` collection is a special hybrid system table. It is always present in
 }
 ```
 
-- **Implicitly Global:** It defaults to `"namespaced": false`, which stores rows under reserved global namespace ID `0`.
-- **Special Columns:** It possesses an implicitly created `external_id` (`TEXT`) column. Its `id` column is a standard `BLOB(16)` UUIDv7, and its `owner_id` column is always equal to `id`.
-- **Identity Key:** The identity mapping is unique by `(namespace_id, external_id)`. With the default global mode this is effectively global uniqueness; with `"namespaced": true`, the same external identity string may resolve to different internal users in different namespaces.
-- **Auto-Upsert:** When a scoped session is established, Zig resolves the external identity string through `external_id`, generating a new UUIDv7 row if missing. Anonymous SDK client IDs and authenticated JWT subjects use the same resolver. This ensures `owner_id`, presence `userId`, and any relational foreign keys to `users.id` always reference persisted user rows.
-- **Namespaced Users:** If `users` is configured with `"namespaced": true`, identity resolution uses the namespace ID of the scope being established. This mode is designed for single-namespace users: the server locks the connection to a single namespace for both store and presence scopes. The first `SetNamespace` (store or presence) establishes the connection's fixed namespace. Any subsequent `SetNamespace` for either scope is rejected with `NAMESPACE_SWITCH_REJECTED` if the namespace string differs. This prevents creating separate identity rows across namespaces for the same external identity.
-- **Session Gate:** Store and presence operations require a ready scoped session. Before namespace and user resolution complete, only lifecycle messages such as auth refresh, namespace selection, ping/pong, and close are valid.
-- **Extensible:** You can define `users` in your `schema.json` to append optional custom fields (like `avatar` or `language`). Custom `users` fields cannot be listed in `required`, because identity rows are auto-created before profile data exists. If omitted entirely, the engine treats it as the implicit JSON above.
+---
+
+## Naming & Storage Invariants
+
+- **Table/Field Identifiers**: Must match `[A-Za-z][A-Za-z0-9_]*`.
+- **Flat Mapping**: Nested objects are flattened into database columns using double-underscore `__` separator bounds (e.g., `profile__userId`).
+- **Reserved Prefixes**: Namespaces starting with `_zync_` are reserved for internal database systems. Identifier keys must not contain `__`.
+- **Built-in Columns**: Every table implicitly includes `id` (`BLOB(16)`), `namespace_id` (`INTEGER`), `owner_id` (`BLOB(16)`), `created_at` (`INTEGER`), and `updated_at` (`INTEGER`).
 
 ---
 
-## Field Definition
+## Typed Arrays (Canonical Sorted Sets)
 
-A field definition MUST contain a `type` property.
-
-### Field Name Constraints
-
-- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
-- Must not contain `__`; this separator is reserved for flattened nested object paths.
-- Must not use reserved system field names: `id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`.
-- In the `users` collection, must not use `external_id`; it is reserved for identity-provider subject mapping.
-
-### Supported Types
-
-| Type | SQLite Mapping | Description |
-|:---|:---:|:---|
-| `string` | `TEXT` | UTF-8 text string. |
-| `integer` | `INTEGER` | 64-bit signed integer. |
-| `number` | `REAL` | 64-bit floating point number. |
-| `boolean` | `INTEGER` | Boolean (0 or 1). |
-| `array` | `BLOB` | Stored as a canonical JSON array (sorted, unique, primitive-typed via `items`). |
-| `object` | (Flattened) | Logical grouping of fields. |
-
-### Shared Properties
-
-| Key | Type | Default | Description |
-|:---|:---:|:---|:---|
-| `type` | `string` | - | One of the types listed above. |
-| `indexed` | `boolean` | `false` | Creates a SQLite index for this column. |
-| `references` | `string` | `null` | Target table name for a foreign key relationship. Referenced fields are stored internally as packed `doc_id` values (`BLOB(16)`), while the SDK still exposes them as strings. |
-| `onDelete` | `string` | `"restrict"` | `set_null`, `cascade`, `restrict`. Note: `set_null` requires the field to be optional (not in `required`). |
-
-### Array Properties
-
-A field with `type: "array"` MUST contain an `items` property.
-
-| Key | Type | Default | Description |
-|:---|:---:|:---|:---|
-| `items` | `string` | - | Type of items within the array (must be a primitive type). |
-
-### Array Semantics (Canonical Sorted Set)
-
-For any field with `type: "array"`, ZyncBase enforces canonical sorted-set behavior:
-
-- Elements MUST match the primitive type declared by `items`.
-- `null` array elements are rejected.
-- Nested arrays and objects are rejected (`INVALID_ARRAY_ELEMENT`).
-- On write, arrays are normalized to sorted unique form.
-- Reads return this canonical sorted unique representation.
+- Fields of type `array` require a primitive type declaration via `items`.
+- Nested arrays or nested objects within arrays are prohibited.
+- Arrays are serialized and stored as unique, sorted arrays. Reads return this canonical representation.
 
 ---
 
-## Nested Objects & Flattening
-
-ZyncBase uses a **flat relational storage engine**. Nested objects are logically grouped in the schema but flattened in the database.
-
-- **Separator**: `__` (double underscore).
-- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*`, cannot contain `__`, and cannot use reserved system field names.
-- **Recursion**: Unlimited depth is supported for `object` types within both `store` and `presence` field definitions. For `presence`, a hard limit of 500 flat fields is enforced at server startup to guard against pathological schemas.
-
-Example:
-```json
-"profile": {
-    "type": "object",
-    "fields": {
-        "userId": { "type": "string" }
-    }
-}
-```
-Flattens to SQLite column: `profile__userId TEXT`.
-
-> *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
-
-> *System Columns*: Every storage table automatically includes five built-in system columns:
-> - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation. It is the collection-wide document identity (`PRIMARY KEY(id)`); `namespace_id` is not part of the document key.
-> - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table). Namespaced tables use the active namespace ID; global tables (`"namespaced": false`) use reserved global namespace ID `0`.
-> - `owner_id`: Stored internally as `BLOB(16)`. Automatically populated by the server with `$session.userId` upon document creation. For `users`, `owner_id` is equal to `id`.
-> - `created_at` & `updated_at`: Stored as `INTEGER` timestamps.
-
----
-
-## Presence Grammar (`presence`)
-
-The optional `presence` top-level key defines typed ephemeral presence fields. When present, it MUST contain at least a `user` key. The `shared` key is optional.
+## Presence Schema
 
 ### Presence Root
 
 | Key | Type | Description |
 |:---|:---:|:---|
-| `user` | `object` | Map of presence field names to presence field definitions. Fields owned per connected user. |
-| `shared` | `object` | Optional. Map of shared field names to presence field definitions. Namespace-level state. |
+| `user` | `object` | Map of presence fields owned per connected user. |
+| `shared` | `object` | Map of namespace-level shared presence fields. |
 
-### Presence Field Definition
+### Presence Field Validation Keywords
 
-Presence fields support a subset of the store field grammar:
+Presence fields support validation keywords:
 
-| Property | Applicable Types | Description |
+| Keyword | Applicable Types | Description |
 |:---|:---:|:---|
-| `type` | all | **Required.** One of: `string`, `integer`, `number`, `boolean`, `object`. |
-| `fields` | `object` | **Required for `object` type.** Map of sub-field names to scalar field definitions. Arbitrary depth is supported (bounded to 500 flat fields total). |
-| `enum` | `string`, `integer` | List of allowed values. |
-| `pattern` | `string` | Regex pattern validation. |
-| `minLength` | `string` | Minimum character length. |
-| `maxLength` | `string` | Maximum character length. |
-| `minimum` | `integer`, `number` | Minimum numeric value. |
-| `maximum` | `integer`, `number` | Maximum numeric value. |
+| `enum` | `string`, `integer` | Restricts values to allowed list. |
+| `pattern` | `string` | Regex validation. |
+| `minLength` / `maxLength` | `string` | Character bounds. |
+| `minimum` / `maximum` | `integer`, `number` | Numeric bounds. |
 
-Presence fields do NOT support: `indexed`, `references`, `onDelete`, `items` (no array fields), or `required` (presence is always a merge — no field is mandatory).
+### Implicit Presence Schema Layout
 
-### Presence Definition
-
-| Key | Type | Description |
-|:---|:---:|:---|
-| `user` | `object` | Required when `presence` is explicitly defined. Map of user-owned ephemeral field definitions. One record per connected user per namespace. |
-| `shared` | `object` | Optional. Map of namespace-level ephemeral field definitions. One record for the entire namespace. |
-
-#### Presence Field Name Constraints
-
-- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
-- Must not contain `__`; this separator is reserved for flattened nested object paths.
-- Must not use reserved system field names: `id`, `namespace_id`, `created_at`, `updated_at`.
-
-#### Presence Nesting
-
-Arbitrary depth of `object` nesting is supported (bounded to 500 flat fields total). Sub-fields are flattened using the `__` separator for wire encoding (`cursor: { x, y }` → `cursor__x`, `cursor__y`). The SDK handles flattening and unflattening transparently.
-
-### Implicit Presence Schema
-
-When the `presence` key is absent from `schema.json`, the server synthesizes a minimal implicit schema:
+If `presence` is omitted from `schema.json`, the server synthesizes the following layout:
 
 ```json
 {
@@ -194,69 +137,35 @@ When the `presence` key is absent from `schema.json`, the server synthesizes a m
 }
 ```
 
-This produces `presenceUserFields: ["status"]` and `presenceSharedFields: []` in the `SchemaSync` message. Presence is always usable — developers can call `presence.set({ status: "active" })` immediately without defining any schema. The implicit schema provides a useful default for the most common presence use case (online/offline status).
-
-Defining an explicit `presence` section in `schema.json` replaces the implicit schema entirely. Explicit schemas are recommended for applications with custom presence fields (cursor positions, typing indicators, etc.).
-
 ### Wire Index Derivation
 
-At server startup, the server flattens `presence.user` and `presence.shared` into index arrays:
+At boot, the server flattens presence definitions to index arrays sent to clients via `SchemaSync`:
 
-1. Iterate `presence.user` keys in definition order.
-2. For each `object` field, expand its sub-fields in definition order using `parentName__subFieldName`.
-3. For each scalar field, emit its name directly.
-4. The resulting flat array is `presenceUserFields[]`. Array position = wire integer index.
-5. Repeat for `presence.shared` → `presenceSharedFields[]`.
-
-These arrays are emitted in the `SchemaSync` message on every new connection.
-
-### Presence Error Catalog
-
-| Error | Condition |
-|:---|:---|
-| `InvalidPresence` | `presence` key is present but not an object. |
-| `MissingPresenceUser` | `presence` is present but `user` key is missing. |
-| `InvalidPresenceUser` | `presence.user` is not an object. |
-| `InvalidPresenceShared` | `presence.shared` is present but not an object. |
-| `InvalidPresenceFieldName` | Presence field name violates naming constraints. |
-| `InvalidPresenceFieldType` | Presence field `type` is missing, not a string, or not one of the supported types. |
-| `InvalidPresenceObjectField` | A presence `object` field is missing `fields`, or `fields` is not an object. |
+| Phase | Target | Iteration / Rule | Output |
+|:---|:---|:---|:---|
+| **Phase 1** | `presence.user` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceUserFields[]`. (Position = Wire Index). |
+| **Phase 2** | `presence.shared` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceSharedFields[]`. (Position = Wire Index). |
 
 ---
 
-## Validation Constraints
+## Supported Validation Constraints
 
-| Key | Applicable Types | Description |
+ZyncBase parses and enforces the following JSON schema validation properties on the write path:
+
+| Constraint Key | Applicable Field Types | Description / Validation Behaviour |
 |:---|:---:|:---|
-| `enum` | `string`, `integer` | List of allowed values. |
-| `pattern` | `string` | Regex pattern validation. |
-| `format` | `string` | Known formats (`email`, `uuid`, `ipv4`). |
-| `minLength` | `string` | Minimum character length. |
-| `maxLength` | `string` | Maximum character length. |
-| `minimum` | `integer`, `number` | Minimum numeric value. |
-| `maximum` | `integer`, `number` | Maximum numeric value. |
+| `enum` | `string`, `integer` | Restricts values to a fixed list of allowed options. |
+| `pattern` | `string` | Regex pattern matching check. |
+| `format` | `string` | Predefined validation formats (e.g. `email`, `uuid`, `ipv4`). |
+| `minLength` | `string` | Minimum character length constraints. |
+| `maxLength` | `string` | Maximum character length constraints. |
+| `minimum` | `integer`, `number` | Minimum numeric value bounds (inclusive). |
+| `maximum` | `integer`, `number` | Maximum numeric value bounds (inclusive). |
 
 ---
 
-## Error Catalog
+## See Also
 
-The following errors are returned by `Schema.init`:
-
-| Error | Condition |
-|:---|:---|
-| `InvalidSchema` | File is not a valid JSON object. |
-| `MissingVersion` | `version` key is missing. |
-| `InvalidVersion` | `version` is not a string. |
-| `MissingStore` | `store` key is missing. |
-| `InvalidStore` | `store` is not an object. |
-| `InvalidTableName` | Table name is empty, starts with a non-letter, contains a non-alphanumeric/non-underscore character, or contains `__`. |
-| `InvalidTableDefinition` | A table value in `store` is not an object. |
-| `MissingFieldType` | A field definition lacks the `type` property. |
-| `InvalidFieldDefinition` | A field value is not an object. |
-| `InvalidFieldType` | `type` value is not a string. |
-| `InvalidFieldName` | Field name is empty, starts with a non-letter, contains a non-alphanumeric/non-underscore character, or contains `__`. |
-| `UnknownFieldType` | `type` string is not recognized. |
-| `InvalidOnDelete` | `onDelete` value is not one of `cascade`, `restrict`, `set_null`; or `set_null` is used on a `required` field. |
-| `MissingArrayItems` | `items` property is missing for an `array` field. |
-| `InvalidArrayItems` | `items` value is not a string. |
-| `UnsupportedArrayItemsType` | `items` type is not one of the allowed primitive types. |
+- [Error Taxonomy](./error-taxonomy.md)
+- [Storage](./storage.md)
+- [Query Grammar](./query-grammar.md)

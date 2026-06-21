@@ -1,473 +1,183 @@
-# Network Layer
+# Networking
 
----
+**Drivers**: [ADR-007](../architecture/adrs.md#adr-007-uwebsockets-as-the-network-layer), [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [Auth Exchange](./auth-exchange.md), [Wire Protocol](./wire-protocol.md), [Security](./security.md)
 
-## Overview
+ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The network layer owns transport lifecycle, WebSocket callback bridging, TLS/OpenSSL linkage, connection registration, and delivery of binary MessagePack frames to `MessageHandler`.
 
-ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig. uWebSockets provides the multi-threaded event loop, TLS via OpenSSL, and zero-copy I/O that the ZyncBase server is built on.
+## Source Files
 
----
+| File | Responsibility |
+|------|----------------|
+| `src/server.zig` | Server composition, start/stop lifecycle, and subsystem wiring. |
+| `src/uwebsockets_wrapper.zig` | Zig-facing wrapper types for app, socket, handlers, send status, and message type. |
+| `src/uws_bridge.cpp` | C/C++ bridge that binds uWebSockets callbacks to Zig-callable functions. |
+| `src/uws_wrapper.h` | C ABI declarations shared by Zig and the C++ bridge. |
+| `src/connection/manager.zig` | Connection registry and targeted send helper. |
+| `src/connection/state.zig` | Per-connection WebSocket handle, outbox, session state, and send/close behavior. |
+| `src/message_handler.zig` | Message callback consumer and request router. |
+| `build.zig` | uWebSockets/usockets/OpenSSL/C++ link configuration. |
+| `vendor/uwebsockets`, `vendor/usockets` | Pinned upstream networking dependencies. |
 
-## uWebSockets Architecture
+## Important Types
 
-### Core Components
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `WebSocketServer` | uWebSockets app pointer, config | Owns listen/run/deinit lifecycle for the network app. |
+| `WebSocketHandlers` | Open/message/close callback function pointers | Defines callback surface passed into the C++ bridge. |
+| `WebSocket` | uWebSockets socket pointer | Sends binary payloads and closes the transport. |
+| `MessageType` | uWebSockets frame type | Distinguishes binary WebSocket frames from unsupported frame kinds. |
+| `SocketUserData` | `Connection` id/state pointer | Binds transport callbacks to ZyncBase connection state. |
+| `ConnectionManager` | allocator, registry | Registers, looks up, and removes live connections. |
+| `MessageHandler` | `Connection`, `wire`, services | Consumes binary payloads after the network layer accepts the frame. |
 
+## Transport Contract
+
+- WebSocket is the only client transport for database operations.
+- Production payloads are binary MessagePack, not JSON.
+- Text frames are rejected through the canonical error path.
+- Compression is disabled; MessagePack size/depth limits are enforced before domain routing.
+- TLS is provided by OpenSSL through usockets when configured.
+- The network layer does not authorize store/presence operations; it authenticates/initializes the connection and delegates authorization to `MessageHandler` and `authorization/*`.
+
+## Connection Lifecycle
+
+1. HTTP ticket exchange creates a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).
+2. WebSocket upgrade is accepted only for the configured endpoint and origin policy.
+3. The bridge allocates/registers a `Connection` and attaches socket user data.
+4. The server sends connection/schema bootstrap pushes as required by the active protocol.
+5. Binary frames are delivered to `MessageHandler.handleMessage`.
+6. Close/error callbacks detach subscriptions, clear scoped session state, and remove connection-owned presence.
+
+## Backpressure And Sends
+
+- Encoded responses are owned by the request arena or dispatcher buffer until handed to `Connection.send`.
+- Send failure closes the connection through the centralized close path.
+- Cross-connection fanout goes through `ConnectionManager`/dispatchers instead of storing raw sockets in domain services.
+- Large or repeated outbound failures should be treated as transport instability, not domain errors.
+
+## Security Boundaries
+
+- Origin validation and frame type checks happen before domain routing.
+- Parser limit violations are tracked by `ConnectionViolationTracker`.
+- Repeated malformed/security-sensitive messages close the connection.
+- Namespace authorization, store authorization, and presence authorization are server-side only and fail closed.
+- Public error codes are owned by [Error Taxonomy](./error-taxonomy.md).
+
+## uWebSockets C ABI Interface
+
+The C++ bridge library `src/uws_bridge.cpp` implements the C functions defined in `src/uws_wrapper.h`, which are imported by Zig:
+
+```c
+// App lifecycle
+uws_app_t* uws_create_app(int ssl, struct us_socket_context_options_t options);
+void       uws_destroy_app(int ssl, uws_app_t* app);
+void       uws_app_run(int ssl, uws_app_t* app);
+void       uws_app_close(int ssl, uws_app_t* app);
+struct us_listen_socket_t* uws_app_listen(
+    int ssl,
+    uws_app_t* app,
+    const char* host,
+    size_t host_length,
+    int port,
+    uws_listen_handler handler,
+    void* user_data
+);
+
+// WebSocket route registration
+void uws_ws(int ssl, uws_app_t* app, void* upgrade_context,
+            const char* pattern, size_t pattern_len,
+            size_t id, const uws_socket_behavior_t* behavior);
+
+// WebSocket operations
+uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t* ws,
+                             const char* msg, size_t len, uws_opcode_t opcode);
+void uws_ws_close(int ssl, uws_websocket_t* ws);
+void* uws_ws_get_user_data(int ssl, uws_websocket_t* ws);
+
+// Request and upgrade helpers
+size_t uws_req_get_header(uws_req_t* req, const char* lower_case_header,
+                          size_t lower_case_header_length, const char** dest);
+size_t uws_req_get_query(uws_req_t* req, const char* key,
+                         size_t key_length, const char** dest);
+void uws_res_upgrade(int ssl, uws_res_t* res, void* data,
+                     const char* sec_web_socket_key, size_t sec_web_socket_key_length,
+                     const char* sec_web_socket_protocol, size_t sec_web_socket_protocol_length,
+                     const char* sec_web_socket_extensions, size_t sec_web_socket_extensions_length,
+                     uws_socket_context_t* context);
+
+// Loop helpers
+struct us_loop_t* uws_get_loop(void);
+void uws_loop_addPostHandler(void* loop, void* ctx, void (*cb)(void* ctx, void* loop));
+void uws_loop_removePostHandler(void* loop, void* key);
 ```
-┌─────────────────────────────────────────────────────┐
-│  uWebSockets (C++)                                  │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │  µSockets Foundation                          │  │
-│  │  ┌─────────────┐  ┌─────────────┐             │  │
-│  │  │  Eventing   │  │  Networking │             │  │
-│  │  │  (epoll/    │  │  (TCP/UDP)  │             │  │
-│  │  │   kqueue)   │  │             │             │  │
-│  │  └─────────────┘  └─────────────┘             │  │
-│  │  ┌─────────────────────────────────┐          │  │
-│  │  │  Cryptography (TLS 1.3)         │          │  │
-│  │  │  (OpenSSL)                      │          │  │
-│  │  └─────────────────────────────────┘          │  │
-│  └───────────────────────────────────────────────┘  │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │  Multi-threaded Event Loop                    │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │  │
-│  │  │ Thread 1 │  │ Thread 2 │  │ Thread N │     │  │
-│  │  │ WebSocket│  │ WebSocket│  │ WebSocket│     │  │
-│  │  │ + HTTP   │  │ + HTTP   │  │ + HTTP   │     │  │
-│  │  └──────────┘  └──────────┘  └──────────┘     │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
 
-### Key Features
+### Socket Behavior Configuration
 
-**1. Multi-threaded Event Loop**
-- One app per thread model
-- Shares listening port across threads
-- Automatic load balancing
-- Scales with CPU cores
-
-**2. Zero-Copy I/O**
-- Minimizes memory copies
-- Direct buffer access
-- Efficient data transfer
-- Low CPU overhead
-
-**3. Native Kernel Features**
-- epoll on Linux
-- kqueue on BSD/macOS
-- IOCP on Windows
-- Zero-abstraction penalty
-
----
-
-## Zig Integration
-
-### Build Configuration
+The uWebSockets socket behaviour is configured at server initialization using the following parameters:
 
 ```zig
-// build.zig - Link uWebSockets
-fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
-    step.linkLibCpp();
-    step.linkLibC();
-    step.linkSystemLibrary("pthread");
-    step.linkSystemLibrary("ssl");
-    step.linkSystemLibrary("crypto");
-
-    step.addIncludePath(b.path("vendor/uwebsockets"));
-    step.addIncludePath(b.path("vendor/usockets"));
-    step.addIncludePath(b.path("src"));
-
-    step.addCSourceFile(.{
-        .file = b.path("src/uws_bridge.cpp"),
-        .flags = &.{
-            "-std=c++20",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-DUWS_NO_ZLIB",
-            "-DLIBUS_USE_OPENSSL=1",
-        },
-    });
-
-    step.addCSourceFiles(.{
-        .files = &.{
-            "vendor/usockets/eventing/epoll_kqueue.c",
-            "vendor/usockets/crypto/openssl.c",
-            "vendor/usockets/context.c",
-            "vendor/usockets/loop.c",
-            "vendor/usockets/socket.c",
-            "vendor/usockets/bsd.c",
-            "vendor/usockets/udp.c",
-        },
-        .flags = &.{
-            "-std=c11",
-            "-DUWS_NO_ZLIB",
-            "-DLIBUS_USE_OPENSSL=1",
-        },
-    });
-
-    step.addCSourceFile(.{
-        .file = b.path("vendor/usockets/crypto/sni_tree.cpp"),
-        .flags = &.{
-            "-std=c++20",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-DLIBUS_USE_OPENSSL=1",
-        },
-    });
-}
+behavior.compression            = c.UWS_COMPRESS_DISABLED;
+behavior.maxPayloadLength       = config.security.max_message_size;
+behavior.idleTimeout            = 120; // seconds by default
+behavior.maxBackpressure        = 16 * 1024 * 1024;
+behavior.sendPingsAutomatically = true;
 ```
 
-### Server Implementation
+## Pinned Upgrade Rules
 
-```zig
-// src/uwebsockets_wrapper.zig
-const uws = @cImport({
-    @cInclude("uws_wrapper.h");
-});
+When updating the vendored uWebSockets or µSockets source files from upstream:
+- Upstream files must be copied into `vendor/uwebsockets/` and `vendor/usockets/`.
+- Build scripts and include paths inside `build.zig` must be adjusted.
+- `src/uws_bridge.cpp` and `src/uws_wrapper.h` must be updated to align with any upstream API changes.
+- Port-binding failure must propagate back to the host process as `error.ListenFailed`.
 
-pub const WebSocketServer = struct {
-    app: *uws.uws_app_t,
-    host_z: [:0]u8,
-    port: u16,
-    ssl: bool,
+## Performance Contract
 
-    pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) !void {
-        const host_z = try allocator.dupeZ(u8, config.host);
-        var options = std.mem.zeroes(uws.struct_us_socket_context_options_t);
-        const app = uws.uws_create_app(if (config.ssl) 1 else 0, options) orelse
-            return error.FailedToCreateApp;
+### Transport Limits
 
-        self.* = .{
-            .app = app,
-            .host_z = host_z,
-            .port = config.port,
-            .ssl = config.ssl,
-        };
-    }
+| Property | Value | Notes |
+|----------|-------|-------|
+| Max message size (app layer) | 1 MB | Passed to uWS `maxPayloadLength`. |
+| Max message size (uWS layer) | 16 MB | Hard limit; connections sending larger frames are dropped. |
+| Max backpressure | 16 MB | Maximum bytes uWS will buffer per connection before dropping. |
+| Idle timeout | 120 sec | Seconds of inactivity before uWS closes the connection. |
+| Max connections | 100,000 | Hard cap on concurrent WebSocket connections. |
 
-    pub fn listen(self: *WebSocketServer) !void {
-        const listen_socket = uws.uws_app_listen(
-            if (self.ssl) 1 else 0,
-            self.app,
-            self.host_z.ptr,
-            self.host_z.len,
-            self.port,
-            listenCallback,
-            self,
-        );
-        if (listen_socket == null) return error.ListenFailed;
-    }
+### Rate Limiting
 
-    pub fn run(self: *WebSocketServer) void {
-        uws.uws_app_run(if (self.ssl) 1 else 0, self.app);
-    }
-
-    pub fn deinit(self: *WebSocketServer, allocator: Allocator) void {
-        uws.uws_destroy_app(if (self.ssl) 1 else 0, self.app);
-        allocator.free(self.host_z);
-    }
-};
-```
-
----
-
-## WebSocket Protocol
-
-### Connection Lifecycle
-
-```
-┌─────────────────────────────────────────────────┐
-│  1. HTTP Upgrade Request                        │
-│     GET /ws HTTP/1.1                            │
-│     Upgrade: websocket                          │
-│     Connection: Upgrade                         │
-│     Sec-WebSocket-Key: ...                      │
-│     Sec-WebSocket-Version: 13                   │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  2. Handshake Validation                        │
-│     - Validate Sec-WebSocket-Key                │
-│     - Check Origin header (CSWSH prevention)    │
-│     - Authenticate user (JWT/ticket)            │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  3. HTTP 101 Switching Protocols                │
-│     HTTP/1.1 101 Switching Protocols            │
-│     Upgrade: websocket                          │
-│     Connection: Upgrade                         │
-│     Sec-WebSocket-Accept: ...                   │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  4. WebSocket Connection Established            │
-│     - Binary frames (MessagePack)               │
-│     - Bidirectional communication               │
-│     - Transport-level Connected push            │
-│     - Store/presence scopes resolve separately  │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  5. Connection Close                            │
-│     - Clean shutdown                            │
-│     - Clear presence data                       │
-│     - Cleanup subscriptions                     │
-└─────────────────────────────────────────────────┘
-```
-
-Transport establishment is not the same as scoped session readiness. After the WebSocket is accepted, only lifecycle messages are valid until the relevant scope is ready: `AuthRefresh`, `StoreSetNamespace`, `PresenceSetNamespace`, ping/pong, and close. Store messages require a ready store scope. Presence messages require a ready presence scope.
-
-### Frame Format
-
-WebSocket frames have minimal overhead:
-
-```
-┌─────────────────────────────────────────────────┐
-│  Frame Header (2-6 bytes)                       │
-│  ┌──────────┬──────────┬──────────┬──────────┐  │
-│  │ FIN (1)  │ Opcode   │ Mask (1) │ Length   │  │
-│  │          │ (4 bits) │          │ (7 bits) │  │
-│  └──────────┴──────────┴──────────┴──────────┘  │
-│                                                 │
-│  Payload (MessagePack binary data)              │
-│  ┌───────────────────────────────────────────┐  │
-│  │  Efficient binary serialization           │  │
-│  │  Small integers: 1 byte                   │  │
-│  │  Short strings: 2-6 bytes overhead        │  │
-│  └───────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
-```
-
-**Overhead**: Only 2-6 bytes per message (vs HTTP's 100+ bytes)
-
----
-
-## MessagePack Serialization
-
-### Message Format
-
-```zig
-const Message = struct {
-    type: MessageType,
-    id: ?u64,              // Request ID (client→server only)
-    // Type-specific fields are decoded inline per the wire protocol spec
-};
-
-const MessageType = enum {
-    // Client→Server (Store)
-    StoreSet,
-    StoreRemove,
-    StoreBatch,
-    StoreQuery,
-    StoreSubscribe,
-    StoreUnsubscribe,
-    StoreLoadMore,
-    // Client→Server (Presence)
-    PresenceSet,
-    PresenceSetShared,
-    PresenceSubscribe,
-    PresenceSubscribeShared,
-    PresenceUnsubscribe,
-    PresenceUnsubscribeShared,
-    PresenceRemove,
-    // Client→Server (Namespace / Auth)
-    StoreSetNamespace,
-    PresenceSetNamespace,
-    AuthRefresh,
-    // Server→Client
-    ok,
-    @"error",
-    SchemaSync,
-    Connected,
-    StoreDelta,
-    WriteCommitted,
-    WriteError,
-    PresenceBroadcast,
-    SharedStateBroadcast,
-    ServerDisconnect,
-};
-```
-
-### Security: Iterative Parser
-
-**Problem**: Recursive parsers can stack overflow on deeply nested data
-
-**Solution**: Iterative parser with depth limits
-
-```zig
-const Parser = struct {
-    max_depth: usize = 32,
-    max_size: usize = 10 * 1024 * 1024, // 10MB
-    
-    pub fn parse(self: *Parser, data: []const u8) !Message {
-        var depth: usize = 0;
-        var pos: usize = 0;
-        
-        while (pos < data.len) {
-            const byte = data[pos];
-            
-            // Check depth limit
-            if (depth > self.max_depth) {
-                return error.MaxDepthExceeded;
-            }
-            
-            // Check size limit
-            if (pos > self.max_size) {
-                return error.MaxSizeExceeded;
-            }
-            
-            // Parse iteratively (not recursively)
-            // ...
-        }
-    }
-};
-```
-
-**Protections:**
-- **Depth bombs** - Deeply nested objects
-- **Size bombs** - Excessive data
-- **Stack overflow** - Recursive parsing
-- **Memory exhaustion** - Unbounded allocation
-
----
-
-## Connection Management
+| Property | Value | Notes |
+|----------|-------|-------|
+| Max messages per second | 100 | Per-connection token bucket rate. |
+| Burst capacity | 200 | Token bucket burst (2× rate). |
+| Violation threshold | 10 | Security violations before connection is forcibly closed. |
 
 ### Connection State
 
-```zig
-const Connection = struct {
-    id: u64,
-    socket: WebSocket,
-    auth_context: AuthContext,
-    external_user_id: []const u8,
-    store_scope: ?ScopedSession,
-    presence_scope: ?ScopedSession,
-    subscriptions: ArrayList(SubscriptionId),
-    presence: ?json.Value,
-    
-    pub fn send(self: *Connection, msg: Message) !void {
-        const bytes = try msgpack.encode(msg);
-        try self.socket.send(bytes);
-    }
-};
+| Property | Value | Notes |
+|----------|-------|-------|
+| Outbox capacity | 16 slots | Per-connection bounded ring buffer for outgoing messages. |
+| Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on event loop. |
 
-const ScopedSession = struct {
-    namespace_id: i64,
-    user_doc_id: DocId,
-    ready: bool,
-};
-```
+### MessagePack Parse Limits
 
-### Authentication
+| Property | Value | Notes |
+|----------|-------|-------|
+| Max nesting depth | 32 | Maximum MessagePack nesting. |
+| Max array length | 100,000 | Maximum array elements. |
+| Max map size | 100,000 | Maximum map entries. |
+| Max string length | 1 MB | Maximum string bytes. |
+| Max binary length | 1 MB | Maximum binary data bytes. |
+| Max extension length | 1 MB | Maximum extension data bytes. |
 
-**Ticket-based authentication** (recommended):
+### Server Lifecycle
 
-*Note: The ZyncBase SDK abstracts this process. Developers simply provide `createClient({ token: 'jwt' })`, and the SDK automatically performs this exchange under the hood to ensure the token never touches the `ws://` URL.*
-
-```
-1. Client requests ticket from HTTP endpoint
-   POST /auth/ticket
-   Authorization: Bearer <JWT>
-   
-2. Server validates JWT, returns short-lived ticket
-   { "ticket": "abc123...", "expires": 1234567890 }
-   
-3. Client connects with ticket
-   ws://server/ws?ticket=abc123...
-   
-4. Server validates ticket, establishes transport connection
-5. Client selects store/presence namespaces
-6. Server resolves scoped `users.id` values and marks scopes ready
-```
-
-**Why tickets?**
-- Short-lived (5-10 minutes)
-- Not logged in URLs
-- Can be revoked
-- Separate from long-lived JWTs
-
-### Origin Validation
-
-**Prevent Cross-Site WebSocket Hijacking (CSWSH):**
-
-```zig
-fn validateOrigin(origin: []const u8, allowed: []const []const u8) bool {
-    for (allowed) |allowed_origin| {
-        if (std.mem.eql(u8, origin, allowed_origin)) {
-            return true;
-        }
-    }
-    return false;
-}
-```
-
-**Configuration:**
-```json
-{
-  "security": {
-    "allowedOrigins": [
-      "https://app.example.com",
-      "https://admin.example.com"
-    ]
-  }
-}
-```
-
----
-
-## Error Handling
-
-### Connection Errors
-
-```zig
-fn onError(ws: *uws.uWS_WebSocket, error_code: c_int) callconv(.C) void {
-    switch (error_code) {
-        uws.ECONNRESET => {
-            // Client disconnected abruptly
-            cleanupConnection(ws);
-        },
-        uws.ETIMEDOUT => {
-            // Connection timeout
-            closeConnection(ws);
-        },
-        else => {
-            // Unknown error
-            logError(error_code);
-        },
-    }
-}
-```
-
-### Message Errors
-
-```zig
-fn handleMessage(msg: []const u8) !Response {
-    const parsed = msgpack.decode(msg) catch |err| {
-        return Response{
-            .type = .error,
-            .code = "INVALID_MESSAGE",
-            .message = "Failed to parse MessagePack",
-        };
-    };
-    
-    // Process message...
-}
-```
-
----
+| Property | Value | Notes |
+|----------|-------|-------|
+| Shutdown drain timeout | 3,000 ms | Maximum time to wait for connections to drain during graceful shutdown. |
+| Token sweep interval | 15,000 ms | How often expired JWT tokens are swept across connections. |
 
 ## See Also
 
-- [Core Principles](../architecture/core-principles.md) - Why we chose uWebSockets
-- [Threading Model](../architecture/threading-model.md) - How multi-threading works
-- [Storage Layer](../architecture/storage-layer.md) - SQLite integration
-- [Query Engine](./query-engine.md) - Message processing
-- [Research](../architecture/research.md) - Performance validation
+- [Wire Protocol](./wire-protocol.md)
+- [Message Handler](./message-handler.md)
+- [Security](./security.md)

@@ -1,135 +1,65 @@
-# Threading Implementation
+# Threading
 
-**Drivers**: [Threading Model Architecture](../../architecture/threading-model.md)
+**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-multi-threaded-core-engine), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics)
 
-This document contains the implementation specifics for the ZyncBase threading model.
+ZyncBase uses uWebSockets worker threads for network I/O while preserving a single serialized storage write path. Request handling may happen concurrently across connections; mutation durability and write acknowledgement are ordered by the storage engine.
 
-## Core Engine Implementation
+## Source Files
 
-```zig
-pub const CoreEngine = struct {
-    // Lock-free cache for reads (parallel access)
-    state_cache: LockFreeCache,
-    
-    // Mutex only for writes (serialized)
-    write_mutex: std.Thread.Mutex,
-    
-    // Storage layer with parallel reads
-    storage: *StorageLayer,
-    
-    pub fn handleMessage(self: *CoreEngine, msg: Message) !Message {
-        return switch (msg.type) {
-            // Reads: No lock, parallel execution
-            .query => try self.handleQueryParallel(msg),
-            .subscribe => try self.handleSubscribeParallel(msg),
-            
-            // Writes: Serialized with mutex
-            .mutation => try self.handleMutationSerialized(msg),
-            
-            else => error.UnknownMessageType,
-        };
-    }
-    
-    // Parallel reads (no mutex) - uses all CPU cores
-    fn handleQueryParallel(self: *CoreEngine, msg: Message) !Message {
-        // Correct LockFreeCache read pattern
-        const handle = try self.state_cache.get(msg.namespace);
-        defer handle.release();
+| File | Responsibility |
+|------|----------------|
+| `src/server.zig` | Server composition and lifecycle for networking, storage, subscriptions, notifications, and write outcome dispatch. |
+| `src/uwebsockets_wrapper.zig` | C ABI wrapper around uWebSockets callbacks and send/close primitives. |
+| `src/connection/manager.zig` | Connection registry and cross-thread send helper. |
+| `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
+| `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
+| `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint coordination, and writer health state. |
+| `src/notification_dispatcher.zig` | Converts committed record changes into subscription pushes. |
+| `src/write_outcome_dispatcher.zig` | Sends deferred committed write acknowledgements/errors. |
+| `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
 
-        const state = handle.state();
-        return try self.executeQuery(state, msg.query);
-    }
-    
-    // Serialized writes (with mutex) - single-writer
-    fn handleMutationSerialized(self: *CoreEngine, msg: Message) !Message {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
-        
-        // Only one thread executes this at a time
-        try self.state_cache.update(msg.namespace, msg.mutation);
-        try self.storage.queueWrite(msg.namespace, msg.mutation);
-        try self.notifySubscribers(msg.namespace);
-        
-        return .{ .type = .success };
-    }
-};
-```
+## Important Types
 
-## Lock-Free Cache Coordination
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `ZyncBaseServer` | `WebSocketServer`, `StorageEngine`, `MessageHandler`, dispatchers | Owns subsystem wiring and start/stop lifecycle. |
+| `ConnectionManager` | `Connection`, uWebSockets wrapper | Tracks live connections and supports targeted sends. |
+| `Connection` | `Outbox`, `Session`, `WebSocket` | Serializes connection-local scope/subscription state and buffers outbound messages. |
+| `WriteQueue` | SQLite writer connection, `MemoryStrategy` | Serializes durable writes and emits outcomes/changes. |
+| `NotificationDispatcher` | `ConnectionManager`, `SubscriptionEngine` | Fans committed store changes out to subscribers. |
+| `WriteOutcomeDispatcher` | `ConnectionManager`, `WriteOutcomeBuffer` | Sends `WriteCommitted`/`WriteError` events to the origin connection. |
+| `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Maintains subscription groups shared across network workers. |
 
-The interaction between the CoreEngine and the Lock-Free Cache is critical for performance:
+## Concurrency Model
 
-```zig
-const LockFreeCache = struct {
-    // Use atomic reference counting for cache entries
-    entries: std.atomic.Value(*HashMap([]const u8, *CacheEntry)),
-    
-    const CacheEntry = struct {
-        state: StateTree,
-        version: std.atomic.Value(u64),
-        ref_count: std.atomic.Value(u32),
-    };
-    
-    pub fn get(self: *LockFreeCache, namespace: []const u8) !Handle {
-        // Lock-free read - multiple threads can execute simultaneously
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
-        
-        // Increment ref count atomically
-        _ = entry.ref_count.fetchAdd(1, .acq_rel);
-        
-        return Handle{ .cache = self, .entry = entry };
-    }
-    
-    pub fn release(self: *LockFreeCache, handle: Handle) void {
-        // Decrement ref count atomically
-        _ = handle.entry.ref_count.fetchSub(1, .acq_rel);
-    }
-    
-    pub fn update(self: *LockFreeCache, namespace: []const u8, mutation: Mutation) !void {
-        // Called only from write_mutex critical section
-        // Safe to mutate because writes are serialized
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
-        
-        try entry.state.apply(mutation);
-        _ = entry.version.fetchAdd(1, .release);
-    }
-};
-```
+- Network callbacks may run on multiple uWebSockets worker loops.
+- A single connection must observe sequential scope and subscription state changes through `Connection` methods.
+- Store writes are serialized through `WriteQueue`; readers and subscribers observe committed results.
+- Subscription and write-outcome fanout happen after storage commit, not before durable ordering is known.
+- Presence state is in-memory and connection-scoped; disconnect teardown removes the connection's presence records.
 
-### Critical Implementation Notes
+## Synchronization Boundaries
 
-**MUST use proper atomic operations:**
-- If the cache falls back to a global mutex, it negates all benefits
-- All reads would block on each other
-- Performance would drop to single-threaded levels (~10k req/sec)
-- The 17x improvement depends on true lock-free reads
+| Boundary | Rule |
+|----------|------|
+| Connection state | Mutate only through `Connection` methods that preserve scope/subscription invariants. |
+| Storage writes | Enter through `StorageEngine`/`WriteQueue`; do not bypass the single-writer path. |
+| Storage reads | Use reader connections and schema/query helpers; do not share SQLite statements across threads without their owning connection. |
+| Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. |
+| WebSocket sends | Use connection/manager send helpers so close and backpressure behavior stays centralized. |
+| Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
 
-**Memory ordering:**
-- `.Acquire` for loads - ensures we see all previous writes
-- `.Release` for stores - ensures our writes are visible to other threads
-- `.AcqRel` for read-modify-write - combines both
+## Invariants
 
----
+- No request may publish subscription or write acknowledgements before the corresponding storage commit.
+- Namespace resolution results must be ignored when superseded by a newer namespace request.
+- Connection teardown must be idempotent enough to tolerate concurrent disconnect and background completion.
+- Shared registries must define one owner for allocation and deallocation of ids, buffers, and snapshots.
+- Threading changes require sanitizer coverage; data-race freedom is part of the API contract.
 
-## Validation & Success Criteria
+## See Also
 
-### Verification Commands
-```bash
-# Run threading unit tests with thread sanitizer
-zig test src/core_engine_test.zig -Dsanitize=thread
-
-# Run lock-free cache concurrency tests
-zig test src/cache_stress_test.zig -Dsanitize=thread
-
-# Run full test suite to confirm no regressions
-zig build test
-```
-
-### Success Criteria
-
-- [ ] Read throughput scales linearly with cores (verified via `cache_stress_test.zig`)
-- [ ] Write throughput: single-writer serialization holds under concurrent load (TSan clean)
-- [ ] Mixed workload: no deadlocks or data races detected by TSan
-- [ ] No lock contention on the read path (TSan reports zero races on `get`)
+- [Message Handler](./message-handler.md)
+- [Storage](./storage.md)
+- [Lock-Free Cache](./lock-free-cache.md)
+- [Presence Internals](./presence-internals.md)

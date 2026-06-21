@@ -1,894 +1,144 @@
-# ZyncBase Wire Protocol Specification
+# Wire Protocol
 
----
+**Drivers**: [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [ADR-009](../architecture/adrs.md#adr-009-integer-routing-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)
 
-## Table of Contents
+This document is the canonical implementation contract for ZyncBase's WebSocket messages. It names the message types, stable fields, source files, and routing rules. Detailed query operators, schema dictionaries, and public error codes live in their owner specs.
 
-1. [Overview](#overview)
-2. [Transport & Serialization](#transport--serialization)
-3. [Message Envelope](#message-envelope)
-4. [Client→Server Messages](#clientserver-messages)
-5. [Server→Client Messages](#serverclient-messages)
-6. [Ticket Endpoints (HTTP)](#ticket-endpoints-http)
-7. [Connection Lifecycle](#connection-lifecycle)
-8. [Error Format](#error-format)
-9. [Extensibility](#extensibility)
-10. [Message Type Summary](#message-type-summary)
-
----
-
-## Overview
-
-This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-008). Each message conforms to one of the types defined in this spec.
-
-> Examples below use pseudo-literals like `<bin16("rect-1")>` for MessagePack `bin(16)` values. On the public SDK surface, document IDs and reference fields remain strings; on the wire they are packed into 16-byte binary IDs.
-
-**Design principles:**
+## Design Principles
 
 - **1:1 SDK mapping** — Every client SDK method maps to exactly one message type. No overloaded messages.
 - **Correlate by ID** — Every client request has a unique `id`. The server response echoes it.
 - **Pushes are unsolicited** — Server-initiated messages (subscription deltas, presence broadcasts) have their own types and do not carry a request `id`.
 - **Extend, never break** — New fields can be added to any message type. Unknown fields are ignored. See [Extensibility](#extensibility).
 
----
+## Source Files
+
+| File | Responsibility |
+|------|----------------|
+| `src/wire.zig` | Public wire module facade and re-exports. |
+| `src/wire/decode.zig` | MessagePack envelope and request extractors. |
+| `src/wire/encode.zig` | Response, schema sync, subscription delta, write outcome, and presence encoders. |
+| `src/wire/errors.zig` | Internal Zig error to public wire-code mapping. |
+| `src/wire/comptime.zig` | Compile-time MessagePack key/value encoding helpers. |
+| `src/message_handler.zig` | Message classification, scoped-session gates, and route dispatch. |
+| `sdk/typescript/src/connection_wire.ts` | SDK-side wire encoding/decoding boundary. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `wire.Envelope` | MessagePack extractor | Required client request header: `type`, `id`. |
+| `StorePathPayloads` | MessagePack `Payload` | Shared extractor result for `StoreSet` and `StoreRemove`. |
+| `StoreBatchPayloads` | MessagePack `Payload` | Extractor result for `StoreBatch`. |
+| `PresenceSetRequest` | MessagePack `Payload` | User presence patch payload. |
+| `PresenceSetSharedRequest` | MessagePack `Payload` | Shared presence patch payload. |
+| `WireError` | public error taxonomy | Encoded error code/message/retry metadata. |
+| `QueryResponse` | storage result metadata | Encoded store query/subscription snapshot response. |
+
+## Transport And Encoding
+
+| Property | Contract |
+|----------|----------|
+| Transport | WebSocket. |
+| Frame type | Binary MessagePack frames. |
+| Compression | Disabled. |
+| Request envelope | MessagePack map with `type: string` and `id: u64`. |
+| Response envelope | MessagePack map with `type: "ok"` or `type: "error"` and matching `id`. |
+| Push envelope | MessagePack map with a push `type`; no request `id`. |
+| Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
+| Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
+| Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
+
+## Client Messages
+
+All client messages include `type` and `id`. The fields below are additional message-specific fields.
+
+| Message | Fields | Scope/session rule | Responsibility |
+|---------|--------|--------------------|----------------|
+| `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
+| `StoreSet` | `path`, `value`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path. |
+| `StoreRemove` | `path`, optional `confirm`, optional `writeId` | Ready store scope. | Remove a store document/path. |
+| `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove operations. |
+| `StoreQuery` | `table_index`, optional query fields | Ready store scope. | Execute a one-shot store query. |
+| `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
+| `StoreLoadMore` | `subId`, `nextCursor` | Ready store scope and known subscription. | Page historical results for an active subscription. |
+| `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
+| `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
+| `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |
+| `PresenceSet` | `data` | Ready presence scope. | Merge user presence fields. |
+| `PresenceSetShared` | `data` | Ready presence scope and shared-write authorization. | Merge namespace shared presence fields. |
+| `PresenceSubscribe` | none | Ready presence scope. | Subscribe to user presence and receive snapshot. |
+| `PresenceUnsubscribe` | `subId` | Connection-local subscription id. | Stop user-presence updates. |
+| `PresenceSubscribeShared` | none | Ready presence scope. | Subscribe to shared presence and receive snapshot. |
+| `PresenceUnsubscribeShared` | `subId` | Connection-local subscription id. | Stop shared-presence updates. |
+| `PresenceRemove` | none | Ready presence scope. | Remove the connection's user presence. |
+
+Query fields for `StoreQuery` and `StoreSubscribe` are owned by [Query Grammar](./query-grammar.md). Cursor behavior is owned by [Cursor Pagination](./cursor-pagination.md).
+
+## Write Confirmation
+
+| Field/value | Meaning |
+|-------------|---------|
+| Omitted `confirm` or `confirm: "accepted"` | Server response confirms the mutation was accepted into the write path. |
+| `confirm: "committed"` | SDK waits for committed outcome before resolving the mutation. |
+| `writeId` | Client-provided write correlation id when the SDK is tracking committed outcome. |
+| `WriteCommitted` push | Writer committed the tracked mutation. |
+| `WriteError` push | Writer failed the tracked mutation after the immediate accept phase. |
+
+Store subscription state is updated by committed `StoreDelta` pushes, not by optimistic mutation responses.
+
+## Server Responses
+
+| Response | Fields | Meaning |
+|----------|--------|---------|
+| `ok` | `id` | Generic success. |
+| `ok` with `session` | `id`, `session` | Namespace or auth refresh resolved session claims. |
+| `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
+| `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
+| `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
+| `error` | `id`, `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome. |
+
+Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
+
+## Server Pushes
+
+| Push | Fields | Meaning |
+|------|--------|---------|
+| `Connected` | `userId` | Transport/session bootstrap push after connection setup. |
+| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields` | Integer dictionaries used by store, query, and presence messages. |
+| `StoreDelta` | `subId`, `ops` | Committed record-level subscription changes. |
+| `WriteCommitted` | `writeId` | Tracked write committed. |
+| `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
+| `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
+| `PresenceBroadcast` | `subId`, `users` | User presence join/update/leave events. |
+| `SharedStateBroadcast` | `subId`, `data` | Shared presence patch or batch of patches. |
 
-## Transport & Serialization
+## Push Payload Notes
 
-| Property | Value |
-|----------|-------|
-| Transport | WebSocket (RFC 6455) |
-| Frame type | Binary (`opcode 0x02`) |
-| Serialization | MessagePack (production), JSON (debug mode via config flag) |
-| Max message size | 10 MB (configurable, see `security.rateLimit.maxMessageSize`) |
-| Max nesting depth | 32 levels (per ADR-008) |
-| Compression | None (per ADR-008) |
+- `StoreDelta.ops` contains record-level `set` and `remove` operations. `set` carries the full encoded record; `remove` carries the record path/id.
+- `PresenceBroadcast.users` entries include `userId` and `event`. `join` includes `data` and `joinedAt`; `update` includes `data`; `leave` includes neither.
+- `SharedStateBroadcast.data` is one patch when a single update is flushed, or an array of patches when several updates are flushed together.
+- `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.
 
----
+## Scoped Session Rules
 
-## Message Envelope
-
-Every message is a MessagePack **map** with at minimum a `type` field. Client-originated messages additionally carry an `id` for request-response correlation.
-
-### Client→Server envelope
-
-```
-{
-  "type": <string>,     // Message type (see catalog below)
-  "id":   <uint64>,     // Unique request ID, generated by client
-  ...                   // Type-specific fields (inline, not nested in a "payload" key)
-}
-```
-
-### Server→Client response envelope
-
-```
-{
-  "type": "ok" | "error",  // Result type
-  "id":   <uint64>,        // Echoed request ID
-  ...                      // Type-specific fields
-}
-```
-
-### Server→Client push envelope
-
-```
-{
-  "type": <string>,     // Push type (e.g., "StoreDelta", "PresenceBroadcast")
-  ...                   // Type-specific fields (no "id" — pushes are unsolicited)
-}
-```
-
-> **Why flat?** Nesting the payload under a `"payload"` key adds a layer of indirection with no benefit. Keeping fields inline is simpler to parse and more compact over the wire.
-
----
-
-## Client→Server Messages
-
-### Store operations
-
-> **Note (ADR-014):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
-
-#### `StoreSet`
-
-Write a value at a path. Default confirmation is accepted/eventual: the response confirms the server accepted the mutation into the write pipeline, not that the writer has committed it. The SDK does not optimistically update local subscription state.
-
-```
-{
-  "type":    "StoreSet",
-  "id":      2,
-  "path":    [0, <bin16("rect-1")>],
-  "value":   { 1: 100, 2: 200, 3: 50, 4: 50 }, // Integer-keyed map for field indices
-  "confirm": "accepted"                         // Optional: "accepted" (default) | "committed"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      2,
-  "writeId": "wr_..." // Present for tracked/committed writes
-}
-```
-
-For `confirm: "accepted"`, `ok` means the mutation was accepted into the write pipeline. For `confirm: "committed"`, the SDK resolves the mutation promise only after the writer commits or produces an accepted no-op. Writer failures surface as `WriteError` or an `error` response with `details.phase = "write"`.
-
----
-
-#### `StoreRemove`
-
-Remove a document at a path. Deleting a missing document is success/no-op.
-
-```
-{
-  "type":    "StoreRemove",
-  "id":      3,
-  "path":    [0, <bin16("rect-1")>],
-  "confirm": "accepted" // Optional: "accepted" (default) | "committed"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      3,
-  "writeId": "wr_..." // Present for tracked/committed writes
-}
-```
-
----
-
-#### `StoreBatch`
-
-Perform multiple write operations atomically. See the [Batch Operations Specification](./batch-operations.md) for wire format details and execution logic.
-
-```
-{
-  "type":    "StoreBatch",
-  "id":      4,
-  "ops":     [
-    ["s", [1, <bin16("123")>], { 3: "assigned" }],
-    ["s", [0, <bin16("bob")>, 8], 5],
-    ["r", [2, <bin16("123")>]]
-  ],
-  "confirm": "accepted" // Optional: "accepted" (default) | "committed"
-}
-```
-
-**Operation codes:**
-- `"s"`: Set (requires `path` and `value`)
-- `"r"`: Remove (requires `path`)
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      4,
-  "writeId": "wr_..." // Present for tracked/committed writes
-}
-```
-
-For `confirm: "committed"`, the batch resolves only if the full batch commits or produces accepted no-op outcomes. On failure, the `details` object in the error response will include `batchIndex` when the failing operation can be identified.
-
----
-
-#### `StoreQuery`
-
-Execute a one-off filtered query (non-real-time) on a collection. Query conditions and sort descriptors are sent as compact positional tuples (see [Query Grammar](./query-grammar.md) for encoding details).
-
-```
-{
-  "type":  "StoreQuery",
-  "id":    6,
-  "table_index": 0,
-  "conditions": [
-    [5, 4, 18],              // [field_index, op_code, value] — op 4 = gte
-    [2, 0, "active"]         // op 0 = eq
-  ],
-  "orderBy": [3, 1],  // [field_index, desc_flag] — 1 = desc
-  "limit":   50,
-  "after":   "..." // Opaque Base64(MessagePack([sort_value, doc_id_bin]))
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":       "ok",
-  "id":         6,
-  "value":      [ ... ],    // Array of matching items
-  "nextCursor": "..." // Opaque Base64(MessagePack([sort_value, doc_id_bin])) or null
-}
-```
-
----
-
-#### `StoreSubscribe`
-
-Subscribe to a filtered query's results in real-time. (Maps to `store.subscribe(collection, opts, cb)`)
-
-```
-{
-  "type":    "StoreSubscribe",
-  "id":      7,
-  "table_index": 1,
-  "conditions": [
-    [2, 0, "active"]      // [field_index, op_code, value] — op 0 = eq
-  ],
-  "orderBy": [8, 1],  // [field_index, desc_flag] — 1 = desc
-  "limit":   50
-}
-```
-
-**Response** (`type: "ok"`) — includes initial snapshot:
-
-```
-{
-  "type":       "ok",
-  "id":         7,
-  "subId":      456,
-  "value":      [ ... ],
-  "hasMore":    true,
-  "nextCursor": "..."
-}
-```
-
-#### `StoreLoadMore`
-
-Request more historical data for an active subscription.
-
-```
-{
-  "type":       "StoreLoadMore",
-  "id":         8,
-  "subId":      456,
-  "nextCursor": "..."
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":       "ok",
-  "id":         8,
-  "subId":      456,
-  "value":      [ ... ],
-  "hasMore":    true,
-  "nextCursor": "..."
-}
-```
-
-After subscription, the server pushes `StoreDelta` messages when the query result set changes.
-
----
-
-#### `StoreUnsubscribe`
-
-Stop receiving updates for a query subscription.
-
-```
-{
-  "type":  "StoreUnsubscribe",
-  "id":    9,
-  "subId": 456
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   9
-}
-```
-
----
-
-### Presence operations
-
-#### `PresenceSet`
-
-Update the local user's presence data. Integer-keyed field-level merge — fields not included in the payload are preserved. Sends a `PresenceBroadcast` to all user-presence subscribers in the namespace.
-
-Field indices come from `presenceUserFields` in the `SchemaSync` message.
-
-```
-{
-  "type": "PresenceSet",
-  "id":   8,
-  "data": { 0: 100.0, 1: 200.0 }   // cursor__x=0, cursor__y=1 — only changed fields
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   8
-}
-```
-
-Fire-and-forget. The server validates field indices and value types at accept time. Unknown field index or wrong type → `SCHEMA_VALIDATION_FAILED`.
-
----
-
-#### `PresenceSetShared`
-
-Merge fields into the namespace-level shared state. Integer-keyed field-level merge — fields not included are preserved. Sends a `SharedStateBroadcast` to all shared-state subscribers in the namespace.
-
-Field indices come from `presenceSharedFields` in the `SchemaSync` message.
-
-```
-{
-  "type": "PresenceSetShared",
-  "id":   9,
-  "data": { 0: 5 }    // slide=0
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   9
-}
-```
-
-Fire-and-forget. Subject to `presenceSharedWrite` authorization. Rejected with `PERMISSION_DENIED` if the rule is not satisfied. Unknown field index or wrong type → `SCHEMA_VALIDATION_FAILED`.
-
----
-
-#### `PresenceSubscribe`
-
-Subscribe to user presence changes in the current presence namespace. Returns the current full user snapshot. Shared state is obtained separately via `PresenceSubscribeShared`.
-
-```
-{
-  "type": "PresenceSubscribe",
-  "id":   10
-}
-```
-
-**Response** (`type: "ok"`) — includes current user snapshot:
-
-```
-{
-  "type":  "ok",
-  "id":    10,
-  "subId": 789,              // Integer subscription ID
-  "users": [
-    {
-      "userId":   <bin16>,   // Internal users.id as 16-byte binary
-      "data":     { 0: 100.0, 1: 200.0, 4: "Alice" },  // Integer-keyed user field map
-      "joinedAt": 1234567890
-    }
-  ]
-}
-```
-
-The initial snapshot reflects committed state at subscription time. Live updates begin arriving within one batch interval (≤50ms). The SDK decodes `data` using the `presenceUserFields` indices from `SchemaSync` and unflattens nested objects before delivering to the application.
-
----
-
-#### `PresenceUnsubscribe`
-
-Stop receiving user presence updates for a subscription.
-
-```
-{
-  "type":  "PresenceUnsubscribe",
-  "id":    11,
-  "subId": 789
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   11
-}
-```
-
----
-
-#### `PresenceSubscribeShared`
-
-Subscribe to shared state changes in the current presence namespace. Returns the current shared state immediately.
-
-```
-{
-  "type": "PresenceSubscribeShared",
-  "id":   12
-}
-```
-
-**Response** (`type: "ok"`) — includes current shared state:
-
-```
-{
-  "type":   "ok",
-  "id":     12,
-  "subId":  790,
-  "shared": { 0: 5, 1: true }    // Current shared state (integer-keyed); null if empty
-}
-```
-
----
-
-#### `PresenceUnsubscribeShared`
-
-Stop receiving shared state updates.
-
-```
-{
-  "type":  "PresenceUnsubscribeShared",
-  "id":    13,
-  "subId": 790
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   13
-}
-```
-
----
-
-#### `PresenceRemove`
-
-Remove the local user's presence data. Also done automatically on disconnect.
-
-```
-{
-  "type": "PresenceRemove",
-  "id":   14
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   14
-}
-```
-
----
-
-#### `AuthRefresh`
-
-Update the connection's base session context with a new external JWT.
-
-```
-{
-  "type":  "AuthRefresh",
-  "id":    11,
-  "token": "<new_external_jwt>"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      11,
-  "session": { ... } // The newly resolved base $session context
-}
-```
-
-The session's `$session` claims and token expiry are updated in-place. Active store and presence scopes continue without interruption.
-
-**Failure**: If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED` and closes the WebSocket connection.
-
----
-
-### Namespace operations
-
-#### `StoreSetNamespace`
-
-Switch the connection's active store namespace and resolve the store scope.
-
-```
-{
-  "type":      "StoreSetNamespace",
-  "id":        12,
-  "namespace": "tenant:acme:workspace:ws-2"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      12,
-  "session": { "userId": "018f..." } // Store-scoped session fragment
-}
-```
-
-Active store subscriptions are invalidated when the namespace changes. The client must re-subscribe. Store operations are rejected with `SESSION_NOT_READY` until this response is sent.
-
----
-
-#### `PresenceSetNamespace`
-
-Switch the connection's active presence namespace and resolve the presence scope. Clears old presence, joins new namespace.
-
-```
-{
-  "type":      "PresenceSetNamespace",
-  "id":        13,
-  "namespace": "tenant:acme:document:doc-456"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":    "ok",
-  "id":      13,
-  "session": { "userId": "018f..." } // Presence-scoped session fragment
-}
-```
-
-Presence operations are rejected with `SESSION_NOT_READY` until this response is sent.
-
----
-
-## Server→Client Messages
-
-### Response messages
-
-All responses to client requests use `type: "ok"` or `type: "error"`:
-
-| `type` | Meaning |
-|--------|---------|
-| `"ok"` | Request succeeded. Fields depend on the original request type (see above). |
-| `"error"` | Request failed. See [Error Format](#error-format). |
-
-Both always include the `id` from the original request.
-
----
-
-### Server push messages
-
-These are unsolicited messages from the server. They do not have a request `id`.
-
-#### `StoreDelta`
-
-Notifies a subscribed client that their subscription's result set has changed.
-
-```
-{
-  "type":  "StoreDelta",
-  "subId": 456,                  // Subscription ID (u64)
-  "ops":   [                           // Array of atomic operations
-    {
-      "op":    "set",                  // "set" | "remove"
-      "path":  [0, "rect-2"],
-      "value": { 1: 50, 2: 75 }       // Present for "set", absent for "remove"
-    },
-    {
-      "op":   "remove",
-      "path": [0, "rect-3"]
-    }
-  ]
-}
-```
-
-**Operation types:**
-
-| `op` | Description |
-|------|-------------|
-| `"set"` | A record was created or updated. `value` contains the full record. |
-| `"remove"` | A record was deleted. No `value` field. |
-
-> **Design note (ADR-014):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
->
-> **Consistency note (ADR-018):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
-
-#### `WriteCommitted`
-
-SDK-consumed writer-result push for tracked/committed writes. SDKs use this to resolve committed mutation promises; it is not exposed as a public application event.
-
-```
-{
-  "type":    "WriteCommitted",
-  "writeId": "wr_..."
-}
-```
-
-#### `WriteError`
-
-Notifies the SDK that a tracked or confirmed write failed after acceptance. This is not a rollback command.
-
-```
-{
-  "type":    "WriteError",
-  "writeId": "wr_...",
-  "code":    "PERMISSION_DENIED",
-  "message": "Rule blocked operation",
-  "path":    [0, <bin16("rect-1")>], // Optional, best-effort
-  "details": {
-    "phase":      "write",
-    "batchIndex": 2                  // Optional, batch failures only
-  }
-}
-```
-
----
-
-#### `PresenceBroadcast`
-
-Notifies user-presence subscribers about presence changes in their namespace. Delivered in 50ms batches. Multiple user events within a batch window are grouped into a single message with a `users` array.
-
-```
-{
-  "type":   "PresenceBroadcast",
-  "subId":  789,           // Integer subscription ID
-  "users":  [
-    {
-      "userId":   <bin16>,   // Internal users.id as 16-byte binary
-      "event":    "join",    // "join" | "update" | "leave"
-      "data":     { 0: 101.0, 1: 201.0 },  // Integer-keyed field map. Present for "join" and "update", absent for "leave"
-      "joinedAt": 1234567890               // Unix timestamp ms. Present only for "join" events
-    }
-  ]
-}
-```
-
-**Event types:**
-
-| `event` | `data` | `joinedAt` | Description |
-|---------|--------|------------|-------------|
-| `"join"` | Full user field map (all set fields) | Present | A user entered the namespace. |
-| `"update"` | Merge delta (only changed fields) | Absent | A user called `presence.set()`. SDK merges into local cache. |
-| `"leave"` | Absent | Absent | A user disconnected or called `presence.remove()`. |
-
-The SDK decodes `data` using `presenceUserFields` indices from `SchemaSync` and unflattens nested objects before delivering to `subscribe()` callbacks.
-
----
-
-#### `SharedStateBroadcast`
-
-Notifies shared-state subscribers that the namespace-level shared state has changed. Delivered in 50ms batches.
-
-```
-{
-  "type":  "SharedStateBroadcast",
-  "subId": 790,                  // Integer subscription ID (from PresenceSubscribeShared)
-  "data":  { 0: 6 }             // Integer-keyed merge delta — only changed fields
-}
-```
-
-The SDK decodes `data` using `presenceSharedFields` indices from `SchemaSync`, merges the patch into the local shared state cache, unflattens nested objects, and fires all `subscribeShared()` callbacks with the updated shared state.
-
----
-
-#### `ServerDisconnect`
-
-Server-initiated graceful disconnection (e.g., server shutdown, token expiry).
-
-```
-{
-  "type":    "ServerDisconnect",
-  "code":    "TOKEN_EXPIRED",
-  "message": "Your authentication token has expired."
-}
-```
-
----
-
-## Ticket Endpoints (HTTP)
-
-### 1. Ticket Exchange (HTTP)
-
-Before opening a WebSocket, the client obtains a single-use ticket.
-
-```
-POST /auth/ticket
-Authorization: Bearer <external_jwt>
-```
-
-**Response** (`HTTP 200 OK`):
-```json
-{
-  "ticket":    "zyc_tk_abc123...",
-  "expiresAt": 1741551234
-}
-```
-
----
-
-## Connection Lifecycle
-
-### 2. WebSocket Upgrade
-
-Client opens a WebSocket connection using the ticket:
-
-```
-GET /ws?ticket=zyc_tk_abc123... HTTP/1.1
-Upgrade: websocket
-Connection: Upgrade
-Origin: https://app.example.com
-```
-
-The server validates:
-1. Origin header (CSWSH prevention)
-2. Ticket signature and expiry (contains baked-in `$session`)
-
-On success: HTTP 101 Switching Protocols. On failure: HTTP 401 or 403.
-
-### 3. SchemaSync & Connected
-
-After the WebSocket is established, the server pushes two foundational messages:
-
-**1. `SchemaSync`**
-Provides the structural dictionary for integer-based routing for both store and presence operations. The SDK must dynamically hash this payload offline to track queue compatibility.
-*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
-
-```
-{
-  "type":   "SchemaSync",
-  "tables": ["users", "tasks"],
-  "fields": [
-    ["id", "namespace_id", "owner_id", "email", "created_at", "updated_at"],
-    ["id", "namespace_id", "owner_id", "title", "status", "created_at", "updated_at"]
-  ],
-  "fieldFlags": [
-    [7, 5, 7, 0, 5, 5],  // users:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), email=0, created_at=5(0b101), updated_at=5(0b101)
-    [7, 5, 7, 0, 0, 5, 5] // tasks:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), title=0, status=0, created_at=5(0b101), updated_at=5(0b101)
-  ],
-  "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],
-  "presenceSharedFields": ["slide", "playing"]
-}
-```
-
-Presence field arrays are flat lists of flattened field names (nested objects are expanded with `__`). The array index is the integer used on the wire. No companion flags arrays — presence fields have no system-column or doc_id semantics. Both arrays are omitted when the schema has no `presence` section.
-
-**2. `Connected`**
-Provides transport-level session context. It does not by itself authorize scoped store or presence operations.
-
-```
-{
-  "type":               "Connected",
-  "externalUserId":     "user-123",       // External identity string (JWT sub or SDK client ID)
-  "session":            { ... },          // Base $session context, before per-scope userId injection
-  "storeReady":         false,
-  "presenceReady":      false
-}
-```
-
-The client should wait for this message before sending namespace selection messages. Store and presence data operations require the corresponding `StoreSetNamespace` or `PresenceSetNamespace` acknowledgement first.
-
-### 4. Heartbeat
-
-The server sends WebSocket-level **ping** frames at a configurable interval (default: 30 seconds). The client responds with **pong** frames (handled automatically by WebSocket implementations). If no pong is received within the timeout (default: 10 seconds), the server closes the connection.
-
-No application-level heartbeat messages are needed — WebSocket ping/pong is sufficient.
-
-### 5. Graceful close
-
-- **Client-initiated:** Client sends a WebSocket close frame. Server cleans up subscriptions and presence.
-- **Server-initiated:** Server sends a `ServerDisconnect` message, then closes the WebSocket.
-
-### 6. Reconnection Strategy
-
-When a connection is lost unexpectedly, clients should implement an exponential backoff strategy with optional jitter to prevent thundering herd scenarios upon server restart.
-The recommended formula for delay before the next attempt is:
-`min(reconnectDelay * 2^attempt + jitter, maxReconnectDelay)`
-
----
-
-## Error Format
-
-All errors follow a consistent envelope:
-
-```
-{
-  "type":       "error",
-  "id":         2,                          // Echoed request ID (if responding to a request)
-  "writeId":    "wr_...",                   // Optional, tracked/committed writes
-  "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
-  "message":    "Field 'priority' must be an integer, got string.",
-  "details":    { "phase": "accept" },      // Optional structured context
-  "retryAfter": 5000                        // (Optional) ms to wait before retry
-}
-```
-
-### Error codes
-
-| Code | Category | Description |
-|------|----------|-------------|
-| `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
-| `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
-| `SESSION_NOT_READY` | state | Scoped operation sent before namespace and user resolution completed |
-| `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
-| `NAMESPACE_SWITCH_REJECTED` | state | Namespace switching is not allowed when `users.namespaced` is enabled |
-| `COLLECTION_NOT_FOUND` | validation | Table/Collection name in path is not in the schema |
-| `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
-| `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |
-| `IMMUTABLE_FIELD` | validation | Attempted to modify a system-protected field (e.g., `id`) |
-| `PERMISSION_DENIED` | authorization | `authorization.json` rejected the operation |
-| `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
-| `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
-| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
-| `INVALID_MESSAGE_TYPE` | validation | Only binary MessagePack frames are supported |
-| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
-| `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
-| `MESSAGE_TOO_LARGE` | client | Payload exceeds `maxMessageSize` |
-| `REQUEST_SUPERSEDED` | state | Scope superseded by newer request |
-| `BATCH_TOO_LARGE` | client | Batch exceeds 500 operations |
-| `ENGINE_UNHEALTHY` | server | Write engine is in degraded state |
-| `CONNECTION_FAILED` | connection | Transport-level failure (WebSocket closed) |
-| `TIMEOUT` | connection | Server-side processing exceeded timeout |
-| `INTERNAL_ERROR` | server | Unexpected server failure (crash/bug) |
-| `MAX_CONNECTIONS_REACHED` | connection | Server at capacity |
-| `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
-| `RESOURCE_EXHAUSTED` | rate-limit | Subscription engine memory budget reached; reduce active subscriptions |
-
----
+- `StoreSetNamespace` and `PresenceSetNamespace` establish independent scoped sessions.
+- Store operations before store scope readiness return `SESSION_NOT_READY`.
+- Presence operations before presence scope readiness return `SESSION_NOT_READY`.
+- A superseded namespace resolution must not activate an older scope.
+- When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.
 
 ## Extensibility
 
-### Adding new message types
+- Additive fields are allowed when older decoders can safely ignore them.
+- New message types must be added to `MessageHandler.classifyMsgType`, `src/wire/decode.zig`, SDK wire code, and this file in the same change.
+- New public errors must be added to `src/wire/errors.zig`, `sdk/typescript/src/errors.ts`, and [Error Taxonomy](./error-taxonomy.md).
+- Breaking wire changes are acceptable during the current green-field stage, but the docs and SDK must move in the same commit.
 
-New client→server or server→client message types can be added in future versions. Clients and servers **must** ignore unknown `type` values gracefully (log and discard).
+## See Also
 
-### Adding new fields
-
-New fields may be added to existing message types at any time. Implementations **must** ignore unknown fields. This allows non-breaking evolution.
-
-### Protocol version
-
-The `Connected` message may include a `protocolVersion` field if explicit version negotiation becomes necessary. Until then, clients and servers use the documented protocol directly.
-
----
-
-## Message Type Summary
-
-| Direction | Type | SDK method | Response? |
-|-----------|------|------------|-----------|
-| C→S | `StoreSet` | `store.set(path, value)` | `ok` |
-| C→S | `StoreRemove` | `store.remove(path)` | `ok` |
-| C→S | `StoreBatch` | `store.batch(ops)` | `ok` |
-| C→S | `StoreQuery` | `store.get(path)`, `store.query(collection, opts)` | `ok` with `value` + `nextCursor` |
-| C→S | `StoreSubscribe` | `store.listen(path, cb)`, `store.subscribe(collection, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
-| C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
-| C→S | `StoreLoadMore` | `subscription.loadMore()` | `ok` with `subId`, `value`, `hasMore`, `nextCursor` |
-| C→S | `PresenceSet` | `presence.set(data)` | `ok` |
-| C→S | `PresenceSetShared` | `presence.setShared(data)` | `ok` |
-| C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId`, `users` (current snapshot) |
-| C→S | `PresenceUnsubscribe` | (unsubscribe function from `subscribe`) | `ok` |
-| C→S | `PresenceSubscribeShared` | `presence.subscribeShared(cb)` | `ok` with `subId`, `shared` |
-| C→S | `PresenceUnsubscribeShared` | (unsubscribe function from `subscribeShared`) | `ok` |
-| C→S | `PresenceRemove` | `presence.remove()` | `ok` |
-| C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` with store-scoped `session` |
-| C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` with presence-scoped `session` |
-| C→S | `AuthRefresh` | `client.authRefresh(token)` | `ok` with `session` |
-| S→C | `SchemaSync` | — | Push (no `id`); includes `presenceUserFields`, `presenceSharedFields` |
-| S→C | `Connected` | — | Push (no `id`) |
-| S→C | `StoreDelta` | — | Push (no `id`) |
-| S→C | `WriteCommitted` | — | Push (no `id`, SDK-consumed) |
-| S→C | `WriteError` | — | Push (no `id`) |
-| S→C | `PresenceBroadcast` | — | Push (no `id`); `users` array with `userId` (bin16), `event`, `data` (integer-keyed), `joinedAt` |
-| S→C | `SharedStateBroadcast` | — | Push (no `id`); integer-keyed shared state delta |
-| S→C | `ServerDisconnect` | — | Push (no `id`) |
+- [Message Handler](./message-handler.md)
+- [Query Grammar](./query-grammar.md)
+- [Schema Grammar](./schema-grammar.md)
+- [Presence Internals](./presence-internals.md)
+- [TypeScript SDK](./typescript-sdk.md)

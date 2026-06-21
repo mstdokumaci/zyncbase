@@ -100,7 +100,6 @@ Application data reads go through the **Subscription Engine**:
 
 The core engine routes incoming messages to either the parallel read path or the serialized write path. The Subscription Engine maintains in-memory collection state updated by the writer thread after each commit. The lock-free cache handles auth/schema/namespace/identity metadata with atomic reference counting and COW map swaps.
 
-Detailed synchronization logic and Zig implementation can be found in the [Threading Implementation](../implementation/threading.md).
 
 ---
 
@@ -151,7 +150,7 @@ CPU usage: 6% (1/16 cores)
 
 ## Memory Management Strategy
 
-ZyncBase employs specialized allocation patterns to minimize overhead in a high-concurrency environment. See [Memory Management Implementation](../implementation/memory-strategy.md) for technical specifics on:
+ZyncBase employs specialized allocation patterns to minimize overhead in a high-concurrency environment:
 - **Arena Allocation** for request-scoped data.
 - **Object Pooling** for reusing common structures.
 - **Allocator Strategies** (Arena, Pool, GPA).

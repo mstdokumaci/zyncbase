@@ -35,7 +35,6 @@ By using atomic operations for reference counting and ensuring that state transi
 3. **Graceful Release**: Once finished, it atomically decrements the reference count.
 4. **Writes via Mutation**: Writes are always serialized by a mutex. When a write completes, the cache entry's version is updated.
 
-Detailed Zig implementation and memory ordering specifics can be found in the [Lock-Free Cache Implementation](../implementation/lock-free-cache.md).
 
 ---
 

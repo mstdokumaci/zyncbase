@@ -226,7 +226,6 @@ The storage layer is designed for vertical scaling on a single node. Distributed
 
 ## See Also
 
-- [Storage Implementation](../implementation/storage.md) - Zig code, PRAGMAs, and DDL generator
 - [Threading Model](./threading-model.md) - How connection pool enables parallel reads
 - [ADRs](./adrs.md) - Architectural Decision Records
 - [Research](./research.md) - SQLite performance benchmarks
