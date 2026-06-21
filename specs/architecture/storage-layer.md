@@ -16,7 +16,6 @@ ZyncBase uses SQLite in Write-Ahead Logging (WAL) mode as its storage layer. Thi
 
 ✅ **Zero-config** - Embedded database, no separate server  
 ✅ **ACID transactions** - Data integrity guarantees  
-✅ **Full-text search** - Built-in FTS5 extension  
 ✅ **Proven reliability** - 20+ years, billions of devices  
 ✅ **WAL mode** - Parallel reads (critical for scaling)  
 ✅ **Single file** - Easy backup and deployment  
@@ -220,8 +219,8 @@ SQLite allows only one writer at a time. While batching helps, it cannot scale t
 ### Checkpoint Starvation
 Heavy read load can prevent WAL entries from being merged back to the main DB, leading to WAL file growth and read degradation. ZyncBase manages this with proactive checkpointing.
 
-### No Horizontal Scaling (v1.0)
-The storage layer is designed for vertical scaling on a single node. For distributed multi-node clusters, ZyncBase suggests LiteFS or Marmot in future iterations.
+### No Horizontal Scaling
+The storage layer is designed for vertical scaling on a single node. Distributed multi-node clustering is out of scope (ADR-002).
 
 ---
 

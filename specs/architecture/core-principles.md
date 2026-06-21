@@ -20,7 +20,7 @@ ZyncBase is built on thirteen core principles that guide every architectural dec
 
 ### Performance & Scale
 
-5. **P-PPF — Predictable Performance**: No hidden O(n²) algorithms, clear performance characteristics. Every operation has documented latency bounds. If it can't be made predictable, it's not in v1.
+5. **P-PPF — Predictable Performance**: No hidden O(n²) algorithms, clear performance characteristics. Every operation has documented latency bounds. If it can't be made predictable, it is excluded from the engine.
 
 6. **P-VSF — Vertical Scaling First**: Optimize for single-node performance before considering distribution. ZyncBase saturates a single machine's CPU cores, memory, and I/O before introducing the complexity of clustering. Horizontal scaling is a future concern, not a current abstraction.
 

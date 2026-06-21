@@ -19,7 +19,7 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 | **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED`, `SESSION_NOT_READY` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`, or wait for scope readiness. |
 | **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface immediately. |
 | **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface immediately. |
-| **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Auto-retry with backoff if `RATE_LIMITED`. |
+| **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Respect server `retry-after`, else backoff if `RATE_LIMITED`. |
 | **Server** | `INTERNAL_ERROR` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
 
 ---
@@ -40,7 +40,7 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 | `INVALID_FIELD_NAME` | Validation | Field name contains forbidden characters | Path/value contains `__` sequence | 400 | No - Fix path or data |
 | `INVALID_ARRAY_ELEMENT` | Validation | Array field contains non-literal value | `store.set` with an array containing nested objects or arrays | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |
-| `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Exponential backoff |
+| `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Respect retryAfter, else backoff |
 | `MESSAGE_TOO_LARGE` | Rate-Limit | Payload too big | Exceeding `maxMessageSize` | 413 | No - Reduce message size |
 | `CONNECTION_FAILED` | Connection | Transport failure | WebSocket closed unexpectedly or DNS failure | - | Yes - Reconnect |
 | `TIMEOUT` | Connection | No server response | Request exceeded `client.timeout` (default: 10s) | 408 | Yes - Retry with backoff |

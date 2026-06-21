@@ -76,7 +76,7 @@ await client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
 await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
 ```
 
-**Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the Path level.
+**Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the field level.
 
 **Confirmation**:
 - `confirm: "accepted"` (default): resolves when the server accepts the mutation into the write pipeline.

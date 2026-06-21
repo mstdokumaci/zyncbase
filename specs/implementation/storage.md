@@ -193,7 +193,6 @@ When `users.namespaced = false`, callers pass global namespace ID `0`. When `use
 
 ### Relational Features
 - **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.
-- **FTS5**: Virtual tables created for full-text search capability on designated paths.
 
 ---
 

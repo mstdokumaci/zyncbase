@@ -891,7 +891,7 @@ The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables s
 **Additive changes auto-migrate with zero friction:**
 
 ```json
-// schema.json v1
+// Initial schema.json
 {
   "store": {
     "tasks": {
@@ -903,7 +903,7 @@ The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables s
   }
 }
 
-// schema.json v2 - add a field
+// Updated schema.json - add a field
 {
   "store": {
     "tasks": {

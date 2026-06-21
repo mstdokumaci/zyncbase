@@ -743,19 +743,19 @@ After the WebSocket is established, the server pushes two foundational messages:
 
 **1. `SchemaSync`**
 Provides the structural dictionary for integer-based routing for both store and presence operations. The SDK must dynamically hash this payload offline to track queue compatibility.
-*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
+*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
 
 ```
 {
   "type":   "SchemaSync",
   "tables": ["users", "tasks"],
   "fields": [
-    ["id", "namespace_id", "email", "created_at", "updated_at"],
-    ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
+    ["id", "namespace_id", "owner_id", "email", "created_at", "updated_at"],
+    ["id", "namespace_id", "owner_id", "title", "status", "created_at", "updated_at"]
   ],
   "fieldFlags": [
-    [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id, bit 2 = required
-    [3, 1, 0, 0, 1, 1]
+    [3, 1, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id, bit 2 = required
+    [3, 1, 1, 0, 0, 1, 1]
   ],
   "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],
   "presenceSharedFields": ["slide", "playing"]
