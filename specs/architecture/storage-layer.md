@@ -6,7 +6,7 @@
 
 ZyncBase uses SQLite in Write-Ahead Logging (WAL) mode as its storage layer. This provides zero-config deployment, ACID transactions, and parallel reads—all critical for vertical scaling.
 
-**Key Innovation**: SQLite WAL mode + connection pool = parallel reads across all CPU cores. For the architectural decision, see [ADR-004](./adrs.md#adr-004-sqlite-wal-mode--concurrency).
+**Key Innovation**: SQLite WAL mode + connection pool = parallel reads across all CPU cores. For the architectural decision, see [ADR-005](./adrs.md#adr-005-sqlite-as-the-storage-engine).
 
 ---
 
@@ -89,7 +89,7 @@ Write-Ahead Logging (WAL) transforms SQLite's concurrency model from a single-us
 
 ## Connection Pool Strategy
 
-To utilize multiple CPU cores for reads, ZyncBase maintains a connection pool with one reader per core. All writes are queued and executed via a single writer connection to satisfy SQLite's serialization requirements. See [ADR-005](./adrs.md#adr-005-multi-threaded-core-engine).
+To utilize multiple CPU cores for reads, ZyncBase maintains a connection pool with one reader per core. All writes are queued and executed via a single writer connection to satisfy SQLite's serialization requirements. See [ADR-006](./adrs.md#adr-006-multi-threaded-core-engine).
 
 - **One reader per core**: Maximizes parallel read throughput without connection contention.
 - **Single writer**: Batched for efficiency to overcome `fsync()` overhead.
@@ -99,7 +99,7 @@ To utilize multiple CPU cores for reads, ZyncBase maintains a connection pool wi
 
 ## Schema Design: Relational-Document Hybrid
 
-ZyncBase generates SQLite tables from a declarative `schema.json`. This provides an abstraction where frontend developers work with paths (document-style), while the core maintains rigid relational integrity. See [ADR-019](./adrs.md#adr-019-relational-document-hybrid-path-conventions).
+ZyncBase generates SQLite tables from a declarative `schema.json`. This provides an abstraction where frontend developers work with paths (document-style), while the core maintains rigid relational integrity. See [ADR-009](./adrs.md#adr-009-integer-routing-architecture).
 
 ### Path-to-Table Mapping
 The first segment of a path (e.g., `tasks`) maps to a database table. This simplifies indexing and query optimization.

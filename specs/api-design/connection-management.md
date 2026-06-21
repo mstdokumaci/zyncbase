@@ -81,7 +81,7 @@ const client = createClient({
 Initiates the connection sequence:
 1. **Ticket exchange** (HTTP POST `/auth/ticket`) — obtains a single-use ticket from the external JWT
 2. **WebSocket upgrade** (`GET /ws?ticket=...`) — opens the WebSocket connection
-3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-025)
+3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-009)
 4. **`Connected` push** — the server sends transport-level session context
 5. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
 

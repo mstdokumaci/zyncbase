@@ -4,7 +4,7 @@ The Store API handles durable, synchronized data. Everything in this namespace i
 
 Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`; calling store methods before that point fails with `SESSION_NOT_READY`.
 
-Mutating methods use subscription-first eventual state propagation (ADR-031). By default, `store.set`, `store.remove`, and `store.batch` resolve when the server accepts the mutation into the write pipeline. They do not optimistically update local subscription state, and they do not wait for writer commit unless `confirm: "committed"` is requested. Subscription callbacks are the authoritative source of committed observable state.
+Mutating methods use subscription-first eventual state propagation (ADR-018). By default, `store.set`, `store.remove`, and `store.batch` resolve when the server accepts the mutation into the write pipeline. They do not optimistically update local subscription state, and they do not wait for writer commit unless `confirm: "committed"` is requested. Subscription callbacks are the authoritative source of committed observable state.
 
 ## Table of Contents
 

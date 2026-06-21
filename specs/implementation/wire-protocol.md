@@ -19,7 +19,7 @@
 
 ## Overview
 
-This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-011). Each message conforms to one of the types defined in this spec.
+This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-008). Each message conforms to one of the types defined in this spec.
 
 > Examples below use pseudo-literals like `<bin16("rect-1")>` for MessagePack `bin(16)` values. On the public SDK surface, document IDs and reference fields remain strings; on the wire they are packed into 16-byte binary IDs.
 
@@ -40,8 +40,8 @@ This document specifies the complete client-server contract for ZyncBase. Every 
 | Frame type | Binary (`opcode 0x02`) |
 | Serialization | MessagePack (production), JSON (debug mode via config flag) |
 | Max message size | 10 MB (configurable, see `security.rateLimit.maxMessageSize`) |
-| Max nesting depth | 32 levels (per ADR-010) |
-| Compression | None in v1 (per ADR-012) |
+| Max nesting depth | 32 levels (per ADR-008) |
+| Compression | None (per ADR-008) |
 
 ---
 
@@ -86,7 +86,7 @@ Every message is a MessagePack **map** with at minimum a `type` field. Client-or
 
 ### Store operations
 
-> **Note (ADR-023):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
+> **Note (ADR-014):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
 
 #### `StoreSet`
 
@@ -601,9 +601,9 @@ Notifies a subscribed client that their subscription's result set has changed.
 | `"set"` | A record was created or updated. `value` contains the full record. |
 | `"remove"` | A record was deleted. No `value` field. |
 
-> **Design note (ADR-023):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
+> **Design note (ADR-014):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
 >
-> **Consistency note (ADR-031):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
+> **Consistency note (ADR-018):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
 
 #### `WriteCommitted`
 

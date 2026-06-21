@@ -6,7 +6,7 @@
 
 This document specifies the full query translation pipeline:
 
-1. **SDK → Wire**: How the Prisma-inspired SDK syntax is pre-compiled into compact positional tuples (per ADR-019).
+1. **SDK → Wire**: How the Prisma-inspired SDK syntax is pre-compiled into compact positional tuples (per ADR-009).
 2. **Wire → AST**: How the Zig server deserializes wire tuples into the `QueryFilter` AST.
 3. **AST → SQL**: How the AST is translated into SQLite `SELECT` queries.
 
@@ -16,7 +16,7 @@ Unlike the public-facing API design documentation, this specification acts as th
 
 ## Wire Encoding (SDK → Wire)
 
-The SDK transforms the developer-friendly Prisma-style query into compact positional arrays before transmission. This follows the same principle as path encoding (ADR-019): SDK-friendly syntax on the developer side, compact arrays on the wire.
+The SDK transforms the developer-friendly Prisma-style query into compact positional arrays before transmission. This follows the same principle as path encoding (ADR-009): SDK-friendly syntax on the developer side, compact arrays on the wire.
 
 ### Operator Codes
 

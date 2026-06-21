@@ -1,6 +1,6 @@
 # Presence Internals
 
-**Drivers**: [Presence API Design](../api-design/presence-api.md) — Formal requirements for user awareness and ephemeral state. [ADR-033](../architecture/adrs.md#adr-033-typed-two-tier-presence-system) — Typed two-tier presence architecture.
+**Drivers**: [Presence API Design](../api-design/presence-api.md) — Formal requirements for user awareness and ephemeral state. [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system) — Typed two-tier presence architecture.
 
 This document covers the architectural details, performance strategy, and internal implementation of ZyncBase's presence system.
 
@@ -10,7 +10,7 @@ This document covers the architectural details, performance strategy, and intern
 
 Presence is strictly scoped to `presenceNamespace`. The server maintains two in-memory structures per namespace: a user state map (one record per connected user) and a shared state map (one record for the entire namespace). All data is ephemeral — no SQLite involvement.
 
-Presence operations require a ready presence scope: the namespace string has been resolved to `_zync_namespaces.id`, and the external identity has been resolved to a persisted `users.id`. If `users.namespaced = true`, identity resolution uses the presence namespace ID. See ADR-029.
+Presence operations require a ready presence scope: the namespace string has been resolved to `_zync_namespaces.id`, and the external identity has been resolved to a persisted `users.id`. If `users.namespaced = true`, identity resolution uses the presence namespace ID. See ADR-015.
 
 ```
 [WebSocket Client] ──▶ [PresenceManager (In-Memory)]
@@ -486,4 +486,4 @@ bun run test:e2e
 - [Presence API Design](../api-design/presence-api.md)
 - [Wire Protocol](./wire-protocol.md)
 - [Auth System](./auth-system.md)
-- [ADR-033: Typed Two-Tier Presence System](../architecture/adrs.md#adr-033-typed-two-tier-presence-system)
+- [ADR-020: Typed Two-Tier Presence System](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)

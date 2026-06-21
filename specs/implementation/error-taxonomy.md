@@ -5,7 +5,7 @@
 ## Drivers
 
 This implementation follows the decisions established in:
-- [ADR-022: Formal Error Taxonomy](../architecture/adrs.md#adr-022-formal-error-taxonomy-and-handling-strategy)
+- [ADR-019: Error Taxonomy and SDK Error Handling](../architecture/adrs.md#adr-019-error-taxonomy-and-sdk-error-handling)
 
 ---
 
@@ -306,4 +306,4 @@ interface ZyncBaseError extends Error {
 
 - [Security Model](./security.md) — Rate limiter and circuit breaker implementation
 - [Wire Protocol](./wire-protocol.md) — Error envelope wire format
-- [ADR-019](../architecture/adrs.md#adr-019-formal-error-taxonomy-and-handling-strategy) — Decision record for this taxonomy
+- [ADR-019](../architecture/adrs.md#adr-019-error-taxonomy-and-sdk-error-handling) — Decision record for this taxonomy
