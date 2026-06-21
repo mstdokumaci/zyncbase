@@ -11,16 +11,18 @@ This implementation follows the decisions established in:
 
 ## 1. Error Categories
 
-Errors are grouped into 6 functional categories to determine automatic SDK behavior such as retries and user-facing surfacing.
+Errors are grouped into 8 functional categories to determine automatic SDK behavior such as retries and user-facing surfacing.
 
 | Category | Typical Codes | Retryable? | SDK Behavior |
 |----------|---------------|------------|--------------|
 | **Connection** | `CONNECTION_FAILED`, `TIMEOUT` | **Yes (Auto)** | Exponential backoff + jitter until reconnected. |
-| **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED`, `SESSION_NOT_READY` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`, or wait for scope readiness. |
-| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `NAMESPACE_SWITCH_REJECTED`, `PERMISSION_DENIED` | No | Surface immediately. |
-| **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface immediately. |
-| **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Respect server `retry-after`, else backoff if `RATE_LIMITED`. |
-| **Server** | `INTERNAL_ERROR` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
+| **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`. |
+| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface immediately. |
+| **State** | `SESSION_NOT_READY`, `NAMESPACE_SWITCH_REJECTED`, `REQUEST_SUPERSEDED`, `SUBSCRIPTION_NOT_FOUND` | No | Surface immediately. |
+| **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE`, `COLLECTION_NOT_FOUND` | No | Surface immediately. |
+| **Client** | `INVALID_PATH`, `BATCH_TOO_LARGE`, `MESSAGE_TOO_LARGE` | No | Surface immediately. |
+| **Rate-Limit** | `RATE_LIMITED` | **Yes (Opt-out)** | Respect server `retry-after`, else backoff if `RATE_LIMITED`. |
+| **Server** | `INTERNAL_ERROR`, `ENGINE_UNHEALTHY` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
 
 ---
 
@@ -30,22 +32,29 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 |------|----------|-------------|---------|-------------|----------------|
 | `AUTH_FAILED` | Authentication | Identity verification failed | Invalid ticket or expired initial JWT | 401 | No - Get new token |
 | `TOKEN_EXPIRED` | Authentication | Session has expired | Connection closed by server; requires re-auth | 401 | Yes - Refresh token |
-| `SESSION_NOT_READY` | Authentication | Scoped session is not ready | Store/presence operation sent before namespace and user resolution completed | 409 | No - Wait for namespace acknowledgement |
+| `SESSION_NOT_READY` | State | Scoped session is not ready | Store/presence operation sent before namespace and user resolution completed | 409 | No - Wait for namespace acknowledgement |
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
-| `NAMESPACE_SWITCH_REJECTED` | Authorization | Namespace switch blocked | `setStoreNamespace`/`setPresenceNamespace` when `users.namespaced` is enabled and a scope is already active | 403 | No - Reconnect per namespace |
+| `NAMESPACE_SWITCH_REJECTED` | State | Namespace switch blocked | `setStoreNamespace`/`setPresenceNamespace` when `users.namespaced` is enabled and a scope is already active | 403 | No - Reconnect per namespace |
 | `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` returned `false` or a same-row guard matched no row | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
-| `COLLECTION_NOT_FOUND` | Authorization | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |
+| `COLLECTION_NOT_FOUND` | Validation | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |
 | `FIELD_NOT_FOUND` | Validation | Field missing in schema | Path/value refers to a field not defined in the schema | 400 | No - Fix schema or data |
 | `IMMUTABLE_FIELD` | Validation | System field is protected | Attempted to modify a protected/immutable system field (e.g., `id`) | 400 | No - Fix data |
 | `INVALID_FIELD_NAME` | Validation | Field name contains forbidden characters | Path/value contains `__` sequence | 400 | No - Fix path or data |
 | `INVALID_ARRAY_ELEMENT` | Validation | Array field contains non-literal value | `store.set` with an array containing nested objects or arrays | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |
+| `INVALID_MESSAGE_FORMAT` | Validation | Missing fields | Message missing `type` or `id` | 400 | No - Fix payload |
+| `INVALID_MESSAGE_TYPE` | Validation | Unsupported frame type | Only binary MessagePack frames are supported | 400 | No - Fix message format |
 | `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Respect retryAfter, else backoff |
-| `MESSAGE_TOO_LARGE` | Rate-Limit | Payload too big | Exceeding `maxMessageSize` | 413 | No - Reduce message size |
+| `MESSAGE_TOO_LARGE` | Client | Payload too big | Exceeding `maxMessageSize` | 413 | No - Reduce message size |
 | `CONNECTION_FAILED` | Connection | Transport failure | WebSocket closed unexpectedly or DNS failure | - | Yes - Reconnect |
 | `TIMEOUT` | Connection | No server response | Request exceeded `client.timeout` (default: 10s) | 408 | Yes - Retry with backoff |
 | `INTERNAL_ERROR` | Server | Zig core failure | Crash, Disk I/O error, or unhandled exception | 500 | Yes - Retry up to 3 times |
+| `ENGINE_UNHEALTHY` | Server | Write engine is in degraded state | Storage engine health check failed | 503 | Yes - Retry up to 3 times |
+| `REQUEST_SUPERSEDED` | State | Scope superseded by newer request | A newer namespace switch request arrived before the previous one completed | 409 | No - Retry with updated scope |
+| `SUBSCRIPTION_NOT_FOUND` | State | `subId` not recognized | Server has no subscription matching the provided ID (stale subscription) | 404 | No - Re-subscribe |
+| `INVALID_PATH` | Client | Path format is invalid | Path contains empty segments or is malformed | 400 | No - Fix path |
+| `BATCH_TOO_LARGE` | Client | Batch exceeds 500 operations | `store.batch` with more than 500 operations | 413 | No - Reduce batch size |
 | `MSGPACK_MAX_DEPTH_EXCEEDED` | Validation | MessagePack nesting too deep | Message exceeds max depth of 32 levels | 400 | No - Reduce nesting |
 | `MSGPACK_MAX_SIZE_EXCEEDED` | Validation | MessagePack message too large | Message exceeds 10MB limit | 413 | No - Reduce message size |
 | `MSGPACK_MAX_STRING_LENGTH_EXCEEDED` | Validation | String too long | String exceeds 1MB limit | 400 | No - Reduce string length |
@@ -60,8 +69,6 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 | `RESOURCE_EXHAUSTED` | Rate-Limit | Subscription engine memory budget reached | New subscription rejected because `subscriptionEngine.maxMemoryMB` approached | 429 | No - Reduce active subscriptions |
 | `WAL_SIZE_EXCEEDED` | Server | WAL file too large | WAL file exceeded threshold | 500 | Yes - Automatic checkpoint |
 | `MAX_CONNECTIONS_REACHED` | Connection | Server at capacity | Pool exhausted | 503 | No - Try later |
-| `INVALID_MESSAGE_FORMAT` | Validation | Missing fields | Message missing `type` or `id` | 400 | No - Fix payload |
-| `INVALID_ARRAY_ELEMENT` | Validation | Non-literal in array | Array contains map or nested array | 400 | No - Fix data |
 
 ---
 
@@ -248,14 +255,42 @@ client.on('tokenExpired', async () => {
 })
 ```
 
-**No retry for**: `AUTH_FAILED`, `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED`
-- These indicate configuration or permission issues
+**No retry for**: `AUTH_FAILED`
+- This indicates an invalid token or identity configuration
 - Retrying won't help
 - Surface error to user immediately
 
+### State Errors
+
+**Errors**: `SESSION_NOT_READY`, `NAMESPACE_SWITCH_REJECTED`, `REQUEST_SUPERSEDED`, `SUBSCRIPTION_NOT_FOUND`
+
+**Strategy**: No retry
+```typescript
+// These errors indicate a connection or session state issue
+// Retrying with the same scope won't help - re-establish the session
+if (isStateError(error)) {
+  // Wait for the appropriate state transition or re-connect
+  throw error
+}
+```
+
+### Client Errors
+
+**Errors**: `INVALID_PATH`, `BATCH_TOO_LARGE`, `MESSAGE_TOO_LARGE`
+
+**Strategy**: No retry (client-side usage error)
+```typescript
+// These errors indicate a client code or configuration issue
+// Fix the code or reduce payload size
+if (isClientError(error)) {
+  console.error('Client usage error:', error)
+  throw error
+}
+```
+
 ### Validation Errors
 
-**Errors**: `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE`, `MSGPACK_*_EXCEEDED`
+**Errors**: `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE`, `INVALID_MESSAGE_FORMAT`, `INVALID_MESSAGE_TYPE`, `COLLECTION_NOT_FOUND`, `MSGPACK_*_EXCEEDED`
 
 **Strategy**: No retry (client-side bug)
 ```typescript
@@ -277,7 +312,9 @@ if (isValidationError(error)) {
 | Server | ✅ Yes | 3 | Exponential | Alert if persistent |
 | Authentication | ⚠️ Partial | 1 | None | Refresh token |
 | Authorization | ❌ No | 0 | N/A | Fix permissions |
+| State | ❌ No | 0 | N/A | Re-establish session or scope |
 | Validation | ❌ No | 0 | N/A | Fix client code |
+| Client | ❌ No | 0 | N/A | Fix client code or configuration |
 
 ---
 

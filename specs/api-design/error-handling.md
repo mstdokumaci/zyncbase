@@ -111,11 +111,17 @@ Error codes relevant to SDK consumers, grouped by category:
 |------|-------------|-------------|
 | `AUTH_FAILED` | Invalid ticket or expired initial JWT | No — get new token |
 | `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
-| `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
 | `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
-| `NAMESPACE_SWITCH_REJECTED` | Namespace switching is not allowed when `users.namespaced` is enabled | No |
 | `PERMISSION_DENIED` | Rule blocked the operation via `authorization.json` or a same-row guard matched no row | No |
-| `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
+
+### State
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
+| `NAMESPACE_SWITCH_REJECTED` | Namespace switching is not allowed when `users.namespaced` is enabled | No — reconnect per namespace |
+| `REQUEST_SUPERSEDED` | Scope superseded by a newer namespace switch request | No — retry with updated scope |
+| `SUBSCRIPTION_NOT_FOUND` | Subscription ID not recognized (stale subscription) | No — re-subscribe |
 
 ### Validation
 
@@ -123,19 +129,27 @@ Error codes relevant to SDK consumers, grouped by category:
 |------|-------------|-------------|
 | `SCHEMA_VALIDATION_FAILED` | Data does not match schema definition | No — fix data |
 | `FIELD_NOT_FOUND` | Field name not defined in schema | No — fix path or data |
+| `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
 | `IMMUTABLE_FIELD` | Attempted to modify a protected system field (e.g., `id`) | No |
 | `INVALID_FIELD_NAME` | Field name contains forbidden `__` sequence | No |
 | `INVALID_ARRAY_ELEMENT` | Array contains non-literal value (e.g., nested object) | No — fix data |
 | `INVALID_MESSAGE` | Malformed message or missing `type` field | No |
 | `INVALID_MESSAGE_FORMAT` | Missing required fields: type or id | No |
-| `INVALID_MESSAGE_ID` | Correlation ID is negative or out of range | No |
+| `INVALID_MESSAGE_TYPE` | Only binary MessagePack frames are supported | No — fix message format |
+
+### Client
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `INVALID_PATH` | Path format is invalid (empty segments or malformed) | No — fix path |
+| `BATCH_TOO_LARGE` | Batch exceeds 500 operations | No — reduce batch size |
+| `MESSAGE_TOO_LARGE` | Payload exceeds `maxMessageSize` | No — reduce payload |
 
 ### Rate Limiting
 
 | Code | Description | Auto-retry? |
 |------|-------------|-------------|
 | `RATE_LIMITED` | Message frequency exceeded | Yes — exponential backoff, respects `retryAfter` |
-| `MESSAGE_TOO_LARGE` | Payload exceeds `maxMessageSize` | No — reduce payload |
 
 ### Connection & Server
 
@@ -146,6 +160,7 @@ Error codes relevant to SDK consumers, grouped by category:
 | `RESOURCE_EXHAUSTED` | Subscription engine memory budget reached | No — reduce active subscriptions |
 | `TIMEOUT` | Operation timed out | Yes — retry with backoff |
 | `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
+| `ENGINE_UNHEALTHY` | Write engine is in degraded state | Yes — retry up to 3 times |
 
 ## Write Failure Reporting
 
@@ -170,7 +185,9 @@ Confirmed write timeouts mean confirmation was not received. They do not imply t
 | Server | ✅ Yes | 3 | Exponential backoff |
 | Authentication | ⚠️ Partial | 1 | Fire `tokenExpired`; wait for refresh |
 | Authorization | ❌ No | 0 | Surface immediately |
+| State | ❌ No | 0 | Surface immediately |
 | Validation | ❌ No | 0 | Surface immediately |
+| Client | ❌ No | 0 | Surface immediately |
 
 ---
 

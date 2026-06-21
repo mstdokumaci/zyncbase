@@ -29,7 +29,7 @@ async function resolveToken(auth: AuthConfig): Promise<string> {
 		"Invalid auth configuration: missing token or tokenProvider",
 		{
 			code: ErrorCodes.AUTH_FAILED,
-			category: "auth",
+			category: "authentication",
 			retryable: false,
 		},
 	);
@@ -68,14 +68,14 @@ async function parseTicketResponse(
 	} catch {
 		throw new ZyncBaseError("Failed to parse ticket response as JSON", {
 			code: ErrorCodes.AUTH_FAILED,
-			category: "auth",
+			category: "authentication",
 			retryable: false,
 		});
 	}
 	if (!body || typeof body !== "object" || !body.ticket) {
 		throw new ZyncBaseError("Ticket response missing ticket field", {
 			code: ErrorCodes.AUTH_FAILED,
-			category: "auth",
+			category: "authentication",
 			retryable: false,
 		});
 	}
@@ -93,11 +93,7 @@ async function parseErrorResponse(response: Response): Promise<never> {
 		if (body.code) code = body.code;
 		if (body.message) message = body.message;
 	} catch {}
-	throw new ZyncBaseError(message, {
-		code,
-		category: "auth",
-		retryable: false,
-	});
+	throw ZyncBaseError.fromServerResponse({ code, message });
 }
 
 export async function acquireTicket(

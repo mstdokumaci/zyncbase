@@ -820,23 +820,28 @@ All errors follow a consistent envelope:
 |------|----------|-------------|
 | `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
 | `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
-| `SESSION_NOT_READY` | auth | Scoped operation sent before namespace and user resolution completed |
+| `SESSION_NOT_READY` | state | Scoped operation sent before namespace and user resolution completed |
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
-| `NAMESPACE_SWITCH_REJECTED` | authorization | Namespace switching is not allowed when `users.namespaced` is enabled |
-| `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
+| `NAMESPACE_SWITCH_REJECTED` | state | Namespace switching is not allowed when `users.namespaced` is enabled |
+| `COLLECTION_NOT_FOUND` | validation | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
 | `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |
+| `IMMUTABLE_FIELD` | validation | Attempted to modify a system-protected field (e.g., `id`) |
 | `PERMISSION_DENIED` | authorization | `authorization.json` rejected the operation |
 | `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
 | `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
+| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
+| `INVALID_MESSAGE_TYPE` | validation | Only binary MessagePack frames are supported |
+| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
-| `MESSAGE_TOO_LARGE` | rate-limit | Payload exceeds `maxMessageSize` |
+| `MESSAGE_TOO_LARGE` | client | Payload exceeds `maxMessageSize` |
+| `REQUEST_SUPERSEDED` | state | Scope superseded by newer request |
+| `BATCH_TOO_LARGE` | client | Batch exceeds 500 operations |
+| `ENGINE_UNHEALTHY` | server | Write engine is in degraded state |
 | `CONNECTION_FAILED` | connection | Transport-level failure (WebSocket closed) |
 | `TIMEOUT` | connection | Server-side processing exceeded timeout |
 | `INTERNAL_ERROR` | server | Unexpected server failure (crash/bug) |
 | `MAX_CONNECTIONS_REACHED` | connection | Server at capacity |
-| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
-| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
 | `RESOURCE_EXHAUSTED` | rate-limit | Subscription engine memory budget reached; reduce active subscriptions |
 

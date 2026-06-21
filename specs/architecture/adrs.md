@@ -663,20 +663,22 @@ Confirmed writes require a timeout. A timeout means confirmation was not receive
 
 Errors from a real-time system span connection failures, authorization denials, schema violations, and storage errors — each requiring different automatic behavior from the SDK.
 
-**Decision**: All ZyncBase errors are classified into 6 categories. The category dictates automatic SDK retry and escalation behavior.
+**Decision**: All ZyncBase errors are classified into 8 categories. The category dictates automatic SDK retry and escalation behavior.
 
 | Category | Examples | SDK Auto-Behavior |
 | :--- | :--- | :--- |
 | **Connection** | Network drop, server restart | Auto-reconnect with exponential backoff |
 | **Authentication** | Invalid JWT, expired token | Trigger token refresh; reconnect if refresh succeeds |
 | **Authorization** | Permission denied | Surface to application; do not retry |
+| **State** | Session not ready, namespace switch rejected | Surface to application; do not retry |
 | **Validation** | Schema violation, invalid payload shape | Surface to application; do not retry |
+| **Client** | Path format invalid, message too large | Surface to application; do not retry |
 | **Rate-Limit** | Too many requests | Respect server `retry-after`; retry after indicated delay |
 | **Server** | Storage failure, engine error | Surface to application; optional retry |
 
 Every ZyncBase error is typed as `ZyncBaseError` with `code` (machine-readable string), `message` (human-readable), `category`, and optional `details` (including `phase`, `batchIndex`, etc., as applicable).
 
-The 6-category model is a server-side classification. The SDK maps it to typed error objects. Application code receives a fully classified, actionable error at every error boundary.
+The 8-category model is a server-side classification. The SDK maps it to typed error objects via `deriveCategory`. The SDK consumer categories are: `authentication`, `authorization`, `state`, `validation`, `client`, `rate_limit`, `server`, `network`, and `unknown`. Application code receives a fully classified, actionable error at every error boundary.
 
 **Consequences**:
 - Application developers handle semantically meaningful error categories, not raw status codes or opaque strings.
