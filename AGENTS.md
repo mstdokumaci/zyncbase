@@ -37,6 +37,7 @@ Important: Project is still in early development stage. Give no consideration to
 - Use `std.Build` for project configuration.
 - Heavy use of error unions and explicit memory management (standard Zig patterns).
 - **ArrayList Initialization (Zig 0.15):** Prefer initializing with `.empty` (e.g., `var list = std.ArrayListUnmanaged(T).empty;`). Note that this results in an unmanaged-style list where the `Allocator` must be provided to methods like `append(allocator, item)` and `deinit(allocator)`.
+- **`std.Io` casing:** Always use PascalCase `std.Io` (not lowercase `std.io`). This is the Zig 0.15+ convention. Example: `var reader: std.Io.Reader = .fixed(bytes);`
 
 ## Linting and Formatting
 - **Linter:** Use `bun run lint` (via `zwanzig`) to maintain code quality and catch common pitfalls.

@@ -200,8 +200,7 @@ pub const StoreService = struct {
 
         const timestamp = std.time.timestamp();
 
-        for (ops, 0..) |op_payload, i| {
-            _ = i;
+        for (ops) |op_payload| {
             if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
             const tuple = op_payload.arr;
             if (tuple[0] != .str) return error.InvalidMessageFormat;

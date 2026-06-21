@@ -8,7 +8,7 @@ pub fn parseValue(allocator: std.mem.Allocator, json_text: []const u8) !std.json
 pub fn cloneMetadata(allocator: std.mem.Allocator, value: std.json.Value) !types.Metadata {
     if (value != .object) return error.InvalidMetadata;
 
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     try std.json.Stringify.value(value, .{}, &out.writer);
     return .{ .json = try out.toOwnedSlice() };

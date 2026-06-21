@@ -299,7 +299,7 @@ pub const SubscriptionEngine = struct {
         }
 
         if (!first_sub) {
-            var group = self.groups.getPtr(group_id) orelse unreachable;
+            var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
             try group.subscribers.put(self.allocator, sub_key, {});
             errdefer _ = group.subscribers.remove(sub_key);
         }
