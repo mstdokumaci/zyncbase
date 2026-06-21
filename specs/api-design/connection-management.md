@@ -120,7 +120,7 @@ await client.setStoreNamespace('tenant:acme:workspace:ws-2')
 
 **Parameters:** `namespace` (string)  
 **Returns:** `Promise<void>`  
-**Throws:** `ZyncBaseError` with code `NAMESPACE_UNAUTHORIZED` if not permitted
+**Throws:** `ZyncBaseError` with code `NAMESPACE_UNAUTHORIZED` if not permitted, or `NAMESPACE_SWITCH_REJECTED` if `users.namespaced` is enabled
 
 ### `client.setPresenceNamespace(namespace)`
 

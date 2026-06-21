@@ -609,3 +609,69 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
     try testing.expectEqualStrings("leave", event_val.str.value());
     try testing.expect((try user_entry.mapGet("data")) == null);
 }
+
+test "encodeSchemaSync: fieldFlags match bit encoding rules" {
+    const allocator = testing.allocator;
+    const schema_mod = @import("schema.zig");
+
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": { "namespaced": false, "fields": { "email": { "type": "string" } } },
+        \\    "tasks": { "fields": { "title": { "type": "string" }, "status": { "type": "string" } } }
+        \\  }
+        \\}
+    ;
+
+    var schema = try schema_mod.initSchema(allocator, schema_json);
+    defer schema.deinit();
+
+    const encoded = try wire.encodeSchemaSync(allocator, &schema);
+    defer allocator.free(encoded);
+
+    var reader: std.Io.Reader = .fixed(encoded);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const field_flags_val = (try parsed.mapGet("fieldFlags")) orelse {
+        return error.MissingFieldFlags;
+    };
+
+    try testing.expect(field_flags_val == .arr);
+    try testing.expectEqual(@as(usize, 2), field_flags_val.arr.len);
+
+    // Users fieldFlags: [id, namespace_id, owner_id, email, created_at, updated_at]
+    const users_flags = field_flags_val.arr[0];
+    try testing.expectEqual(@as(usize, 6), users_flags.arr.len);
+    // id=7 (0b111 = system|doc_id|required)
+    try testing.expectEqual(@as(u64, 7), users_flags.arr[0].uint);
+    // namespace_id=5 (0b101 = system|required)
+    try testing.expectEqual(@as(u64, 5), users_flags.arr[1].uint);
+    // owner_id=7 (0b111 = system|doc_id|required)
+    try testing.expectEqual(@as(u64, 7), users_flags.arr[2].uint);
+    // email=0 (user field, not required)
+    try testing.expectEqual(@as(u64, 0), users_flags.arr[3].uint);
+    // created_at=5 (0b101 = system|required)
+    try testing.expectEqual(@as(u64, 5), users_flags.arr[4].uint);
+    // updated_at=5 (0b101 = system|required)
+    try testing.expectEqual(@as(u64, 5), users_flags.arr[5].uint);
+
+    // Tasks fieldFlags: [id, namespace_id, owner_id, title, status, created_at, updated_at]
+    const tasks_flags = field_flags_val.arr[1];
+    try testing.expectEqual(@as(usize, 7), tasks_flags.arr.len);
+    // id=7
+    try testing.expectEqual(@as(u64, 7), tasks_flags.arr[0].uint);
+    // namespace_id=5
+    try testing.expectEqual(@as(u64, 5), tasks_flags.arr[1].uint);
+    // owner_id=7
+    try testing.expectEqual(@as(u64, 7), tasks_flags.arr[2].uint);
+    // title=0 (user field, not required)
+    try testing.expectEqual(@as(u64, 0), tasks_flags.arr[3].uint);
+    // status=0 (user field, not required)
+    try testing.expectEqual(@as(u64, 0), tasks_flags.arr[4].uint);
+    // created_at=5
+    try testing.expectEqual(@as(u64, 5), tasks_flags.arr[5].uint);
+    // updated_at=5
+    try testing.expectEqual(@as(u64, 5), tasks_flags.arr[6].uint);
+}

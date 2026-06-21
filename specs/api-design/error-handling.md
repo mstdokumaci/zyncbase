@@ -113,6 +113,7 @@ Error codes relevant to SDK consumers, grouped by category:
 | `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
 | `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
 | `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
+| `NAMESPACE_SWITCH_REJECTED` | Namespace switching is not allowed when `users.namespaced` is enabled | No |
 | `PERMISSION_DENIED` | Rule blocked the operation via `authorization.json` or a same-row guard matched no row | No |
 | `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
 

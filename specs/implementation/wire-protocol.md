@@ -754,8 +754,8 @@ Provides the structural dictionary for integer-based routing for both store and 
     ["id", "namespace_id", "owner_id", "title", "status", "created_at", "updated_at"]
   ],
   "fieldFlags": [
-    [3, 1, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id, bit 2 = required
-    [3, 1, 1, 0, 0, 1, 1]
+    [7, 5, 7, 0, 5, 5],  // users:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), email=0, created_at=5(0b101), updated_at=5(0b101)
+    [7, 5, 7, 0, 0, 5, 5] // tasks:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), title=0, status=0, created_at=5(0b101), updated_at=5(0b101)
   ],
   "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],
   "presenceSharedFields": ["slide", "playing"]
@@ -822,6 +822,7 @@ All errors follow a consistent envelope:
 | `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
 | `SESSION_NOT_READY` | auth | Scoped operation sent before namespace and user resolution completed |
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
+| `NAMESPACE_SWITCH_REJECTED` | authorization | Namespace switching is not allowed when `users.namespaced` is enabled |
 | `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
 | `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |

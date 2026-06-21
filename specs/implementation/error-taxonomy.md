@@ -17,7 +17,7 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 |----------|---------------|------------|--------------|
 | **Connection** | `CONNECTION_FAILED`, `TIMEOUT` | **Yes (Auto)** | Exponential backoff + jitter until reconnected. |
 | **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED`, `SESSION_NOT_READY` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`, or wait for scope readiness. |
-| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface immediately. |
+| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `NAMESPACE_SWITCH_REJECTED`, `PERMISSION_DENIED` | No | Surface immediately. |
 | **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface immediately. |
 | **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Respect server `retry-after`, else backoff if `RATE_LIMITED`. |
 | **Server** | `INTERNAL_ERROR` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
@@ -32,6 +32,7 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 | `TOKEN_EXPIRED` | Authentication | Session has expired | Connection closed by server; requires re-auth | 401 | Yes - Refresh token |
 | `SESSION_NOT_READY` | Authentication | Scoped session is not ready | Store/presence operation sent before namespace and user resolution completed | 409 | No - Wait for namespace acknowledgement |
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
+| `NAMESPACE_SWITCH_REJECTED` | Authorization | Namespace switch blocked | `setStoreNamespace`/`setPresenceNamespace` when `users.namespaced` is enabled and a scope is already active | 403 | No - Reconnect per namespace |
 | `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` returned `false` or a same-row guard matched no row | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
 | `COLLECTION_NOT_FOUND` | Authorization | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |

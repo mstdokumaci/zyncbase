@@ -22,6 +22,7 @@ export const ErrorCodes = {
 	INVALID_PATH: "INVALID_PATH",
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
 	REQUEST_SUPERSEDED: "REQUEST_SUPERSEDED",
+	NAMESPACE_SWITCH_REJECTED: "NAMESPACE_SWITCH_REJECTED",
 } as const;
 
 interface ZyncBaseErrorOptions {
@@ -47,6 +48,7 @@ function deriveCategory(code: string): {
 
 		case ErrorCodes.SESSION_NOT_READY:
 		case ErrorCodes.REQUEST_SUPERSEDED:
+		case ErrorCodes.NAMESPACE_SWITCH_REJECTED:
 			return { category: "state", retryable: false };
 
 		case ErrorCodes.RATE_LIMITED:

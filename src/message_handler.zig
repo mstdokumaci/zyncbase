@@ -253,6 +253,17 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const req = try wire.extractStoreSetNamespaceFast(message);
+
+        if (self.schema.table("users")) |users_table| {
+            if (users_table.namespaced) {
+                if (conn.getStoreNamespace()) |current| {
+                    if (!std.mem.eql(u8, current, req.namespace)) {
+                        return error.NamespaceSwitchRejected;
+                    }
+                }
+            }
+        }
+
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
@@ -569,6 +580,16 @@ pub const MessageHandler = struct {
         const req = wire.extractPresenceSetNamespaceFast(message) catch {
             return error.InvalidMessageFormat;
         };
+
+        if (self.schema.table("users")) |users_table| {
+            if (users_table.namespaced) {
+                if (conn.getPresenceNamespace()) |current| {
+                    if (!std.mem.eql(u8, current, req.namespace)) {
+                        return error.NamespaceSwitchRejected;
+                    }
+                }
+            }
+        }
 
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);

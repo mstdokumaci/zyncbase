@@ -46,6 +46,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.PermissionDenied, error.AccessDenied => wireError("PERMISSION_DENIED", "Rule blocked operation"),
         error.SessionNotReady => wireError("SESSION_NOT_READY", "Scoped session is not ready"),
         error.NamespaceUnauthorized => wireError("NAMESPACE_UNAUTHORIZED", "No access to namespace"),
+        error.NamespaceSwitchRejected => wireError("NAMESPACE_SWITCH_REJECTED", "Namespace switching is not allowed when users.namespaced is enabled"),
         error.MaxDepthExceeded => wireError("MESSAGE_TOO_LARGE", "Payload too big"),
         error.RateLimited => wireError("RATE_LIMITED", "Too many requests"),
         error.RequestSuperseded => wireError("REQUEST_SUPERSEDED", "Scope superseded by newer request"),
