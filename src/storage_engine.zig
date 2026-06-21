@@ -1,7 +1,4 @@
 const std = @import("std");
-pub const std_options: std.Options = .{
-    .log_level = .debug,
-};
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const reader = @import("storage_engine/reader.zig");
