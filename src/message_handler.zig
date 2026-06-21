@@ -481,6 +481,7 @@ pub const MessageHandler = struct {
         defer qr.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
+        errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
         return try wire.encodeQuery(arena_allocator, .{
