@@ -13,7 +13,7 @@ test "storage SQL builders quote identifiers" {
     var tables = [_]schema_mod.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
-    const table_metadata = schema.getTable("select") orelse return error.TestExpectedValue;
+    const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
     const columns = [_]ColumnValue{
         .{ .index = schema_mod.first_user_field_index, .value = undefined },
@@ -38,7 +38,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     var tables = [_]schema_mod.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
-    const table_metadata = schema.getTable("select") orelse return error.TestExpectedValue;
+    const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
     const select_document_sql = try sql.buildSelectDocumentSql(allocator, table_metadata, null);
     defer allocator.free(select_document_sql);
@@ -72,7 +72,7 @@ fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
     var tables = [_]schema_mod.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
-    const table_metadata = schema.getTable("people") orelse return error.TestExpectedValue;
+    const table_metadata = schema.table("people") orelse return error.TestExpectedValue;
     const name_index = table_metadata.fieldIndex("name") orelse return error.TestExpectedValue;
 
     const conds = try allocator.alloc(query_ast.Condition, 2);

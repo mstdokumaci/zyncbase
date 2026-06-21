@@ -224,16 +224,8 @@ pub const Schema = struct {
         return &self.tables[idx];
     }
 
-    pub fn getTable(self: *const Schema, name: []const u8) ?*const Table {
-        return self.table(name);
-    }
-
     pub fn tableByIndex(self: *const Schema, index: usize) ?*const Table {
         if (index >= self.tables.len) return null;
         return &self.tables[index];
-    }
-
-    pub fn getTableByIndex(self: *const Schema, index: usize) ?*const Table {
-        return self.tableByIndex(index);
     }
 };

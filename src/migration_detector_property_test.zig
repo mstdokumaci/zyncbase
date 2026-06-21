@@ -66,7 +66,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 }
                 var target_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &target_tables);
                 defer target_schema.deinit();
-                const users_table = target_schema.getTable("users") orelse return error.TestExpectedValue;
+                const users_table = target_schema.table("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 var detector = MigrationDetector.init(allocator, &db, &target_schema);
@@ -93,7 +93,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
 
                 var existing_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
-                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                const users_table = existing_schema.table("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 const new_fname = field_names[rand.intRangeAtMost(usize, 1, field_names.len - 1)];
@@ -137,7 +137,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
 
                 var existing_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
-                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                const users_table = existing_schema.table("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 var target_fields = [_]schema.Field{schema_helpers.makeField("status", .integer)};
@@ -175,7 +175,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
 
                 var existing_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
-                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                const users_table = existing_schema.table("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 var target_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};

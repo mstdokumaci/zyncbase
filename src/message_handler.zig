@@ -312,7 +312,7 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const table = self.schema.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(sub_query.table_index) orelse return error.UnknownTable;
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
@@ -457,7 +457,7 @@ pub const MessageHandler = struct {
         const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
         var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
@@ -503,7 +503,7 @@ pub const MessageHandler = struct {
         const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
         var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,

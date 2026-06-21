@@ -171,7 +171,7 @@ pub const Writer = struct {
         id: DocId,
         sql_cache: *std.AutoHashMap(usize, []const u8),
     ) !?Record {
-        const table_metadata = self.schema.getTableByIndex(table_index) orelse return null;
+        const table_metadata = self.schema.tableByIndex(table_index) orelse return null;
         const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
             const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata, null);
             errdefer self.allocator.free(s);
@@ -254,7 +254,7 @@ pub const Writer = struct {
         for (ops, 0..) |op, op_idx| {
             switch (op) {
                 .upsert => |iop| {
-                    const table_metadata = self.schema.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
+                    const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
                     const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
                     var old_record: ?Record = null;
@@ -299,7 +299,7 @@ pub const Writer = struct {
                     }
                 },
                 .update => |uop| {
-                    const table_metadata = self.schema.getTableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
+                    const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
                     var old_record: ?Record = null;
                     const capture_res = getDocumentHelper(self, uop.table_index, namespace_id, uop.id, &sql_cache);
@@ -337,7 +337,7 @@ pub const Writer = struct {
                     }
                 },
                 .delete => |dop| {
-                    const table_metadata = self.schema.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
+                    const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
                     const maybe_old_record = executeDelete(self, dop, namespace_id, table_metadata) catch |err| {
                         const classified_err = errors.classifyError(err);
@@ -449,7 +449,7 @@ pub const Writer = struct {
                 else => false,
             };
             if (has_affected) {
-                const table_metadata = self.schema.getTableByIndex(table_index) orelse continue;
+                const table_metadata = self.schema.tableByIndex(table_index) orelse continue;
                 const key = reader.getCacheKey(table_metadata, namespace_id, id);
                 eviction_keys.appendAssumeCapacity(key);
             }
@@ -718,7 +718,7 @@ pub const Writer = struct {
             return;
         };
         for (entries) |entry| {
-            const table_metadata = self.schema.getTableByIndex(entry.table_index) orelse continue;
+            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse continue;
             const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
             eviction_keys.appendAssumeCapacity(key);
         }
@@ -755,7 +755,7 @@ pub const Writer = struct {
         defer pk_deletes.deinit(self.allocator);
 
         for (entries, 0..) |entry, entry_idx| {
-            const table_metadata = self.schema.getTableByIndex(entry.table_index) orelse {
+            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse {
                 final_err = StorageError.UnknownTable;
                 std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
                 failed_batch_index = entry_idx;

@@ -26,7 +26,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     defer filter.deinit(allocator);
 
     // Subscribe
-    _ = try engine.subscribe(1, (schema.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (schema.table("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Create a matching record change
     var new_record = try tth.recordFromValues(allocator, &.{tth.valText("active")});
@@ -34,7 +34,7 @@ test "SubscriptionEngine: basic subscribe and match" {
 
     const change = subscription_engine.RecordChange{
         .namespace_id = 1,
-        .table_index = (schema.getTable("items") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("items") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_record = new_record,
         .old_record = null,
@@ -66,8 +66,8 @@ test "SubscriptionEngine: group sharing" {
     defer schema.deinit();
 
     // Two different subscribers for EXACTLY the same filter
-    const first = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
-    const second = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
+    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
+    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
 
     try testing.expect(first); // First one should create group
     try testing.expect(!second); // Second one should join existing group
@@ -90,7 +90,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(3, (schema.getTable("c") orelse return error.TestExpectedValue).index, filter, 1, 1);
+    _ = try engine.subscribe(3, (schema.table("c") orelse return error.TestExpectedValue).index, filter, 1, 1);
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 
     engine.unsubscribe(1, 1);
@@ -137,8 +137,8 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer schema.deinit();
 
     // Subscribe with different values
-    _ = try engine.subscribe(1, (schema.getTable("items") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    _ = try engine.subscribe(1, (schema.getTable("items") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    _ = try engine.subscribe(1, (schema.table("items") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe(1, (schema.table("items") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     // If they share the same key, they will be in the same group.
     // They SHOULD be in different groups because the values are different.
@@ -174,8 +174,8 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.getTable("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    _ = try engine.subscribe(1, (schema.getTable("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -200,8 +200,8 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.getTable("scores") orelse return error.TestExpectedValue).index, filter_int, 1, 201);
-    _ = try engine.subscribe(1, (schema.getTable("scores") orelse return error.TestExpectedValue).index, filter_real, 2, 202);
+    _ = try engine.subscribe(1, (schema.table("scores") orelse return error.TestExpectedValue).index, filter_int, 1, 201);
+    _ = try engine.subscribe(1, (schema.table("scores") orelse return error.TestExpectedValue).index, filter_real, 2, 202);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -223,14 +223,14 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
     var schema = try sth.createSchema(allocator, &[_]sth.Table{table});
     defer schema.deinit();
 
-    _ = try engine.subscribe(999, (schema.getTable(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(999, (schema.table(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var new_record = try tth.recordFromValues(allocator, &.{});
     defer new_record.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
         .namespace_id = 999,
-        .table_index = (schema.getTable(long_coll) orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table(long_coll) orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_record = new_record,
         .old_record = null,
@@ -313,8 +313,8 @@ test "SubscriptionEngine: group sharing with different condition order" {
     });
     defer schema.deinit();
 
-    const first = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second); // Should share group!
@@ -340,7 +340,7 @@ test "SubscriptionEngine: canonical key includes predicate state" {
     });
     defer schema.deinit();
 
-    const table_index = (schema.getTable("coll") orelse return error.TestExpectedValue).index;
+    const table_index = (schema.table("coll") orelse return error.TestExpectedValue).index;
     const first = try engine.subscribe(2, table_index, filter_all, 1, 101);
     const second = try engine.subscribe(2, table_index, filter_none, 2, 102);
 
@@ -365,7 +365,7 @@ test "SubscriptionEngine: match-none filter never matches changes" {
     });
     defer schema.deinit();
 
-    const table_index = (schema.getTable("users") orelse return error.TestExpectedValue).index;
+    const table_index = (schema.table("users") orelse return error.TestExpectedValue).index;
     _ = try engine.subscribe(1, table_index, filter, 1, 100);
 
     var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
@@ -407,14 +407,14 @@ test "SubscriptionEngine: in operator subscribe and match" {
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
         .namespace_id = 1,
-        .table_index = (schema.getTable("users") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_record = r,
         .old_record = null,
@@ -458,8 +458,8 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     });
     defer schema.deinit();
 
-    const first = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe(2, (schema.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second);
@@ -489,14 +489,14 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.recordFromValues(allocator, &.{tth.valText("member")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
         .namespace_id = 1,
-        .table_index = (schema.getTable("users") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_record = r,
         .old_record = null,
@@ -525,7 +525,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     });
     defer filter.deinit(allocator);
 
-    _ = try engine.subscribe(2, (schema.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(2, (schema.table("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Case 1: Record leaves filter (priority 8 -> 2)
     var old_record = try tth.recordFromValues(allocator, &.{tth.valInt(8)});
@@ -535,7 +535,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 
     const change_leave = subscription_engine.RecordChange{
         .namespace_id = 2,
-        .table_index = (schema.getTable("items") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_record = new_record,
         .old_record = old_record,
@@ -554,7 +554,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 
     const change_enter = subscription_engine.RecordChange{
         .namespace_id = 2,
-        .table_index = (schema.getTable("items") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_record = new_record2,
         .old_record = old_record2,
@@ -573,7 +573,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 
     const change_within = subscription_engine.RecordChange{
         .namespace_id = 2,
-        .table_index = (schema.getTable("items") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_record = new_record3,
         .old_record = old_record3,
@@ -592,7 +592,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 
     const change_outside = subscription_engine.RecordChange{
         .namespace_id = 2,
-        .table_index = (schema.getTable("items") orelse return error.TestExpectedValue).index,
+        .table_index = (schema.table("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_record = new_record4,
         .old_record = old_record4,

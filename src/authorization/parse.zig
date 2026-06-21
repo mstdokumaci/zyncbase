@@ -69,7 +69,7 @@ pub fn validateConfig(config: *const types.AuthConfig, schema: *const schema_mod
                 try validateStoreRule(rule, table);
             }
         } else {
-            const table = schema.getTable(rule.collection) orelse return error.UnknownTable;
+            const table = schema.table(rule.collection) orelse return error.UnknownTable;
             try validateStoreRule(rule, table);
         }
     }

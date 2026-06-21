@@ -39,7 +39,7 @@ test "storage: stability no crashes on concurrent errors" {
         fn run(t_ctx: ThreadContext) void {
             var i: usize = 0;
             const ops = 40;
-            const tbl_md = t_ctx.ctx.schema.getTable("test") orelse @panic("test table missing");
+            const tbl_md = t_ctx.ctx.schema.table("test") orelse @panic("test table missing");
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
                 const key: u128 = t_ctx.thread_id * 1_000 + i + 1;

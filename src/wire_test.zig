@@ -272,7 +272,7 @@ test "encodeQuery: includes subscription pagination fields" {
     }});
     defer schema.deinit();
 
-    const table_metadata = schema.getTable("users") orelse return error.UnknownTable;
+    const table_metadata = schema.table("users") orelse return error.UnknownTable;
     const records = try allocator.alloc(typed.Record, 1);
     records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
@@ -333,7 +333,7 @@ test "encodeSetDeltaSuffix: set operation" {
     }});
     defer schema.deinit();
 
-    const table_metadata = schema.getTable("users") orelse return error.UnknownTable;
+    const table_metadata = schema.table("users") orelse return error.UnknownTable;
     const record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer record.deinit(allocator);
 

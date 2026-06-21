@@ -231,7 +231,7 @@ pub const StoreService = struct {
         auth_predicate: ?*const query_ast.FilterPredicate,
     ) !QueryResult {
         const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
-        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         var filter = try query_parser.parseQueryFilter(allocator, self.schema, table_index, payload);
         errdefer filter.deinit(allocator);
@@ -271,7 +271,7 @@ pub const StoreService = struct {
         next_cursor: []const u8,
         auth_predicate: ?*const query_ast.FilterPredicate,
     ) !CursorResult {
-        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
         const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
 
         if (filter.after) |*old| old.deinit(allocator);
@@ -299,7 +299,7 @@ pub const StoreService = struct {
         if (path.len != 2) return StorageError.InvalidPath;
 
         const table_index = msgpack.extractPayloadUint(path[0]) orelse return error.InvalidMessageFormat;
-        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (path[1] != .bin) return error.InvalidMessageFormat;
         const parsed_doc_id = try typed.docIdFromBytes(path[1].bin.value());
