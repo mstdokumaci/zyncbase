@@ -1,4 +1,13 @@
-Query Language Grammar SQL Translation document specifies full query translation pipeline **SDK → Wire** Prisma SDK syntax pre-compiled into compact positional tuples ADR-019) **Wire → AST** Zig server deserializes wire tuples into `QueryFilter` AST **AST → SQL** AST translated into SQLite `SELECT` queries specification definitive source truth for backend systems executing queries storage engine Wire Encoding (SDK → Wire) SDK transforms developer Prisma query into compact positional arrays before transmission follows same principle as path encoding (ADR-019) SDK-friendly syntax developer compact arrays on wire Operator Codes query operator maps to fixed integer code Zig `Operator` enum `startsWith `endsWith `notIn `isNull `lte `isNotNull` `contains` Condition Tuples condition encoded as positional array```
+Query Language Grammar SQL Translation query translation pipeline → Prisma SDK syntax pre-compiled positional tuples ADR **Wire → Zig server deserializes wire tuples `QueryFilter AST → AST translated SQLite `SELECT queries specification definitive source truth backend systems executing queries storage engine Wire Encoding (SDK → Wire transforms Prisma query positional arrays before transmission principle path encoding (ADR SDK-friendly syntax compact arrays wire Operator Codes query operator maps fixed integer code Zig `Operator enum| Code | Operator | Code | Operator |
+|------|----------|------|----------|
+| 0 | `eq` | 7 | `startsWith` |
+| 1 | `ne` | 8 | `endsWith` |
+| 2 | `gt` | 9 | `in` |
+| 3 | `lt` | 10 | `notIn` |
+| 4 | `gte` | 11 | `isNull` |
+| 5 | `lte` | 12 | `isNotNull` |
+| 6 | `contains` | | |
+Condition Tuples encoded positional array:```
 [field_index: int, op: int, value: any]
 ````field_index Integer schema dictionary index SDK `op` operator code `value comparison value Omitted `isNull `isNotNull` Sort Tuples descriptor encoded positional array```
 [field_index: int, desc: int]
@@ -74,7 +83,14 @@ Query Language Grammar SQL Translation document specifies full query translation
   "limit":   50,
   "after":   "eyJpZCI6..."
 }
-```Encoding Rules SDK field Wire key Encoding `where` conditions `conditions`[field_index op value tuples `where.or` `orConditions`_index value tuples `orderBy`[field_index desc` tuple `limit` Integer (unchanged `after` String (unchanged Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure"address SDK flattens field path joining keys `__` condition tuple field `"address__city"` SQLite JSON Extractors `json_extract()->> operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map Zig AST parser validates wire integer indices against schema field array bounds```zig
+```Encoding Rules| SDK field | Wire key | Encoding |
+|-----------|----------|----------|
+| `where` (root conditions) | `conditions` | Array of `[field_index, op, value?]` tuples |
+| `where.or` | `orConditions` | Array of `[field_index, op, value?]` tuples |
+| `orderBy` | `orderBy` | `[field_index, desc]` tuple |
+| `limit` | `limit` | Integer (unchanged) |
+| `after` | `after` | String (unchanged) |
+Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure SDK flattens field path keys `__` condition tuple field"address__city SQLite JSON Extractors_extract( operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map Zig AST parser validates wire integer indices against schema field array bounds```zig
 pub const PredicateState = enum(u8) {
     conditional,
     match_all,
@@ -106,7 +122,16 @@ pub const Condition = struct {
 pub const Operator = enum {
     eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
 };
-```Wire → AST Mapping server deserializes condition tuple into `Condition` struct without string lookup Tuple position AST field[0]` `Condition.field_index` Integer assignment `[1]` `Condition.op` `Operator enum `[2]` `Condition.value` value Absent `isNull Sort tuples map to `SortDescriptor` Tuple position AST field[0]` `SortDescriptor.field_index` Integer index assignment `[1]` `SortDescriptor.desc` `1` → `true `0` → `false` Predicate Normalization ZyncBase normalizes predicates before execution semantic-preserving uses `PredicateState` values fake SQL conditions `field IN []` `match_none` NOT IN [] `match_all` AND group `match_none` condition makes predicate `match_none` conditions removed OR group `match_all` condition removes_none terms removed If removed predicate becomes `match_none` no conditions predicate becomes `match_all` `conditions_conditions retain meaning```text
+```Wire → AST server deserializes condition without string lookup| Tuple position | AST field | Notes |
+|----------------|-----------|-------|
+| `[0]` | `Condition.field_index` | Integer index direct assignment |
+| `[1]` | `Condition.op` | Integer cast to `Operator` enum |
+| `[2]` | `Condition.value` | Any MessagePack value. Absent for `isNull`/`isNotNull` |
+Sort tuples| Tuple position | AST field | Notes |
+|----------------|-----------|-------|
+| `[0]` | `SortDescriptor.field_index` | Integer index direct assignment |
+| `[1]` | `SortDescriptor.desc` | `1` → `true`, `0` → `false` |
+Predicate Normalization parsing authorization ZyncBase normalizes predicates before execution semantic-preserving uses `PredicateState values fake SQL fragments conditions Rules `field IN [] `match_none NOT [ `match_all` AND group `match_none` condition makes predicate `match_none conditions removed OR group `match_all` condition removes OR group group_none terms removed If OR group term removed_none predicate becomes `match_none no conditions predicate becomes `match_all` `conditions_conditions retain meaning```text
 conditions AND (or_conditions[0] OR or_conditions[1] ...)
 ```_none empty predicate Empty predicates `match_all impossible predicates `match_none SQLite Translation Rules Core Selection collection queries `namespace boundaries```sql
 SELECT value_msgpack 
@@ -116,7 +141,27 @@ WHERE _namespace = ?
   [AND (...or_conditions)]
 ORDER BY [sorts...], id DESC
 LIMIT ?
-```Parameter Binding ZyncBase separate query layout data injection parameterized queries user-input values formatted into SQL strings Operator SQLite WHERE fragment `eq` `column_name = ? `ne` `column_name ? `gt`_name > `lt` `column_name <_name > ? `lte` `column_name <= ? `startsWith `column_name `endsWith` `column_name LIKE '%' `column_name IN `notIn` `column_name NOT IN `isNull` `column_name NULL` `isNotNull` `column_name NOT NULL` JSONB Array Fields Sorted Sets Array fields persisted canonical sorted unique form Query operands array equality`eq canonicalized before SQL binding equality semantics deterministic order-insensitive for arrays arrays stored as JSONB values properties queried with scalar operators `>` `LIKEZyncBase restricts array fields subset Operator Action Array Field SQLite Subquery Mapping `contains Array contains element `EXISTS (SELECT 1 json_each(column_name value = ? array equality `column_name = ? canonicalized value `isNull Undefined/Missing `column_name NULL `startsWith `gt array field `SCHEMA_VALIDATION_FAILED error scalar-field `in operand array canonicalized deduped during parsing Result semantics order-insensitive duplicate-insensitive Combining Conditions standard filter contains `conditions `orConditions array Example Wire Payload```json
+```Parameter Binding ZyncBase separate query layout data injection parameterized queries user-input values SQL strings| AST Operator | SQLite WHERE fragment |
+|--------------|-----------------------|
+| `eq`         | `column_name = ?` |
+| `ne`         | `column_name != ?` |
+| `gt`         | `column_name > ?` |
+| `lt`         | `column_name < ?` |
+| `gte`        | `column_name >= ?` |
+| `lte`        | `column_name <= ?` |
+| `startsWith` | `column_name LIKE ? || '%'` |
+| `endsWith`   | `column_name LIKE '%' || ?` |
+| `in`         | `column_name IN (?, ?, ...)` |
+| `notIn`      | `column_name NOT IN (?, ?, ...)` |
+| `isNull`     | `column_name IS NULL` (Or `column_name = NULL` safely translated) |
+| `isNotNull`  | `column_name IS NOT NULL` |
+JSONB Array Fields Sorted Sets Array fields form Query operands array equality canonicalized before SQL binding equality semantics deterministic order-insensitive for arrays arrays stored JSONB values properties queried scalar operators ZyncBase restricts array fields subset| Operator | Action on Array Field | SQLite Subquery Mapping |
+|----------|-----------------------|--------------------------|
+| `contains`| Array contains element (membership) | `EXISTS (SELECT 1 FROM json_each(column_name) WHERE value = ?)` |
+| `eq`     | Canonical array equality | `column_name = ?` (comparison against canonicalized value) |
+| `isNull` | Undefined/Missing     | `column_name IS NULL` |
+| `isNotNull`| Exists              | `column_name IS NOT NULL` |
+run `startsWith array field_VALIDATION_FAILED error scalar-field `in operand array canonicalized deduped parsing semantics order-insensitive duplicate-insensitive Combining Conditions standard filter contains `conditions optional `orConditions array Wire Payload```json
 {
   "conditions": [[2, 0, "high"]],
   "orConditions": [[4, 0, "active"], [4, 0, "pending"]]

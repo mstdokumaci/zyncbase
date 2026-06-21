@@ -19,6 +19,7 @@ MODEL_NAME = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
 COMPRESSION_RATE = 0.5
 USE_LLMLINGUA2 = True
 PROTECT_CODE_BLOCKS = True
+PROTECT_TABLES = True
 # ========================================================
 
 
@@ -75,15 +76,29 @@ def main():
                 with open(source_file, "r", encoding="utf-8") as f:
                     content = f.read()
 
-                if PROTECT_CODE_BLOCKS:
-                    # Split by code blocks to keep them intact
-                    pattern = r"(```[\s\S]*?```)"
-                    parts = re.split(pattern, content)
+                if PROTECT_CODE_BLOCKS or PROTECT_TABLES:
+                    # Build combined pattern to protect code blocks and/or tables
+                    sub_patterns = []
+                    flags = 0
+                    if PROTECT_CODE_BLOCKS:
+                        sub_patterns.append(r"```[\s\S]*?```")
+                        flags |= re.DOTALL
+                    if PROTECT_TABLES:
+                        sub_patterns.append(r"(?:^[ \t]*\|[^\n]*\n?)+")
+                        flags |= re.MULTILINE
+
+                    combined = r"(" + "|".join(sub_patterns) + r")"
+                    parts = re.split(combined, content, flags=flags)
                     compressed_parts = []
 
                     for part in parts:
-                        if part.startswith("```"):
+                        if not part:
+                            continue
+                        if PROTECT_CODE_BLOCKS and part.startswith("```"):
                             # Preserve code blocks/diagrams exactly
+                            compressed_parts.append(part)
+                        elif PROTECT_TABLES and part.lstrip().startswith("|"):
+                            # Preserve table blocks exactly
                             compressed_parts.append(part)
                         elif len(part.strip()) > 20:
                             # Compress prose segments that have significant content

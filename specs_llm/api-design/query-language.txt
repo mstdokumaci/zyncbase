@@ -1,4 +1,11 @@
-ZyncBase Query Language Reference Prisma-inspired query language.store.query(.store.subscribe() Table of Contents Philosophy [Query Operators [Combining Conditions [Sorting [Pagination [Examples ZyncBase query language inspired by Prisma improvements **Prisma-inspired syntax** TypeScript-first clean no prefixes **Implicit AND** root-level conditions with AND **Explicit `or`** key for conditions **Short operator `eq` `gte` **Consistent lowercase** operators keywords lowercase SQL `limit` **Cursor-based pagination** Use `after` real-time navigation Prisma-inspired evaluated MongoDB GraphQL/Hasura Prisma custom approacheschose Prisma syntax Matches target audience web developers **Clean No prefixes Developers learning Prisma-designed** Learned from MongoDB mistakes 15 years improvements over Prisma Aspect ZyncBase AND operator `AND: [...] Implicit root Simpler common case OR operator `OR: [...] Consistent lowercase Equality `equals: value `eq: value` Shorter clearer Not equal `not: value `ne: value Explicit operator Pagination `take/`skip `limit/`after Standard SQL terms Cursor Comparison with alternatives```typescript
+ZyncBase Query Language Reference Prisma-inspired query language.store.query(.store.subscribe() Table of Contents Philosophy [Query Operators [Combining Conditions [Sorting [Pagination [Examples query language inspired by Prisma improvements **Prisma-inspired syntax** TypeScript-first clean no prefixes **Implicit AND** root-level conditions with AND **Explicit `or`** for conditions **Short operator `eq` `gte` **Consistent lowercase** operators keywords SQL `limit` **Cursor-based pagination** Use `after` for real-time navigation Prisma-inspired? evaluated MongoDB GraphQL/Hasura Prisma custom approaches chose Prisma syntax **TypeScript-first** Matches target audience web developers **Clean syntax** No prefixes **Growing adoption** Developers learning Prisma-designed** Learned from MongoDB's mistakes 15 years improvements over Prisma| Aspect | Prisma | ZyncBase | Why |
+|--------|--------|-----|-----|
+| AND operator | `AND: [...]` | Implicit at root | Simpler for common case |
+| OR operator | `OR: [...]` | `or: [...]` | Consistent lowercase |
+| Equality | `equals: value` | `eq: value` | Shorter, clearer |
+| Not equal | `not: value` | `ne: value` | Explicit operator |
+| Pagination | `take`/`skip` | `limit`/`after` | Standard SQL terms + Cursor |
+alternatives```typescript
 // MongoDB style
 { $and: [{ age: { $gte: 18 } }, { status: { $eq: 'active' } }] }
 
@@ -203,7 +210,22 @@ const tasks = await client.store.query('tasks', {
   orderBy: { created_at: 'desc' },
   limit: 100
 })
-```Operator Reference Table Operator Type Description Example `eq` Equal to `{ status eq 'active' } `ne` Not equal to `{ status 'deleted' `gt` Number/Date Greater than `{ age: gt: 18 `gte` Number Greater or equal `{ age gte 18 `lt` Number/Date Less than `{ age: lt: 65 } `lte` Number Less than or equal `{ age: lte: 65 } `contains` substring `{ name contains 'john' } `startsWith` Starts with prefix `{ name startsWith 'J' `endsWith` Ends with suffix `{ name endsWith 'son' } `in` Value in array set `{ role'admin 'editor' `notIn` Value not in array `{ role notIn'guest'] `isNull` null/undefined `{ deleted_at isNull: true } `isNotNull` value `{ verified_at isNotNull: true } Best Practices Use implicit for simplicity```typescript
+```Operator Table| Operator | Type | Description | Example |
+|----------|------|-------------|---------|
+| `eq` | Any | Equal to | `{ status: { eq: 'active' } }` |
+| `ne` | Any | Not equal to | `{ status: { ne: 'deleted' } }` |
+| `gt` | Number/Date | Greater than | `{ age: { gt: 18 } }` |
+| `gte` | Number/Date | Greater than or equal | `{ age: { gte: 18 } }` |
+| `lt` | Number/Date | Less than | `{ age: { lt: 65 } }` |
+| `lte` | Number/Date | Less than or equal | `{ age: { lte: 65 } }` |
+| `contains` | String | Contains substring | `{ name: { contains: 'john' } }` |
+| `startsWith` | String | Starts with prefix | `{ name: { startsWith: 'J' } }` |
+| `endsWith` | String | Ends with suffix | `{ name: { endsWith: 'son' } }` |
+| `in` | Any | Value in array (operand treated as set) | `{ role: { in: ['admin', 'editor'] } }` |
+| `notIn` | Any | Value not in array (operand treated as set) | `{ role: { notIn: ['guest'] } }` |
+| `isNull` | Any | Is null/undefined | `{ deleted_at: { isNull: true } }` |
+| `isNotNull` | Any | Has a value | `{ verified_at: { isNotNull: true } }` |
+Best Practices Use implicit simplicity```typescript
 // Good - clean and readable
 {
   where: {

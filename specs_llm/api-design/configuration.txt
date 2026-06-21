@@ -170,7 +170,11 @@ ZyncBase Server Configuration guide with JSON files Table of Contents [Configura
     "statementCacheSize": 100
   }
 }
-```schema.json data structure ZyncBase schema format two top keys `store persistent relational data `presence ephemeral presence state **Naming Restriction** Field names double underscore sequence reserved system field names `__` sequence reserved for internal flattening nested objects Invalid names `error.InvalidFieldName` Presence Schema optional `presence key defines ephemeral presence fields authoritative rejects messages unknown field indices mismatched types no schemaless fallback Two tiers supported `presence.user` Fields per user One record per user namespace Cleaned on disconnect `presence.shared` Fields namespace-level state One record namespace Persists until users leave (5 Presence field constraints Arbitrary object nesting supported limit 500 flat fields enforced per presence tier server startup Nested objects flattened using `__` SDK handles Presence fields required tiers use field-level merge semantics **Supported `string `number `integer `booleanstandard constraints apply`enum `maxLength`presence.shared optional** Omit application no room-level shared state Example Collaborative Editor Shared Slide```json
+```schema.json data structure ZyncBase schema format two keys `store persistent relational data `presence ephemeral presence state **Naming Restriction** Field names double underscore sequence reserved system field names `__` sequence reserved internal flattening nested objects Invalid names `error.InvalidFieldName Presence Schema optional `presence key defines ephemeral presence fields definition authoritative rejects messages unknown field indices mismatched types no schemaless fallback Two tiers supported| Key | Description |
+|---|---|
+| `presence.user` | Fields owned per connected user. One record per user per namespace. Cleaned up on disconnect. |
+| `presence.shared` | Fields representing namespace-level state. One record for the entire namespace. Persists until all users leave (5-second grace period). |
+Presence field constraints Arbitrary depth object nesting supported x y limit 500 flat fields enforced per presence tier server startup Nested objects flattened using `__ SDK handles Presence fields required tiers use field-level merge semantics `string `number `integer `boolean standard constraints apply`enum `maximum `minLength `maxLength`presence.shared Omit no room-level shared state Example Collaborative Editor Shared Slide```json
 {
   "version": "1.0.0",
   "store": {
@@ -216,7 +220,14 @@ presenceSharedFields: ["slide", "playing"]
   ],
   "store": []
 }
-```Rule Applies `presenceRead`.subscribe().subscribeShared()` `presenceWrite`.set().remove()` `presenceSharedWrite`.setShared() defaults same value `presenceWrite` when omitted `$data` variable available in `presenceWrite` rules exposes incoming field values See [Presence API Reference-api full usage details **Naming Restriction** Field names forbidden double underscore sequence reserved system field names`id `__` sequence reserved for internal flattening nested objects Invalid names `error.InvalidFieldName` Example Collaborative Canvas```json
+```
+
+| Rule | Applies to |
+|---|---|
+| `presenceRead` | `presence.subscribe()` and `presence.subscribeShared()` |
+| `presenceWrite` | `presence.set()` and `presence.remove()` |
+| `presenceSharedWrite` | `presence.setShared()` — defaults to same value as `presenceWrite` when omitted |
+$data` variable available in `presenceWrite rules exposes incoming field values See [Presence API Reference for usage details **Naming Restriction** Field names forbidden double underscore sequence reserved system field names `__` sequence reserved for internal flattening nested objects Invalid names with `error.InvalidFieldName` Example Collaborative Canvas```json
 {
   "version": "1.0.0",
   "store": {
@@ -543,7 +554,7 @@ CREATE TABLE tasks (
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 ```primary key `id not Namespace-aware tables require document IDs references cursors caches SDK single-key Auto-Migration changes auto-migrate zero friction```json
-// schema.json v1
+// Initial schema.json
 {
   "store": {
     "tasks": {
@@ -555,7 +566,7 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
   }
 }
 
-// schema.json v2 - add a field
+// Updated schema.json - add a field
 {
   "store": {
     "tasks": {
@@ -671,7 +682,14 @@ zyncbase migrate down
 
 # Dry run (see what would happen)
 zyncbase migrate up --dry-run
-```Environment-Specific Behavior Change Type  Development  Production ||------------- Add field Auto-migrate Add table Auto-migrate Change type  Allow confirm Require migration Remove field Allow confirm Require migration Major version  Allow confirm Require migration Quick Start Guide **Adding field (zero friction):**```bash
+```Environment| Change Type | Development | Production |
+|-------------|-------------|------------|
+| Add field | ✓ Auto-migrate | ✓ Auto-migrate |
+| Add table | ✓ Auto-migrate | ✓ Auto-migrate |
+| Change type | ⚠ Allow with confirm | ✗ Require migration |
+| Remove field | ⚠ Allow with confirm | ✗ Require migration |
+| Major version | ⚠ Allow with confirm | ✗ Require migration |
+Quick Start Guide **Adding field```bash
 # 1. Edit schema
 $ vim schema.json  # Add 'assignee' field
 

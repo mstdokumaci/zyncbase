@@ -31,4 +31,22 @@ pub const MessageHandler = struct {
         try self.routeMessage(ws, arena_allocator, payload);
     }
 };
-```Scoped Session Gate `routeMessage enforces readiness before dispatching operations `StoreSet `StoreRemove `StoreLoadMore require ready store scope `PresenceSet require ready presence scope `AuthRefresh `StoreSetNamespace `PresenceSetNamespace ping/pong close accepted before readiness establish If operation arrives before scope ready handler returns `SESSION_NOT_READY` without touching storage subscriptions presence state Memory Management Strategy Allocation Lifecycle Parse buffers temp strings Pooled Arena Released `handleMessage Persistent state Until connection close Response buffers Allocated `buildSuccessResponse Caller sends via.send() frees Thread Safety Concurrency `MessageHandler shared across worker threads safety achieved through-Connection Locking** struct mutex `handleMessage locks mutex sequential message processing client **Atomic Reference Counting** Connections ref-counted safety during concurrent `handleOpen events**Thread-Safe Component `StorageEngine `SubscriptionManager handle internal synchronization Invariants Error Conditions Arena released `defer releaseArena ensures cleanup error paths Processed under mutex Messages same connection run concurrently No leak on invalid MsgPack Faulty payloads caught by decoder arena released Error Cause `error.OutOfMemory` ArenaPool GPA exhausted `INTERNAL_ERROR` sent connection throttled `error.InvalidMessage` MessagePack parse failure_MESSAGE violation tracked `error.Unauthorized` Permission check failed.SessionNotReady` Scoped operation before namespace/user resolution `SESSION_NOT_READY sent Validation Success Criteria Arena released after every message Correct routing for wire protocol operations Scoped store presence operations rejected until scopes ready ThreadSanitizer passes for concurrent message processing connections [Memory Management Arena GPA strategy [Threading Implementation Per-thread memory isolation [Wire Protocol Message format handled handler
+```Scoped Session Gate `routeMessage enforces readiness before dispatching operations `StoreSet `StoreLoadMore require ready store scope `PresenceSet require ready presence scope `AuthRefresh `StoreSetNamespace `PresenceSetNamespace ping/pong close accepted before readiness establish refresh operation arrives before scope ready handler returns `SESSION_NOT_READY` without touching storage subscriptions presence state Memory Management Strategy| Allocation | Allocator | Lifecycle |
+|------------|-----------|-----------|
+| Parse buffers, temp strings | Pooled Arena | Released to pool at end of `handleMessage` |
+| Persistent state (subscriptions) | GPA | Until connection close |
+| Response buffers | GPA | Allocated in `buildSuccessResponse` etc.; Caller sends via `ws.send()` then frees |
+Thread Safety Concurrency `MessageHandler shared across threads safety achieved-Connection mutex `handleMessage locks mutex sequential message processing single client **Atomic Reference Counting** Connections ref-counted safety during concurrent `handleOpen events **Thread-Safe Component `StorageEngine `SubscriptionManager handle internal synchronization Invariants Error Conditions| Invariant | Description |
+|-----------|-------------|
+| Arena always released | `defer releaseArena(arena)` ensures cleanup even on error paths |
+| Processed under mutex | Messages for the same connection never run concurrently |
+| No leak on invalid MsgPack | Faulty payloads are caught by the decoder; arena is still released |
+
+| Error | Cause | Behaviour |
+|-------|-------|-----------|
+| `error.OutOfMemory` | ArenaPool or GPA exhausted | `INTERNAL_ERROR` sent; connection may be throttled |
+| `error.InvalidMessage` | MessagePack parse failure | `INVALID_MESSAGE` sent; violation tracked |
+| `error.Unauthorized` | Permission check failed | `UNAUTHORIZED` sent |
+| `error.SessionNotReady` | Scoped operation before namespace/user resolution | `SESSION_NOT_READY` sent |
+| `error.NamespaceSwitchRejected` | Namespace switch while `users.namespaced` is enabled | `NAMESPACE_SWITCH_REJECTED` sent |
+Validation Success Criteria Arena released after message (checked via arena stats Correct routing for wire protocol operations`StoreSet `StoreRemove Scoped store presence operations until scopes ready ThreadSanitizer passes for concurrent message processing across multiple connections [Memory Management Arena GPA strategy [Threading Implementation Per-thread memory [Wire Protocol Message format handler

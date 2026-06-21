@@ -81,7 +81,14 @@ const client = createClient({
   ],
   "store": []
 }
-```Rule Controls `presenceRead` subscribe user presence shared state namespace `presenceWrite` call `presence.set()`.remove()` `presenceSharedWrite` call `presence.setShared()``$data` rules** incoming field values exposed `$data` `presenceWrite` rules content-gated authorization```json
+```
+
+| Rule | Controls |
+|---|---|
+| `presenceRead` | Who can subscribe to user presence and shared state in this namespace |
+| `presenceWrite` | Who can call `presence.set()` and `presence.remove()` |
+| `presenceSharedWrite` | Who can call `presence.setShared()` |
+`$data` incoming field values exposed as$data in rules enabling content-gated authorization```json
 "presenceSharedWrite": { "$data.slide": { "gte": 0 } }
 ```three rules accept `true presence `false RAM-only predicate over$session$namespace$data``presenceSharedWrite` omitted defaults same value as `presenceWrite` write user presence shared state unless restricted Use Cases Examples Collaborative Editor Cursors Status```typescript
 // schema.json
@@ -181,4 +188,16 @@ client.presence.subscribeShared(({ playing, timestamp }) => {
   video.currentTime = timestamp
   playing ? video.play() : video.pause()
 })
-```Throttling Operation Layer Mechanism `presence.set()` Client-side SDK throttles to ~60fps (16ms `presence.setShared()` Client-side Not throttled shared state changes infrequent User presence broadcasts Server-side Batched every 50ms Multiple updates merged into one `PresenceBroadcast per subscriber Shared state broadcasts Server-side Batched every 50ms `setShared calls merged into one `SharedStateBroadcast per subscriber Best Practices user fields include essential transient state Move stable data like to `users collection store persist only what pay for what send Cursor-only updates include status name Use specific:123 reduce fan-out avoid leaking presence `subscribeShared` for room-level store for ephemeral room state shared faster never persisted cleaned up automatically shared state for two users write shared state last-writer-wins server Shared state fields self-describing values meaningful under concurrent writes API Reference persistent state management [Configuration].md Defining presence store schemas[Authorization/configuration#authorizationjson auth rules [Error Handling]-handling.md Error types handling strategies
+```
+
+---
+
+## Throttling
+
+| Operation | Layer | Mechanism |
+|---|---|---|
+| `presence.set()` | Client-side | SDK throttles to ~60fps (16ms intervals). |
+| `presence.setShared()` | Client-side | Not throttled — shared state changes are infrequent by design. |
+| User presence broadcasts | Server-side | Batched every 50ms. Multiple updates within the window are merged into one `PresenceBroadcast` per subscriber. |
+| Shared state broadcasts | Server-side | Batched every 50ms. Multiple `setShared` calls within the window are merged into one `SharedStateBroadcast` per subscriber. |
+Best Practices user fields include essential transient state Move stable data like `name to `users collection in store persist queried **Send only what Merge semantics pay for what send Cursor-only updates include status name granularity** Use specific`doc:123 reduce fan-out avoid leaking presence across contexts `subscribeShared for room-level use store for ephemeral room state shared faster never persisted cleaned up automatically shared state for LWW** two users write shared state last-writer-wins server Shared state fields self-describing values remain meaningful under concurrent writes API Reference persistent state management [Configuration presence store schemas [Authorization auth rules [Error Handling Error types handling strategies

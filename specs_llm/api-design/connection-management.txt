@@ -12,7 +12,18 @@ const client = createClient({
   maxReconnectAttempts: Infinity,
   reconnectJitter: true
 })
-```Options Reference Option Default Description `url` string(required WebSocket server URL `auth.token` string(required External JWT authentication `storeNamespace`'public' Namespace store operations derived JWT server `presenceNamespace` same `storeNamespace` Namespace presence specific document-scoped). `reconnect` `true` Auto-reconnect unexpected disconnect `reconnectDelay` `1000` Base delay reconnect attempts `maxReconnectDelay` `30000` Maximum delay cap exponential backoff `maxReconnectAttempts` `Infinity` Max retry attempts before giving up `reconnectJitter` `true` Add ±10% randomness retry timing (prevents thundering Namespace Examples```typescript
+```Options| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `url` | string | *(required)* | WebSocket server URL |
+| `auth.token` | string | *(required)* | External JWT for authentication |
+| `storeNamespace` | string | `'public'` | Namespace for store operations. Can also be derived from JWT on the server. |
+| `presenceNamespace` | string | same as `storeNamespace` | Namespace for presence. Usually more specific (e.g., document-scoped). |
+| `reconnect` | boolean | `true` | Auto-reconnect on unexpected disconnect |
+| `reconnectDelay` | number | `1000` | Base delay (ms) between reconnect attempts |
+| `maxReconnectDelay` | number | `30000` | Maximum delay cap (ms) for exponential backoff |
+| `maxReconnectAttempts` | number | `Infinity` | Max retry attempts before giving up |
+| `reconnectJitter` | boolean | `true` | Add ±10% randomness to retry timing (prevents thundering herd) |
+Examples```typescript
 // Simple app (defaults to public namespace)
 const client = createClient({
   url: 'ws://localhost:3000',
@@ -33,14 +44,14 @@ const client = createClient({
   storeNamespace: 'tenant:acme:workspace:ws-1',
   presenceNamespace: 'tenant:acme:workspace:ws-1:document:doc-123'
 })
-```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT **WebSocket /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary`Connected server sends transport-level session context SDK sends store namespace selections server resolves namespace `users.id SDK for `SchemaSync `Connected` namespace acknowledgements before resolving `connect()```typescript
+```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary ADR-009`Connected server sends transport-level session context SDK sends store namespace selections server resolves namespace `users.id SDK for `SchemaSync `Connected` namespace acknowledgements before resolving `connect()```typescript
 await client.connect()
 // Required store and presence scopes are ready.
 ````Promise<void> `ZyncBaseError `AUTH_FAILED `CONNECTION_FAILED `client.disconnect() closes connection clears active namespace```typescript
 client.disconnect()
 ```wire-level details connection lifecycle format `Connected payload heartbeat see [Wire Protocol#connection Namespace Switching.setStoreNamespace(namespace Switch active store namespace runtime returned promise resolves server resolves namespace ID store user ID store subscriptions invalidated client re-subscribe```typescript
 await client.setStoreNamespace('tenant:acme:workspace:ws-2')
-````namespace `Promise<void> `ZyncBaseError `NAMESPACE_UNAUTHORIZED `client.setPresenceNamespace(namespace) Switch active presence namespace returned promise resolves server resolves namespace ID user ID clears presence old namespace joins new```typescript
+````namespace `Promise<void> `ZyncBaseError` `NAMESPACE_UNAUTHORIZED `NAMESPACE_SWITCH_REJECTED.namespaced enabled `client.setPresenceNamespace(namespace) Switch active presence namespace returned promise resolves server resolves namespace ID user ID clears presence old namespace joins new```typescript
 await client.setPresenceNamespace('tenant:acme:document:doc-456')
 ````namespace `Promise<void> Event Listeners `client.on(event callback connection lifecycle events```typescript
 client.on('connected', () => {
@@ -63,7 +74,19 @@ client.on('tokenExpired', async () => {
   const newToken = await refreshAuthToken()
   await client.authRefresh(newToken)
 })
-```Events Callback Signature Description `connected`() => void` WebSocket established scopes ready `disconnected`() => void` Connection closed retries `reconnecting`() => void` reconnect disconnect `error` ZyncBaseError) => void` Connection subscription systemic writer/storage tracked write error `tokenExpired`() => void` Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
+```
+
+### Events
+
+| Event | Callback Signature | Description |
+|-------|-------------------|-------------|
+| `connected` | `() => void` | WebSocket established and initial required scopes are ready |
+| `disconnected` | `() => void` | Connection closed (manually or after max retries) |
+| `reconnecting` | `() => void` | Attempting to reconnect after unexpected disconnect |
+| `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
+| `tokenExpired` | `() => void` | Server indicates token has expired; SDK should refresh |
+| `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
+`statusChange```typescript
 client.on('statusChange', (status, detail) => {
   // status: 'connecting' | 'scoping' | 'connected' | 'reconnecting' | 'disconnected'
   // detail.previousStatus: the state before this transition

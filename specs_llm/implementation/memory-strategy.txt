@@ -1,4 +1,4 @@
-Memory Management Implementation [Threading Model Architecture-001 Zig Core Language document ZyncBase memory management object pool strategy request-scoped lifetimes object lifecycle maintenance ZyncBase avoids global garbage collector uses tiered allocator strategy memory managed lifecycle locality requirements```
+Memory Management Implementation Model Architecture-001 Zig Implementation Language document contains details ZyncBase memory management object pool strategy request-scoped lifetimes object lifecycle maintenance ZyncBase avoids global garbage collector uses tiered allocator strategy memory managed lifecycle locality requirements```
 [System Memory]
       |
       +--- [GPA (General Purpose)] -> Long-lived State (Subscriptions, Server Shell)
@@ -29,7 +29,16 @@ pub fn release(self: *Self, data: *T) void {
         self.allocator.destroy(node);
     }
 }
-```Operational Logic Pool Selection Matrix Type Sync Type Locality **IndexPool** 64-bit Atomic Index Excellent Frequent/Small objects Memory Safety Best Practices Unbounded Allocations** parsers enforce depth size limits prevent OOM attacks **Self-Healing Pools** `IndexPool returns dynamic memory OS avoid footprint bloat-Place Initialization** Types `std.Thread.Mutex.atomic.Value` initialized in-place Returning types by value illegal leads memory corruption **Fail-Fast on OOM** ZyncBase treats allocation failure fatal request error Internal background buffers use bounded overflow silent drop buffers capacity caps prevent unbounded allocation Invariants Error Conditions Arena reset via `defer` before request handler returns Pool exhaustion `IndexPool.pop() returns `null.acquire() heap Returns `error.OutOfMemory `INTERNAL_ERROR` Index Overflow `IndexPool capacity capped at `u32.64-bit packing Validation Success Criteria Metrics Zero heap allocation cycles steady state Leak-free execution GPA safety checks Race-free atomic operations `TSAN Verification Commands```bash
+```Operational Logic Selection| Pool Type | Backing | Sync Type | Locality | Best For |
+|-----------|---------|-------------|----------|----------|
+| **IndexPool** | Contiguous | 64-bit Atomic Index | Excellent | Frequent/Small objects |
+Memory Safety Practices Unbounded parsers enforce depth size limits prevent OOM attacks **Self-Healing `IndexPool returns dynamic memory OS release avoid footprint bloat-Place Initialization** Types.Thread.Mutex.atomic.Value initialized in-place Returning types by value illegal leads memory **Fail-Fast on OOM** ZyncBase treats allocation failure fatal request error Internal background buffers `SessionResolutionBuffer outside use bounded overflow silent drop OOM_ERROR buffers capacity caps prevent unbounded allocation Invariants Error Conditions| Condition | Invariant |
+|-----------|-----------|
+| Arena reset | Must happen via `defer` before the request handler returns |
+| Pool exhaustion | `IndexPool.pop()` returns `null`; `IndexPool.acquire()` falls back to heap |
+| OOM | Returns `error.OutOfMemory` which maps to `INTERNAL_ERROR` |
+| Index Overflow | `IndexPool` capacity is capped at `u32.max` to ensure 64-bit packing |
+Validation Success Criteria Metrics Zero heap allocation cycles steady state Leak-free execution GPA safety checks Race-free atomic operations Verification Commands```bash
 # Verify naming and basic consistency
 bun run lint
 

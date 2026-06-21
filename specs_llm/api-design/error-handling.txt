@@ -35,4 +35,65 @@ client.on('error', (error: ZyncBaseError) => {
 ```3. WriteError events Asynchronous failures are `WriteError`s not rollback NACKs `writeId tracked writes for user feedback diagnostics imply local rollback SDK apply subscription updates 4. Framework hooks populate `error` field```typescript
 const { data, error } = useStore('tasks.123')
 if (error) { /* render error state */ }
-```Common Error Codes to SDK consumers grouped by category Authentication & Authorization Auto-retry `AUTH_FAILED` Invalid ticket expired JWT new token `TOKEN_EXPIRED` Session expired fires event Partial refresh token `SESSION_NOT_READY` operation sent before namespace user resolution finished wait for `connect() or namespace switch `NAMESPACE_UNAUTHORIZED` Not authorized access namespace `PERMISSION_DENIED` Rule blocked operation via `authorization.json same-row guard `COLLECTION_NOT_FOUND` Path collection not defined schema No — fix path Validation Auto-retry `SCHEMA_VALIDATION_FAILED` Data match schema definition No fix data `FIELD_NOT_FOUND` name not defined in No fix path data `IMMUTABLE_FIELD` modify protected system field `INVALID_FIELD_NAME` forbidden `__` sequence `INVALID_ARRAY_ELEMENT` Array non-literal valueobject fix data `INVALID_MESSAGE Malformed missing `type field `INVALID_MESSAGE_FORMAT Missing fields type id `INVALID_MESSAGE_ID Correlation ID negative out of range Rate Limiting Auto-retry `RATE_LIMITED Message frequency exceeded exponential backoff `MESSAGE_TOO_LARGE Payload exceeds `maxMessageSize reduce payload Connection Server Auto-retry `CONNECTION_FAILED Transport failure (WebSocket closed reconnect_CONNECTIONS_REACHED Server capacity try later `RESOURCE_EXHAUSTED Subscription engine memory budget reached reduce subscriptions `TIMEOUT Operation timed out retry backoff `INTERNAL_ERROR Unexpected server failure retry 3 times Write Failure Reporting separates state delivery outcome reporting Subscription callbacks authoritative state Default accepted writes receive guaranteed per-operation async error delivery Confirmed writes reject promise reports failure Tracked write errors use `writeId include `path metadata Batch write errors include `details.batchIndex` failing operation knownConfirmed write timeouts mean confirmation not received imply write aborted or failed commit After reconnect subscriptions remain source truth for final state Auto-Retry Summary Error Category Max Attempts Strategy Connection Yes Infinite Exponential backoff [Reconnection Rate-Limit Yes (opt-out Infinite Respect `retryAfter` backoff Server Yes Exponential backoff Authentication Partial Fire `tokenExpired` wait refresh Authorization No Surface immediately Validation No immediately See [Connection Management] Client lifecycle events [Store API Accepted/committed mutation methods [Error Taxonomy] internal error catalog retry implementations [Wire Protocol]-format Error envelope wire format
+```Error Codes SDK consumers grouped category Authentication Authorization| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `AUTH_FAILED` | Invalid ticket or expired initial JWT | No — get new token |
+| `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
+| `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
+| `PERMISSION_DENIED` | Rule blocked the operation via `authorization.json` or a same-row guard matched no row | No |
+
+### State
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
+| `NAMESPACE_SWITCH_REJECTED` | Namespace switching is not allowed when `users.namespaced` is enabled | No — reconnect per namespace |
+| `REQUEST_SUPERSEDED` | Scope superseded by a newer namespace switch request | No — retry with updated scope |
+| `SUBSCRIPTION_NOT_FOUND` | Subscription ID not recognized (stale subscription) | No — re-subscribe |
+
+### Validation
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `SCHEMA_VALIDATION_FAILED` | Data does not match schema definition | No — fix data |
+| `FIELD_NOT_FOUND` | Field name not defined in schema | No — fix path or data |
+| `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
+| `IMMUTABLE_FIELD` | Attempted to modify a protected system field (e.g., `id`) | No |
+| `INVALID_FIELD_NAME` | Field name contains forbidden `__` sequence | No |
+| `INVALID_ARRAY_ELEMENT` | Array contains non-literal value (e.g., nested object) | No — fix data |
+| `INVALID_MESSAGE` | Malformed message or missing `type` field | No |
+| `INVALID_MESSAGE_FORMAT` | Missing required fields: type or id | No |
+| `INVALID_MESSAGE_TYPE` | Only binary MessagePack frames are supported | No — fix message format |
+
+### Client
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `INVALID_PATH` | Path format is invalid (empty segments or malformed) | No — fix path |
+| `BATCH_TOO_LARGE` | Batch exceeds 500 operations | No — reduce batch size |
+| `MESSAGE_TOO_LARGE` | Payload exceeds `maxMessageSize` | No — reduce payload |
+
+### Rate Limiting
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `RATE_LIMITED` | Message frequency exceeded | Yes — exponential backoff, respects `retryAfter` |
+Connection Server| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `CONNECTION_FAILED` | Transport failure (WebSocket closed) | Yes — reconnect |
+| `MAX_CONNECTIONS_REACHED` | Server at capacity | No — try later |
+| `RESOURCE_EXHAUSTED` | Subscription engine memory budget reached | No — reduce active subscriptions |
+| `TIMEOUT` | Operation timed out | Yes — retry with backoff |
+| `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
+| `ENGINE_UNHEALTHY` | Write engine is in degraded state | Yes — retry up to 3 times |
+Write Failure Reporting ZyncBase separates state delivery outcome reporting Subscription callbacks authoritative state accepted writes receive-operation async error delivery after acceptance Confirmed writes reject promise failure Tracked errors use `writeId-effort metadata Batch errors include.batchIndex failing operation Confirmed timeouts confirmation received imply aborted failed reconnect subscriptions remain source truth final state Auto-Retry Summary| Error Category | Auto-Retry | Max Attempts | Strategy |
+|----------------|------------|--------------|----------|
+| Connection | ✅ Yes | Infinite | Exponential backoff (see [Reconnection](./connection-management.md#reconnection-strategy)) |
+| Rate-Limit | ✅ Yes (opt-out) | Infinite | Respect `retryAfter`, else backoff |
+| Server | ✅ Yes | 3 | Exponential backoff |
+| Authentication | ⚠️ Partial | 1 | Fire `tokenExpired`; wait for refresh |
+| Authorization | ❌ No | 0 | Surface immediately |
+| State | ❌ No | 0 | Surface immediately |
+| Validation | ❌ No | 0 | Surface immediately |
+| Client | ❌ No | 0 | Surface immediately |
+See [Connection Management Client lifecycle events API.md Accepted mutation methods [Error Taxonomy internal error catalog retry implementations [Wire Protocol#error-format Error envelope wire format
