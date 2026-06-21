@@ -466,7 +466,7 @@ A WebSocket transport can be open before the server has enough context to safely
 
 ### The Invariant: Transport Open ≠ Session Ready
 
-Transport connectivity and scoped session readiness are distinct states. Store and presence maintain independent scopes — their namespaces may differ.
+Transport connectivity and scoped session readiness are distinct states. Store and presence maintain independent scopes — they can be resolved in different namespaces when `users.namespaced = false`.
 
 Before a scope is ready, the server accepts only lifecycle messages: authentication, namespace selection, ping/pong, and close. All data messages — subscriptions, queries, mutations, presence operations — are rejected with `SESSION_NOT_READY`.
 
@@ -476,9 +476,9 @@ A scope is the resolved pair:
 1. **Namespace ID** — the namespace string resolved to `_zync_namespaces.id` (integer)
 2. **`$session.userId`** — the external identity string (JWT `sub` or anonymous subject) resolved to an internal `BLOB(16)` UUIDv7 from the `users` table
 
-Store and presence maintain independent scopes because their active namespaces may differ.
+Store and presence resolve independently — each scope maintains its own resolved namespace ID and user ID.
 
-When `users.namespaced = false` (the default), `users` is a global table and the same external identity always maps to the same `users.id` regardless of which namespace is active — namespace switching carries the same identity forward. When `users.namespaced = true`, identity resolution is scoped to the active namespace. This mode is designed for single-namespace users; switching namespaces on such a connection is not a supported pattern (it would resolve or create a separate identity row in the target namespace's partition). Applications using `users.namespaced = true` should ensure each connection operates within a single fixed namespace.
+When `users.namespaced = false` (the default), `users` is a global table and the same external identity always maps to the same `users.id` regardless of which namespace is active — namespace switching carries the same identity forward. When `users.namespaced = true`, identity resolution is scoped to the active namespace. This mode is designed for single-namespace users; the server enforces that a connection is locked to a single namespace for both store and presence scopes. Specifically, the first `SetNamespace` (store or presence) establishes the connection's namespace. Any subsequent `SetNamespace` for either scope is rejected with `NAMESPACE_SWITCH_REJECTED` if the namespace string differs from the established one.
 
 ### Non-Blocking Resolution (Two-Tier)
 

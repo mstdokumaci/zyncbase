@@ -334,7 +334,7 @@ test "NamespaceSwitch: initial store namespace setup succeeds with users.namespa
     try testing.expectEqualStrings("ok", result.resp_type);
 }
 
-test "NamespaceSwitch: store namespace switch rejected with users.namespaced=true" {
+test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
     const allocator = testing.allocator;
     const schema_json =
         \\{
@@ -342,11 +342,14 @@ test "NamespaceSwitch: store namespace switch rejected with users.namespaced=tru
         \\  "store": {
         \\    "users": { "namespaced": true, "fields": {} },
         \\    "tasks": { "fields": { "title": { "type": "string" } } }
+        \\  },
+        \\  "presence": {
+        \\    "user": { "cursor": { "type": "object", "fields": { "x": { "type": "number" }, "y": { "type": "number" } } } }
         \\  }
         \\}
     ;
     var app: AppTestContext = undefined;
-    try app.initWithSchemaJSON(allocator, "ns-switch-reject", schema_json);
+    try app.initWithSchemaJSON(allocator, "ns-scope-lock", schema_json);
     defer app.deinit();
 
     const gpa = app.memory_strategy.generalAllocator();
@@ -360,36 +363,60 @@ test "NamespaceSwitch: store namespace switch rejected with users.namespaced=tru
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 
-    // Pre-warm "public" in cache (implicit auth allows "public")
     _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
-    // Also pre-warm "beta" so resolution would be sync if it were reached
     _ = try app.resolveStoreScopeForTest("beta", helpers.test_external_user_id);
 
-    // First namespace setup — allowed (no active store scope yet)
-    const msg1 = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
-    defer allocator.free(msg1);
-    const resp1 = try routeWithArena(&app.handler, allocator, conn, msg1);
-    defer allocator.free(resp1);
-    const result1 = try parseResponse(allocator, resp1);
-    defer allocator.free(result1.resp_type);
-    defer if (result1.code) |code| allocator.free(code);
-    try testing.expectEqualStrings("ok", result1.resp_type);
+    {
+        const msg = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("ok", r.resp_type);
+    }
 
-    // Switch to "beta" — rejected because users.namespaced=true
-    // The namespace switch check runs BEFORE authorization, so auth never rejects it.
-    const msg2 = try createStoreSetNamespaceMessageBytes(allocator, 2, "beta");
-    defer allocator.free(msg2);
-    const resp2 = try routeWithArena(&app.handler, allocator, conn, msg2);
-    defer allocator.free(resp2);
-    const result2 = try parseResponse(allocator, resp2);
-    defer allocator.free(result2.resp_type);
-    defer if (result2.code) |code| allocator.free(code);
+    // Same-scope store switch rejected
+    {
+        const msg = try createStoreSetNamespaceMessageBytes(allocator, 2, "beta");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
+    }
 
-    try testing.expectEqualStrings("error", result2.resp_type);
-    try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", result2.code.?);
+    // Cross-scope: presence with different ns rejected
+    {
+        const msg = try createPresenceSetNamespaceMessageBytes(allocator, 3, "beta");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
+    }
+
+    // Cross-scope: presence with same ns accepted
+    {
+        const msg = try createPresenceSetNamespaceMessageBytes(allocator, 4, "public");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("ok", r.resp_type);
+    }
 }
 
-test "NamespaceSwitch: store namespace switch allowed when users.namespaced=false (default)" {
+test "NamespaceSwitch: namespaced=false allows any switch" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "ns-switch-allowed", &.{
@@ -408,10 +435,8 @@ test "NamespaceSwitch: store namespace switch allowed when users.namespaced=fals
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 
-    // Pre-warm "public" in cache
     _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
 
-    // First namespace setup — allowed
     const msg1 = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
     defer allocator.free(msg1);
     const resp1 = try routeWithArena(&app.handler, allocator, conn, msg1);
@@ -421,8 +446,6 @@ test "NamespaceSwitch: store namespace switch allowed when users.namespaced=fals
     defer if (result1.code) |code| allocator.free(code);
     try testing.expectEqualStrings("ok", result1.resp_type);
 
-    // Switch to same namespace "public" again — allowed (namespaced=false means no restriction)
-    // Using the same namespace avoids the implicit auth "public"-only restriction.
     const msg2 = try createStoreSetNamespaceMessageBytes(allocator, 2, "public");
     defer allocator.free(msg2);
     const resp2 = try routeWithArena(&app.handler, allocator, conn, msg2);
@@ -431,60 +454,4 @@ test "NamespaceSwitch: store namespace switch allowed when users.namespaced=fals
     defer allocator.free(result2.resp_type);
     defer if (result2.code) |code| allocator.free(code);
     try testing.expectEqualStrings("ok", result2.resp_type);
-}
-
-test "NamespaceSwitch: presence namespace switch rejected with users.namespaced=true" {
-    const allocator = testing.allocator;
-    const schema_json =
-        \\{
-        \\  "version": "1.0.0",
-        \\  "store": {
-        \\    "users": { "namespaced": true, "fields": {} },
-        \\    "tasks": { "fields": { "title": { "type": "string" } } }
-        \\  },
-        \\  "presence": {
-        \\    "user": { "cursor": { "type": "object", "fields": { "x": { "type": "number" }, "y": { "type": "number" } } } }
-        \\  }
-        \\}
-    ;
-    var app: AppTestContext = undefined;
-    try app.initWithSchemaJSON(allocator, "ns-presence-reject", schema_json);
-    defer app.deinit();
-
-    const gpa = app.memory_strategy.generalAllocator();
-    const ws = try gpa.create(WebSocket);
-    defer gpa.destroy(ws);
-    ws.* = helpers.createMockWebSocket(gpa);
-    try app.connection_manager.onOpen(ws);
-    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
-    defer {
-        app.connection_manager.onClose(ws);
-        if (conn.release()) app.memory_strategy.releaseConnection(conn);
-    }
-
-    // Pre-warm cache for both "public" and "beta"
-    _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
-    _ = try app.resolveStoreScopeForTest("beta", helpers.test_external_user_id);
-
-    // First presence namespace — allowed (no active presence scope yet)
-    const msg1 = try createPresenceSetNamespaceMessageBytes(allocator, 1, "public");
-    defer allocator.free(msg1);
-    const resp1 = try routeWithArena(&app.handler, allocator, conn, msg1);
-    defer allocator.free(resp1);
-    const result1 = try parseResponse(allocator, resp1);
-    defer allocator.free(result1.resp_type);
-    defer if (result1.code) |code| allocator.free(code);
-    try testing.expectEqualStrings("ok", result1.resp_type);
-
-    // Switch to "beta" — rejected because users.namespaced=true
-    const msg2 = try createPresenceSetNamespaceMessageBytes(allocator, 2, "beta");
-    defer allocator.free(msg2);
-    const resp2 = try routeWithArena(&app.handler, allocator, conn, msg2);
-    defer allocator.free(resp2);
-    const result2 = try parseResponse(allocator, resp2);
-    defer allocator.free(result2.resp_type);
-    defer if (result2.code) |code| allocator.free(code);
-
-    try testing.expectEqualStrings("error", result2.resp_type);
-    try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", result2.code.?);
 }

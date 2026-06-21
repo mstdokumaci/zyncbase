@@ -243,6 +243,22 @@ pub const MessageHandler = struct {
         return session;
     }
 
+    fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
+        if (schema.table("users")) |users_table| {
+            if (users_table.namespaced) {
+                if (conn.getStoreNamespace() orelse
+                    conn.pending_store_namespace orelse
+                    conn.getPresenceNamespace() orelse
+                    conn.pending_presence_namespace) |current|
+                {
+                    if (!std.mem.eql(u8, current, req_namespace)) {
+                        return error.NamespaceSwitchRejected;
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
 
     fn handleStoreSetNamespace(
@@ -254,15 +270,7 @@ pub const MessageHandler = struct {
     ) !?[]const u8 {
         const req = try wire.extractStoreSetNamespaceFast(message);
 
-        if (self.schema.table("users")) |users_table| {
-            if (users_table.namespaced) {
-                if (conn.getStoreNamespace()) |current| {
-                    if (!std.mem.eql(u8, current, req.namespace)) {
-                        return error.NamespaceSwitchRejected;
-                    }
-                }
-            }
-        }
+        try rejectNamespaceSwitch(self.schema, conn, req.namespace);
 
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
@@ -581,15 +589,7 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        if (self.schema.table("users")) |users_table| {
-            if (users_table.namespaced) {
-                if (conn.getPresenceNamespace()) |current| {
-                    if (!std.mem.eql(u8, current, req.namespace)) {
-                        return error.NamespaceSwitchRejected;
-                    }
-                }
-            }
-        }
+        try rejectNamespaceSwitch(self.schema, conn, req.namespace);
 
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
