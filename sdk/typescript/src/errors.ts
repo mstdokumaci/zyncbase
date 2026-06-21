@@ -22,6 +22,11 @@ export const ErrorCodes = {
 	INVALID_PATH: "INVALID_PATH",
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
 	REQUEST_SUPERSEDED: "REQUEST_SUPERSEDED",
+	NAMESPACE_SWITCH_REJECTED: "NAMESPACE_SWITCH_REJECTED",
+	IMMUTABLE_FIELD: "IMMUTABLE_FIELD",
+	INVALID_MESSAGE_FORMAT: "INVALID_MESSAGE_FORMAT",
+	INVALID_MESSAGE_TYPE: "INVALID_MESSAGE_TYPE",
+	SUBSCRIPTION_NOT_FOUND: "SUBSCRIPTION_NOT_FOUND",
 } as const;
 
 interface ZyncBaseErrorOptions {
@@ -41,12 +46,16 @@ function deriveCategory(code: string): {
 	switch (code) {
 		case ErrorCodes.AUTH_FAILED:
 		case ErrorCodes.TOKEN_EXPIRED:
+			return { category: "authentication", retryable: false };
+
 		case ErrorCodes.NAMESPACE_UNAUTHORIZED:
 		case ErrorCodes.PERMISSION_DENIED:
-			return { category: "auth", retryable: false };
+			return { category: "authorization", retryable: false };
 
 		case ErrorCodes.SESSION_NOT_READY:
 		case ErrorCodes.REQUEST_SUPERSEDED:
+		case ErrorCodes.NAMESPACE_SWITCH_REJECTED:
+		case ErrorCodes.SUBSCRIPTION_NOT_FOUND:
 			return { category: "state", retryable: false };
 
 		case ErrorCodes.RATE_LIMITED:
@@ -64,6 +73,9 @@ function deriveCategory(code: string): {
 		case ErrorCodes.INVALID_ARRAY_ELEMENT:
 		case ErrorCodes.INVALID_MESSAGE:
 		case ErrorCodes.COLLECTION_NOT_FOUND:
+		case ErrorCodes.IMMUTABLE_FIELD:
+		case ErrorCodes.INVALID_MESSAGE_FORMAT:
+		case ErrorCodes.INVALID_MESSAGE_TYPE:
 			return { category: "validation", retryable: false };
 
 		case ErrorCodes.CONNECTION_FAILED:

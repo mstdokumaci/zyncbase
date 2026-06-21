@@ -108,7 +108,7 @@ pub fn parseQueryFilter(
     if (payload != .map) return error.InvalidMessageFormat;
 
     // Find the table metadata in schema for validation
-    const table_metadata = schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+    const table_metadata = schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
     var predicate = query_ast.FilterPredicate{};
     const id_field = table_metadata.fields[schema_mod.id_field_index];

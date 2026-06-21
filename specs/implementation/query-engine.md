@@ -188,7 +188,7 @@ const SubscriptionEngine = struct {
 
 ZyncBase uses a **Fine-Grained Observation** strategy to ensure sub-100ms real-time sync without overloading the SQLite reader pool.
 
-**Strategy: Fine-Grained Observation (ADR-018)**
+**Strategy: Fine-Grained Observation (ADR-014)**
 - The Writer thread or Message Handler emits a `RecordChange` event.
 - The `SubscriptionEngine` evaluates the change against active `SubscriptionGroups` in memory.
 - **No SQLite queries are re-run** for standard filter matching.

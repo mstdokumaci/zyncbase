@@ -52,7 +52,7 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRecordChange, cm: *ConnectionManager) void {
-        const table_metadata = self.schema.getTableByIndex(change.table_index) orelse {
+        const table_metadata = self.schema.tableByIndex(change.table_index) orelse {
             std.log.err("NotificationDispatcher skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };

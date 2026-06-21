@@ -83,6 +83,7 @@ The `MessageHandler` is shared across all worker threads. Thread safety is achie
 | `error.InvalidMessage` | MessagePack parse failure | `INVALID_MESSAGE` sent; violation tracked |
 | `error.Unauthorized` | Permission check failed | `UNAUTHORIZED` sent |
 | `error.SessionNotReady` | Scoped operation before namespace/user resolution | `SESSION_NOT_READY` sent |
+| `error.NamespaceSwitchRejected` | Namespace switch while `users.namespaced` is enabled | `NAMESPACE_SWITCH_REJECTED` sent |
 
 ---
 

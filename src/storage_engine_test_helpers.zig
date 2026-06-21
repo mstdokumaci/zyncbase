@@ -203,11 +203,11 @@ pub const EngineTestContext = struct {
     }
 
     pub fn tableMetadata(self: *const EngineTestContext, table_name: []const u8) !*const TableMetadata {
-        return self.schema.getTable(table_name) orelse StorageError.UnknownTable;
+        return self.schema.table(table_name) orelse StorageError.UnknownTable;
     }
 
     pub fn tableIndex(self: *const EngineTestContext, table_name: []const u8) usize {
-        const md = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const md = self.schema.table(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return md.index;
     }
 

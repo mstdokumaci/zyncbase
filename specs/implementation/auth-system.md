@@ -3,7 +3,7 @@
 **Drivers**:
 - [Configuration API Design](../api-design/configuration.md) - Server configuration and authorization rules.
 - [Auth Exchange](./auth-exchange.md) - Ticket handshake and `$session` construction.
-- [ADR-032](../architecture/adrs.md#adr-032-config-driven-authentication-and-external-permission-claims) - Config-driven authentication and external permission claims.
+- [ADR-016](../architecture/adrs.md#adr-016-authentication-authorization-and-the-trust-boundary) - Authentication, authorization, and the trust boundary.
 
 ---
 

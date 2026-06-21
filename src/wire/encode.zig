@@ -294,7 +294,7 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
     try writer.writeAll(Keys.fields);
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
-        const tbl_md = schema.getTable(table.name) orelse return error.UnknownTable;
+        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             try msgpack.writeMsgPackStr(writer, field.name);
@@ -304,7 +304,7 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
     try writer.writeAll(Keys.field_flags);
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
-        const tbl_md = schema.getTable(table.name) orelse return error.UnknownTable;
+        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             var flags: u8 = 0;

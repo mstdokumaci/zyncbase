@@ -26,32 +26,40 @@ The lock-free cache uses atomic reference counting and a single-writer-multiple-
 
 ```zig
 pub const LockFreeCache = struct {
-    // Atomic pointer to the current hash map
-    entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
+    // Atomic pointers to RCU-style snapshots (ADR-006)
+    auth_snapshots: std.atomic.Value(*std.StringHashMap(*AuthSnapshotEntry)),
+    schema_metadata: std.atomic.Value(*SchemaMetadataEntry),
+    namespace_ids: std.atomic.Value(*std.StringHashMap(u32)),
+    user_ids: std.atomic.Value(*std.StringHashMap(DocId)),
+    document_records: std.atomic.Value(*std.AutoHashMap(DocKey, *DocumentEntry)),
+    
     allocator: Allocator,
     write_mutex: std.Thread.Mutex,
 };
 
-pub const CacheEntry = struct {
-    state: StateTree,
-    version: std.atomic.Value(u64),
+pub const AuthSnapshotEntry = struct {
+    claims: JWTClaims,
     ref_count: std.atomic.Value(u32),
-    timestamp: std.atomic.Value(i64),
+};
+
+pub const DocumentEntry = struct {
+    fields: std.AutoHashMap(u16, Value),
+    ref_count: std.atomic.Value(u32),
 };
 ```
 
 ### Wait-Free Read Path
 
 ```zig
-pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
+pub fn getDocument(self: *LockFreeCache, key: DocKey) !*DocumentEntry {
     // Acquire the current map pointer
-    const map = self.entries.load(.Acquire);
-    const entry = map.get(namespace) orelse return error.NotFound;
+    const map = self.document_records.load(.Acquire);
+    const entry = map.get(key) orelse return error.NotFound;
     
     // Safely increment reference count before return
     _ = entry.ref_count.fetchAdd(1, .AcqRel);
     
-    return &entry.state;
+    return entry;
 }
 ```
 
@@ -82,7 +90,7 @@ Readers that loaded the pointer before the map swap may still hold a reference; 
 
 | Error | Cause | Behaviour |
 |-------|-------|-----------|
-| `error.NotFound` | Namespace not in map | Caller falls through to storage |
+| `error.NotFound` | Key or record not in cache | Caller falls through to storage/database |
 | ref_count overflow | > 65536 concurrent readers on one entry | Debug assert fires; release build: undefined behaviour — must not occur |
 | Double-release | `release()` called without matching `get()` | ref_count underflows; debug assert fires |
 

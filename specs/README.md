@@ -53,7 +53,7 @@ This directory contains the formal specifications and architectural decisions fo
 - [ ] Ephemeral in-memory storage
 
 ### Phase 4: Production Hardening (In-Progress)
-**Goal**: V1 Stability
+**Goal**: Production Stability
 - [/] Error taxonomy & retry strategies (Implemented in core)
 - [/] Documentation alignment (This task)
 - [ ] Connection management optimizations
@@ -62,11 +62,11 @@ This directory contains the formal specifications and architectural decisions fo
 
 ---
 
-## Out of V1 Scope
+## Out of Scope
 
 To focus on a rock-solid core, the following features are explicitly deferred or rejected:
 
-- **Horizontal Scaling**: **Rejected for V1**. ZyncBase is designed for vertical scaling to 100k+ connections on a single node. Distributed state complexity is avoided to maintain predictability (See [ADR-006](./architecture/adrs.md)).
+- **Horizontal Scaling**: **Rejected**. ZyncBase is designed for vertical scaling to 100k+ connections on a single node. Distributed state complexity is avoided to maintain predictability (See [ADR-002](./architecture/adrs.md#adr-002-vertical-scaling-as-the-scaling-strategy)).
 - **Offline Support**: Deferred. (Sync queue, client-side conflict resolution).
-- **Advanced Queries**: Multi-field sorting, Aggregations, Regex (Roadmap: post-v1).
-- **Frameworks**: Vue/Svelte integrations (V1 focuses on React/Vanilla).
+- **Advanced Queries**: Multi-field sorting, Aggregations, Regex (Roadmap: future release).
+- **Frameworks**: Vue/Svelte integrations (focuses on React/Vanilla).

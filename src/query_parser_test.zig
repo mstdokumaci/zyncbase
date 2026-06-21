@@ -18,7 +18,7 @@ test "basic query filter parsing" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 4, 18 }, // gte
@@ -30,7 +30,7 @@ test "basic query filter parsing" {
 
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
-    const users_md = schema.getTable("users") orelse return error.UnknownTable;
+    const users_md = schema.table("users") orelse return error.UnknownTable;
     const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
     const status_index = users_md.fieldIndex("status") orelse return error.UnknownField;
 
@@ -51,7 +51,7 @@ test "query with orConditions" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .or_conditions = .{
             .{ "role", 0, "admin" },
@@ -62,7 +62,7 @@ test "query with orConditions" {
 
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
-    const users_md = schema.getTable("users") orelse return error.UnknownTable;
+    const users_md = schema.table("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
     try testing.expect(filter.predicate.or_conditions != null);
@@ -89,7 +89,7 @@ test "query with orderBy and after" {
     const after_token = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(after_token);
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .orderBy = .{ "created_at", 1 }, // desc
         .cursor = after_token,
@@ -99,7 +99,7 @@ test "query with orderBy and after" {
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
-    const items_md = schema.getTable("items") orelse return error.UnknownTable;
+    const items_md = schema.table("items") orelse return error.UnknownTable;
     const created_at_index = items_md.fieldIndex("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
@@ -115,7 +115,7 @@ test "query rejects invalid Base64 after cursor token" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .cursor = "%%%INVALID_BASE64%%%",
     });
@@ -136,7 +136,7 @@ test "isNull condition (no value tuple)" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "deleted_at", 11 }, // isNull
@@ -162,7 +162,7 @@ test "unknown field name (including flattened paths)" {
     defer schema.deinit();
 
     // Use raw invalid index instead of string to reach server-side UnknownField logic
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ @as(usize, 999), 0, "NYC" },
@@ -189,7 +189,7 @@ test "malformed after field (panic regression test)" {
     malformed_after[1] = msgpack.Payload.uintToPayload(99); // Malformed: should be a string
     try root.mapPut("after", .{ .arr = malformed_after });
 
-    try testing.expectError(error.InvalidMessageFormat, query_parser.parseQueryFilter(allocator, &schema, schema.getTable("items").?.index, root));
+    try testing.expectError(error.InvalidMessageFormat, query_parser.parseQueryFilter(allocator, &schema, schema.table("items").?.index, root));
 }
 
 test "in condition parses to typed array" {
@@ -207,7 +207,7 @@ test "in condition parses to typed array" {
     const values_payload = msgpack.Payload{ .arr = values };
     defer values_payload.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, values_payload },
@@ -238,7 +238,7 @@ test "query normalization drops AND notIn empty set" {
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 10, empty_values },
@@ -271,7 +271,7 @@ test "query normalization marks AND in empty set as match none" {
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, empty_values },
@@ -300,7 +300,7 @@ test "query normalization drops OR tautology but keeps AND conditions" {
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 0, 18 },
@@ -332,7 +332,7 @@ test "query normalization marks OR group with only false terms as match none" {
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .or_conditions = .{
             .{ "role", 9, empty_values },
@@ -357,7 +357,7 @@ test "in condition rejects non-array operand" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, "admin" }, // Value should be array for IN (9)
@@ -383,7 +383,7 @@ test "in condition rejects nil element" {
     const values_payload = msgpack.Payload{ .arr = values };
     defer values_payload.free(allocator);
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, values_payload },
@@ -404,7 +404,7 @@ test "contains on array field parses using element type" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "tags", 6, "urgent" }, // contains
@@ -428,7 +428,7 @@ test "contains on text rejects non-string operand" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "name", 6, 42 }, // non-string for contains
@@ -449,7 +449,7 @@ test "startsWith on non-text field is rejected" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 7, "1" }, // startsWith on integer
@@ -472,7 +472,7 @@ test "isNull with operand is rejected" {
 
     // Manually construct null condition with extra operand to bypass helper's valid construction
     var cond_arr = try allocator.alloc(msgpack.Payload, 3);
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     cond_arr[0] = msgpack.Payload.uintToPayload(tbl.fieldIndex("deleted_at") orelse return error.TestExpectedValue);
     cond_arr[1] = msgpack.Payload.uintToPayload(11); // isNull
     cond_arr[2] = msgpack.Payload.uintToPayload(1); // unexpected operand
@@ -495,7 +495,7 @@ test "eq with nil operand is rejected" {
     }});
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "name", 0, msgpack.Payload{ .nil = {} } },
@@ -519,7 +519,7 @@ test "orderBy rejects invalid direction value" {
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
-    const tbl_items = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
     order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(2); // invalid direction
     try root.mapPut("orderBy", .{ .arr = order_arr });
@@ -548,7 +548,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     try root.mapPut("after", try msgpack.Payload.strToPayload(after_token, allocator));
 
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
-    const tbl_items = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
     order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(1);
     try root.mapPut("orderBy", .{ .arr = order_arr });

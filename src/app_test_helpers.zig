@@ -216,16 +216,16 @@ pub const AppTestContext = struct {
     }
 
     pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {
-        return self.schema.getTable(table_name) orelse error.UnknownTable;
+        return self.schema.table(table_name) orelse error.UnknownTable;
     }
 
     pub fn tableIndex(self: *const AppTestContext, table_name: []const u8) usize {
-        const md = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const md = self.schema.table(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return md.index;
     }
 
     pub fn fieldIndex(self: *const AppTestContext, table_name: []const u8, field_name: []const u8) usize {
-        const tbl = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const tbl = self.schema.table(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return tbl.fieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 

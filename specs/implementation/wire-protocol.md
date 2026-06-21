@@ -19,7 +19,7 @@
 
 ## Overview
 
-This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-011). Each message conforms to one of the types defined in this spec.
+This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-008). Each message conforms to one of the types defined in this spec.
 
 > Examples below use pseudo-literals like `<bin16("rect-1")>` for MessagePack `bin(16)` values. On the public SDK surface, document IDs and reference fields remain strings; on the wire they are packed into 16-byte binary IDs.
 
@@ -40,8 +40,8 @@ This document specifies the complete client-server contract for ZyncBase. Every 
 | Frame type | Binary (`opcode 0x02`) |
 | Serialization | MessagePack (production), JSON (debug mode via config flag) |
 | Max message size | 10 MB (configurable, see `security.rateLimit.maxMessageSize`) |
-| Max nesting depth | 32 levels (per ADR-010) |
-| Compression | None in v1 (per ADR-012) |
+| Max nesting depth | 32 levels (per ADR-008) |
+| Compression | None (per ADR-008) |
 
 ---
 
@@ -86,7 +86,7 @@ Every message is a MessagePack **map** with at minimum a `type` field. Client-or
 
 ### Store operations
 
-> **Note (ADR-023):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
+> **Note (ADR-014):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
 
 #### `StoreSet`
 
@@ -601,9 +601,9 @@ Notifies a subscribed client that their subscription's result set has changed.
 | `"set"` | A record was created or updated. `value` contains the full record. |
 | `"remove"` | A record was deleted. No `value` field. |
 
-> **Design note (ADR-023):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
+> **Design note (ADR-014):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
 >
-> **Consistency note (ADR-031):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
+> **Consistency note (ADR-018):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
 
 #### `WriteCommitted`
 
@@ -743,19 +743,19 @@ After the WebSocket is established, the server pushes two foundational messages:
 
 **1. `SchemaSync`**
 Provides the structural dictionary for integer-based routing for both store and presence operations. The SDK must dynamically hash this payload offline to track queue compatibility.
-*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
+*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
 
 ```
 {
   "type":   "SchemaSync",
   "tables": ["users", "tasks"],
   "fields": [
-    ["id", "namespace_id", "email", "created_at", "updated_at"],
-    ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
+    ["id", "namespace_id", "owner_id", "email", "created_at", "updated_at"],
+    ["id", "namespace_id", "owner_id", "title", "status", "created_at", "updated_at"]
   ],
   "fieldFlags": [
-    [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id, bit 2 = required
-    [3, 1, 0, 0, 1, 1]
+    [7, 5, 7, 0, 5, 5],  // users:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), email=0, created_at=5(0b101), updated_at=5(0b101)
+    [7, 5, 7, 0, 0, 5, 5] // tasks:    id=7(0b111), namespace_id=5(0b101), owner_id=7(0b111), title=0, status=0, created_at=5(0b101), updated_at=5(0b101)
   ],
   "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],
   "presenceSharedFields": ["slide", "playing"]
@@ -820,22 +820,28 @@ All errors follow a consistent envelope:
 |------|----------|-------------|
 | `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
 | `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
-| `SESSION_NOT_READY` | auth | Scoped operation sent before namespace and user resolution completed |
+| `SESSION_NOT_READY` | state | Scoped operation sent before namespace and user resolution completed |
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
-| `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
+| `NAMESPACE_SWITCH_REJECTED` | state | Namespace switching is not allowed when `users.namespaced` is enabled |
+| `COLLECTION_NOT_FOUND` | validation | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
 | `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |
+| `IMMUTABLE_FIELD` | validation | Attempted to modify a system-protected field (e.g., `id`) |
 | `PERMISSION_DENIED` | authorization | `authorization.json` rejected the operation |
 | `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
 | `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
+| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
+| `INVALID_MESSAGE_TYPE` | validation | Only binary MessagePack frames are supported |
+| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
-| `MESSAGE_TOO_LARGE` | rate-limit | Payload exceeds `maxMessageSize` |
+| `MESSAGE_TOO_LARGE` | client | Payload exceeds `maxMessageSize` |
+| `REQUEST_SUPERSEDED` | state | Scope superseded by newer request |
+| `BATCH_TOO_LARGE` | client | Batch exceeds 500 operations |
+| `ENGINE_UNHEALTHY` | server | Write engine is in degraded state |
 | `CONNECTION_FAILED` | connection | Transport-level failure (WebSocket closed) |
 | `TIMEOUT` | connection | Server-side processing exceeded timeout |
 | `INTERNAL_ERROR` | server | Unexpected server failure (crash/bug) |
 | `MAX_CONNECTIONS_REACHED` | connection | Server at capacity |
-| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
-| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
 | `RESOURCE_EXHAUSTED` | rate-limit | Subscription engine memory budget reached; reduce active subscriptions |
 

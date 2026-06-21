@@ -115,7 +115,7 @@ describe("acquireTicket", () => {
 			acquireTicket("ws://localhost:3000", { token: "bad" }),
 		).rejects.toMatchObject({
 			code: "AUTH_FAILED",
-			category: "auth",
+			category: "authentication",
 		});
 	});
 

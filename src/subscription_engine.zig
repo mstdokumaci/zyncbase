@@ -245,6 +245,7 @@ pub const SubscriptionEngine = struct {
 
         var group_id: u64 = 0;
         var first_sub = false;
+        var subscriber_in_group = false;
 
         if (self.groups_by_filter.get(filter)) |gid| {
             group_id = gid;
@@ -269,6 +270,7 @@ pub const SubscriptionEngine = struct {
             errdefer if (group_owned) group.deinit(self.allocator);
 
             try group.subscribers.put(self.allocator, sub_key, {});
+            subscriber_in_group = true;
             try self.groups.put(self.allocator, group_id, group);
             group_owned = false;
             errdefer {
@@ -299,10 +301,22 @@ pub const SubscriptionEngine = struct {
         }
 
         if (!first_sub) {
-            var group = self.groups.getPtr(group_id) orelse unreachable;
+            var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
             try group.subscribers.put(self.allocator, sub_key, {});
-            errdefer _ = group.subscribers.remove(sub_key);
+            subscriber_in_group = true;
         }
+
+        errdefer if (subscriber_in_group) {
+            if (self.groups.getPtr(group_id)) |grp| {
+                _ = grp.subscribers.remove(sub_key);
+                if (first_sub and grp.subscribers.count() == 0) {
+                    _ = self.groups_by_filter.remove(grp.filter);
+                    self.removeGroupFromCollectionIndex(coll_key, group_id);
+                    grp.deinit(self.allocator);
+                    _ = self.groups.remove(group_id);
+                }
+            }
+        };
 
         try self.active_subs.put(self.allocator, sub_key, group_id);
         return first_sub;

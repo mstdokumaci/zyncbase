@@ -58,7 +58,7 @@ test "NotificationDispatcher: poll processes items" {
     try nd.init(alloc, &cb, &sub_engine, &memory, &schema);
     defer nd.deinit();
 
-    const tbl_md = schema.getTable("coll") orelse return error.TestExpectedValue;
+    const tbl_md = schema.table("coll") orelse return error.TestExpectedValue;
     const values = try alloc.alloc(typed.Value, tbl_md.fields.len);
     errdefer alloc.free(values);
     for (values, 0..) |*value, i| {

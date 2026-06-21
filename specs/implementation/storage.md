@@ -116,7 +116,7 @@ Document identity is `id` alone. Each collection/table expects `id` to be global
 
 ### System Tables
 The storage engine maintains internal system tables that are not defined in `schema.json`:
-- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
+- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-009). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
 - `users`: Always present as a hybrid system collection. Its `external_id` column maps external identity strings to internal `BLOB(16)` user IDs used by `owner_id`, `$session.userId`, and presence `userId` values.
 
 ### Array Canonicalization Pipeline
@@ -193,7 +193,6 @@ When `users.namespaced = false`, callers pass global namespace ID `0`. When `use
 
 ### Relational Features
 - **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.
-- **FTS5**: Virtual tables created for full-text search capability on designated paths.
 
 ---
 

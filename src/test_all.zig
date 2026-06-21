@@ -1,5 +1,6 @@
-pub const std_options = struct {
-    pub const log_level = .warn;
+const std = @import("std");
+pub const std_options: std.Options = .{
+    .log_level = .warn,
 };
 
 test {

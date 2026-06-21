@@ -20,7 +20,7 @@ test "property: random valid query filters" {
     var schema = try sth.createSchema(allocator, &tables);
     defer schema.deinit();
 
-    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const field_index = tbl.fieldIndex("field") orelse return error.TestExpectedValue;
 
     for (0..100) |_| {
@@ -78,7 +78,7 @@ test "property: reject unknown field names" {
         var schema = try sth.createSchema(allocator, &tables);
         defer schema.deinit();
 
-        const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+        const tbl = schema.table("items") orelse return error.TestExpectedValue;
         const result = query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
         try testing.expectError(error.UnknownField, result);
     }

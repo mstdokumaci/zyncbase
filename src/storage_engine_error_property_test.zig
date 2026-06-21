@@ -106,7 +106,7 @@ test "storage: error handling concurrent access safety" {
         }
     }.run;
     var threads: [4]std.Thread = undefined;
-    const tbl_md = ctx.schema.getTable("data_table") orelse return error.UnknownTable;
+    const tbl_md = ctx.schema.table("data_table") orelse return error.UnknownTable;
     for (&threads) |*t| {
         t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index });
     }

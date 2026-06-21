@@ -255,3 +255,203 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     try testing.expectEqualStrings("error", result.resp_type);
     try testing.expectEqualStrings("INVALID_MESSAGE", result.code.?);
 }
+
+// ─── Namespace switching enforcement tests ────────────────────────────────
+
+fn createStoreSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64, namespace: []const u8) ![]u8 {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    errdefer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+
+    try buf.append(allocator, 0x83); // fixmap(3)
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "StoreSetNamespace");
+    try msgpack.writeMsgPackStr(writer, "id");
+    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeInt(u64, id, .big);
+    try msgpack.writeMsgPackStr(writer, "namespace");
+    try msgpack.writeMsgPackStr(writer, namespace);
+
+    return buf.toOwnedSlice(allocator);
+}
+
+fn createPresenceSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64, namespace: []const u8) ![]u8 {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    errdefer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+
+    try buf.append(allocator, 0x83); // fixmap(3)
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "PresenceSetNamespace");
+    try msgpack.writeMsgPackStr(writer, "id");
+    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeInt(u64, id, .big);
+    try msgpack.writeMsgPackStr(writer, "namespace");
+    try msgpack.writeMsgPackStr(writer, namespace);
+
+    return buf.toOwnedSlice(allocator);
+}
+
+test "NamespaceSwitch: initial store namespace setup succeeds with users.namespaced=true" {
+    const allocator = testing.allocator;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": { "namespaced": true, "fields": {} },
+        \\    "tasks": { "fields": { "title": { "type": "string" } } }
+        \\  }
+        \\}
+    ;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "ns-switch-init", schema_json);
+    defer app.deinit();
+
+    const gpa = app.memory_strategy.generalAllocator();
+    const ws = try gpa.create(WebSocket);
+    defer gpa.destroy(ws);
+    ws.* = helpers.createMockWebSocket(gpa);
+    try app.connection_manager.onOpen(ws);
+    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
+    defer {
+        app.connection_manager.onClose(ws);
+        if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    }
+
+    // Pre-warm "public" in cache (implicit auth allows "public" namespace)
+    _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
+
+    // Route the StoreSetNamespace message — initial setup always allowed
+    const msg = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
+    defer allocator.free(msg);
+
+    const response = try routeWithArena(&app.handler, allocator, conn, msg);
+    defer allocator.free(response);
+    const result = try parseResponse(allocator, response);
+    defer allocator.free(result.resp_type);
+    defer if (result.code) |code| allocator.free(code);
+
+    try testing.expectEqualStrings("ok", result.resp_type);
+}
+
+test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
+    const allocator = testing.allocator;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": { "namespaced": true, "fields": {} },
+        \\    "tasks": { "fields": { "title": { "type": "string" } } }
+        \\  },
+        \\  "presence": {
+        \\    "user": { "cursor": { "type": "object", "fields": { "x": { "type": "number" }, "y": { "type": "number" } } } }
+        \\  }
+        \\}
+    ;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "ns-scope-lock", schema_json);
+    defer app.deinit();
+
+    const gpa = app.memory_strategy.generalAllocator();
+    const ws = try gpa.create(WebSocket);
+    defer gpa.destroy(ws);
+    ws.* = helpers.createMockWebSocket(gpa);
+    try app.connection_manager.onOpen(ws);
+    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
+    defer {
+        app.connection_manager.onClose(ws);
+        if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    }
+
+    _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
+    _ = try app.resolveStoreScopeForTest("beta", helpers.test_external_user_id);
+
+    {
+        const msg = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("ok", r.resp_type);
+    }
+
+    // Same-scope store switch rejected
+    {
+        const msg = try createStoreSetNamespaceMessageBytes(allocator, 2, "beta");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
+    }
+
+    // Cross-scope: presence with different ns rejected
+    {
+        const msg = try createPresenceSetNamespaceMessageBytes(allocator, 3, "beta");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
+    }
+
+    // Cross-scope: presence with same ns accepted
+    {
+        const msg = try createPresenceSetNamespaceMessageBytes(allocator, 4, "public");
+        defer allocator.free(msg);
+        const resp = try routeWithArena(&app.handler, allocator, conn, msg);
+        defer allocator.free(resp);
+        const r = try parseResponse(allocator, resp);
+        defer allocator.free(r.resp_type);
+        defer if (r.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("ok", r.resp_type);
+    }
+}
+
+test "NamespaceSwitch: namespaced=false allows any switch" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "ns-switch-allowed", &.{
+        .{ .name = "items", .fields = &.{"value"} },
+    });
+    defer app.deinit();
+
+    const gpa = app.memory_strategy.generalAllocator();
+    const ws = try gpa.create(WebSocket);
+    defer gpa.destroy(ws);
+    ws.* = helpers.createMockWebSocket(gpa);
+    try app.connection_manager.onOpen(ws);
+    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
+    defer {
+        app.connection_manager.onClose(ws);
+        if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    }
+
+    _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
+
+    const msg1 = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");
+    defer allocator.free(msg1);
+    const resp1 = try routeWithArena(&app.handler, allocator, conn, msg1);
+    defer allocator.free(resp1);
+    const result1 = try parseResponse(allocator, resp1);
+    defer allocator.free(result1.resp_type);
+    defer if (result1.code) |code| allocator.free(code);
+    try testing.expectEqualStrings("ok", result1.resp_type);
+
+    const msg2 = try createStoreSetNamespaceMessageBytes(allocator, 2, "public");
+    defer allocator.free(msg2);
+    const resp2 = try routeWithArena(&app.handler, allocator, conn, msg2);
+    defer allocator.free(resp2);
+    const result2 = try parseResponse(allocator, resp2);
+    defer allocator.free(result2.resp_type);
+    defer if (result2.code) |code| allocator.free(code);
+    try testing.expectEqualStrings("ok", result2.resp_type);
+}

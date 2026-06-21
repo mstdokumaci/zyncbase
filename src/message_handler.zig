@@ -243,6 +243,22 @@ pub const MessageHandler = struct {
         return session;
     }
 
+    fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
+        if (schema.table("users")) |users_table| {
+            if (users_table.namespaced) {
+                if (conn.getStoreNamespace() orelse
+                    conn.pending_store_namespace orelse
+                    conn.getPresenceNamespace() orelse
+                    conn.pending_presence_namespace) |current|
+                {
+                    if (!std.mem.eql(u8, current, req_namespace)) {
+                        return error.NamespaceSwitchRejected;
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
 
     fn handleStoreSetNamespace(
@@ -253,6 +269,9 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const req = try wire.extractStoreSetNamespaceFast(message);
+
+        try rejectNamespaceSwitch(self.schema, conn, req.namespace);
+
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
@@ -301,7 +320,7 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const table = self.schema.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(sub_query.table_index) orelse return error.UnknownTable;
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
@@ -446,7 +465,7 @@ pub const MessageHandler = struct {
         const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
         var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
@@ -462,7 +481,9 @@ pub const MessageHandler = struct {
         defer qr.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
+        errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
+        errdefer conn.removeSubscription(sub_id);
 
         return try wire.encodeQuery(arena_allocator, .{
             .msg_id = msg_id,
@@ -492,7 +513,7 @@ pub const MessageHandler = struct {
         const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
         var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
@@ -569,6 +590,8 @@ pub const MessageHandler = struct {
         const req = wire.extractPresenceSetNamespaceFast(message) catch {
             return error.InvalidMessageFormat;
         };
+
+        try rejectNamespaceSwitch(self.schema, conn, req.namespace);
 
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
