@@ -1,94 +1,32 @@
-Threading Implementation Model Architecture document contains specifics ZyncBase threading model Core Engine Implementation```zig
-pub const CoreEngine = struct {
-    // Lock-free cache for reads (parallel access)
-    state_cache: LockFreeCache,
-    
-    // Mutex only for writes (serialized)
-    write_mutex: std.Thread.Mutex,
-    
-    // Storage layer with parallel reads
-    storage: *StorageLayer,
-    
-    pub fn handleMessage(self: *CoreEngine, msg: Message) !Message {
-        return switch (msg.type) {
-            // Reads: No lock, parallel execution
-            .query => try self.handleQueryParallel(msg),
-            .subscribe => try self.handleSubscribeParallel(msg),
-            
-            // Writes: Serialized with mutex
-            .mutation => try self.handleMutationSerialized(msg),
-            
-            else => error.UnknownMessageType,
-        };
-    }
-    
-    // Parallel reads (no mutex) - uses all CPU cores
-    fn handleQueryParallel(self: *CoreEngine, msg: Message) !Message {
-        // Correct LockFreeCache read pattern
-        const handle = try self.state_cache.get(msg.namespace);
-        defer handle.release();
+Threading Model Architecture-006]-threaded-core [ADR-014-subscription-018-mutation-acknowledgement-consistency-semantics ZyncBase uses uWebSockets threads network I/O single serialized storage write path Request handling connections mutation durability write acknowledgement ordered by storage engine Source Files| File | Responsibility |
+|------|----------------|
+| `src/server.zig` | Server composition and lifecycle for networking, storage, subscriptions, notifications, and write outcome dispatch. |
+| `src/uwebsockets_wrapper.zig` | C ABI wrapper around uWebSockets callbacks and send/close primitives. |
+| `src/connection/manager.zig` | Connection registry and cross-thread send helper. |
+| `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
+| `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
+| `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint coordination, and writer health state. |
+| `src/notification_dispatcher.zig` | Converts committed record changes into subscription pushes. |
+| `src/write_outcome_dispatcher.zig` | Sends deferred committed write acknowledgements/errors. |
+| `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
 
-        const state = handle.state();
-        return try self.executeQuery(state, msg.query);
-    }
-    
-    // Serialized writes (with mutex) - single-writer
-    fn handleMutationSerialized(self: *CoreEngine, msg: Message) !Message {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
-        
-        // Only one thread executes this at a time
-        try self.state_cache.update(msg.namespace, msg.mutation);
-        try self.storage.queueWrite(msg.namespace, msg.mutation);
-        try self.notifySubscribers(msg.namespace);
-        
-        return .{ .type = .success };
-    }
-};
-```Lock-Free Cache Coordination CoreEngine Lock-Free Cache critical```zig
-const LockFreeCache = struct {
-    // Use atomic reference counting for cache entries
-    entries: std.atomic.Value(*HashMap([]const u8, *CacheEntry)),
-    
-    const CacheEntry = struct {
-        state: StateTree,
-        version: std.atomic.Value(u64),
-        ref_count: std.atomic.Value(u32),
-    };
-    
-    pub fn get(self: *LockFreeCache, namespace: []const u8) !Handle {
-        // Lock-free read - multiple threads can execute simultaneously
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
-        
-        // Increment ref count atomically
-        _ = entry.ref_count.fetchAdd(1, .acq_rel);
-        
-        return Handle{ .cache = self, .entry = entry };
-    }
-    
-    pub fn release(self: *LockFreeCache, handle: Handle) void {
-        // Decrement ref count atomically
-        _ = handle.entry.ref_count.fetchSub(1, .acq_rel);
-    }
-    
-    pub fn update(self: *LockFreeCache, namespace: []const u8, mutation: Mutation) !void {
-        // Called only from write_mutex critical section
-        // Safe to mutate because writes are serialized
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
-        
-        try entry.state.apply(mutation);
-        _ = entry.version.fetchAdd(1, .release);
-    }
-};
-```Critical Implementation Notes use atomic operations cache global mutex negates benefits reads block Performance to single-threaded levels~10k req/sec 17x improvement lock-free reads **Memory ordering `.Acquire for loads previous writes `.Release` stores writes visible.AcqRel` read-modify-write combines both Validation Success Criteria Verification Commands```bash
-# Run threading unit tests with thread sanitizer
-zig test src/core_engine_test.zig -Dsanitize=thread
+## Important Types
 
-# Run lock-free cache concurrency tests
-zig test src/cache_stress_test.zig -Dsanitize=thread
-
-# Run full test suite to confirm no regressions
-zig build test
-```Success Criteria Read throughput scales cores_stress_test Write throughput single-writer serialization holds under concurrent load Mixed workload no deadlocks data races No lock contention read path zero races `get
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `ZyncBaseServer` | `WebSocketServer`, `StorageEngine`, `MessageHandler`, dispatchers | Owns subsystem wiring and start/stop lifecycle. |
+| `ConnectionManager` | `Connection`, uWebSockets wrapper | Tracks live connections and supports targeted sends. |
+| `Connection` | `Outbox`, `Session`, `WebSocket` | Serializes connection-local scope/subscription state and buffers outbound messages. |
+| `WriteQueue` | SQLite writer connection, `MemoryStrategy` | Serializes durable writes and emits outcomes/changes. |
+| `NotificationDispatcher` | `ConnectionManager`, `SubscriptionEngine` | Fans committed store changes out to subscribers. |
+| `WriteOutcomeDispatcher` | `ConnectionManager`, `WriteOutcomeBuffer` | Sends `WriteCommitted`/`WriteError` events to the origin connection. |
+| `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Maintains subscription groups shared across network workers. |
+Concurrency Model Network callbacks uWebSockets loops single connection scope subscription state changes methods Store writes serialized readers subscribers observe results Subscription write fanout after storage before ordering Presence state in-memory connection-scoped disconnect removes presence records Synchronization Boundaries| Boundary | Rule |
+|----------|------|
+| Connection state | Mutate only through `Connection` methods that preserve scope/subscription invariants. |
+| Storage writes | Enter through `StorageEngine`/`WriteQueue`; do not bypass the single-writer path. |
+| Storage reads | Use reader connections and schema/query helpers; do not share SQLite statements across threads without their owning connection. |
+| Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. |
+| WebSocket sends | Use connection/manager send helpers so close and backpressure behavior stays centralized. |
+| Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
+Invariants No request publish subscription acknowledgements before storage commit Namespace resolution results ignored superseded newer namespace request Connection teardown concurrent disconnect background completion Shared registries define one owner allocation ids buffers snapshots Threading changes require sanitizer coverage data-race freedom API contract [Message Handler [Storage-Free Cache [Presence Internals

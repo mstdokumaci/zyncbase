@@ -1,40 +1,64 @@
-ZyncBase Authorization Grammar defines JSON grammar `authorization.json Root Structure.json two decoupled arrays| Key | Type | Description |
+Authorization Grammar [ADR-003]-configuration-design-zero [ADR-016]-authentication-authorization-trust [Auth System [Query Grammar specifies JSON grammar structures context variables evaluation matrix authorize client messages Source Files| File | Responsibility |
+|------|----------------|
+| `src/authorization/types.zig` | Defines AST nodes, variable tokens, operators, and rule configurations. |
+| `src/authorization/parse.zig` | Validates AST schema typing, operator validity, and path formats. |
+| `src/authorization/evaluate.zig` | Evaluates RAM-scoped context fields (`$session`, `$namespace`, `$value`). |
+| `src/authorization/doc_predicate.zig` | Lowers `$doc` comparisons into storage engine filters. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `Condition` | `Expression`, `LogicalGroup`, boolean | Abstract node representing an auth check. |
+| `Expression` | left/right variable references, operator | Relational comparison (e.g. `LHS Operator RHS`). |
+| `LogicalGroup` | conditions list, `LogicalOp` | Logical grouping (`and` or `or`). |
+| `Context` | `Session`, `NamespaceState`, payload bytes | Evaluator context wrapper for variables. |
+Root Structure `authorization.json two decoupled arrays:| Key | Type | Description |
 |:---|:---|:---|
 | `namespaces` | `array` | Rules for horizontal partitioning (namespace access) and presence operations. |
 | `store` | `array` | Rules for vertical partitioning (table access) and document ownership. |
-Namespace Definition namespace governs access presence channels| Key | Type | Description |
+Namespace Fields| Key | Type | Description / Validation |
+|:---|:---:|:---|
+| `pattern` | `string` | Pinned match template (e.g., `tenant:{tenant_id}`). Enclosed variables are extracted. |
+| `storeFilter` | `Condition` | Checked on `StoreSetNamespace`. Denies store scope if false. |
+| `presenceRead` | `Condition` | Checked on `PresenceSetNamespace`, `PresenceSubscribe`, and `PresenceSubscribeShared`. |
+| `presenceWrite` | `Condition` | Checked on `PresenceSet` and `PresenceRemove`. `$data` contains the fields. |
+| `presenceSharedWrite`| `Condition` | Checked on `PresenceSetShared`. Defaults to `presenceWrite` if omitted. |
+Rule Fields| Key | Type | Description / Validation |
+|:---|:---:|:---|
+| `collection` | `string` | Table name, or `*` for a catch-all fallback. |
+| `read` | `Condition` | Checked on `StoreQuery` and `StoreSubscribe`. |
+| `write` | `Condition` | Checked on `StoreSet`, `StoreRemove`, and `StoreBatch`. |
+Condition Structure` maps three JSON formats:| Format Type | JSON Layout | Evaluation Logic |
 |:---|:---|:---|
-| `pattern` | `string` | The namespace pattern (e.g., `tenant:{tenant_id}`). Segments enclosed in `{}` are extracted into the `$namespace` context. |
-| `storeFilter` | `Condition` | Evaluated on `StoreSetNamespace`. If `false`, the client is rejected from the store namespace. |
-| `presenceRead` | `Condition` | Evaluated on `PresenceSetNamespace`, `PresenceSubscribe`, and `PresenceSubscribeShared`. |
-| `presenceWrite` | `Condition` | Evaluated on `PresenceSet` and `PresenceRemove`. `$data` contains the incoming field values. |
-| `presenceSharedWrite` | `Condition` | Evaluated on `PresenceSetShared`. `$data` contains the incoming field values. Defaults to the same value as `presenceWrite` when omitted. |
-Store Definition governs read write access table| Key | Type | Description |
-|:---|:---|:---|
-| `collection` | `string` | The table name to which these rules apply (e.g., `tasks`), or `*` for a catch-all rule that applies to any collection not matched by an earlier rule. |
-| `read` | `Condition` | Evaluated on `StoreQuery` and `StoreSubscribe`. |
-| `write` | `Condition` | Evaluated on `StoreSet`, `StoreRemove`, and `StoreBatch`. |
-Condition Grammar `Condition **Boolean `true or `false **Logical [Condition or **Comparison "LHS "Operator "RHS" **LHS (Left-Hand Side context variable$session.userId$doc.owner_id **Operator** `eq` `ne `gt `gte `lt` `in `contains` **RHS (Right-Hand Side raw literal (string number boolean array or context variable Variable Scope Evaluation Matrix predictability performance ZyncBase restricts variables during wire command Variables evaluated two execution paths Evaluation** check memory **Predicate Lowering**-row$doc comparisons lowered into `FilterPredicate shape `StoreQuery `StoreSubscribe storage layer owns SQL rendering$session` built authentication exchange validated JWT or SDK anonymous subject load fields `users` for authorization| Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$data` (presence) | `$doc` |
+| **Boolean Literal** | `true` or `false` | Absolute grant or denial. |
+| **Logical Group** | `{ "and": [...] }` or `{ "or": [...] }` | Evaluates nested array conditions recursively. |
+| **Comparison Object** | `{ "LHS": { "Operator": "RHS" } }` | Relational check (e.g. `{ "$doc.owner_id": { "eq": "$session.userId" } }`). |
+**LHS** context variable$session **Operator** `eq `ne `gt `lt `in `contains **RHS** raw literal value context variable Variable Scope Evaluation Matrix ZyncBase evaluates variables two execution paths Instant stateless check memory incoming variables **Predicate Row-level$doc comparisons converted `FilterPredicate shape storage engine renders predicate SQL query clauses| Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$data` (presence) | `$doc` (existing row) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ Predicate Lowering |
-| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Create: RAM candidate / Update: Predicate Lowering |
+| `StoreSet` (Create) | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Candidate RAM |
+| `StoreSet` (Update) | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
 | `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ Predicate Lowering |
 | `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
 | `PresenceSetShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
 | `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `PresenceSubscribeShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
-rule references forbidden variable command evaluation fails access denied `StoreLoadMore `StoreUnsubscribe` inherit authorization `PresenceUnsubscribe` require no authorization check `$data` decoded presence field map from `PresenceSet message identified by schema name.status available on presence write commands `StoreSet `$doc` write rules interpreted by write kind candidate document evaluated in RAM without storage read existing stored document enforced by predicate lowering document enforced predicate lowering create candidate includes document id `owner_id $session.userId normalized incoming fields server-managed fields/defaults create rule references `$doc` field absent not server-injected or defaulted create denied preserves invariant client create document Predicate Lowering Strategy checks `$doc` variable fetch document RAM before authorization authorization layer lowers condition into storage-neutral `FilterPredicate` renders predicate into SQL `WHERE` fragment with values server boot `AuthConfig.init validates store rule against active schemaUnknown `$doc` fields invalid operators predicate shapes store-query model fail startup supported `$doc` shape expressive than StoreQuery zero AND conditions one OR group Nested `$doc` groups multiple OR groups branch invalid```json
-"write": { "$doc.owner_id": { "eq": "$session.userId" } }
-```creating document server injects `owner_id from$session.userId treats document as$doc evaluates ownership rule updating deleting Zig evaluates$session.userId internal `BLOB(16) user ID recognizes$doc.owner_id as column reference lowers to filter condition storage renders binary parameter `UPDATE tasks SET id = ? owner_id = If user own document 0 rows affected extra overhead accepted writes perform extra reads classify zero-row outcome Confirmed writes classify report `PERMISSION_DENIED` Zero-Config Default `authorization.json missing ZyncBase boots with implicit "public playground" rule guarantees frictionless developer experience prototyping destroying data JSON```json
+Write Operations `$doc` Interpretation mutations`StoreSet$doc variable behaves write kinds| Write Kind | `$doc` Representation | Evaluation Method | Invariant / Failure Behavior |
+|:---|:---|:---|:---|
+| **Create** | Candidate document (normalized fields + owner + default values). | RAM check | Checked in-memory before database query. Denied if required fields are missing. |
+| **Update** | Existing database row. | Predicate Lowering | Lowered to SQL filter. If match fails, 0 rows are affected (zero-read verify). |
+| **Delete** | Existing database row. | Predicate Lowering | Lowered to SQL filter. If match fails, 0 rows are affected (zero-read verify). |
+Default Playground Rules `authorization.json omitted server synthesizes playground rule```json
 {
   "namespaces": [
     {
       "pattern": "public",
-      "storeFilter":        true,
-      "presenceRead":       true,
-      "presenceWrite":      true,
+      "storeFilter": true,
+      "presenceRead": true,
+      "presenceWrite": true,
       "presenceSharedWrite": true
     }
   ],
@@ -46,4 +70,4 @@ rule references forbidden variable command evaluation fails access denied `Store
     }
   ]
 }
-```default means accessible namespace `public` anonymous users read data broadcast presence in `public` namespace Users create records owned by$session.userId` modify delete records Creates satisfy$doc.owner_id == $session.userId` server-side owner injection updates deletes enforce rule predicate lowering
+```See [Auth System]-system [Query Grammar]-grammar.md [Storage].md

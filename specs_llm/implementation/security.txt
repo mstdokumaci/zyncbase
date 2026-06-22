@@ -1,86 +1,35 @@
-Security Model [Auth System Exchange Implementation document describes security mechanisms ZyncBase covers defense-in-depth layer model parser limits native authentication authorization rate limiter data structures Defense-in-Depth Layer Model enforces security seven layers specific component```
-Layer 1: TLS (uWebSockets / OpenSSL)          — encrypts all client traffic
-Layer 2: Rate Limiting (ConnectionLimiter)       — per-IP connection and message limits
-Layer 3: Input Validation (MessagePack parser)   — enforces size/depth/type limits before any allocation
-Layer 4: Authentication (AuthExchange)           — ticket validation on every new connection
-Layer 5: Authorization (authorization.json)      — native session, namespace, and same-row policy checks
-Layer 6: Namespace Isolation (StorageLayer)      — every query is scoped to namespace_id
-Layer 7: Audit Logging (SecurityLogger)          — structured log entry for every security event
-```layer independent failure layer grant access next applies MessagePack Parser Limits enforces limits before allocating memory parsed value Exceeding limit closes connection violations```zig
-pub const ParserConfig = struct {
-    max_depth:         usize = 32,
-    max_size:          usize = 10 * 1024 * 1024,  // 10 MB
-    max_string_length: usize = 1 * 1024 * 1024,   // 1 MB
-    max_array_length:  usize = 100_000,
-    max_map_size:      usize = 100_000,
-};
-```parser iterative uses explicit stack bounded_depth stack overflow impossible input nesting Violation Handling```zig
-pub const ViolationTracker = struct {
-    count:     u32 = 0,
-    threshold: u32 = 3,
+Security [ADR-016-authorization [ADR-015-session [Auth Exchange System Taxonomy Security layered transport admission parser/resource limits authentication scoped session resolution authorization teardown fail Client SDK checks convenience server-side validation authoritative Source Files| File | Responsibility |
+|------|----------------|
+| `src/config_loader.zig` | Security config values such as origins, message limits, and rate limits. |
+| `src/uwebsockets_wrapper.zig`, `src/uws_bridge.cpp` | Transport callbacks and origin/frame admission surface. |
+| `src/message_handler.zig` | Rate limiting, parser error handling, scoped session gate, and error propagation. |
+| `src/connection/violations.zig` | Repeated malformed/security-violation tracking. |
+| `src/connection/ticket_exchange.zig` | HTTP ticket exchange and session projection. |
+| `src/jwt_validator.zig` | JWT/JWKS validation and key caching. |
+| `src/authorization/*` | Namespace, store, write, read, and presence authorization. |
+| `src/wire/decode.zig` | Envelope/request extraction and message shape validation. |
+| `src/msgpack_utils.zig` | MessagePack decoding limits and helpers. |
 
-    /// Returns true when the connection must be closed.
-    pub fn record(self: *ViolationTracker, err: ParserError) bool {
-        self.count += 1;
-        logSecurityEvent(.msgpack_violation, err);
-        return self.count >= self.threshold;
-    }
-};
-```violations connection closed code Native Authorization Contract ZyncBase evaluates `authorization.json Zig core no foreign runtime circuit breaker application-code callback path Rules inspect$session claims JWT anonymous identity$namespace namespace$path collection name$value mutation payload-row$doc fields storage predicates Rules relationship traversal joins external API calls user-row permission reads encoded trusted token claims same-row data before request authorization fails denies operation `NAMESPACE_UNAUTHORIZED_DENIED fails Rate Limiter Data Structures Connection Limiter IP```zig
-pub const ConnectionLimiter = struct {
-    // ip_str -> active connection count
-    counts: std.StringHashMap(u32),
-    max_per_ip: u32 = 100,
+## Security Layers
 
-    pub fn allow(self: *ConnectionLimiter, ip: []const u8) bool {
-        const entry = self.counts.getOrPutValue(ip, 0) catch return false;
-        if (entry.value_ptr.* >= self.max_per_ip) return false;
-        entry.value_ptr.* += 1;
-        return true;
-    }
+| Layer | Owner | Rule |
+|-------|-------|------|
+| Transport admission | networking wrapper/server config | Accept only configured WebSocket endpoint/origins and binary frames. |
+| Parser limits | `msgpack_utils`, `wire/decode` | Reject malformed, oversized, or deeply nested payloads before domain routing. |
+| Rate limiting | `MessageHandler`, `Connection` | Apply per-connection token bucket before envelope routing. |
+| Authentication | `ticket_exchange`, `jwt_validator` | Trust only validated tickets/tokens and projected session claims. |
+| Scoped session | `Connection`, `SessionResolver` | Store/presence operations require resolved namespace/user scope. |
+| Authorization | `authorization/*` | Namespace/read/write/presence checks are server-side and fail closed. |
+| Teardown | `MessageHandler`, `ConnectionManager`, presence/subscriptions | Disconnect removes connection-owned state and subscriptions. |
 
-    pub fn release(self: *ConnectionLimiter, ip: []const u8) void {
-        if (self.counts.getPtr(ip)) |count| {
-            if (count.* > 0) count.* -= 1;
-        }
-    }
-};
-```Message Rate Limiter token```zig
-pub const RateLimiter = struct {
-    tokens:      f64,
-    max_tokens:  f64 = 100.0,
-    refill_rate: f64 = 100.0, // tokens per second
-    last_refill: i64,
+## Important Types
 
-    pub fn consume(self: *RateLimiter) bool {
-        const now = std.time.milliTimestamp();
-        const elapsed_s = @as(f64, @floatFromInt(now - self.last_refill)) / 1000.0;
-        self.tokens = @min(self.max_tokens, self.tokens + elapsed_s * self.refill_rate);
-        self.last_refill = now;
-
-        if (self.tokens >= 1.0) {
-            self.tokens -= 1.0;
-            return true;
-        }
-        return false;
-    }
-};
-```Namespace Isolation SQLite query includes namespace_id = ? clause_id set from store scope client-supplied data Cross-namespace access requires authorization from$session claims `authorization.json `$session.userId` scoped server state resolved through `users table before store operations never derived from JWT subject SDK client ID Invariants Error Conditions| Invariant | Description |
-|-----------|-------------|
-| Fail-secure | Authentication and authorization failures deny access — never grant it |
-| Parser-before-alloc | No heap allocation occurs for message content until all parser limits pass |
-| Namespace scoping | `namespace_id` in every query comes from `AuthContext`, not from the wire message |
-| Violation threshold | A connection is closed after exactly `violation_threshold` parser violations |
-
-| Error | Behaviour |
-|-------|-----------|
-| `error.AuthFailed` | Deny connection or refresh, return `AUTH_FAILED` to client |
-| `error.PermissionDenied` | Deny operation, return `PERMISSION_DENIED` to client |
-| `error.MaxDepthExceeded` | Record violation; close connection if threshold reached |
-| `error.MaxSizeExceeded` | Record violation; close connection if threshold reached |
-Validation Success Criteria TSan clean auth rate-limiter paths Parser rejects depth 32 size 10 MB/msgpack_parser Auth rules deny invalid namespace same-row permission Ticket validation rejects expired reused tickets Connection limiter blocks connection 101 same IP Verification Commands```bash
-zig test src/msgpack_parser_test.zig
-zig build test -Dtest-filter="auth"
-zig test src/rate_limiter_test.zig
-zig build test -Dsanitize=thread
-```See [Auth System Native authorization rules Exchange Ticket handshake session projection [Sanitizers TSan GPA coverage [Networking Implementation TLS connection lifecycle
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `ConnectionViolationTracker` | connection id | Counts repeated malformed/security-sensitive messages and triggers close threshold. |
+| `JwtValidator` | JWKS cache, validation config | Validates token issuer/audience/signature/expiration. |
+| `TicketExchange` | JWT validator, session mapping | Converts a validated HTTP auth request into a short-lived WebSocket ticket/session. |
+| `AuthConfig` | schema, authorization parser | Runtime authorization rule set from `authorization.json`. |
+| `EvalContext` | session, namespace, record/document values | Resolves authorization operands and conditions. |
+| `ReadAuthInput` / `WriteAuthInput` | query/schema/session data | Builds read predicates and write authorization decisions. |
+Fail-Closed Rules Missing auth configuration namespace/store rule denies access unless Store operations require scope presence scope readiness Namespace switching rejected for incompatible.namespaced scope Authorization lowering failure denies operation Unknown fields invalid operators schema mismatches fail before storage mutation error codes retry behavior in Taxonomy Resource Limits Message size limits parser not domain Rate limiting returns_LIMITED error optional malformed-sensitive payloads close connection Allocator exhaustion request/server failure partial authorization success [Auth Exchange System Grammar Handler

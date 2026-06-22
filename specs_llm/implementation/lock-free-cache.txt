@@ -1,55 +1,26 @@
-Lock-Free Cache Implementation-Free Cache Architecture Implementation specifics ZyncBase lock-free cache enables parallel read access CPU cores without global locks lock-free cache uses atomic reference counting single-writer-multiple-reader model Writes serialized mutex reads wait-free```
-[Reader Thread A] --+
-[Reader Thread B] --+--> [Atomic Value: Hash Map Pointer]
-[Reader Thread C] --+           |
-                                v
-                       [Current Hash Map]
-                        /       |       \
-               [Entry 1]    [Entry 2]    [Entry 3]
-```Implementation Core Structure```zig
-pub const LockFreeCache = struct {
-    // Atomic pointers to RCU-style snapshots (ADR-006)
-    auth_snapshots: std.atomic.Value(*std.StringHashMap(*AuthSnapshotEntry)),
-    schema_metadata: std.atomic.Value(*SchemaMetadataEntry),
-    namespace_ids: std.atomic.Value(*std.StringHashMap(u32)),
-    user_ids: std.atomic.Value(*std.StringHashMap(DocId)),
-    document_records: std.atomic.Value(*std.AutoHashMap(DocKey, *DocumentEntry)),
-    
-    allocator: Allocator,
-    write_mutex: std.Thread.Mutex,
-};
+Lock-Free Cache [ADR-006-threaded-core [Threading Strategy lock-free cache reusable read-mostly cache used readers need stable handles without global lock replace retire entries controlled ownership Source Files| File | Responsibility |
+|------|----------------|
+| `src/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
+| `src/storage_engine/cache.zig` | Storage metadata cache key/value types built on the cache primitive. |
+| `src/jwt_validator.zig` | JWKS/cache usage for authentication. |
+| `src/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
 
-pub const AuthSnapshotEntry = struct {
-    claims: JWTClaims,
-    ref_count: std.atomic.Value(u32),
-};
+## Important Types
 
-pub const DocumentEntry = struct {
-    fields: std.AutoHashMap(u16, Value),
-    ref_count: std.atomic.Value(u32),
-};
-```Wait Path```zig
-pub fn getDocument(self: *LockFreeCache, key: DocKey) !*DocumentEntry {
-    // Acquire the current map pointer
-    const map = self.document_records.load(.Acquire);
-    const entry = map.get(key) orelse return error.NotFound;
-    
-    // Safely increment reference count before return
-    _ = entry.ref_count.fetchAdd(1, .AcqRel);
-    
-    return entry;
-}
-```Invariants Error Conditions ref_count Overflow `u32` reaches.math.maxInt(u32) next `fetchAdd` wraps to 0 use-after-free writer evicts entry readers hold concurrent reader threads bounded by CPU core count (≤ 256 invariant```
-ref_count ≤ thread_count_max  (always << u32 max)
-```debug builds assert `fetchAdd```zig
-const prev = entry.ref_count.fetchAdd(1, .AcqRel);
-std.debug.assert(prev < 65536); // sanity bound well below u32 max
-```Eviction Contract entry freed by writer `ref_count == 0 Remove entry from map Spin-wait defer until.ref_count.load == 0 call `allocator.destroy(entry) Readers loaded pointer before swap hold reference eviction wait before memory reclaimed Error Conditions| Error | Cause | Behaviour |
-|-------|-------|-----------|
-| `error.NotFound` | Key or record not in cache | Caller falls through to storage/database |
-| ref_count overflow | > 65536 concurrent readers on one entry | Debug assert fires; release build: undefined behaviour — must not occur |
-| Double-release | `release()` called without matching `get()` | ref_count underflows; debug assert fires |
-Operational Logic Memory Ordering Guarantees **Acquire/Release** map pointer synchronization reader partially updated map **AcqRel** reference counting visibility across cores Writer Serialization reads lock-free mutations acquire `write_mutex one thread re-building map race conditions rotation Validation Success Criteria Performance Targets Concurrent Read Scaling 64 cores Read Latency < 500ns hot entries Zero Lock Contention read path Verification Commands```bash
-# Run stress tests with thread sanitizer
-zig test src/cache_stress_test.zig -fsanitize=thread
-```See [Threading Implementation.md [Storage Implementation.md [Memory Management/memory-strategy.md
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `lockFreeCache(...)` | allocator, key/value/hash/eql functions | Produces a typed cache implementation for one key/value domain. |
+| Cache entry | atomic ref count, key/value | Stores one value and tracks active readers. |
+| Cache handle | cache entry pointer | Keeps a value alive for a reader until release. |
+| Storage cache keys | namespace/identity typed ids | Avoid repeated namespace/user metadata lookup. |
+| JWKS cache state | JWT validator | Avoid repeated key fetch/parse while respecting refresh policy. |
+Contract Readers acquire handle release once Values valid until released Writers replace entries retired entries freed after release Cache users own key clone behavior Cache internals public error-code overflow failure maps subsystem Invariants No reader observes freed memory Reference counts wrap Entry retirement block unrelated readers Deinit no leaked handles Cache value types arena-owned pointers unless outlives handle Performance Contract| Property | Value | Notes |
+|----------|-------|-------|
+| Max deferred nodes | 100,000 | Maximum COW map snapshots + old entries before pool exhaustion. |
+| Reclamation interval | 100 ms | Background thread wake interval for freeing old snapshots. |
+| Thread epoch slots | 128 | Maximum concurrent thread readers (limits parallel cache access). |
+Performance Targets ADR| Metric | Target |
+|--------|--------|
+| Cache throughput | > 100,000 reads/sec on 16-core |
+| Cache latency | Sub-millisecond retrieval |
+**Overflow_deferred_nodes reached cache updates block until reclamation catches backpressure mechanism prevent memory growth See [Threading [Memory Strategy [Storage.md

@@ -1,50 +1,25 @@
-Memory Management Implementation Model Architecture-001 Zig Implementation Language document contains details ZyncBase memory management object pool strategy request-scoped lifetimes object lifecycle maintenance ZyncBase avoids global garbage collector uses tiered allocator strategy memory managed lifecycle locality requirements```
-[System Memory]
-      |
-      +--- [GPA (General Purpose)] -> Long-lived State (Subscriptions, Server Shell)
-      |
-      +--- [Arena Allocator]      -> Request-scoped data (Message parsing, temporary buffers)
-      |
-      +--- [IndexPool]            -> High-churn objects (Connections, Arenas, DeferNodes)
-```Tiered Allocator Strategy ZyncBase allocators memory minimize fragmentation overhead```zig
-const MemoryStrategy = struct {
-    // IndexPool: High-churn/Small objects (Contiguous pre-allocated memory)
-    connection_pool: IndexPool(Connection),
-    arena_pool: IndexPool(std.heap.ArenaAllocator),
-};
-```Object Pooling IndexPool(T) high-concurrency high-churn objects fragmentation cache locality critical slice `Node(T) Uses 64-bit atomics 32-bit array index 32-bit ABA tag Metadata `next_index stored `std.atomic.Value prevent TSAN data races/release cycles protected stack pool exhausted falls back to dynamic heap allocation `Connection `ArenaAllocator `lockFreeCache.DeferNode````zig
-// IndexPool core logic snippet
-pub fn release(self: *Self, data: *T) void {
-    const node: *Node = @alignCast(@fieldParentPtr("data", data));
-    const ptr = @intFromPtr(node);
-    const start = @intFromPtr(self.nodes.ptr);
-    const end = start + self.nodes.len * @sizeOf(Node);
+Memory Strategy [Threading Handler [Sanitizers `MemoryStrategy centralizes allocator ownership separates server state temporary allocations high connection objects Source Files| File | Responsibility |
+|------|----------------|
+| `src/memory_strategy.zig` | General allocator, arena pool, connection pool, and `IndexPool(T)`. |
+| `src/connection/state.zig` | Pooled `Connection` state and teardown behavior. |
+| `src/message_handler.zig` | Per-message arena acquisition/release. |
+| `src/server.zig` | Server-lifetime ownership of `MemoryStrategy`. |
+| `src/*_test.zig` memory tests | Leak, pool, and request-lifetime coverage. |
 
-    if (ptr >= start and ptr < end) {
-        // Fast path: push back to contiguous array stack
-        // ... index bit-packing logic ...
-    } else {
-        // Overflow path: destroy heap-allocated node (self-healing)
-        if (self.deinitData) |deinit_fn| deinit_fn(self.allocator, data);
-        self.allocator.destroy(node);
-    }
-}
-```Operational Logic Selection| Pool Type | Backing | Sync Type | Locality | Best For |
-|-----------|---------|-------------|----------|----------|
-| **IndexPool** | Contiguous | 64-bit Atomic Index | Excellent | Frequent/Small objects |
-Memory Safety Practices Unbounded parsers enforce depth size limits prevent OOM attacks **Self-Healing `IndexPool returns dynamic memory OS release avoid footprint bloat-Place Initialization** Types.Thread.Mutex.atomic.Value initialized in-place Returning types by value illegal leads memory **Fail-Fast on OOM** ZyncBase treats allocation failure fatal request error Internal background buffers `SessionResolutionBuffer outside use bounded overflow silent drop OOM_ERROR buffers capacity caps prevent unbounded allocation Invariants Error Conditions| Condition | Invariant |
-|-----------|-----------|
-| Arena reset | Must happen via `defer` before the request handler returns |
-| Pool exhaustion | `IndexPool.pop()` returns `null`; `IndexPool.acquire()` falls back to heap |
-| OOM | Returns `error.OutOfMemory` which maps to `INTERNAL_ERROR` |
-| Index Overflow | `IndexPool` capacity is capped at `u32.max` to ensure 64-bit packing |
-Validation Success Criteria Metrics Zero heap allocation cycles steady state Leak-free execution GPA safety checks Race-free atomic operations Verification Commands```bash
-# Verify naming and basic consistency
-bun run lint
+## Important Types
 
-# Verify pool stability under concurrency
-bun run test:tsan
-
-# Full integration verification
-bun run test:e2e
-```See [Threading Model Architecture-model.md [Lock-Free Cache Implementation-free-cache.md
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `MemoryStrategy` | parent allocator, `Connection` | Owns the thread-safe GPA plus pooled arenas and pooled connection objects. |
+| `MemoryStrategy.Config` | pool capacities | Defines production/test pool sizing. |
+| `IndexPool(T)` | atomics, allocator callbacks | Fixed-capacity pool with tagged free-stack and active-count leak assertion. |
+| `std.heap.ArenaAllocator` | GPA allocator | Handles request-temporary allocations released in bulk. |
+| `Connection` | connection allocator | High-churn transport/session state reused through the connection pool. |
+Classes| Allocation class | Owner | Lifetime |
+|------------------|-------|----------|
+| Server subsystems, schemas, caches, subscription registries | `MemoryStrategy.generalAllocator()` | Server lifetime or explicit subsystem lifetime. |
+| Message decode trees, temporary query/auth buffers, response encoding buffers | Request arena from `acquireArena` | One `handleMessage` call or dispatcher operation. |
+| Connection objects | `connection_pool` | Active WebSocket connection; reset before returning to pool. |
+| Connection-owned strings/session state | Connection allocator/state | Until scope reset, disconnect, or connection release. |
+| Background bounded buffers | Owning subsystem | Fixed capacity; overflow policy must be explicit. |
+Rules Acquire/release arenas same lifecycle reset capacity before returning pool store arena-owned memory storage subscription presence state pointer handed across subsystem thread boundaries owned long-lived allocator copied receiver's allocator `IndexPool requires zero active items active item shutdown leak Pool capacity exhaustion implementation error unless bounded-drop policy Background buffers pressure document Failure Behavior Public error codes [Error Taxonomy Request-path allocation failure fail release temporary state Storage/write-engine allocation failure deferred work write-outcome path acknowledgement Test builds treat GPA leak reports failures [Message Handler [Threading [Sanitizers

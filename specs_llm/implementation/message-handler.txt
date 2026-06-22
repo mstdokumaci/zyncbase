@@ -1,52 +1,32 @@
-Message Handler [Memory Management Implementation Protocol `MessageHandler primary processing WebSocket messages implements MessagePack wire protocol handles per-connection memory lifecycle routes operations storage engine Interface Contract```zig
-pub const MessageHandler = struct {
-    allocator: Allocator,
-    memory_strategy: *MemoryStrategy,
-    violation_tracker: *ViolationTracker,
-    storage_engine: *StorageEngine,
-    subscription_manager: *SubscriptionManager,
-    connection_registry: ConnectionRegistry,
+Message Handler Protocol [Threading Strategy Taxonomy [ADR-015-session [ADR-018-acknowledgement-consistency-semantics `MessageHandler WebSocket request router decodes envelope enforces connection limits gates operations scoped session readiness dispatches store services encodes immediate response or error Source Files| File | Responsibility |
+|------|----------------|
+| `src/message_handler.zig` | Main request lifecycle, routing, scoped session gates, rate-limit enforcement, and response/error send path. |
+| `src/wire/decode.zig` | Zero/low-allocation envelope and payload extractors for supported message types. |
+| `src/wire/encode.zig` | Success, query, schema sync, write acknowledgement, presence, and error encoders. |
+| `src/connection/state.zig` | Per-connection state, send outbox, scoped session fields, and subscription ownership. |
+| `src/connection/session_resolver.zig` | Background namespace/user resolution and stale-result protection. |
+| `src/store_service.zig` | Store mutations, queries, pagination, and scope lookup. |
+| `src/presence/manager.zig` | Presence writes, snapshots, and subscriber fanout source state. |
+| `src/authorization/*` | Namespace, read, write, and presence authorization decisions. |
 
-    /// Process one WebSocket message.
-    ///
-    /// Guarantees:
-    ///   - All temporary allocations (parse buffers, intermediate results) are 
-    ///     allocated from a pooled arena via MemoryStrategy.
-    ///   - Arena is acquired and released per message.
-    ///   - Message processing is synchronized per connection via a mutex in Connection state.
-    ///   - Operations are routed to StorageEngine after MessagePack decoding.
-    pub fn handleMessage(
-        self: *MessageHandler, 
-        ws: *WebSocket, 
-        message: []const u8, 
-        msg_type: MessageType
-    ) !void {
-        // ... acquisition and mutex locking ...
-        const arena = try self.memory_strategy.acquireArena();
-        defer self.memory_strategy.releaseArena(arena);
-        const arena_allocator = arena.allocator();
+## Important Types
 
-        var reader: std.Io.Reader = .fixed(message);
-        const payload = try msgpack.decode(arena_allocator, &reader);
-        try self.routeMessage(ws, arena_allocator, payload);
-    }
-};
-```Scoped Session Gate `routeMessage enforces readiness before dispatching operations `StoreSet `StoreLoadMore require ready store scope `PresenceSet require ready presence scope `AuthRefresh `StoreSetNamespace `PresenceSetNamespace ping/pong close accepted before readiness establish refresh operation arrives before scope ready handler returns `SESSION_NOT_READY` without touching storage subscriptions presence state Memory Management Strategy| Allocation | Allocator | Lifecycle |
-|------------|-----------|-----------|
-| Parse buffers, temp strings | Pooled Arena | Released to pool at end of `handleMessage` |
-| Persistent state (subscriptions) | GPA | Until connection close |
-| Response buffers | GPA | Allocated in `buildSuccessResponse` etc.; Caller sends via `ws.send()` then frees |
-Thread Safety Concurrency `MessageHandler shared across threads safety achieved-Connection mutex `handleMessage locks mutex sequential message processing single client **Atomic Reference Counting** Connections ref-counted safety during concurrent `handleOpen events **Thread-Safe Component `StorageEngine `SubscriptionManager handle internal synchronization Invariants Error Conditions| Invariant | Description |
-|-----------|-------------|
-| Arena always released | `defer releaseArena(arena)` ensures cleanup even on error paths |
-| Processed under mutex | Messages for the same connection never run concurrently |
-| No leak on invalid MsgPack | Faulty payloads are caught by the decoder; arena is still released |
-
-| Error | Cause | Behaviour |
-|-------|-------|-----------|
-| `error.OutOfMemory` | ArenaPool or GPA exhausted | `INTERNAL_ERROR` sent; connection may be throttled |
-| `error.InvalidMessage` | MessagePack parse failure | `INVALID_MESSAGE` sent; violation tracked |
-| `error.Unauthorized` | Permission check failed | `UNAUTHORIZED` sent |
-| `error.SessionNotReady` | Scoped operation before namespace/user resolution | `SESSION_NOT_READY` sent |
-| `error.NamespaceSwitchRejected` | Namespace switch while `users.namespaced` is enabled | `NAMESPACE_SWITCH_REJECTED` sent |
-Validation Success Criteria Arena released after message (checked via arena stats Correct routing for wire protocol operations`StoreSet `StoreRemove Scoped store presence operations until scopes ready ThreadSanitizer passes for concurrent message processing across multiple connections [Memory Management Arena GPA strategy [Threading Implementation Per-thread memory [Wire Protocol Message format handler
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `MessageHandler` | `MemoryStrategy`, `Connection`, `StoreService`, `PresenceManager`, `SubscriptionEngine`, `AuthConfig`, `Schema`, `JwtValidator` | Owns request handling and all domain dispatch from a decoded wire envelope. |
+| `Connection` | `Outbox`, `Session`, `WebSocket`, allocator | Holds mutable per-client state, scoped namespace/user ids, pending namespace resolution, and connection subscriptions. |
+| `ConnectionViolationTracker` | Security config | Counts malformed/security-sensitive messages and closes abusive connections. |
+| `wire.Envelope` | MessagePack extractor | Carries `type` and `id`, the only fields needed before routing. |
+| `StoreService` | `StorageEngine`, `Schema`, `Authorization` | Executes store reads/writes and resolves namespace/user scope. |
+| `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Tracks store subscriptions and evaluates record changes for fanout. |
+| `PresenceManager` | Presence schema, subscribers | Maintains user/shared presence state and produces snapshots/broadcasts. |
+Request Lifecycle Apply per-connection message rate limiting.SecurityConfig Decode `wire.Envelope MessagePack Acquire request arena `MemoryStrategy Classify message type Route store auth presence handler Send immediate response route completes Return `null asynchronous resolution response_seq current Convert route failures.getWireError send canonical error response Supported Routes| Group | Message names | Gate |
+|-------|---------------|------|
+| Scope setup | `StoreSetNamespace`, `PresenceSetNamespace` | Requires authenticated connection; may run before scoped readiness. |
+| Store write | `StoreSet`, `StoreRemove`, `StoreBatch` | Requires ready store scope and write authorization. |
+| Store read | `StoreQuery`, `StoreSubscribe`, `StoreLoadMore` | Requires ready store scope and read authorization. |
+| Store subscription control | `StoreUnsubscribe` | Connection-local subscription id. |
+| Auth | `AuthRefresh` | Requires valid refresh token/JWT validation path. |
+| Presence write | `PresenceSet`, `PresenceSetShared`, `PresenceRemove` | Requires ready presence scope and presence authorization. |
+| Presence subscription control | `PresenceSubscribe`, `PresenceUnsubscribe`, `PresenceSubscribeShared`, `PresenceUnsubscribeShared` | Requires ready presence scope except local cleanup paths. |
+Session Rules Transport store/presence readiness Store operations require `Connection.getStoreSession() resolved namespace id Presence operations require namespace/user scope Namespace setup messages start new resolution sequence detach stale store subscriptions.namespaced true forbids switching different namespace reconnect Background resolution check `scope_seq before async activate older scope Error Handling Public codes retry categories owned by [Error Taxonomy Message format parser-limit failures recorded in `ConnectionViolationTracker Repeated security violations close WebSocket Write operations acknowledgement through `WriteCommitted `WriteError pushes after request Error Propagation Errors flow four paths Synchronous Request Errors `routeMessageFast `handleMessage calls.getWireError.encodeError( builds MessagePack error response `conn.send() delivers response backpressure closes connection Asynchronous Write Errors Write enqueued with `conn_id `write_id Writer thread commits transaction failure `WriteOutcomeResult error into `WriteOutcomeBuffer `WriteOutcomeDispatcher drains buffer calls `wire.(_id_index.sendToConnection delivers `WriteError origin connection Asynchronous Session Resolution Errors Namespace resolution enqueued on cache miss Writer thread resolves namespace IDs failure pushes `SessionResolutionResult error `SessionResolver drains buffer re-checks_seq calls.encodeError original request superseded sends `REQUEST_SUPERSEDED Security Violations Decode-level errors identified `isSecurityError( `ConnectionViolationTracker records violation threshold exceeded connection closed Repeated malformed messages path tracker connection-scoped Zig errors `wire.getWireError(/wire/errors.zig translation table error codes Memory Concurrency Invariants Request-temporary allocations `MemoryStrategy released before `handleMessage returns Persistent connection data allocated from allocator cleared during teardown Per-connection mutable state guarded by methods cross-connection fanout handled managers Store writes serialized by queue read/subscription paths mutate connection scope Disconnect teardown clears violation state detaches subscriptions resets scope removes presence [Wire Protocol/wire-protocol.md [Auth Exchange-exchange [Presence Internals [Storage

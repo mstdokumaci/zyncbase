@@ -1,4 +1,19 @@
-ZyncBase Authorization Format.json [Configuration API Design Server configuration authorization rules [Auth Exchange Ticket handshake `$session` construction [ADR-016-authentication-authorization-trust-boundary Authentication authorization trust Core Principles **Deny by Default** access denied unless allowed rule **Native-Only Rules evaluated Zig limited context$session` resolved session context validated JWT identity$namespace current namespace string$doc` Columns target row `FilterPredicate `StoreQuery `StoreSubscribe`$value incoming mutation payload RAM$path` table name **External Permission ZyncBase compute memberships billing state group inheritance permission graphs in trusted token claims namespace parts same-row data incoming value-Row `$doc` same row Rules relationship traversal joins external calls lookups table invalid in JSON **Query Predicate Parity** Auth JSON keeps rule syntax comparison residual `$doc` predicate lower same query predicate StoreQuery zero AND conditions plus one OR groupAuth supports expressive$doc filter store query language Namespace rules handle horizontal presence Store rules collection-level access same-row ownership `users table not read authorization maps external subject internal `users.id$session.userId_id presence identity foreign keys Optional profile fields remain application data Rule Format Structure file organized decoupled arrays`namespaces full grammar [Auth Grammar```json
+Authorization System [ADR-003]-configuration-design-zero [ADR-016]-authorization [Auth Exchange [Query Grammar ZyncBase declarative stateless authorization model `authorization.json Evaluation fail-closed executing Zig metadata loaded boot resolved session handshake Source Files| File | Responsibility |
+|------|----------------|
+| `src/authorization/types.zig` | Internal representation of declarative rule arrays and conditions. |
+| `src/authorization/parse.zig` | JSON deserialization, validation, and schema consistency checking. |
+| `src/authorization/pattern.zig` | Colon-separated namespace segment parsing, matching, and wildcard binding. |
+| `src/authorization.zig` | Main entry point for matching connections to namespace and store rule definitions. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `AuthRules` | allocator | Root container for `namespaces` and `store` rule lists. |
+| `NamespaceRule` | pattern, conditions | Matches client-requested namespaces and dictates read/write/shared access. |
+| `StoreRule` | collection name, conditions | Gates CRUD operations on SQLite tables via path and row-level checks. |
+| `MatchPattern` | segment buffers | Parses namespace templates (e.g. `tenant:{tenant_id}`) and extracts route variables. |
+Invariants **Fail-Closed** operation matching allow rule rejected **Stateless Access resolved from$session$namespace variables$path metadata$value$doc database **Same-Row Boundaries** `$doc` predicates constrain columns single row Cross-table joins relational traversal auth rules prohibited **Lowering Consistency** auth condition targeting database rows$doc lower `FilterPredicate shape query parser **Namespace store presence operations require resolved namespace scope namespace fails authorize operations block JSON Structure Overview `authorization.json organizes authorization rules two arrays```json
 {
   "namespaces": [
     {
@@ -16,70 +31,33 @@ ZyncBase Authorization Format.json [Configuration API Design Server configuratio
     }
   ]
 }
-```Evaluation Order Conflict Resolution **Top-Down Evaluation** Rules `namespaces arrays evaluated first matching pattern wins **Early Exit** rule grants access evaluation stops access permitted **Namespace-First** frame namespace evaluated via or `PresenceSetNamespace first If no namespace rule matches scope not ready subsequent evaluations irrelevant **Ready-Scope Store rules evaluated after resolved namespace$session.userId Presence rules evaluated after resolved namespace.userId Namespace Wildcard Behavior Session Expectations Namespaces colon-separated segment model Wildcards match segments extract variables into$namespace context ZyncBase stateless for authorization hierarchical namespace authorization requires data in `$session.userId not identity persisted internal `users.id` resolved for scope If.namespaced false resolved in global namespace If true ID resolved in namespace store presence scope Example 1: Tenant Isolation Session contains_id "acme Namespace:_id Rule$namespace.tenant_id$session.tenant_id User connects to namespace `tenant:acme ZyncBase extracts `acme as$namespace._id compares.tenant_id Example 2: Project Isolation Session Arrays Jira Confluence app organization token multiple grants```json
-{
-  "sub": "user_123",
-  "org_id": "acme",
-  "read_projects": ["docs", "wiki", "planning"],
-  "write_projects": ["docs"]
-}
-```authorization use arrays```json
-{
-  "namespaces": [
-    {
-      "pattern": "org:{org_id}:project:{project_id}",
-      "storeFilter": {
-        "and": [
-          { "$namespace.org_id": { "eq": "$session.org_id" } },
-          { "$namespace.project_id": { "in": "$session.read_projects" } }
-        ]
-      },
-      "presenceRead": { "$namespace.project_id": { "in": "$session.read_projects" } },
-      "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
-    }
-  ]
-}
-```rules check grants same data```json
-{
-  "store": [
-    {
-      "collection": "pages",
-      "read": { "$doc.project_id": { "in": "$session.read_projects" } },
-      "write": { "$doc.project_id": { "in": "$session.write_projects" } }
-    }
-  ]
-}
-```using arrays roles JWT/session ZyncBase performs scope validation in RAM same-row SQL predicates Permission lists human-manageable applications use roles groups active-context tokens unbounded grant arrays Presence API Authorization Store API flat namespace-wide concept Users join presence namespace broadcast state listen others Presence authorization defined level`presenceRead subscribe presence channel see who online shared state`presenceWrite broadcast user presence$data variable exposes values content-gated rules`presenceSharedWrite Permission write namespace-level shared state exposes values Defaults same value as `presenceWrite omitted presence shared state presence ephemeral no `$doc` equivalent no path-level routing requires ready presence scope entries keyed by resolved internal user ID Example```json
-{
-  "namespaces": [
-    {
-      "pattern": "org:{org_id}:project:{project_id}",
-      "storeFilter": {
-        "and": [
-          { "$namespace.org_id": { "eq": "$session.org_id" } },
-          { "$namespace.project_id": { "in": "$session.read_projects" } }
-        ]
-      },
-      "presenceRead":        { "$namespace.project_id": { "in": "$session.read_projects" } },
-      "presenceWrite":       { "$namespace.project_id": { "in": "$session.write_projects" } },
-      "presenceSharedWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
-    }
-  ],
-  "store": []
-}
-```Composition Model Conditions mirror store query predicate model apply `$doc use RAM evaluation$session$namespace$path$value **Boolean Values** `true (allow or `false `eq `ne `gt `lt `contains `and `or` server boot `AuthConfig.init schema validates store rule against schema rule evaluated RAM same-row `FilterPredicate fails startup Unknown$doc fields invalid operators expressions nested groups beyond store-query predicate shape invalid```json
-{
-  "write": {
-    "or": [
-      { "$session.role": { "eq": "admin" } },
-      {
-        "and": [
-          { "$session.role": { "eq": "editor" } },
-          { "$path": { "eq": "tasks" } },
-          { "$doc.owner_id": { "eq": "$session.userId" } }
-        ]
-      }
-    ]
+```Namespace Scoping Wildcard Rules colon-separated segment structure SEGMENTS matching{variable extracted$namespace| Template Pattern | Request Namespace | Resolved `$namespace` Context |
+|:---|:---|:---|
+| `tenant:{tenant_id}` | `tenant:acme` | `$namespace.tenant_id = "acme"` |
+| `org:{org_id}:proj:{p_id}` | `org:google:proj:db` | `$namespace.org_id = "google"`, `$namespace.p_id = "db"` |
+Multi-Tenancy Scoping Examples Tenant Isolation **Session Context** "tenant_id "acme" **Rule$namespace.tenant_id"$session.tenant_id" User upgrade to `tenant:acme succeeds `tenant:other Array Member Checking **Session Context** "read_projects""docs", "write_projects""docs **Namespace```json
+  {
+    "pattern": "org:{org_id}:project:{project_id}",
+    "storeFilter": { "$namespace.project_id": { "in": "$session.read_projects" } },
+    "presenceRead": { "$namespace.project_id": { "in": "$session.read_projects" } },
+    "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
   }
-}
-```Authorization ZyncBase application-code authorization runtime permission check facts outside token namespace target row incoming value application compute permission before token Examples outside ZyncBase `project_members before access resolving inherited permissions spaces folders pages checking billing status Stripe evaluating custom approval workflow calling external policy engine matching$namespace.tenant_id to$session.tenant_id checking.project_id against.read_projects$doc.owner_id == $session.userId writes$session.role checking$doc.project_id against$session.write_projects
+  ```Presence Authorization Unlike Store API namespace-wide boundary| Presence Operation | Scoped JSON Key | Variables Available | Default Behavior |
+|:---|:---|:---|:---|
+| Subscribing to user events | `presenceRead` | `$session`, `$namespace` | Denied |
+| Broadcasting own state | `presenceWrite` | `$session`, `$namespace`, `$data` | Denied |
+| Updating shared states | `presenceSharedWrite` | `$session`, `$namespace`, `$data` | Inherits `presenceWrite` value if omitted |
+Composition Model Operators Rules store query predicate model **Literals** `true (allow `false| Operator | Usage | Evaluated In |
+|:---|:---|:---|
+| `eq`, `ne` | Equality / Inequality checks | RAM or SQL |
+| `gt`, `gte`, `lt`, `lte` | Range bounds comparison | RAM or SQL |
+| `in`, `notIn` | Value membership in array claims | RAM or SQL |
+| `contains` | Check if array field contains value | RAM or SQL |
+| `and`, `or` | Condition groupings | RAM or SQL |
+Authorization Boundaries sub-microsecond performance ZyncBase separates policies| Allowed Inside ZyncBase (Stateless RAM / Same-Row SQL) | Must Be Handled Outside (JWT Claims / App Logic) |
+|:---|:---|
+| Matching `$namespace.tenant_id` to `$session.tenant_id`. | Looking up user members in a `project_members` join table. |
+| Checking `$namespace.project_id` in `$session.read_projects`. | Resolving hierarchical organization tree permissions. |
+| Restricting mutations to `$doc.owner_id == $session.userId`. | Verifying Stripe billing status or credit balances. |
+| Restricting writes to `$session.role` in `["admin", "editor"]`. | Multi-step approval workflows or external policy lookups. |
+See [Auth Exchange]-exchange.md [Auth Grammar].md [Query Grammar-grammar.md [Security].md

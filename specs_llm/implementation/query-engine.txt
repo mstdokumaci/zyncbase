@@ -1,204 +1,30 @@
-Query Engine handles filtering sorting real subscriptions executes queries in-memory cache SQLite storage tracks subscriptions clients changes Fine change detection in-memory subscriptions efficient real-time updates Query AST Structure Grammar AST definitions`QueryFilter `Condition `SortDescriptor```zig
-const Query = struct {
-    table_index: usize,                    // Integer index from SchemaSync dictionary
-    filters: []Condition,
-    sort: ?SortDescriptor,
-    limit: ?usize,
-    after: ?[]const u8,                    // Opaque token (base64 encoded cursor)
-};
+Query Engine [ADR-013] [ADR-014]-subscription [Query Grammar Pagination [Storage converts SDK query requests typed validates schema lowers storage-backed reads to SQLite SQL reuses predicate semantics in-memory subscription filtering Source Files| File | Responsibility |
+|------|----------------|
+| `src/query_ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
+| `src/query_parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
+| `src/storage_engine/filter_sql.zig` | AST-to-SQL predicate lowering and bound value ownership. |
+| `src/storage_engine/sql.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
+| `src/storage_engine/reader.zig` | Query execution and row decoding. |
+| `src/filter_eval.zig` | In-memory predicate evaluation for subscription matching. |
+| `src/subscription_engine.zig` | Subscription grouping, query retention, and record-change matching. |
+| `src/store_service.zig` | Store-facing query, subscribe, and load-more operations. |
 
-const Condition = struct {
-    field_index: usize,                    // Integer index from SchemaSync dictionary
-    op: Operator,
-    value: ?TypedValue,
-};
+## Important Types
 
-const Operator = enum {
-    eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
-};
-
-const SortDescriptor = struct {
-    field_index: usize,                    // Integer index from SchemaSync dictionary
-    desc: bool,
-};
-```Query Execution Flow```
-┌─────────────────────────────────────────────────┐
-│  1. Parse Query                                 │
-│     - Validate syntax                           │
-│     - Build AST                                 │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  2. Check Cache                                 │
-│     - Look for cached results                   │
-│     - Check if cache is fresh                   │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  3. Execute Query                               │
-│     - Build SQL (if needed)                     │
-│     - Execute on SQLite reader                  │
-│     - Or filter in-memory cache                 │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  4. Apply Filters                               │
-│     - Filter results                            │
-│     - Sort results                              │
-│     - Apply limit and cursor (after)            │
-└─────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────┐
-│  5. Return Results                              │
-│     - Serialize to MessagePack                  │
-│     - Send to client                            │
-└─────────────────────────────────────────────────┘
-```
-
-### Implementation
-
-```zig
-const QueryEngine = struct {
-    storage: *StorageLayer,
-    cache: *LockFreeCache,
-    
-    pub fn execute(self: *QueryEngine, query: Query) ![]json.Value {
-        // Try cache first
-        if (try self.executeFromCache(query)) |results| {
-            return results;
-        }
-        
-        // Build SQL
-        const sql = try self.buildSQL(query);
-        
-        // Execute on SQLite reader (parallel)
-        const reader = self.storage.getReader();
-        const rows = try reader.query(sql);
-        
-        // Parse results
-        return try self.parseResults(rows);
-    }
-    
-    fn buildSQL(self: *QueryEngine, query: Query) ![]const u8 {
-        var buf = ArrayList(u8).init(self.allocator);
-        
-        // Resolve table name from schema arrays via integer index
-        const table_name = self.schema.tables[query.table_index].name;
-        try buf.appendSlice("SELECT * FROM ");
-        try buf.appendSlice(table_name);
-        try buf.appendSlice(" WHERE namespace_id = ?");
-        
-        for (query.filters) |condition| {
-            try buf.appendSlice(" AND ");
-            // Resolve column name from schema field arrays via integer index
-            const col_name = self.schema.tables[query.table_index].fields[condition.field_index].name;
-            try self.appendCondition(&buf, col_name, condition);
-        }
-        
-        if (query.sort) |sort| {
-            try buf.appendSlice(" ORDER BY ");
-            const sort_col = self.schema.tables[query.table_index].fields[sort.field_index].name;
-            try buf.appendSlice(sort_col);
-            try buf.appendSlice(if (sort.desc) " DESC" else " ASC");
-        }
-        
-        if (query.limit) |limit| {
-            try std.fmt.format(buf.writer(), " LIMIT {}", .{limit});
-        }
-        
-        if (query.after) |after| {
-            // Implementation detail: Decode after token and apply WHERE filters
-            try self.appendCursorFilters(&buf, after);
-        }
-        
-        return buf.toOwnedSlice();
-    }
-};
-```Real-time Subscriptions Tracking```zig
-const SubscriptionId = u64;
-
-/// Internal representation of a group of subscribers sharing the same Filter AST
-const SubscriptionGroup = struct {
-    id: u64,
-    namespace: []const u8,
-    collection: []const u8,
-    filter: QueryFilter,
-    /// Set of (connection_id, client_subscription_id)
-    subscribers: std.AutoHashMapUnmanaged(SubscriberKey, void),
-
-    pub const SubscriberKey = struct {
-        connection_id: u64,
-        id: SubscriptionId,
-    };
-};
-
-const SubscriptionEngine = struct {
-    /// group_id -> SubscriptionGroup
-    groups: std.AutoHashMapUnmanaged(u64, SubscriptionGroup),
-    /// collection_key (ns:coll) -> ArrayList(GroupId)
-    groups_by_collection: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u64)),
-    /// (conn_id, sub_id) -> group_id
-    active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64),
-    
-    pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange) ![]Match {
-        // Implementation logic...
-    }
-};
-```Change Detection ZyncBase uses-Grained strategy sub-100ms sync without overloading SQLite reader pool Fine-Grained Observation Writer emits `RecordChange event `SubscriptionEngine evaluates change against `SubscriptionGroups SQLite queries re for filter matching clients subscribed groups record notified Implementation Details notification pipeline operates in RAM```zig
-pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
-    const key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ change.namespace, change.collection });
-    const group_ids = self.groups_by_collection.get(key) orelse return &.{};
-
-    var matches = std.ArrayList(Match).init(allocator);
-    for (group_ids.items) |gid| {
-        const group = self.groups.get(gid) orelse continue;
-
-        const matched_before = if (change.old_record) |old| try evaluateFilter(group.filter, old) else false;
-        const matches_after = if (change.new_record) |new| try evaluateFilter(group.filter, new) else false;
-
-        if (matched_before or matches_after) {
-            // Group-level match means all subscribers in group receive notification
-            var it = group.subscribers.keyIterator();
-            while (it.next()) |sub| {
-                try matches.append(.{ .connection_id = sub.connection_id, .subscription_id = sub.id });
-            }
-        }
-    }
-    return matches.toOwnedSlice();
-}
-```Presence Awareness ZyncBase presence system tracks user state online status real-time presence data stored in-memory state management broadcast batching see [Presence Internals Authorization Optimization Problem SQL queries authorization WebSocket bottleneck```
-Cursor movement (100/sec) × SQL query (1ms) = 100ms latency
-```Permission Snapshots scoped readiness```zig
-fn onStoreScopeReady(conn: *Connection) !void {
-    // Execute SQL queries to determine permissions
-    const permissions = try db.query(
-        "SELECT room_id FROM room_members WHERE user_id = ?",
-        .{conn.store_scope.user_doc_id}
-    );
-    
-    // Cache in memory
-    conn.permissions = PermissionSnapshot{
-        .rooms = permissions,
-        .version = 1,
-    };
-}
-```Fast path```zig
-fn checkPermission(conn: *Connection, room_id: []const u8) bool {
-    // Memory lookup (nanoseconds)
-    return conn.permissions.rooms.contains(room_id);
-}
-```**3. Invalidation```zig
-fn onRoomMembershipChange(user_id: DocId) !void {
-    // Find all connections for this user
-    for (connections) |conn| {
-        if (conn.store_scope.user_doc_id == user_id) {
-            // Re-query permissions
-            conn.permissions = try refreshPermissions(conn);
-        }
-    }
-}
-```Common path Nanosecond memory lookup Rare SQL query permissions change Authorization doesn bottleneck real-time operations [Core Principles Design [Threading Model Parallel query execution [Storage Layer SQLite optimization [Network Layer WebSocket protocol [Query Language Query syntax reference [Research Performance validation
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `QueryFilter` | `FilterPredicate`, `SortDescriptor`, schema field metadata | Full read/subscription query contract after parsing. |
+| `FilterPredicate` | `PredicateState`, `Condition` | Logical predicate tree for SQL lowering and in-memory evaluation. |
+| `Condition` | `Operator`, typed operands | One field/operator/value comparison. |
+| `SortDescriptor` | schema field index, direction | Stable order definition used by SQL and cursor encoding. |
+| `ParserError` | wire/schema validation | Internal parser failure set mapped through public error taxonomy. |
+| `RenderedPredicate` | SQL fragment, bound values | Result of lowering AST predicates for SQLite. |
+| `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Keeps active queries and evaluates committed changes. |
+| `CursorResult` | records, next cursor | Store-service result for paginated reads. |
+Responsibilities Decode query tuples operators operands Validate table names operator compatibility sort fields cursor shape Preserve semantic model storage reads subscription filtering Generate stable ordering cursor predicates paginated reads Apply authorization predicates before storage execution Retain subscription queries changes Query Flow extracts wire request store Authorization builds optional read predicate_parser parses filter_service.zig passes filter auth predicate to storage Storage lowers predicates executes SELECT Results encoded.encodeQuery Subscriptions retain parsed query use_eval.zig for changes Invariants Query grammar owned duplicate catalogs SQL lowering in-memory filtering agree operator Cursor tokens tied sort order reject mismatched values Namespace filters authorization predicates before returning records Subscription matching uses committed changes speculative writes Parser/internal errors map Taxonomy Performance Contract| Property | Value | Notes |
+|----------|-------|-------|
+| Batch write ops limit | 500 | Maximum operations in a single `StoreBatch` call. |
+| Cursor overfetch | +1 row | `LIMIT` is overfetched by 1 for accurate `hasMore` detection. |
+| Subscription condition matching | 64 max as sets | Maximum conditions matched as sets during filter equality comparison. |
+| Default query limit | None (unbounded) | Client must supply `limit` for bounded queries. |
+Batch operations exceeding 500 ops return `BATCH_TOO_LARGE Queries without unbounded supply limit predictable performance See [Query Grammar [Cursor Pagination [Storage [TypeScript SDK

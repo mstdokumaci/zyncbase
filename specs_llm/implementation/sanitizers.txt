@@ -1,28 +1,7 @@
-Sanitizer Configuration Implementation Management-strategy specifies sanitizers test targets invariants passing CI run ZyncBase sanitizer strategies memory concurrency correctness **ThreadSanitizer enforces lock-free cache SWMR invariant no unsynchronized writes read/write races shared state **GeneralPurposeAllocator safety enforces arena/GPA invariant GPA allocation freed once no-free double-free Valgrind supplementary tool C interop paths SQLite GPA cover allocations Invariants Enforced| Sanitizer | Invariant |
-|-----------|-----------|
-| TSan | No data race on `LockFreeCache.entries` pointer or any `CacheEntry` field |
-| TSan | `write_mutex` is always held when mutating cache entries |
-| TSan | **Stable Address**: Types with internal synchronization (atomics/mutexes) must remain address-stable once in use. While bit-copies are often safe during initialization, moving a "live" or locked mutex cause fatal SIGABRT/corruption on Mac. |
-| TSan | `PresenceManager.pending_updates` is only written from the single flush goroutine |
-| GPA safety | Every `alloc` from the GPA has exactly one matching `free` |
-| GPA safety | Arena memory is never accessed after `resetArena()` |
-| GPA safety | Pool `release` is never called on an item not currently acquired |
-Test Targets Sanitizer| Test file | TSan | GPA safety |
-|-----------|------|------------|
-| `src/cache_stress_test.zig` | ✓ required | ✓ |
-| `src/core_engine_test.zig` | ✓ required | ✓ |
-| `src/presence_manager_test.zig` | ✓ required | ✓ |
-| `src/memory_strategy_test.zig` | — | ✓ required |
-| `src/request_handler_test.zig` | — | ✓ required |
-| `src/memory_strategy_test.zig` | — | ✓ |
-| `src/query_engine_test.zig` | — | ✓ |
-TSan required tests mutable state threads GPA safety on debug builds CI Pass / Fail Contract run passes build test -Dsanitize=thread exits 0 no TSan warnings test no TSan exits 0 no GPA leak report exit fails TSan warning appears exit code build failures GPA reports leak exit memory leaks test panics returns non-zero exit code TSan warnings false suppressed `tsan_suppressions.txt file comment suppression Verification Commands```bash
-# TSan — must be clean
-zig build test -Dsanitize=thread
-
-# GPA leak check — must be clean (debug build, default)
-zig build test
-
-# Supplementary: Valgrind for C interop paths
-valgrind --leak-check=full --error-exitcode=1 ./zig-out/bin/zyncbase-test
-```[Threading Implementation lock-free cache SWMR model [Memory Management-strategy GPA arena pool strategy-Free Cache ref_count invariants
+Sanitizers [Threading Strategy-Free Cache ZyncBase uses sanitizers concurrency safety prevent data races leak memory operations testing execution Source Files| File/Context | Responsibility |
+|------|----------------|
+| `build.zig` | Configures compiler instrumentation options for sanitizers (`-fsanitize=thread`). |
+| `src/memory_safety_property_test.zig` | Fuzzes boundary conditions to trigger GPA leak detection. |
+| `src/lock_free_cache_leak_test.zig` | Validates that retired cache nodes are correctly destroyed under stress load. |
+| `src/subscription_engine_thread_safety_test.zig` | Stresses subscription engines to detect concurrency races under TSan. |
+Sanitizer Invariants **ThreadSanitizer Enforces serialized writes lock-free cache unsynchronized memory access between read threads thread **GeneralPurposeAllocator Enforces leak-free execution debug builds logs error if memory released before exit Stability** Live threads at stable heap addresses synchronization objects bit-copied triggers panic failures **Self-Healing Releasing non items `IndexPool runtime assertions CI Verification Rules **Zero Race Tolerance** TSan warning CI failure Leak Tolerance** memory leak report from GPA exit fails build pipeline **Valgrind C interop interface boundaries trace allocations outside Zig runtime [Threading [Memory Strategy-Free Cache
