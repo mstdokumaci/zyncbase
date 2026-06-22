@@ -13,11 +13,11 @@ pub const ThreadBudget = struct {
     notification: usize,
 
     pub fn init(cpu_count: usize) ThreadBudgetError!ThreadBudget {
-        if (cpu_count < 4) {
+        if (cpu_count < 3) {
             return error.InsufficientCpuCores;
         }
 
-        const remaining: usize = cpu_count - 4;
+        const remaining: usize = @max(cpu_count, 4) - 4;
         const readers = @min(4, @max(1, remaining / 2));
         const notification = @max(1, remaining -| readers);
 

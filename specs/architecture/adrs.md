@@ -125,16 +125,16 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
 
-**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 4 CPU cores. There are no configuration overrides for thread counts.
+**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 3 CPU cores. There are no configuration overrides for thread counts.
 
 ### Minimum Hardware Requirement
 
-The server requires at least 4 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase — the thread budget formula cannot produce a valid allocation.
+The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase — the thread budget formula cannot produce a valid allocation.
 
 ### Thread Budget Formula
 
 ```
-if cpu_count < 4 → server refuses to start
+if cpu_count < 3 → server refuses to start
 
 fixed:
   event_loop   = 1

@@ -4,7 +4,7 @@
 
 ## Overview
 
-ZyncBase uses a **deterministic thread budget architecture** with six fixed thread domains. Thread counts are computed from CPU core count using a hardcoded formula — there are no configuration overrides. The server refuses to start on machines with fewer than 4 CPU cores.
+ZyncBase uses a **deterministic thread budget architecture** with six fixed thread domains. Thread counts are computed from CPU core count using a hardcoded formula — there are no configuration overrides. The server refuses to start on machines with fewer than 3 CPU cores.
 
 **Key Innovation**: Deterministic thread allocation ensures predictable resource usage and eliminates configuration-induced performance cliffs.
 
@@ -226,7 +226,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 
 ### Cons
 
-- **Minimum 4 cores required** — Cannot run on small instances
+- **Minimum 3 cores required** — Cannot run on small instances
 - **Writes are serialized** — SQLite single-writer limitation
 - **Need atomic operations** — For lock-free cache
 - **Cold queries hit SQLite** — First subscribe to a collection incurs a read
@@ -235,7 +235,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 ### Mitigation
 
 **For minimum core requirement:**
-- Modern servers have 4+ cores
+- Modern servers have 3+ cores
 - Small instances are not the target deployment environment
 - Clear error message at startup
 

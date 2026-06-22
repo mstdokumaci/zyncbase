@@ -2,7 +2,7 @@
 
 **Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics)
 
-ZyncBase uses a deterministic thread budget architecture with six thread domains computed from CPU core count. Thread counts are hardcoded via formula — no configuration overrides. The server refuses to start on machines with fewer than 4 CPU cores.
+ZyncBase uses a deterministic thread budget architecture with six thread domains computed from CPU core count. Thread counts are hardcoded via formula — no configuration overrides. The server refuses to start on machines with fewer than 3 CPU cores.
 
 ## Source Files
 
@@ -36,7 +36,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 
 - The server runs six thread domains: event loop (1), writer (1), checkpoint (1), presence (1), readers (variable, max 4), notification (variable).
 - Thread counts are computed at startup from CPU core count using a hardcoded formula in `ThreadBudget`.
-- The server refuses to start on machines with fewer than 4 CPU cores.
+- The server refuses to start on machines with fewer than 3 CPU cores.
 - A single connection must observe sequential scope and subscription state changes through `Connection` methods.
 - Store writes are serialized through `WriteQueue`; readers and subscribers observe committed results.
 - Subscription and write-outcome fanout happen after storage commit, not before durable ordering is known.
