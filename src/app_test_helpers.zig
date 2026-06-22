@@ -115,7 +115,7 @@ pub const AppTestContext = struct {
     empty_claims: std.StringHashMapUnmanaged([]const u8) = .{},
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
-        try self.initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true });
+        try self.initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef, options: StorageEngine.Options) !void {
@@ -129,13 +129,13 @@ pub const AppTestContext = struct {
 
         const schema = try schema_mod.initSchema(allocator, json_text);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
-        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
+        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
         const schema = try schema_mod.initSchema(allocator, json);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
-        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
+        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithSchemaAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: Schema, options: StorageEngine.Options) !void {

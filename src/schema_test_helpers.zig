@@ -294,7 +294,7 @@ pub const TestContext = struct {
 
 pub fn normalizeTestStorageOptions(options: StorageEngine.Options) StorageEngine.Options {
     var effective = options;
-    if (effective.in_memory and effective.reader_pool_size == 0) {
+    if (effective.reader_pool_size == 0) {
         effective.reader_pool_size = 1;
     }
     return effective;

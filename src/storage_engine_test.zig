@@ -340,7 +340,7 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
         "engine-batch-writes-disabled",
         table,
         .{ .batch_writes = false, .batch_timeout = 5_000 },
-        .{ .in_memory = true },
+        .{ .in_memory = true, .reader_pool_size = 1 },
     );
     defer ctx.deinit();
 

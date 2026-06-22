@@ -121,19 +121,52 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 ---
 
-## ADR-006: Multi-Threaded Core Engine
+## ADR-006: Deterministic Thread Budget Architecture
 
-A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware.
+A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
 
-**Decision**: The engine runs three concurrent thread domains: a single writer thread (serialized mutations), a reader pool (one SQLite connection per CPU core), and the uWS event-loop threads (network I/O and message dispatch). Metadata shared across all thread domains is served from a lock-free cache using atomic reference counting.
+**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 4 CPU cores. There are no configuration overrides for thread counts.
+
+### Minimum Hardware Requirement
+
+The server requires at least 4 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase — the thread budget formula cannot produce a valid allocation.
+
+### Thread Budget Formula
+
+```
+if cpu_count < 4 → server refuses to start
+
+fixed:
+  event_loop   = 1
+  writer       = 1
+  checkpoint   = 1
+  presence     = 1
+
+variable:
+  readers      = min(4, max(1, (cpu_count - 4) / 2))
+  notification = max(1, cpu_count - 4 - readers)
+```
 
 ### Threading Topology
 
+| CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
+|-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
+| 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
+| 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
+| 32        | 1          | 1      | 1          | 1        | 4       | 24           | 32    |
+
+**Event loop thread** — runs the uWebSockets reactor, handles all WebSocket I/O and message dispatch. Must never block.
+
 **Writer thread** — receives mutations from the write queue, commits them to SQLite, and pushes change events to the Subscription Engine. Serialization is by design: SQLite supports only one concurrent writer, and total write ordering is architecturally valuable (ADR-002).
 
-**Reader pool** — one thread per CPU core, each holding its own SQLite connection opened in WAL read mode. Used for cold queries (subscriptions to collections with no active warm state) and `loadMore` operations.
+**Checkpoint thread** — background WAL→main database flush, decoupled from the write path.
 
-**uWS event-loop threads** — handle all WebSocket events (connect, message, disconnect). These threads own the reactor and must never block. Operations that cannot complete immediately are dispatched to the writer thread or reader pool; results are delivered back to the reactor asynchronously via `us_wakeup_loop()`.
+**Presence thread** — encodes presence broadcasts from batched state and pushes to the send queue.
+
+**Reader pool** — up to 4 threads, each holding its own SQLite connection opened in WAL read mode. Used for cold queries (subscriptions to collections with no active warm state) and `loadMore` operations.
+
+**Notification threads** — drain the change buffer after storage commits, evaluate subscription filters (CPU-heavy), encode delta messages, and push to the send queue.
 
 ### Lock-Free Cache
 
@@ -149,8 +182,10 @@ Metadata shared across all thread domains is served from a lock-free cache using
 Collection query results and subscription state are managed exclusively by the Subscription Engine; the lock-free cache does not participate in collection reads or write propagation.
 
 **Consequences**:
+- Deterministic resource usage — no configuration-induced performance cliffs.
+- Fail-fast on underpowered machines — clear error at startup.
 - Full CPU core utilization — benchmarks show ~Nx throughput improvement on a cpu with N cores, moving from a single-threaded to a multi-threaded core.
-- uWS reactor threads remain non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
+- uWS reactor thread remains non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
 
 **Principles**: P-PPF, P-VSF
 

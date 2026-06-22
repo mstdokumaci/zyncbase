@@ -339,7 +339,7 @@ test "logging: level filtering" {
         defer subscription_engine.deinit();
 
         var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true }, null, null);
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
         var auth_config = try authorization.implicitConfig(allocator, &sm2);
@@ -434,7 +434,7 @@ test "logging: message formatting" {
         defer subscription_engine.deinit();
 
         var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true }, null, null);
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
         var auth_config2 = try authorization.implicitConfig(allocator, &sm3);
@@ -513,7 +513,7 @@ test "logging: message formatting" {
         defer subscription_engine.deinit();
 
         var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true }, null, null);
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
         var auth_config3 = try authorization.implicitConfig(allocator, &sm4);

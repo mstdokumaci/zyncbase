@@ -36,7 +36,7 @@ pub const Context = struct {
             &self.memory_strategy,
             &self.test_context,
             &self.schema,
-            .{ .in_memory = true },
+            .{ .in_memory = true, .reader_pool_size = 1 },
         );
         errdefer self.storage_engine.deinit();
 

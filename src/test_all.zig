@@ -32,6 +32,7 @@ test {
     _ = @import("wire_test.zig");
     _ = @import("notification_dispatcher_test.zig");
     _ = @import("sync_consistency_test.zig");
+    _ = @import("thread_budget_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");

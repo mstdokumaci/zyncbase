@@ -43,7 +43,7 @@ test "storage: engine initialization errors" {
     var sm3 = try sth.createDummySchema(allocator);
     defer sm3.deinit();
     var engine3: StorageEngine = undefined;
-    try engine3.init(allocator, &ms, test_dir, &sm3, .{}, .{ .in_memory = false }, null, null);
+    try engine3.init(allocator, &ms, test_dir, &sm3, .{}, .{ .in_memory = false, .reader_pool_size = 1 }, null, null);
     defer engine3.deinit();
 
     // Verify database file was created
