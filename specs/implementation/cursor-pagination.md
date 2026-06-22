@@ -1,76 +1,93 @@
-# Cursor Pagination Implementation Spec
+# Cursor Pagination
 
----
-
-## Overview
+**Drivers**: [ADR-013](../architecture/adrs.md#adr-013-query-language), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [Query Engine](./query-engine.md), [Storage](./storage.md)
 
 ZyncBase exposes a purely cursor-driven pagination topology over offset-based equivalents (`offset/limit`). Cursor pagination scales securely and provides deterministic sequence navigation regardless of new inserts mutating sequence positions beneath the pointer.
 
-This document serves as the implementation specification defining the `nextCursor` token encoding layout, SQLite execution logic, and real-time cursor windowing.
+---
+
+## Source Files
+
+| File | Responsibility |
+|------|----------------|
+| `src/query_parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
+| `src/storage_engine/reader.zig` | Builds compound SQL selection predicates and executes tie-breaking pagination queries. |
+| `src/store_service.zig` | Marshals cursor bounds between client requests and storage queries. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
+| `PageRequest` | `Cursor`, limit, direction | Struct container for page size, direction, and cursor boundary. |
 
 ---
 
-## Defining Determinism: Tie-Breaking Cursors
+## Opaque Cursor Layout
 
-In a high-throughput environment, queries ordered exclusively by a singular column (e.g., `ORDER BY created_at DESC`) are structurally unsafe. Millions of rows can share the exact precise timestamp. Standard cursors inherently risk "infinite loops" and skipped pages via collision overlap.
-
-Following established industry patterns found in strictly enforced schemas (Firebase / PostgREST), ZyncBase utilizes **Compound Cursors**. A compound cursor encodes the primary sorting column and an implicit, globally unique identifier (the packed 16-byte document ID). 
-
-The generated `nextCursor` string provided inside `StoreQuery` responses is an opaque Base64 literal representing a MessagePack tuple constraint:
+The `nextCursor` token returned in `StoreQuery` responses is an opaque Base64 literal containing a MessagePack-encoded tuple:
 
 ```typescript
 const cursorTuple = [sort_value, docIdBin16];
-const opaqueToken = base64(msgpackEncode(cursorTuple));
+const nextCursor = base64(msgpackEncode(cursorTuple));
 ```
+
+- `sort_value`: The value of the sorting column for the last element on the page (scalar primitive or null).
+- `docIdBin16`: The 16-byte binary UUIDv7 of the last element on the page.
 
 ---
 
-## SQLite Execution
+## SQL Compilation & Parameter Binding
 
-When the `StorageEngine` interprets a `StoreQuery` containing an `after` string token:
+When querying with a cursor, ZyncBase compiles the compound sorting criteria using an `OR` logic gate to handle colliding values (tie-breaking) while preserving database index usage:
 
-### Step 1: Cursor Decoding
-Base64 extraction decodes the token back into the isolated sort variable and distinct ID constraints.
+### Ascending Sort Query
 
-### Step 2: Compound Translation
-Because the cursor is a compounded combination, it requires an `OR` logic boundary inside the parameter generator to support tie-break skipping.
-
-When traversing an **`ascending`** sort sequence, the translation reads:
 ```sql
-SELECT * FROM collection
-WHERE ...
+SELECT value_msgpack FROM "collection"
+WHERE _namespace = ?
   AND (
     sort_column > ? 
     OR (sort_column = ? AND id > ?)
   )
 ORDER BY sort_column ASC, id ASC
-LIMIT x
+LIMIT ?
 ```
-_(Parameter binding matches `[sort_value, sort_value, document_id_blob]`)_
 
-When navigating a **`descending`** sequence, the translation is inverted:
+### Descending Sort Query
+
 ```sql
-SELECT * FROM collection
-WHERE ...
+SELECT value_msgpack FROM "collection"
+WHERE _namespace = ?
   AND (
     sort_column < ? 
     OR (sort_column = ? AND id < ?)
   )
 ORDER BY sort_column DESC, id DESC
-LIMIT x
+LIMIT ?
 ```
 
-> [!NOTE]
-> ZyncBase's internal SQLite queries implicitly force `ORDER BY id DESC/ASC` across all calls. 
-> Without appending `id` as the final instruction, SQLite cannot consistently organize colliding timestamps, undermining the effectiveness of the OR tiebreaker.
+### Parameter Bind Array Order
+
+The SQL queries require positional arguments. Parameters must be bound in the exact following order:
+
+| Query Type | Parameters Array | Bind Types |
+|:---|:---|:---|
+| **Ascending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
+| **Descending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
 
 ---
 
-## Real-time Live Windowing (`loadMore`)
+## Live Windowing (`loadMore`)
 
-The `StoreSubscribe` model allows a query stream to actively watch a chunk of results, whilst optionally loading historic items deep into the cache via `loadMore()`.
+- Active query subscriptions (`StoreSubscribe`) materialise real-time updates at the top of the collection view.
+- To paginate backward or fetch historically older elements, the SDK synthesises a query cursor based on the last row currently present in the client-side array.
+- A `StoreLoadMore` request uses this cursor to fetch the next batch from the database without disrupting the active subscription's push listener.
 
-When the `MessageHandler` accepts a `StoreLoadMore` request, it must fetch historical boundary elements without destroying the sequence integrity of `StoreDelta` events previously recorded. 
-The internal logic relies entirely on the same sequence bounds outlined above. 
+---
 
-The primary difference lies in the UI representation. The client-side wrapper isolates the initial `limit` bounds and applies identical deterministic sorting. While new items slide into the array top by way of real-time server Pushes (`StoreDelta`), executing `loadMore()` cleanly fetches elements using a cursor synthesized directly from the final active element resting at the bottom of the client array chunk.
+## See Also
+
+- [Query Engine](./query-engine.md)
+- [Storage](./storage.md)
+- [TypeScript SDK](./typescript-sdk.md)

@@ -1,419 +1,144 @@
-# Storage Implementation
-
-**Drivers**: [Storage Layer Architecture](../architecture/storage-layer.md)
-
-This document contains the implementation specifics for the ZyncBase storage layer, focusing on SQLite configuration, connection management, schema generation, and migration logic.
-
----
-
-## SQLite Configuration
-
-### Pragma Settings
-ZyncBase uses a specifically tuned set of PRAGMAs to optimize for high-concurrency real-time workloads.
-
-```sql
--- Enable WAL mode (parallel reads + better concurrency)
-PRAGMA journal_mode = WAL;
-
--- Increase cache size to 64MB (hot pages in RAM)
-PRAGMA cache_size = -64000;
-
--- Synchronous = NORMAL (balance between durability and performance)
-PRAGMA synchronous = NORMAL;
-
--- Memory-mapped I/O (reduces syscall overhead for reads)
-PRAGMA mmap_size = 268435456; -- 256MB
-
--- Multiple reader connections (parallel reads)
-PRAGMA read_uncommitted = 1;
-
--- Proactive checkpoint management (prevent WAL growth)
-PRAGMA wal_autocheckpoint = 1000;
-```
-
-### Rationale
-
-## SQLite Configuration: WAL Mode
-
-ZyncBase leverages SQLite's Write-Ahead Logging (WAL) for high-performance concurrency. For a detailed explanation of the WAL mechanism and its benefits, see the [Storage Layer Architecture](../architecture/storage-layer.md#wal-mode-the-concurrency-engine).
-
-We enforce these settings on every connection:
-
-**cache_size = -64000:**
-Caches hot pages in RAM to reduce disk I/O. Negative value represents KB (64MB total).
-
-**synchronous = NORMAL:**
-Balances durability and performance. Safe against application crashes; only vulnerable to power failure.
-
-**mmap_size = 256MB:**
-Maps the database file to memory, reducing syscall overhead and speeding up reads.
-
----
-
-## Connection Pool Implementation
-
-ZyncBase maintains a thread-local connection pool to maximize read throughput across CPU cores.
-
-```zig
-const StorageLayer = struct {
-    write_conn: *sqlite.Connection,      // Single writer
-    read_pool: []sqlite.Connection,      // Multiple readers
-    write_queue: RingBuffer(WriteOp),
-    
-    pub fn init(allocator: Allocator) !*StorageLayer {
-        const num_readers = try std.Thread.getCpuCount();
-        const reader_pool = try allocator.alloc(sqlite.Db, num_readers);
-        
-        const self = try allocator.create(StorageLayer);
-        self.* = .{
-            .write_conn = try sqlite.open("ZyncBase.db"),
-            .read_pool = try allocator.alloc(sqlite.Connection, num_readers),
-            .write_queue = RingBuffer(WriteOp).init(allocator),
-        };
-        
-        // Open one reader connection per CPU core
-        for (self.read_pool) |*conn| {
-            conn.* = try sqlite.open("ZyncBase.db");
-        }
-        
-        // Initial setup for the writer connection
-        try self.write_conn.exec("PRAGMA journal_mode = WAL");
-        try self.write_conn.exec("PRAGMA synchronous = NORMAL");
-        try self.write_conn.exec("PRAGMA cache_size = -64000");
-        
-        return self;
-    }
-    
-    pub fn getReader(self: *StorageLayer) *sqlite.Connection {
-        // Thread-local selection to avoid connection contention
-        const thread_id = std.Thread.getCurrentId();
-        const reader_idx = thread_id % self.read_pool.len;
-        return &self.read_pool[reader_idx];
-    }
-};
-```
-
----
-
-## Schema-to-DDL Generation
-
-ZyncBase automatically transforms a JSON-based store definition into optimized SQLite relational tables.
-
-### Type Mapping Implementation
-
-| JSON Schema Type | SQLite Type | Notes |
-|------------------|-------------|-------|
-| `string` | `TEXT` | Map to UTF-8 text |
-| `integer` | `INTEGER` | 64-bit signed integer |
-| `number` | `REAL` | 64-bit float |
-| `boolean` | `INTEGER` | Stored as 0 or 1 |
-| `object` (nested) | Flattened columns | `address.city` → `address__city TEXT` |
-| `array` (primitives) | `BLOB` | Stored as canonical JSONB value (sorted, unique) |
-
-Built-in document IDs and schema `references` fields are stored as fixed-width `BLOB(16)` values and kept as packed 16-byte IDs throughout the storage engine.
-
-Document identity is `id` alone. Each collection/table expects `id` to be globally unique within that collection, and generated DDL uses `PRIMARY KEY(id)`. `namespace_id` is retained on every row for namespace routing and authorization predicates, but it is not part of the document key.
-
-### System Tables
-The storage engine maintains internal system tables that are not defined in `schema.json`:
-- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-009). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
-- `users`: Always present as a hybrid system collection. Its `external_id` column maps external identity strings to internal `BLOB(16)` user IDs used by `owner_id`, `$session.userId`, and presence `userId` values.
-
-### Array Canonicalization Pipeline
-
-For schema-defined array fields, write-path processing is:
-
-1. Validate each element against the field `items` primitive type.
-2. Reject invalid elements (`null`, nested arrays, objects).
-3. Normalize to sorted unique form.
-4. Persist the canonicalized array value.
-
-This guarantees deterministic on-disk representation and deterministic read/query semantics for typed arrays.
-
-### Implementation Logic
-
-`StorageEngine` initialization always receives a parsed `Schema`. If the configured `schema.json` file is omitted or missing, the configuration layer synthesizes the implicit users-only schema before storage initialization.
-
-> [!IMPORTANT]
-> **Strict Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
-> 1. All user database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
-> 2. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
-> 3. If the specified `schema.json` file is missing or omitted, the server will still boot successfully, but **only the implicitly defined `users` collection will be available** for data storage. Any mutations to other collections will be safely rejected.
-
-```zig
-const Schema = @import("schema.zig").Schema;
-
-var schema = try Schema.init(allocator, schema_json);
-defer schema.deinit();
-
-// Schema.init parses JSON, validates references and required leaf fields,
-// normalizes canonical table/field ordering, and builds lookup indexes.
-// external_id is storage-internal for users and is not exposed as a wire field.
-
-const DDLGenerator = struct {
-    allocator: Allocator,
-    
-    pub fn generateDDL(self: *DDLGenerator, table: Table) ![]const u8 {
-        var buf = ArrayList(u8).init(self.allocator);
-        try buf.appendSlice("CREATE TABLE ");
-        try buf.appendSlice(table.name);
-        try buf.appendSlice(" (\n");
-        
-        for (table.fields, 0..) |field, i| {
-            try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "    {s} {s}", .{field.name, self.sqlType(field.type)}));
-            if (field.required) try buf.appendSlice(" NOT NULL");
-            if (field.primary_key) try buf.appendSlice(" PRIMARY KEY");
-            if (std.meta.hasFn(field, "unique") and field.unique) try buf.appendSlice(" UNIQUE");
-            if (i < table.fields.len - 1) try buf.appendSlice(",\n");
-        }
-        try buf.appendSlice("\n);\n");
-        
-        // Auto-generate indexes
-        for (table.fields) |field| {
-            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id") or std.mem.eql(u8, field.name, "owner_id") or std.mem.eql(u8, field.name, "external_id")) {
-                try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "CREATE INDEX idx_{s}_{s} ON {s}({s});\n", .{table.name, field.name, table.name, field.name}));
-            }
-        }
-        if (std.mem.eql(u8, table.name, "users")) {
-            try buf.appendSlice("CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);\n");
-        }
-        return buf.toOwnedSlice();
-    }
-};
-```
-
-At write/query time, `namespaced` controls the namespace predicate, not the table shape:
-- For `namespaced: true`, writes store the active namespace ID and queries use `namespace_id = :active_namespace_id`.
-- For `namespaced: false`, writes store namespace ID `0` and queries use `namespace_id = 0`.
-- In both modes, `id` remains collection-wide unique. The engine does not support namespace-local duplicate IDs via a composite `(namespace_id, id)` key.
-
-Identity resolution is a storage operation, not an in-memory hash shortcut. `resolveUserId(namespace_id, external_id)` inserts a new `users` row when needed, returns the persisted `users.id`, and sets `owner_id = id` for that row. All document `owner_id` values and presence user keys must come from this resolver.
-
-When `users.namespaced = false`, callers pass global namespace ID `0`. When `users.namespaced = true`, callers pass the namespace ID of the store or presence scope being resolved.
-
-### Relational Features
-- **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.
-
----
-
-## Auto-Migration Implementation
-
-ZyncBase manages schema evolution by comparing the current state with the target schema.
-
-### Execution Strategy
-
-```zig
-const MigrationDetector = struct {
-    pub fn detectChanges(old_schema: Schema, new_schema: Schema) ![]Change {
-        var changes = ArrayList(Change).init(allocator);
-        for (new_schema.tables) |new_table| {
-            if (!old_schema.hasTable(new_table.name)) {
-                try changes.append(.{ .type = .create_table, .table = new_table });
-                continue;
-            }
-            // Logic for add_column, remove_column, change_type...
-        }
-        return changes.toOwnedSlice();
-    }
-};
-
-const MigrationExecutor = struct {
-    db: *sqlite.Connection,
-    
-    pub fn execute(self: *MigrationExecutor, plan: MigrationPlan) !void {
-        try self.db.exec("BEGIN TRANSACTION");
-        errdefer self.db.exec("ROLLBACK") catch {};
-        
-        for (plan.changes) |change| {
-            switch (change.type) {
-                .create_table => try self.db.exec(change.ddl),
-                .add_column => {
-                    const sql = try std.fmt.allocPrint(allocator, "ALTER TABLE {s} ADD COLUMN {s} {s}", .{change.table, change.field.name, sqlType(change.field.type)});
-                    try self.db.exec(sql);
-                },
-                .change_type, .remove_column => try self.recreateTable(change.table),
-            }
-        }
-        try self.db.exec("COMMIT");
-    }
-    
-    fn recreateTable(self: *MigrationExecutor, table: Table) !void {
-        const backup_name = try std.fmt.allocPrint(self.db.allocator, "{s}_migration_backup", .{table.name});
-        defer self.db.allocator.free(backup_name);
-
-        // 1. Copy existing rows into a temporary backup table
-        const create_backup = try std.fmt.allocPrint(self.db.allocator,
-            "CREATE TABLE {s} AS SELECT * FROM {s}", .{ backup_name, table.name });
-        defer self.db.allocator.free(create_backup);
-        try self.db.exec(create_backup);
-
-        // 2. Drop the original table
-        const drop_original = try std.fmt.allocPrint(self.db.allocator,
-            "DROP TABLE {s}", .{table.name});
-        defer self.db.allocator.free(drop_original);
-        try self.db.exec(drop_original);
-
-        // 3. Recreate with the new schema (DDL already generated by DDLGenerator)
-        try self.db.exec(table.ddl);
-
-        // 4. Copy rows back, mapping only columns that exist in both schemas
-        const common_cols = try self.commonColumns(backup_name, table);
-        defer self.db.allocator.free(common_cols);
-        const reinsert = try std.fmt.allocPrint(self.db.allocator,
-            "INSERT INTO {s} ({s}) SELECT {s} FROM {s}",
-            .{ table.name, common_cols, common_cols, backup_name });
-        defer self.db.allocator.free(reinsert);
-        try self.db.exec(reinsert);
-
-        // 5. Drop the backup table
-        const drop_backup = try std.fmt.allocPrint(self.db.allocator,
-            "DROP TABLE {s}", .{backup_name});
-        defer self.db.allocator.free(drop_backup);
-        try self.db.exec(drop_backup);
-    }};
-```
-
----
-
-## Write Strategy: Async Batching
-
-To avoid disk I/O bottlenecks, ZyncBase groups operations into single transactions.
-
-```zig
-const StorageLayer = struct {
-    write_queue: RingBuffer(WriteOp),
-    batch_size: usize = 200,
-    batch_timeout_ms: u32 = 10,
-    
-    pub fn queueWrite(self: *StorageLayer, op: WriteOp) !void {
-        try self.write_queue.push(op);
-        if (self.write_queue.len() >= self.batch_size) {
-            try self.flushBatch();
-        }
-        // Otherwise the writer sleeps until new work arrives or the timeout
-        // deadline expires; it does not poll on a fixed interval.
-    }
-
-    fn flushBatch(self: *StorageLayer) !void {
-        const batch = self.write_queue.drain();
-        try self.write_conn.exec("BEGIN TRANSACTION");
-        for (batch) |op| {
-            try self.executeWrite(op);
-        }
-        try self.write_conn.exec("COMMIT");
-    }
-};
-```
-
----
-
-## Write Completion Tracking
-
-To support `confirm: "committed"` and `WriteError`, the `StorageLayer` tracks requester metadata only for writes that need a writer-thread outcome. Default accepted writes can be enqueued without durable completion state; after acceptance, subscriptions remain the source of truth for committed observable state.
-
-### Structural Requirements
-
-1. **`WriteOp` Metadata**:
-    Add optional metadata to link tracked or confirmed writes back to the live requester.
-    ```zig
-    pub const WriteOp = struct {
-        type: enum { ... },
-        // ... existing fields ...
-        client_id: ?u64 = null,    // Live WebSocket connection for tracked/confirmed writes
-        write_id: ?[]const u8 = null, // Correlation id for writer-thread outcomes
-    };
-    ```
-
-    If `write_id` is present, `client_id` must also be present. Operation status is retained in memory and scoped to the originating live connection.
-
-2. **Completion Callback**:
-    The `StorageLayer` reports writer-thread outcomes for tracked or confirmed writes.
-    ```zig
-    const StorageLayer = struct {
-        // ...
-        on_write_committed: ?*const fn (client_id: u64, write_id: []const u8) void = null,
-        on_write_error: ?*const fn (client_id: u64, write_id: []const u8, err: anyerror) void = null,
-
-        fn flushBatch(self: *StorageLayer) !void {
-            // ... inside batch execution loop ...
-            if (op.write_id) |write_id| {
-                switch (result) {
-                    .ok => if (self.on_write_committed) |cb| cb(op.client_id.?, write_id),
-                    .err => |err| if (self.on_write_error) |cb| cb(op.client_id.?, write_id, err),
-                }
-            }
-        }
-    };
-    ```
-
-### Server Integration
-The `ZyncBaseServer` implements the completion callbacks by looking up `client_id` in its active connection registry. On success it sends SDK-consumed `WriteCommitted`; on failure it sends `WriteError`. If the connection is gone, completion status is discarded because write-status records are not durable.
-
----
-
-## Read Strategy: Subscription Engine Integration
-
-Application data reads route through the **Subscription Engine** rather than a general-purpose read-through cache:
-
-- **Warm path**: Collections with active subscribers are evaluated entirely in memory. The Subscription Engine maintains per-collection state updated by the writer thread after each commit. No SQLite involvement.
-- **Cold path**: One-shot `StoreQuery` requests with no active subscription query the SQLite read pool directly using the connection pool below.
-
-The lock-free cache is used exclusively for auth/schema metadata, namespace-to-integer mappings, and user identity mappings — all of which are immutable once written, making them safe for wait-free reads across all threads.
-
----
-
-## Checkpoint Management
-
-Prevents WAL file starvation and minimizes read degradation.
-
-| Mode | Behavior | Use Case |
-|------|----------|----------|
-| PASSIVE | Non-blocking, best effort | Background maintenance |
-| FULL | Waits for readers, completes | Scheduled maintenance |
-| TRUNCATE | Resets and shrinks WAL | Reclaim disk space |
-
----
-
-## Performance Optimization
-
-### Authorization Snapshots
-Saves overhead by caching permission queries on connection. In-memory lookup (nanoseconds) prevents authorization from bottlenecking the read-path.
-
----
-
-## Backup
-
-### Online Backup Contract
-`backup` is safe to call while the server is running. It checkpoints the WAL so the main database file is fully up-to-date, then copies it atomically using SQLite's online backup API.
-
-```zig
-pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
-    // Checkpoint WAL into the main database file
-    try self.write_conn.exec("PRAGMA wal_checkpoint(FULL)");
-
-    // Use SQLite's online backup API for an atomic, consistent copy
-    const dest = try sqlite.open(dest_path);
-    defer dest.close();
-    const bk = try sqlite.backupInit(dest, "main", self.write_conn, "main");
-    defer bk.finish();
-    while (try bk.step(100) == .more) {} // copy 100 pages at a time
-}
-```
-
-### Invariants
-- The destination file is a valid, readable SQLite database on success.
-- The source database remains fully operational during the backup.
-- If `backup` returns an error, the destination file is incomplete and must be discarded.
-
-### Verification
-```bash
-zig test src/storage_backup_test.zig
-```
-
----
+# Storage
+
+**Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics), [Threading](./threading.md), [Query Engine](./query-engine.md)
+
+The storage layer persists store data in SQLite with WAL mode. It owns schema-to-DDL generation, migration execution, reader/writer connection roles, typed value encoding, write serialization, query execution, and committed change production.
+
+## Source Files
+
+| File | Responsibility |
+|------|----------------|
+| `src/storage_engine.zig` | Public storage facade and re-exports for storage submodules. |
+| `src/storage_engine/connection.zig` | SQLite configuration, WAL/checkpoint helpers, and reconnect behavior. |
+| `src/storage_engine/writer.zig` | Mutations, batch writes, row ownership checks, and committed change creation. |
+| `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint mode/stats, and writer health. |
+| `src/storage_engine/reader.zig` | Select/query execution, record decoding, and query result ownership. |
+| `src/storage_engine/sql.zig` | SQL construction and SQLite binding helpers. |
+| `src/storage_engine/filter_sql.zig` | Query predicate lowering to SQL fragments and bound values. |
+| `src/storage_engine/cache.zig` | Namespace/identity metadata cache keys and values. |
+| `src/storage_engine/errors.zig` | SQLite error classification into internal storage errors. |
+| `src/ddl_generator.zig` | Schema-to-DDL translation. |
+| `src/migration_detector.zig`, `src/migration_executor.zig` | Schema change detection and migration execution. |
+| `src/store_service.zig` | Application-facing store API on top of storage. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `StorageEngine` | SQLite, schema, memory strategy, write queue | Main persistence API for store service and server lifecycle. |
+| `WriteQueue` | `Writer`, connection manager, outcome buffers | Serializes durable writes and coordinates checkpoint/write health. |
+| `Writer` | SQLite writer connection, schema, cache | Executes inserts/updates/deletes/batches and emits `RecordChange` values. |
+| `QueryResult` | decoded records, table metadata, cursor | Owns read result data returned to store service/wire encoding. |
+| `PkSet` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
+| `ColumnValue` | typed values | Represents values bound into SQLite statements. |
+| `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
+| `MigrationPlan` | old/new schema metadata | Describes required schema changes before execution. |
+
+## SQLite Contract
+
+- WAL mode is mandatory so readers are not blocked by the writer in normal operation.
+- Durable mutations enter through the write queue; bypassing it breaks acknowledgement ordering.
+- Tables include system columns needed for namespace, identity, timestamps, and LWW semantics.
+- Store record values are encoded/decoded through typed value helpers; docs should not duplicate codec internals.
+- Schema changes must go through migration detection/execution rather than ad hoc DDL.
+- SQLite error details remain internal unless they map to a public code in [Error Taxonomy](./error-taxonomy.md).
+
+## Read Path
+
+1. Store/query API validates table, path, projection, authorization, and query filter.
+2. Query filter is lowered through `filter_sql.zig`.
+3. Reader code builds the SELECT using `sql.zig` helpers.
+4. SQLite rows are decoded into typed records owned by the caller allocator.
+5. Cursor state is returned when pagination is active.
+
+## Write Path
+
+1. Store service validates payload shape and authorization.
+2. Mutation is enqueued through the single-writer path.
+3. Writer applies schema validation, ownership checks, and conflict semantics.
+4. Commit produces `RecordChange` entries for subscriptions.
+5. Immediate and committed acknowledgements follow ADR-018 semantics.
+
+## Invariants
+
+- `users.namespaced` and namespace ownership rules must match authorization/session decisions.
+- Same-row authorization guards should be expressed in the write SQL path when possible.
+- Reader statements/results are owned by their reader connection and allocator.
+- Batch writes are atomic at the storage boundary: either the accepted batch commits consistently or returns a failure.
+- Checkpoint/reconnect behavior must not reorder committed write outcomes.
+
+## Performance Contract
+
+### SQLite Configuration
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| WAL autocheckpoint | 1,000 pages | SQLite-level threshold for automatic checkpointing. |
+| Busy timeout | 5,000 ms | How long to wait on a locked database before failing. |
+| Page cache | 64 MB | Hot pages cached in RAM (`cache_size = -64000`). |
+| Memory-mapped I/O | 256 MB | Reduces syscall overhead for reads (`mmap_size = 268435456`). |
+
+### Checkpoint Management
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| WAL size threshold | 10 MB | Triggers checkpoint when WAL exceeds this size. |
+| Time threshold | 300 sec | Triggers checkpoint if 5 minutes since last checkpoint. |
+| Check interval | 10 sec | Background loop interval for checking checkpoint need. |
+| Max retry attempts | 3 | Exponential backoff on transient checkpoint failures. |
+| Escalation threshold | < 10% reduction | If passive checkpoint reduces WAL by less than 10%, escalates to full mode. |
+
+### Write Batching
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| Batch size | 200 ops | Maximum writes per transaction. |
+| Batch timeout | 10 ms | Maximum time to wait before flushing an incomplete batch. |
+| Statement cache | 100 per connection | LRU eviction for prepared statements. |
+
+### Reader Pool
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| Pool size | 1 per CPU core | Defaults to `std.Thread.getCpuCount()`. |
+| Selection | Round-robin | Atomic index with `fetchAdd(1, .monotonic)`. |
+
+### Reconnection
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| Max attempts | 5 | After database failure. |
+| Initial backoff | 100 ms | Exponential backoff start. |
+| Max backoff | 5,000 ms | Exponential backoff cap. |
+| Backoff multiplier | 2.0 | Doubles delay each retry. |
+
+### Buffer Capacities
+
+| Buffer | Capacity | Notes |
+|--------|----------|-------|
+| Change buffer | 8,192 | Ring buffer for record changes (power of 2 for cheap modulo). |
+| Write outcome buffer | 256 + overflow | Ring buffer for write acknowledgements. |
+| Session resolution buffer | 256 + 512 overflow | Ring buffer for namespace/user resolutions. |
+
+## Threading Model
+
+| Subsystem | Thread | Synchronization | Ownership Boundary |
+|-----------|--------|-----------------|-------------------|
+| Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; sole producer of change/outcome/resolution buffers. |
+| Write queue | MPSC: uWS thread (producers) + writer thread (consumer) | Lock-free (atomic tail swap + atomic next pointers) | Thread-safe by design. |
+| Reader pool | uWS event loop (currently) | Per-reader `mutex` | Each reader locked individually during use. |
+| Change/Outcome/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
+
+**Key invariants**:
+- All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
+- The writer thread communicates back to the event loop through three lock-free ring buffers.
+- The writer calls `us_wakeup_loop()` to ensure the event loop processes buffers promptly.
+- Reader connections are pooled with individual mutexes, selected by atomic round-robin.
+- Reader pool exists to allow future multi-threaded read paths; currently only one reader is used at a time.
 
 ## See Also
 
-- [Storage Layer Architecture](../architecture/storage-layer.md) - Deep dive into WAL and pooling design
-- [Threading Model](../architecture/threading-model.md) - Multi-threaded core integration
-- [Research](../architecture/research.md) - Benchmarks and performance validation
+- [Schema Grammar](./schema-grammar.md)
+- [Query Engine](./query-engine.md)
+- [Cursor Pagination](./cursor-pagination.md)
+- [Error Taxonomy](./error-taxonomy.md)

@@ -1,99 +1,116 @@
-# ZyncBase Configuration Grammar
+# Configuration Grammar
 
-This document defines the formal grammar and property specification for `zyncbase-config.json`.
+**Drivers**: [ADR-003](../architecture/adrs.md#adr-003-configuration-first-design-zero-zig), [Security](./security.md), [Memory Strategy](./memory-strategy.md)
 
-## General Rules
-
-1. **Format**: Valid JSON.
-2. **Units**: All duration/timeout values are expressed in **milliseconds** unless otherwise specified.
-3. **Environment Variables**: Values of type `string` support environment variable substitution using the `${VAR_NAME}` syntax.
-4. **Strictness**: Unknown keys at the top level or within section objects will be ignored (with a warning in logs).
+This document defines the schema, properties, and constraints for the server runtime configuration (`zyncbase-config.json`).
 
 ---
 
-## Properties Reference
+## Source Files
 
-### Root Level
+| File | Responsibility |
+|------|----------------|
+| `src/config_loader.zig` | Loads JSON configurations, interpolates environment variables, and validates settings. |
+| `src/config_loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
+
+## Important Types
+
+| Type | Dependencies | Responsibility |
+|------|--------------|----------------|
+| `Config` | `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig` | Root configuration structure representing the complete JSON layout. |
+| `ServerConfig` | none | Host, port, and interface binding parameters. |
+| `AuthConfig` | `jwt` config keys | JWT signature algorithms, issuer, audience, and grace periods. |
+| `SecurityConfig` | none | Allowed origins, rate limiting bounds, message caps, and violation thresholds. |
+| `LoggingConfig` | none | Output format (JSON/text) and minimum log level threshold. |
+| `PerformanceConfig` | none | Ring buffer sizes, SQL statement cache capacities, and write-batching parameters. |
+
+---
+
+## Configuration Property Reference
+
+### Root Level Settings
+
+| Key | Type | Default | Description / Validation |
+|:---|:---:|:---|:---|
+| `server` | `object` | `{}` | Network and port settings object. |
+| `authentication` | `object` | `{}` | Token settings object. |
+| `security` | `object` | `{}` | Access control and rate limits object. |
+| `logging` | `object` | `{}` | Log verbosity and format settings object. |
+| `performance` | `object` | `{}` | Internal tuning configurations object. |
+| `dataDir` | `string` | `"./data"` | Directory path for persistence (SQLite, WAL). Supports env expansion. |
+| `schema` | `string \| object` | `"./schema.json"` | Path to schema JSON or inline schema object. If missing, runs with users-only schema. |
+| `authorization` | `string` | `null` | Path to `authorization.json` file. If missing, runs with playground default. |
+| `environment` | `string` | `"development"` | Server environment mode (`development`, `production`). |
+
+### `server` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `server` | `object` | `{}` | Network and connection settings. |
-| `authentication` | `object` | `{}` | Identity and access tokens. |
-| `security` | `object` | `{}` | Access control and rate limiting. |
-| `logging` | `object` | `{}` | Log verbosity and formatting. |
-| `performance` | `object` | `{}` | Tuning for throughput and latency. |
-| `dataDir` | `string` | `"./data"` | Directory for persistence (SQLite, WAL). |
-| `schema` | `string \| object` | `"./schema.json"` | Path to schema file or schema config object. If omitted or the default path is missing, server boots with only the implicit `users` collection. |
-| `authorization` | `string` | `null` | Path to `authorization.json`. If omitted or the file is missing, the server boots with the safe implicit public playground rules defined in `auth-grammar.md`. |
-| `environment` | `string` | `"development"` | Engine mode (`development`, `production`). |
+| `port` | `number` | `3000` | Port to bind (1-65535). |
+| `host` | `string` | `"0.0.0.0"` | Bind address host interface. |
 
----
-
-### `server`
+### `authentication` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `port` | `number` | `3000` | Port to listen on (1-65535). |
-| `host` | `string` | `"0.0.0.0"` | Bind address. |
+| `jwt.secret` | `string` | `null` | Key for HMAC tokens (`HS256`, `HS384`, `HS512`). Supports env variables. |
+| `jwt.algorithm` | `string` | `"HS256"` | Supported signature checking: `HS256`, `HS384`, `HS512`, `RS256`. |
+| `jwt.issuer` | `string` | `null` | Validates `iss` claim on incoming JWTs if specified. |
+| `jwt.audience` | `string` | `null` | Validates `aud` claim on incoming JWTs if specified. |
+| `session.tokenGracePeriodSeconds`| `number` | `30` | Grace period (in seconds) allowed after token expiry before WS close. |
 
----
-
-### `authentication`
-
-| Key | Type | Default | Description |
-|:---|:---:|:---|:---|
-| `jwt.secret` | `string` | `null` | Secret key for HS256/HS384/HS512. |
-| `jwt.algorithm` | `string` | `"HS256"` | Supported: `HS256`, `HS384`, `HS512`, `RS256`. |
-| `jwt.issuer` | `string` | `null` | Validates `iss` claim if present. |
-| `jwt.audience` | `string` | `null` | Validates `aud` claim if present. |
-| `session.tokenGracePeriodSeconds` | `number` | `30` | Seconds after JWT expiry before connection termination. |
-
----
-
-### `security`
+### `security` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `allowedOrigins` | `array<string>` | `[]` | CORS `Access-Control-Allow-Origin` list. |
-| `allowLocalhost` | `boolean` | `true` | Always allow connections from local loopback. |
-| `maxMessagesPerSecond` | `number` | `100` | Max messages per connection per second. |
-| `maxConnections` | `number` | `100000` | Max simultaneous connections (global limit across all connections). |
-| `maxMessageSize` | `number` | `1048576` | Max size of a single WebSocket message (bytes). |
-| `violationThreshold` | `number` | `10` | Number of security violations before IP ban. |
+| `allowedOrigins` | `array<string>` | `[]` | CORS `Access-Control-Allow-Origin` permitted patterns. |
+| `allowLocalhost` | `boolean` | `true` | Explicitly permits client connections from `localhost` / `127.0.0.1`. |
+| `maxMessagesPerSecond` | `number` | `100` | Hard cap on messages allowed per connection per second. |
+| `maxConnections` | `number` | `100000` | Hard cap on global simultaneous active connections. |
+| `maxMessageSize` | `number` | `1048576` | Hard cap on single WebSocket message payload size (in bytes). |
+| `violationThreshold` | `number` | `10` | Number of security violations before triggering temporary IP ban. |
 
----
-
-### `logging`
+### `logging` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `level` | `string` | `"info"` | `debug`, `info`, `warn`, `error`. |
-| `format` | `string` | `"json"` | `json`, `text`. |
+| `level` | `string` | `"info"` | Log level output cutoff: `debug`, `info`, `warn`, `error`. |
+| `format` | `string` | `"json"` | Console output serialization: `json` or `text`. |
 
----
-
-### `performance`
+### `performance` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `messageBufferSize` | `number` | `1000` | Size of internal ring buffer for routing. |
-| `batchWrites` | `boolean` | `true` | Group multiple writes into single transactions. |
-| `batchSize` | `number` | `200` | Maximum number of writes per storage transaction when `batchWrites` is enabled. |
-| `batchTimeout` | `number` | `10` | Wait time for batching (ms). |
-| `statementCacheSize` | `number` | `100` | Max number of prepared statements to keep in cache per connection. |
+| `messageBufferSize` | `number` | `1000` | Capacity size of message-routing ring buffers. |
+| `batchWrites` | `boolean` | `true` | Enables grouping multiple writes into single database transactions. |
+| `batchSize` | `number` | `200` | Max number of writes processed in a single transaction. |
+| `batchTimeout` | `number` | `10` | Write batch window collection delay timeout (in ms). |
+| `statementCacheSize` | `number` | `100` | Max number of prepared statements cached per SQLite connection. |
 
 ---
 
-## Validation & Errors
+## Configuration Invariants
 
-The following checks are performed during `validateConfig`:
+- **Format**: Valid JSON.
+- **Strictness**: Unknown keys at the top level or within section objects will be ignored with a logged warning.
+- **Unit Defaults**: All duration/timeout parameters are parsed in milliseconds unless explicitly noted.
+- **Variable Substitution**: String values support environment variable injection via `${VAR_NAME}` syntax.
 
-| Error | Condition |
-|:---|:---|
-| `InvalidPort` | Port is 0 or > 65535. |
-| `InvalidDataDir` | Parent directory relative to `dataDir` does not exist or is not writable. |
-| `InvalidSchemaFile` | A provided `schema` object/path is malformed, or an existing schema file contains invalid JSON or fails schema validation. Missing/omitted schema files synthesize the users-only schema instead. |
-| `InvalidAuthorizationFile` | Specified `authorization` file exists but cannot be parsed or fails authorization grammar validation. |
-| `InvalidBufferSize` | `messageBufferSize` is 0. |
-| `InvalidBatchSize` | `batchSize` is 0. |
-| `InvalidMaxMessageSize` | `maxMessageSize` is 0. |
+---
+
+## Validation & Failure Behavior
+
+Validation checks occur during server bootstrap in `validateConfig`:
+- Port range checks (1-65535).
+- Capacity, buffer size, and batch boundary checks (must be > 0).
+- Directory write capability checks on `dataDir`.
+- Missing or unreadable configuration files fail bootstrap immediately.
+- Specific config error codes are detailed in [Error Taxonomy](./error-taxonomy.md).
+
+---
+
+## See Also
+
+- [Security](./security.md)
+- [Error Taxonomy](./error-taxonomy.md)
+- [Auth System](./auth-system.md)
