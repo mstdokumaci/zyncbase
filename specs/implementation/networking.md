@@ -137,8 +137,7 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Max message size (app layer) | 1 MB | Passed to uWS `maxPayloadLength`. |
-| Max message size (uWS layer) | 16 MB | Hard limit; connections sending larger frames are dropped. |
+| Max message size | 1 MB | Passed to uWS `maxPayloadLength` (connections sending larger frames are dropped). |
 | Max backpressure | 16 MB | Maximum bytes uWS will buffer per connection before dropping. |
 | Idle timeout | 120 sec | Seconds of inactivity before uWS closes the connection. |
 | Max connections | 100,000 | Hard cap on concurrent WebSocket connections. |

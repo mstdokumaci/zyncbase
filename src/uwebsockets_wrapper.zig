@@ -46,7 +46,7 @@ pub const WebSocketServer = struct {
         ssl_key_path: ?[]const u8 = null,
         /// Maximum incoming WebSocket message size in bytes. Connections sending
         /// larger frames are dropped by uWS before the message reaches Zig code.
-        max_payload_length: usize = 16 * 1024 * 1024,
+        max_payload_length: usize = 1024 * 1024,
         /// Maximum bytes uWS will buffer per connection before dropping frames.
         max_backpressure: usize = 16 * 1024 * 1024,
         /// Seconds of inactivity before uWS closes the connection (0 = disabled).
