@@ -155,12 +155,11 @@ pub const StorageEngine = struct {
         try connection.configureDatabase(&writer_conn, true);
         try sql.ensureNamespaceTable(&writer_conn);
 
-        // Create reader pool (one per CPU core)
-        const configured_reader_pool_size = if (options.reader_pool_size == 0)
-            try std.Thread.getCpuCount()
-        else
-            options.reader_pool_size;
-        const num_readers = @max(configured_reader_pool_size, 1);
+        // Create reader pool
+        if (options.reader_pool_size == 0) {
+            return error.InvalidReaderPoolSize;
+        }
+        const num_readers = options.reader_pool_size;
         const reader_pool = try allocator.alloc(ReaderNode, num_readers);
         errdefer allocator.free(reader_pool);
 

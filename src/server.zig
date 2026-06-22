@@ -31,6 +31,7 @@ const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwksCache = @import("jwt_validator.zig").JwksCache;
 const Session = connection.Session;
+const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Atomic global server reference for signal handlers (written once before registration,
@@ -43,6 +44,7 @@ pub const ZyncBaseServer = struct {
     allocator: std.mem.Allocator,
     config: Config,
     memory_strategy: MemoryStrategy,
+    thread_budget: ThreadBudget,
     violation_tracker: ViolationTracker,
     subscription_engine: SubscriptionEngine,
     checkpoint_manager: CheckpointManager,
@@ -113,6 +115,14 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator().free(config.schema_file);
             config.schema_file = try self.memory_strategy.generalAllocator().dupe(u8, file);
         }
+
+        const cpu_count = std.Thread.getCpuCount() catch {
+            return error.CpuCountDetectionFailed;
+        };
+        self.thread_budget = ThreadBudget.init(cpu_count) catch {
+            return error.InsufficientCpuCores;
+        };
+        self.thread_budget.logSummary();
 
         // Initialize violation tracker
         std.log.debug("Initializing violation tracker", .{});
@@ -191,7 +201,7 @@ pub const ZyncBaseServer = struct {
             config.data_dir,
             &self.schema,
             config.performance,
-            .{},
+            .{ .reader_pool_size = self.thread_budget.readers },
             storageEngineWakeup,
             self,
         );

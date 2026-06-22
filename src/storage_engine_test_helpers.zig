@@ -171,7 +171,7 @@ pub const EngineTestContext = struct {
     test_context: TestContext,
 
     pub fn init(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, table_def: Table) !void {
-        try self.initWithOptions(allocator, prefix, &[_]Table{table_def}, .{ .in_memory = true });
+        try self.initWithOptions(allocator, prefix, &[_]Table{table_def}, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithOptions(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
@@ -346,7 +346,7 @@ pub fn createDummySchema(allocator: Allocator) !Schema {
 
 /// Setup a storage engine with a single table.
 pub fn setupEngine(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table) !void {
-    try setupEngineWithOptions(ctx, allocator, prefix, table, .{ .in_memory = true });
+    try setupEngineWithOptions(ctx, allocator, prefix, table, .{ .in_memory = true, .reader_pool_size = 1 });
 }
 
 /// Setup a storage engine with a single table and specific options.

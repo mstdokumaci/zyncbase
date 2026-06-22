@@ -1,5 +1,6 @@
 const std = @import("std");
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
+const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -9,6 +10,16 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    const cpu_count = std.Thread.getCpuCount() catch {
+        std.log.err("Failed to detect CPU count", .{});
+        return error.CpuCountDetectionFailed;
+    };
+
+    _ = ThreadBudget.init(cpu_count) catch {
+        std.log.err("ZyncBase requires at least 4 CPU cores, found {}", .{cpu_count});
+        return error.InsufficientCpuCores;
+    };
 
     var config_path: ?[]const u8 = null;
 
