@@ -14,8 +14,8 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ZyncBase Thread Domains                       │
-│                                                                  │
+│                    ZyncBase Thread Domains                      │
+│                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
 │  │ Event Loop   │  │    Writer    │  │  Checkpoint  │           │
 │  │   (1 fixed)  │  │   (1 fixed)  │  │   (1 fixed)  │           │
@@ -24,7 +24,7 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 │  │  I/O + Msg   │  │  Commit      │  │  WAL→DB      │           │
 │  │  Dispatch    │  │  Serialization│ │  Flush       │           │
 │  └──────┬───────┘  └──────┬───────┘  └──────────────┘           │
-│         │                 │                                      │
+│         │                 │                                     │
 │         │          ┌──────▼───────┐  ┌──────────────┐           │
 │         │          │  Presence    │  │ Notification │           │
 │         │          │   (1 fixed)  │  │  (variable)  │           │
@@ -33,16 +33,16 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 │         │          │  Encoding    │  │  Evaluation  │           │
 │         │          └──────────────┘  │  + Dispatch  │           │
 │         │                            └──────────────┘           │
-│         │                                                        │
-│  ┌──────▼───────────────────────────────────────────────────┐   │
-│  │                    Reader Pool                            │   │
-│  │              (variable, max 4)                            │   │
-│  │   ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐                │   │
-│  │   │ R1   │  │ R2   │  │ R3   │  │ R4   │                │   │
-│  │   │SQLite│  │SQLite│  │SQLite│  │SQLite│                │   │
-│  │   │ WAL  │  │ WAL  │  │ WAL  │  │ WAL  │                │   │
-│  │   └──────┘  └──────┘  └──────┘  └──────┘                │   │
-│  └───────────────────────────────────────────────────────────┘   │
+│         │                                                       │
+│  ┌──────▼──────────────────────────────────────────────────┐    │
+│  │                    Reader Pool                          │    │
+│  │              (variable, max 4)                          │    │
+│  │   ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐                │    │
+│  │   │ R1   │  │ R2   │  │ R3   │  │ R4   │                │    │
+│  │   │SQLite│  │SQLite│  │SQLite│  │SQLite│                │    │
+│  │   │ WAL  │  │ WAL  │  │ WAL  │  │ WAL  │                │    │
+│  │   └──────┘  └──────┘  └──────┘  └──────┘                │    │
+│  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 The thread budget is computed at startup from the detected CPU core count:
 
 ```
-if cpu_count < 4 → server refuses to start
+if cpu_count < 3 → server refuses to start
 
 fixed:
   event_loop   = 1
@@ -62,14 +62,16 @@ fixed:
   presence     = 1
 
 variable:
-  readers      = min(4, max(1, (cpu_count - 4) / 2))
-  notification = max(1, cpu_count - 4 - readers)
+  remaining    = max(cpu_count, 4) - 4
+  readers      = min(4, max(1, remaining / 2))
+  notification = max(1, remaining - readers)
 ```
 
 ### Thread Count by CPU Cores
 
 | CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
 |-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
 | 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
