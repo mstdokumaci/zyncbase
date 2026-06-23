@@ -344,6 +344,7 @@ pub const ZyncBaseServer = struct {
 
         // Initialize send queue for cross-thread message delivery
         self.send_queue = try SendQueue.init(self.memory_strategy.generalAllocator());
+        errdefer self.send_queue.deinit();
 
         // Initialize Notification Dispatcher
         try self.notification_dispatcher.init(
@@ -534,12 +535,12 @@ pub const ZyncBaseServer = struct {
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
 
-        // Deinitialize components in reverse order
-        std.log.debug("Deinitializing connection_manager", .{});
-        self.connection_manager.deinit();
-
+        self.connection_manager.drainSendQueue(&self.send_queue);
         std.log.debug("Deinitializing send_queue", .{});
         self.send_queue.deinit();
+
+        std.log.debug("Deinitializing connection_manager", .{});
+        self.connection_manager.deinit();
 
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();

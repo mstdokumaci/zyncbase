@@ -53,6 +53,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | Storage reads | Use reader connections and schema/query helpers; do not share SQLite statements across threads without their owning connection. |
 | Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. |
 | WebSocket sends | Same-thread sends use `ConnectionManager.sendToConnection()` directly. Cross-thread sends push to `SendQueue`; the event loop drains in `notifyPostHandler`. `Connection.send()` is always called from the event loop thread. |
+| SendQueue | Lock-free MPSC queue of `{ conn_id, encoded_message }`. Producers (push) may be any thread. Consumer (pop/drain) must be the event loop thread only. `deinit()` requires all producers stopped. |
 | Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
 | Thread budget | Computed once at startup; no runtime mutation or configuration override. |
 
@@ -65,6 +66,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - Shared registries must define one owner for allocation and deallocation of ids, buffers, and snapshots.
 - Threading changes require sanitizer coverage; data-race freedom is part of the API contract.
 - Thread counts are deterministic — derived from CPU count, not configuration.
+- `send_queue.deinit()` must only run after every producer thread has been stopped and joined; `drainSendQueue()` must be called once before deinit to free remaining entry data.
 
 ## See Also
 

@@ -31,6 +31,8 @@ pub const SendQueue = struct {
         };
     }
 
+    /// Must only be called after every producer has stopped and a final drain
+    /// has completed. Concurrent push() during deinit() is a data race.
     pub fn deinit(self: *SendQueue) void {
         while (true) {
             const head = self.head;
@@ -45,8 +47,9 @@ pub const SendQueue = struct {
     }
 
     pub fn push(self: *SendQueue, conn_id: u64, data: []const u8) !void {
-        const node = try self.allocator.create(Node);
         const duped = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(duped);
+        const node = try self.allocator.create(Node);
         node.* = .{
             .conn_id = conn_id,
             .data = duped,
