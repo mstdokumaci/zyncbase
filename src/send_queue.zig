@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 
 pub const Entry = struct {
     conn_id: u64,
-    data: []u8,
+    data: []const u8,
 };
 
 pub const SendQueue = struct {
     const Node = struct {
         conn_id: u64,
-        data: []u8,
+        data: []const u8,
         next: std.atomic.Value(?*Node),
     };
 
@@ -64,7 +64,7 @@ pub const SendQueue = struct {
         const next = head.next.load(.acquire) orelse return null;
 
         const conn_id: u64 = next.conn_id;
-        const data: []u8 = next.data;
+        const data: []const u8 = next.data;
         self.head = next;
         self.allocator.destroy(head);
         return .{ .conn_id = conn_id, .data = data };

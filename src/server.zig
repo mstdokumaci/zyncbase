@@ -70,6 +70,7 @@ pub const ZyncBaseServer = struct {
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
     shutdown_start_time: i64 = 0,
+    workers_stopped: bool = false,
     last_token_sweep_ms: i64 = 0,
 
     /// Initialize the ZyncBase server with all components
@@ -454,6 +455,7 @@ pub const ZyncBaseServer = struct {
     pub fn shutdown(self: *ZyncBaseServer) !void {
         try self.startGracefulShutdown();
         try self.finishGracefulShutdown();
+        self.stopBackgroundWorkers();
     }
 
     pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
@@ -508,6 +510,23 @@ pub const ZyncBaseServer = struct {
         std.log.info("Graceful shutdown complete", .{});
     }
 
+    /// Stop all background worker threads before resource deinitialization.
+    /// Must be called after finishGracefulShutdown() and before deinit().
+    /// Idempotent: safe to call multiple times.
+    pub fn stopBackgroundWorkers(self: *ZyncBaseServer) void {
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
+        if (self.workers_stopped) return;
+        self.workers_stopped = true;
+
+        std.log.info("Stopping background workers", .{});
+
+        // Stop the storage engine writer thread. Must be after final flush+checkpoint
+        // in finishGracefulShutdown(), which uses the writer thread. Safe to call
+        // even if already stopped — stopThread() checks and sets write_thread to null.
+        self.storage_engine.writer.stopThread();
+    }
+
     /// Setup signal handlers for SIGTERM and SIGINT
     fn setupSignalHandlers(self: *ZyncBaseServer) !void {
         // Store global reference for signal handler with release ordering so the
@@ -531,14 +550,29 @@ pub const ZyncBaseServer = struct {
         std.posix.sigaction(std.posix.SIG.INT, &sigint_action, null);
     }
 
-    /// Deinitialize the server and free all resources
+    /// Deinitialize the server and free all resources.
+    /// Background workers must be stopped before shared resources are deinitialized.
+    /// Deinit order follows a bottom-up dependency chain:
+    ///   1. Stop background producers (defensive — already done by shutdown())
+    ///   2. Drain and deinit the SendQueue (no more producers exist)
+    ///   3. Deinit consumers and remaining components (reverse init order)
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
 
+        // Phase 1: Stop all background worker threads before any resource deinit.
+        // Idempotent — safe to call even if shutdown() already stopped them.
+        self.stopBackgroundWorkers();
+
+        // Phase 2: Drain and deinit the SendQueue. No producers are running at this
+        // point, so this is safe even when future Plans 3-5 add worker threads.
+        std.log.debug("Draining send_queue", .{});
         self.connection_manager.drainSendQueue(&self.send_queue);
         std.log.debug("Deinitializing send_queue", .{});
         self.send_queue.deinit();
 
+        // Phase 3: Deinit consumers and remaining infrastructure.
+        // ConnectionManager must be deinited after the queue (it drains/owns
+        // message memory) and before the underlying uWS resources.
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
 
@@ -569,6 +603,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
 
+        // Storage engine writer thread already stopped in stopBackgroundWorkers().
+        // storage_engine.deinit() guards the double-join via a state check.
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
 
