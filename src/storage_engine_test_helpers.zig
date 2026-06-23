@@ -269,6 +269,7 @@ pub const EngineTestContext = struct {
         if (cleanup) {
             self.test_context.deinit();
         } else {
+            if (self.test_context.send_queue) |*sq| sq.deinit();
             self.allocator.free(self.test_context.test_dir);
         }
     }

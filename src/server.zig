@@ -26,7 +26,7 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
 const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
-const SendQueue = @import("send_queue.zig").SendQueue;
+const send_queue_type = @import("send_queue.zig").send_queue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
@@ -58,7 +58,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     presence_manager: PresenceManager,
     presence_dispatcher: PresenceDispatcher,
-    send_queue: SendQueue,
+    send_queue: send_queue_type,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -196,6 +196,12 @@ pub const ZyncBaseServer = struct {
             errdefer self.auth_config.deinit();
         }
 
+        // Initialize send queue for cross-thread message delivery.
+        // Must be initialized before storage_engine.start() — reader threads receive a
+        // pointer to it and begin pushing encoded responses immediately.
+        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        errdefer self.send_queue.deinit();
+
         // Initialize storage engine, which now requires a schema and notification callbacks
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
@@ -244,7 +250,7 @@ pub const ZyncBaseServer = struct {
             }
 
             // Lock the engine and start the runtime thread
-            try self.storage_engine.start();
+            try self.storage_engine.start(&self.send_queue);
         }
 
         // Initialize checkpoint manager
@@ -342,10 +348,6 @@ pub const ZyncBaseServer = struct {
             config.security.max_connections,
         );
         errdefer self.connection_manager.deinit();
-
-        // Initialize send queue for cross-thread message delivery
-        self.send_queue = try SendQueue.init(self.memory_strategy.generalAllocator());
-        errdefer self.send_queue.deinit();
 
         // Initialize Notification Dispatcher
         try self.notification_dispatcher.init(
@@ -525,6 +527,9 @@ pub const ZyncBaseServer = struct {
         // in finishGracefulShutdown(), which uses the writer thread. Safe to call
         // even if already stopped — stopThread() checks and sets write_thread to null.
         self.storage_engine.writer.stopThread();
+
+        // Stop reader threads to ensure no one pushes to send_queue during its deinit.
+        self.storage_engine.stopReaderPool();
     }
 
     /// Setup signal handlers for SIGTERM and SIGINT

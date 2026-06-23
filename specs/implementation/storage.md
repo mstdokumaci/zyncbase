@@ -13,6 +13,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `src/storage_engine/writer.zig` | Mutations, batch writes, row ownership checks, and committed change creation. |
 | `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint mode/stats, and writer health. |
 | `src/storage_engine/reader.zig` | Select/query execution, record decoding, and query result ownership. |
+| `src/storage_engine/reader_pool.zig` | Dedicated reader OS threads. Consume `ReadRequest`, encode responses, push to `SendQueue`. |
 | `src/storage_engine/sql.zig` | SQL construction and SQLite binding helpers. |
 | `src/storage_engine/filter_sql.zig` | Query predicate lowering to SQL fragments and bound values. |
 | `src/storage_engine/cache.zig` | Namespace/identity metadata cache keys and values. |
@@ -98,10 +99,14 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 
 ### Reader Pool
 
+Actual reader OS threads consuming from an SPMC blocking work queue. Each reader thread owns its SQLite connection and statement cache exclusively.
+
 | Property | Value | Notes |
 |----------|-------|-------|
-| Pool size | 1 per CPU core | Defaults to `std.Thread.getCpuCount()`. |
-| Selection | Round-robin | Atomic index with `fetchAdd(1, .monotonic)`. |
+| Thread count | `ThreadBudget.readers` (1–4) | Formula: min(4, max(1, (cpu-4)/2)). |
+| Work queue | SPMC blocking (mutex + CV) | Event loop (single producer) enqueues `ReadRequest`. Reader threads (multiple consumers) pop and execute. |
+| Response delivery | Lock-free MPSC (atomic tail swap) | Reader threads encode responses to MessagePack and push `{conn_id, encoded_bytes}` to `SendQueue`. Event loop drains in post-handler. |
+| Statement cache | 100 per connection | LRU eviction for prepared statements. |
 
 ### Reconnection
 
@@ -119,6 +124,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | Change buffer | 8,192 | Ring buffer for record changes (power of 2 for cheap modulo). |
 | Write outcome buffer | 256 + overflow | Ring buffer for write acknowledgements. |
 | Session resolution buffer | 256 + 512 overflow | Ring buffer for namespace/user resolutions. |
+| Read request queue | Unbounded (linked list) | SPMC blocking queue for async read requests. |
 
 ## Threading Model
 
@@ -126,15 +132,17 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 |-----------|--------|-----------------|-------------------|
 | Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; sole producer of change/outcome/resolution buffers. |
 | Write queue | MPSC: uWS thread (producers) + writer thread (consumer) | Lock-free (atomic tail swap + atomic next pointers) | Thread-safe by design. |
-| Reader pool | uWS event loop (currently) | Per-reader `mutex` | Each reader locked individually during use. |
+| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
 | Change/Outcome/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
+| SendQueue drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
 
 **Key invariants**:
 - All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
 - The writer thread communicates back to the event loop through three lock-free ring buffers.
 - The writer calls `us_wakeup_loop()` to ensure the event loop processes buffers promptly.
-- Reader connections are pooled with individual mutexes, selected by atomic round-robin.
-- Reader pool exists to allow future multi-threaded read paths; currently only one reader is used at a time.
+- Reader threads execute SQLite queries on dedicated connections; no contention with the event loop or writer thread.
+- StoreSubscribe registration happens in `MessageHandler` before the read request is enqueued to the reader pool.
+- Metadata cache is lock-free and safe for concurrent reads from reader threads and the writer thread. Cache population uses writer version snapshot for race protection.
 
 ## See Also
 

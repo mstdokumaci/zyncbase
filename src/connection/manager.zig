@@ -4,7 +4,7 @@ const Connection = @import("state.zig").Connection;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const Schema = @import("../schema.zig").Schema;
-const SendQueue = @import("../send_queue.zig").SendQueue;
+const send_queue_type = @import("../send_queue.zig").send_queue;
 const wire = @import("../wire.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
@@ -253,7 +253,7 @@ pub const ConnectionManager = struct {
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
-    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *SendQueue) void {
+    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
         while (send_queue.pop()) |entry| {
             defer send_queue.allocator.free(entry.data);
 

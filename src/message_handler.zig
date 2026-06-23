@@ -14,6 +14,9 @@ const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
+const query_ast = @import("query_ast.zig");
+const query_parser = @import("query_parser.zig");
+const read_buffer = @import("storage_engine/read_buffer.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -309,7 +312,7 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const req = try wire.extractStoreLoadMoreFast(message);
 
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
@@ -324,7 +327,7 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = session.user_doc_id,
@@ -332,18 +335,31 @@ pub const MessageHandler = struct {
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
         });
-        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor, read_auth_ptr);
-        defer page.deinit(arena_allocator);
+        var filter_clone = try sub_query.filter.clone(self.allocator);
+        errdefer filter_clone.deinit(self.allocator);
 
-        return try wire.encodeQuery(arena_allocator, .{
+        const cursor = try query_parser.decodeCursorToken(self.allocator, req.nextCursor, filter_clone.order_by.field_type, filter_clone.order_by.items_type);
+        if (filter_clone.after) |*old| old.deinit(self.allocator);
+        filter_clone.after = cursor;
+
+        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+
+        const request = read_buffer.ReadRequest{
+            .conn_id = conn.id,
             .msg_id = msg_id,
+            .kind = .load_more,
+            .table_index = sub_query.table_index,
+            .namespace_id = sub_query.namespace_id,
+            .filter = filter_clone,
+            .auth_predicate = auth_clone,
             .sub_id = req.subId,
-            .results = &page.results,
-            .table = page.table,
-            .next_cursor = page.next_cursor_str,
-        });
+            .allocator = self.allocator,
+        };
+
+        try self.store_service.storage_engine.enqueueRead(request);
+        return null;
     }
 
     // ---- Group B: Payload-dependent handlers (keep Payload tree) ----
@@ -451,7 +467,7 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const table_index = try wire.extractStoreTableIndexFast(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -467,7 +483,7 @@ pub const MessageHandler = struct {
 
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = session.user_doc_id,
@@ -475,23 +491,33 @@ pub const MessageHandler = struct {
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
         });
-        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);
-        defer qr.deinit(arena_allocator);
+        const filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
+        errdefer @constCast(&filter).deinit(self.allocator);
 
-        _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
+        // Register subscription synchronously before async read so notifications are not missed
+        _ = try self.subscription_engine.subscribe(namespace_id, table_index, filter, conn.id, sub_id);
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
         errdefer conn.removeSubscription(sub_id);
 
-        return try wire.encodeQuery(arena_allocator, .{
+        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+
+        const request = read_buffer.ReadRequest{
+            .conn_id = conn.id,
             .msg_id = msg_id,
+            .kind = .subscribe,
+            .table_index = table_index,
+            .namespace_id = namespace_id,
+            .filter = filter,
+            .auth_predicate = auth_clone,
             .sub_id = sub_id,
-            .results = &qr.results,
-            .table = qr.table,
-            .next_cursor = qr.next_cursor_str,
-        });
+            .allocator = self.allocator,
+        };
+
+        try self.store_service.storage_engine.enqueueRead(request);
+        return null;
     }
 
     fn handleStoreQuery(
@@ -500,7 +526,7 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const table_index = try wire.extractStoreTableIndexFast(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -515,7 +541,7 @@ pub const MessageHandler = struct {
 
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = session.user_doc_id,
@@ -523,16 +549,26 @@ pub const MessageHandler = struct {
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
         });
-        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);
-        defer qr.deinit(arena_allocator);
+        const filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
+        errdefer @constCast(&filter).deinit(self.allocator);
 
-        return try wire.encodeQuery(arena_allocator, .{
+        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+
+        const request = read_buffer.ReadRequest{
+            .conn_id = conn.id,
             .msg_id = msg_id,
-            .results = &qr.results,
-            .table = qr.table,
-        });
+            .kind = .query,
+            .table_index = table_index,
+            .namespace_id = namespace_id,
+            .filter = filter,
+            .auth_predicate = auth_clone,
+            .allocator = self.allocator,
+        };
+
+        try self.store_service.storage_engine.enqueueRead(request);
+        return null;
     }
 
     fn handleAuthRefresh(

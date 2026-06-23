@@ -28,7 +28,8 @@ test {
     _ = @import("filter_eval_test.zig");
     _ = @import("storage_query_test.zig");
     _ = @import("change_buffer_test.zig");
-    _ = @import("send_queue_test.zig");
+    _ = @import("queues/mpsc_queue_test.zig");
+    _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
     _ = @import("wire_test.zig");
     _ = @import("notification_dispatcher_test.zig");
@@ -65,7 +66,8 @@ test {
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");
-    _ = @import("send_queue_thread_safety_test.zig");
+    _ = @import("queues/mpsc_queue_thread_safety_test.zig");
+    _ = @import("queues/spmc_blocking_queue_thread_safety_test.zig");
 
     // Integration tests
     _ = @import("integration_wiring_test.zig");

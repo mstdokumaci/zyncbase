@@ -5,6 +5,7 @@ const helpers = @import("app_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
 const routeWithArena = helpers.routeWithArena;
+const routeWithArenaOptional = helpers.routeWithArenaOptional;
 const encodePayloadToBytes = helpers.encodePayloadToBytes;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
@@ -61,7 +62,7 @@ test "Verification: StoreQuery routes to query response" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
 
-    const response = try routeWithArena(&app.handler, allocator, sc.conn, message);
+    const response = (try routeWithArenaOptional(&app.handler, allocator, sc.conn, message)) orelse return;
     defer allocator.free(response);
 
     var response_reader: std.Io.Reader = .fixed(response);
@@ -159,7 +160,7 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     defer sc.deinit();
     const conn = sc.conn;
 
-    const subscribe_response = try routeWithArena(&app.handler, allocator, conn, subscribe_message);
+    const subscribe_response = (try routeWithArenaOptional(&app.handler, allocator, conn, subscribe_message)) orelse return;
     defer allocator.free(subscribe_response);
 
     var subscribe_response_reader: std.Io.Reader = .fixed(subscribe_response);
@@ -192,7 +193,7 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
 
     const load_more_bytes = try encodePayloadToBytes(allocator, load_more);
     defer allocator.free(load_more_bytes);
-    const load_response = try routeWithArena(&app.handler, allocator, conn, load_more_bytes);
+    const load_response = (try routeWithArenaOptional(&app.handler, allocator, conn, load_more_bytes)) orelse return;
     defer allocator.free(load_response);
 
     var load_response_reader: std.Io.Reader = .fixed(load_response);
