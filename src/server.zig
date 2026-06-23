@@ -26,6 +26,7 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
 const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
+const SendQueue = @import("send_queue.zig").SendQueue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
@@ -57,6 +58,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     presence_manager: PresenceManager,
     presence_dispatcher: PresenceDispatcher,
+    send_queue: SendQueue,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -68,6 +70,7 @@ pub const ZyncBaseServer = struct {
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
     shutdown_start_time: i64 = 0,
+    workers_stopped: bool = false,
     last_token_sweep_ms: i64 = 0,
 
     /// Initialize the ZyncBase server with all components
@@ -340,6 +343,10 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.connection_manager.deinit();
 
+        // Initialize send queue for cross-thread message delivery
+        self.send_queue = try SendQueue.init(self.memory_strategy.generalAllocator());
+        errdefer self.send_queue.deinit();
+
         // Initialize Notification Dispatcher
         try self.notification_dispatcher.init(
             self.memory_strategy.generalAllocator(),
@@ -448,6 +455,7 @@ pub const ZyncBaseServer = struct {
     pub fn shutdown(self: *ZyncBaseServer) !void {
         try self.startGracefulShutdown();
         try self.finishGracefulShutdown();
+        self.stopBackgroundWorkers();
     }
 
     pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
@@ -502,6 +510,23 @@ pub const ZyncBaseServer = struct {
         std.log.info("Graceful shutdown complete", .{});
     }
 
+    /// Stop all background worker threads before resource deinitialization.
+    /// Must be called after finishGracefulShutdown() and before deinit().
+    /// Idempotent: safe to call multiple times.
+    pub fn stopBackgroundWorkers(self: *ZyncBaseServer) void {
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
+        if (self.workers_stopped) return;
+        self.workers_stopped = true;
+
+        std.log.info("Stopping background workers", .{});
+
+        // Stop the storage engine writer thread. Must be after final flush+checkpoint
+        // in finishGracefulShutdown(), which uses the writer thread. Safe to call
+        // even if already stopped — stopThread() checks and sets write_thread to null.
+        self.storage_engine.writer.stopThread();
+    }
+
     /// Setup signal handlers for SIGTERM and SIGINT
     fn setupSignalHandlers(self: *ZyncBaseServer) !void {
         // Store global reference for signal handler with release ordering so the
@@ -525,11 +550,18 @@ pub const ZyncBaseServer = struct {
         std.posix.sigaction(std.posix.SIG.INT, &sigint_action, null);
     }
 
-    /// Deinitialize the server and free all resources
+    /// Deinit everything. Order: stop background threads → deinit cross-thread
+    /// resources → deinit consumers → deinit infrastructure.
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
 
-        // Deinitialize components in reverse order
+        // Stop background threads before any shared-resource deinit.
+        self.stopBackgroundWorkers();
+
+        // send_queue.deinit() frees any remaining unconsumed data.
+        std.log.debug("Deinitializing send_queue", .{});
+        self.send_queue.deinit();
+
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
 
@@ -560,6 +592,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
 
+        // Writer thread already stopped in stopBackgroundWorkers().
+        // storage_engine.deinit() guards double-join via state check.
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
 
@@ -627,6 +661,7 @@ pub const ZyncBaseServer = struct {
         self.session_resolver.poll(&self.connection_manager);
         self.write_outcome_dispatcher.poll(&self.connection_manager);
         self.presence_dispatcher.poll(&self.connection_manager);
+        self.connection_manager.drainSendQueue(&self.send_queue);
 
         const now_ms = std.time.milliTimestamp();
         if (now_ms - self.last_token_sweep_ms >= 15_000) {

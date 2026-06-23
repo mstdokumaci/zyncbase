@@ -15,6 +15,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
 | `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
 | `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint coordination, and writer health state. |
+| `src/send_queue.zig` | Lock-free MPSC queue for cross-thread WebSocket message delivery. |
 | `src/notification_dispatcher.zig` | Converts committed record changes into subscription pushes. |
 | `src/write_outcome_dispatcher.zig` | Sends deferred committed write acknowledgements/errors. |
 | `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
@@ -27,6 +28,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `ZyncBaseServer` | `WebSocketServer`, `StorageEngine`, `MessageHandler`, dispatchers | Owns subsystem wiring and start/stop lifecycle. |
 | `ConnectionManager` | `Connection`, uWebSockets wrapper | Tracks live connections and supports targeted sends. |
 | `Connection` | `Outbox`, `Session`, `WebSocket` | Serializes connection-local scope/subscription state and buffers outbound messages. |
+| `SendQueue` | `Allocator` | Lock-free MPSC queue for cross-thread message delivery to connections. |
 | `WriteQueue` | SQLite writer connection, `MemoryStrategy` | Serializes durable writes and emits outcomes/changes. |
 | `NotificationDispatcher` | `ConnectionManager`, `SubscriptionEngine` | Fans committed store changes out to subscribers. |
 | `WriteOutcomeDispatcher` | `ConnectionManager`, `WriteOutcomeBuffer` | Sends `WriteCommitted`/`WriteError` events to the origin connection. |
@@ -50,18 +52,21 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | Storage writes | Enter through `StorageEngine`/`WriteQueue`; do not bypass the single-writer path. |
 | Storage reads | Use reader connections and schema/query helpers; do not share SQLite statements across threads without their owning connection. |
 | Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. |
-| WebSocket sends | Use connection/manager send helpers so close and backpressure behavior stays centralized. |
+| WebSocket sends | Same-thread sends use `ConnectionManager.sendToConnection()` directly. Cross-thread sends push to `SendQueue`; the event loop drains in `notifyPostHandler`. `Connection.send()` is always called from the event loop thread. |
+| SendQueue | Lock-free MPSC queue of `{ conn_id, encoded_message }`. Producers (push) may be any thread. Consumer (pop/drain) must be the event loop thread only. `deinit()` requires all producers stopped. |
 | Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
 | Thread budget | Computed once at startup; no runtime mutation or configuration override. |
 
 ## Invariants
 
+- All WebSocket sends via `Connection.send()` occur on the event loop thread; cross-thread producers use `SendQueue` to marshal messages.
 - No request may publish subscription or write acknowledgements before the corresponding storage commit.
 - Namespace resolution results must be ignored when superseded by a newer namespace request.
 - Connection teardown must be idempotent enough to tolerate concurrent disconnect and background completion.
 - Shared registries must define one owner for allocation and deallocation of ids, buffers, and snapshots.
 - Threading changes require sanitizer coverage; data-race freedom is part of the API contract.
 - Thread counts are deterministic — derived from CPU count, not configuration.
+- `send_queue.deinit()` must only run after every producer thread has been stopped and joined; it will automatically free any remaining unconsumed entry data.
 
 ## See Also
 
