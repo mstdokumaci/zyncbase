@@ -97,9 +97,11 @@ test "SendQueue: concurrent push and pop stress" {
     const consumer = struct {
         fn run(ctx: *ConsumerContext) void {
             while (ctx.consumed.load(.acquire) < ctx.total_expected) {
-                while (ctx.sq.pop()) |entry| {
+                if (ctx.sq.pop()) |entry| {
                     ctx.alloc.free(entry.data);
                     _ = ctx.consumed.fetchAdd(1, .acq_rel);
+                } else {
+                    std.atomic.spinLoopHint();
                 }
             }
             while (ctx.sq.pop()) |entry| {
