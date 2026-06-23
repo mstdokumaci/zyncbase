@@ -26,6 +26,7 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
 const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
+const SendQueue = @import("send_queue.zig").SendQueue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
@@ -57,6 +58,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     presence_manager: PresenceManager,
     presence_dispatcher: PresenceDispatcher,
+    send_queue: SendQueue,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -340,6 +342,9 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.connection_manager.deinit();
 
+        // Initialize send queue for cross-thread message delivery
+        self.send_queue = try SendQueue.init(self.memory_strategy.generalAllocator());
+
         // Initialize Notification Dispatcher
         try self.notification_dispatcher.init(
             self.memory_strategy.generalAllocator(),
@@ -533,6 +538,9 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
 
+        std.log.debug("Deinitializing send_queue", .{});
+        self.send_queue.deinit();
+
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
 
@@ -627,6 +635,7 @@ pub const ZyncBaseServer = struct {
         self.session_resolver.poll(&self.connection_manager);
         self.write_outcome_dispatcher.poll(&self.connection_manager);
         self.presence_dispatcher.poll(&self.connection_manager);
+        self.connection_manager.drainSendQueue(&self.send_queue);
 
         const now_ms = std.time.milliTimestamp();
         if (now_ms - self.last_token_sweep_ms >= 15_000) {

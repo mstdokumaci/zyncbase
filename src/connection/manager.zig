@@ -4,6 +4,7 @@ const Connection = @import("state.zig").Connection;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const Schema = @import("../schema.zig").Schema;
+const SendQueue = @import("../send_queue.zig").SendQueue;
 const wire = @import("../wire.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
@@ -247,6 +248,45 @@ pub const ConnectionManager = struct {
                 std.log.warn("Connection {}: dropped during drain flush, closing", .{conn_id});
                 conn.ws.close();
             },
+        }
+    }
+
+    /// Cross-thread safe send: push message to SendQueue for event loop delivery.
+    /// Called from background threads (notification, presence, reader pools).
+    /// The event loop drains the queue in notifyPostHandler and calls Connection.send().
+    pub fn postToConnection(self: *ConnectionManager, send_queue: *SendQueue, conn_id: u64, data: []const u8) void {
+        _ = self;
+        send_queue.push(conn_id, data) catch |err| {
+            std.log.warn("Failed to post to connection {}: {}", .{ conn_id, err });
+        };
+    }
+
+    /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
+    /// Called in notifyPostHandler after dispatcher polls.
+    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *SendQueue) void {
+        while (send_queue.pop()) |entry| {
+            defer self.allocator.free(entry.data);
+
+            const conn = self.acquireConnection(entry.conn_id) catch |err| {
+                std.log.warn("Connection {} not found during send queue drain: {}", .{ entry.conn_id, err });
+                continue;
+            };
+            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+
+            conn.send(entry.data) catch |err| switch (err) {
+                error.Dropped => {
+                    std.log.warn("Connection {} dropped by uWS, closing", .{entry.conn_id});
+                    conn.ws.close();
+                },
+                error.Full => {
+                    std.log.warn("Connection {} outbox full (slow client), closing", .{entry.conn_id});
+                    conn.ws.close();
+                },
+                else => {
+                    std.log.err("Connection {} unexpected send error: {}", .{ entry.conn_id, err });
+                    conn.ws.close();
+                },
+            };
         }
     }
 
