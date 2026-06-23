@@ -251,21 +251,11 @@ pub const ConnectionManager = struct {
         }
     }
 
-    /// Cross-thread safe send: push message to SendQueue for event loop delivery.
-    /// Called from background threads (notification, presence, reader pools).
-    /// The event loop drains the queue in notifyPostHandler and calls Connection.send().
-    pub fn postToConnection(self: *ConnectionManager, send_queue: *SendQueue, conn_id: u64, data: []const u8) void {
-        _ = self;
-        send_queue.push(conn_id, data) catch |err| {
-            std.log.warn("Failed to post to connection {}: {}", .{ conn_id, err });
-        };
-    }
-
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *SendQueue) void {
         while (send_queue.pop()) |entry| {
-            defer self.allocator.free(entry.data);
+            defer send_queue.allocator.free(entry.data);
 
             const conn = self.acquireConnection(entry.conn_id) catch |err| {
                 std.log.warn("Connection {} not found during send queue drain: {}", .{ entry.conn_id, err });

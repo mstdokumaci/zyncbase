@@ -59,6 +59,15 @@ pub const SendQueue = struct {
         prev.next.store(node, .release);
     }
 
+    /// Cross-thread safe send: push message to SendQueue for event loop delivery.
+    /// Called from background threads. The event loop drains the queue and
+    /// calls Connection.send() in notifyPostHandler via drainSendQueue.
+    pub fn postToConnection(self: *SendQueue, conn_id: u64, data: []const u8) void {
+        self.push(conn_id, data) catch |err| {
+            std.log.warn("Failed to post to connection {}: {}", .{ conn_id, err });
+        };
+    }
+
     pub fn pop(self: *SendQueue) ?Entry {
         const head = self.head;
         const next = head.next.load(.acquire) orelse return null;
