@@ -66,7 +66,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - Shared registries must define one owner for allocation and deallocation of ids, buffers, and snapshots.
 - Threading changes require sanitizer coverage; data-race freedom is part of the API contract.
 - Thread counts are deterministic — derived from CPU count, not configuration.
-- `send_queue.deinit()` must only run after every producer thread has been stopped and joined; `drainSendQueue()` must be called once before deinit to free remaining entry data.
+- `send_queue.deinit()` must only run after every producer thread has been stopped and joined; it will automatically free any remaining unconsumed entry data.
 
 ## See Also
 

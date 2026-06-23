@@ -550,29 +550,18 @@ pub const ZyncBaseServer = struct {
         std.posix.sigaction(std.posix.SIG.INT, &sigint_action, null);
     }
 
-    /// Deinitialize the server and free all resources.
-    /// Background workers must be stopped before shared resources are deinitialized.
-    /// Deinit order follows a bottom-up dependency chain:
-    ///   1. Stop background producers (defensive — already done by shutdown())
-    ///   2. Drain and deinit the SendQueue (no more producers exist)
-    ///   3. Deinit consumers and remaining components (reverse init order)
+    /// Deinit everything. Order: stop background threads → deinit cross-thread
+    /// resources → deinit consumers → deinit infrastructure.
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
 
-        // Phase 1: Stop all background worker threads before any resource deinit.
-        // Idempotent — safe to call even if shutdown() already stopped them.
+        // Stop background threads before any shared-resource deinit.
         self.stopBackgroundWorkers();
 
-        // Phase 2: Drain and deinit the SendQueue. No producers are running at this
-        // point, so this is safe even when future Plans 3-5 add worker threads.
-        std.log.debug("Draining send_queue", .{});
-        self.connection_manager.drainSendQueue(&self.send_queue);
+        // send_queue.deinit() frees any remaining unconsumed data.
         std.log.debug("Deinitializing send_queue", .{});
         self.send_queue.deinit();
 
-        // Phase 3: Deinit consumers and remaining infrastructure.
-        // ConnectionManager must be deinited after the queue (it drains/owns
-        // message memory) and before the underlying uWS resources.
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
 
@@ -603,8 +592,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
 
-        // Storage engine writer thread already stopped in stopBackgroundWorkers().
-        // storage_engine.deinit() guards the double-join via a state check.
+        // Writer thread already stopped in stopBackgroundWorkers().
+        // storage_engine.deinit() guards double-join via state check.
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
 

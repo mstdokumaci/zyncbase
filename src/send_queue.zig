@@ -31,8 +31,9 @@ pub const SendQueue = struct {
         };
     }
 
-    /// Must only be called after every producer has stopped and a final drain
-    /// has completed. Concurrent push() during deinit() is a data race.
+    /// Must only be called after every producer thread has been stopped and joined.
+    /// Deinit frees all remaining unconsumed entry data automatically.
+    /// Concurrent push() during deinit() is a data race.
     pub fn deinit(self: *SendQueue) void {
         while (true) {
             const head = self.head;
