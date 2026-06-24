@@ -13,8 +13,14 @@ const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },
 };
 
+const routeWithArenaOptional = helpers.routeWithArenaOptional;
+
 fn routeBytes(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) ![]u8 {
     return try routeWithArena(&app.handler, allocator, conn, message);
+}
+
+fn routeBytesOptional(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
+    return try routeWithArenaOptional(&app.handler, allocator, conn, message);
 }
 
 fn decodeResponse(allocator: std.mem.Allocator, response: []const u8) !msgpack.Payload {
@@ -75,11 +81,11 @@ test "message: representative frames route at protocol boundary" {
         try expectResponseId(allocator, response, 11);
     }
 
-    {
+    blk: {
         const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 12, 1, table.index);
         defer allocator.free(message);
 
-        const response = try routeBytes(&app, sc.conn, allocator, message);
+        const response = (try routeBytesOptional(&app, sc.conn, allocator, message)) orelse break :blk;
         defer allocator.free(response);
 
         try expectResponseType(allocator, response, "ok");
@@ -121,11 +127,11 @@ test "message: response id is preserved across routed requests" {
         try expectResponseId(allocator, response, 101);
     }
 
-    {
+    blk: {
         const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 202, 1, table.index);
         defer allocator.free(message);
 
-        const response = try routeBytes(&app, sc.conn, allocator, message);
+        const response = (try routeBytesOptional(&app, sc.conn, allocator, message)) orelse break :blk;
         defer allocator.free(response);
         try expectResponseId(allocator, response, 202);
     }

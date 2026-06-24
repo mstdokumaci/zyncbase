@@ -1,19 +1,27 @@
 const std = @import("std");
 const testing = std.testing;
-const SendQueue = @import("send_queue.zig").SendQueue;
-const Allocator = std.mem.Allocator;
+const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
 
-test "SendQueue: multiple producers single consumer" {
+const TestEntry = struct {
+    id: u64,
+    msg: []const u8,
+
+    pub fn free(self: *TestEntry, alloc: std.mem.Allocator) void {
+        alloc.free(self.msg);
+    }
+};
+
+test "MpscQueue: multiple producers single consumer" {
     const alloc = testing.allocator;
-    var sq = try SendQueue.init(alloc);
-    defer sq.deinit();
+    var q = try mpscQueue(TestEntry).init(alloc);
+    defer q.deinit();
 
     const thread_count = 4;
     const items_per_thread = 1000;
     const total_items = thread_count * items_per_thread;
 
     const ProducerContext = struct {
-        sq: *SendQueue,
+        q: *mpscQueue(TestEntry),
         thread_id: u64,
         count: usize,
     };
@@ -27,21 +35,16 @@ test "SendQueue: multiple producers single consumer" {
         fn run(ctx: *ProducerContext) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                const conn_id = ctx.thread_id * 10000 + i;
                 var buf: [32]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "msg-{}-{}", .{ ctx.thread_id, i }) catch return error.TestFailed;
-                try ctx.sq.push(conn_id, msg);
+                try ctx.q.push(.{ .id = ctx.thread_id * 10000 + i, .msg = try ctx.q.allocator.dupe(u8, msg) });
             }
         }
     }.run;
 
     for (0..thread_count) |i| {
         const ctx = try alloc.create(ProducerContext);
-        ctx.* = .{
-            .sq = &sq,
-            .thread_id = @intCast(i),
-            .count = items_per_thread,
-        };
+        ctx.* = .{ .q = &q, .thread_id = @intCast(i), .count = items_per_thread };
         contexts[i] = ctx;
         threads[i] = try std.Thread.spawn(.{}, producer, .{ctx});
     }
@@ -52,24 +55,24 @@ test "SendQueue: multiple producers single consumer" {
     }
 
     var received: usize = 0;
-    while (sq.pop()) |entry| {
-        alloc.free(entry.data);
+    while (q.pop()) |entry| {
+        alloc.free(entry.msg);
         received += 1;
     }
 
     try testing.expectEqual(total_items, received);
 }
 
-test "SendQueue: concurrent push and pop stress" {
+test "MpscQueue: concurrent push and pop stress" {
     const alloc = testing.allocator;
-    var sq = try SendQueue.init(alloc);
-    defer sq.deinit();
+    var q = try mpscQueue(TestEntry).init(alloc);
+    defer q.deinit();
 
     const producer_count = 3;
     const items_per_producer = 500;
 
     const ProducerContext = struct {
-        sq: *SendQueue,
+        q: *mpscQueue(TestEntry),
         count: usize,
     };
 
@@ -82,14 +85,14 @@ test "SendQueue: concurrent push and pop stress" {
         fn run(ctx: *ProducerContext) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                try ctx.sq.push(i, "stress");
+                try ctx.q.push(.{ .id = i, .msg = try ctx.q.allocator.dupe(u8, "stress") });
             }
         }
     }.run;
 
     const ConsumerContext = struct {
-        sq: *SendQueue,
-        alloc: Allocator,
+        q: *mpscQueue(TestEntry),
+        alloc: std.mem.Allocator,
         consumed: std.atomic.Value(usize),
         total_expected: usize,
     };
@@ -97,15 +100,15 @@ test "SendQueue: concurrent push and pop stress" {
     const consumer = struct {
         fn run(ctx: *ConsumerContext) void {
             while (ctx.consumed.load(.acquire) < ctx.total_expected) {
-                if (ctx.sq.pop()) |entry| {
-                    ctx.alloc.free(entry.data);
+                if (ctx.q.pop()) |entry| {
+                    ctx.alloc.free(entry.msg);
                     _ = ctx.consumed.fetchAdd(1, .acq_rel);
                 } else {
                     std.atomic.spinLoopHint();
                 }
             }
-            while (ctx.sq.pop()) |entry| {
-                ctx.alloc.free(entry.data);
+            while (ctx.q.pop()) |entry| {
+                ctx.alloc.free(entry.msg);
                 _ = ctx.consumed.fetchAdd(1, .acq_rel);
             }
         }
@@ -113,14 +116,14 @@ test "SendQueue: concurrent push and pop stress" {
 
     for (0..producer_count) |i| {
         const ctx = try alloc.create(ProducerContext);
-        ctx.* = .{ .sq = &sq, .count = items_per_producer };
+        ctx.* = .{ .q = &q, .count = items_per_producer };
         producer_contexts[i] = ctx;
         threads[i] = try std.Thread.spawn(.{}, producer, .{ctx});
     }
 
     var consumer_ctx = try alloc.create(ConsumerContext);
     consumer_ctx.* = .{
-        .sq = &sq,
+        .q = &q,
         .alloc = alloc,
         .consumed = std.atomic.Value(usize).init(0),
         .total_expected = producer_count * items_per_producer,
@@ -137,23 +140,23 @@ test "SendQueue: concurrent push and pop stress" {
     try testing.expectEqual(producer_count * items_per_producer, final_consumed);
 }
 
-test "SendQueue: push during drain" {
+test "MpscQueue: push during drain" {
     const alloc = testing.allocator;
-    var sq = try SendQueue.init(alloc);
-    defer sq.deinit();
+    var q = try mpscQueue(TestEntry).init(alloc);
+    defer q.deinit();
 
-    try sq.push(1, "initial1");
-    try sq.push(2, "initial2");
+    try q.push(.{ .id = 1, .msg = try alloc.dupe(u8, "initial1") });
+    try q.push(.{ .id = 2, .msg = try alloc.dupe(u8, "initial2") });
 
-    const drained_first = sq.pop() orelse return error.TestFailed;
-    alloc.free(drained_first.data);
+    const drained_first = q.pop() orelse return error.TestFailed;
+    alloc.free(drained_first.msg);
 
-    try sq.push(3, "during_drain");
-    try sq.push(4, "after_push");
+    try q.push(.{ .id = 3, .msg = try alloc.dupe(u8, "during_drain") });
+    try q.push(.{ .id = 4, .msg = try alloc.dupe(u8, "after_push") });
 
     var count: usize = 0;
-    while (sq.pop()) |entry| {
-        alloc.free(entry.data);
+    while (q.pop()) |entry| {
+        alloc.free(entry.msg);
         count += 1;
     }
 

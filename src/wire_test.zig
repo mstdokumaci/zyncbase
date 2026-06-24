@@ -5,7 +5,6 @@ const msgpack = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
-const storage_types = @import("storage_engine.zig");
 const typed = @import("typed.zig");
 const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -280,10 +279,6 @@ test "encodeQuery: includes subscription pagination fields" {
         allocator.free(records);
     }
 
-    var result = storage_types.ManagedResult{
-        .records = records,
-    };
-
     const cursor = typed.Cursor{
         .sort_value = tth.valInt(10),
         .id = 1,
@@ -294,7 +289,7 @@ test "encodeQuery: includes subscription pagination fields" {
     const response = try wire.encodeQuery(allocator, .{
         .msg_id = 44,
         .sub_id = 7,
-        .results = &result,
+        .records = records,
         .table = table_metadata,
         .next_cursor = next_cursor_str,
     });

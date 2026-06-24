@@ -352,23 +352,6 @@ pub fn resolveNamespaceId(
     return errors.StorageError.InvalidOperation;
 }
 
-pub fn lookupNamespaceId(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt_cache: *StatementCache,
-    namespace: []const u8,
-) !?i64 {
-    const sql_text = "SELECT id FROM _zync_namespaces WHERE name = ?";
-    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
-    defer mstmt.release();
-
-    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
-    if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
-    if (rc == sqlite.c.SQLITE_DONE) return null;
-    return errors.classifyStepError(db);
-}
-
 pub fn resolveUserId(
     allocator: Allocator,
     db: *sqlite.Db,

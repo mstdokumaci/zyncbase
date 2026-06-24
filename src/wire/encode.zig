@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
-const storage_mod = @import("../storage_engine.zig");
 const typed = @import("../typed.zig");
 const schema_mod = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
@@ -227,8 +226,8 @@ pub fn encodeError(
 pub const QueryResponse = struct {
     msg_id: u64,
     sub_id: ?u64 = null,
-    results: *const storage_mod.ManagedResult,
-    table: *const storage_mod.TableMetadata,
+    records: []const typed.Record,
+    table: *const schema_mod.Table,
     next_cursor: ?[]const u8 = null,
 };
 
@@ -252,8 +251,8 @@ pub fn encodeQuery(
     }
 
     try writer.writeAll(Keys.value);
-    try msgpack.encodeArrayHeader(writer, response.results.records.len);
-    for (response.results.records) |record| {
+    try msgpack.encodeArrayHeader(writer, response.records.len);
+    for (response.records) |record| {
         try encodeRecord(writer, record, response.table);
     }
 
@@ -337,7 +336,7 @@ fn encodeDeltaOp(
     comptime op: DeltaOp,
     table_index: usize,
     id_val: typed.Value,
-    maybe_value: ?struct { record: typed.Record, meta: *const storage_mod.TableMetadata },
+    maybe_value: ?struct { record: typed.Record, meta: *const schema_mod.Table },
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -383,7 +382,7 @@ pub fn encodeSetDeltaSuffix(
     table_index: usize,
     id_val: typed.Value,
     new_record: typed.Record,
-    table_metadata: *const storage_mod.TableMetadata,
+    table_metadata: *const schema_mod.Table,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .set, table_index, id_val, .{
         .record = new_record,
@@ -391,7 +390,7 @@ pub fn encodeSetDeltaSuffix(
     });
 }
 
-pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const storage_mod.TableMetadata) !void {
+pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_mod.Table) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeMapHeader(writer, record.values.len);
     for (record.values, 0..) |typed_value, idx| {

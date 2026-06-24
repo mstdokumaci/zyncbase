@@ -8,6 +8,8 @@ const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const send_queue_mod = @import("send_queue.zig");
+const send_queue_type = send_queue_mod.send_queue;
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
@@ -249,6 +251,7 @@ pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Sche
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     test_dir: []const u8,
+    send_queue: ?send_queue_type = null,
 
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8) !TestContext {
         // Generate a unique directory name using timestamp and random bits
@@ -282,6 +285,7 @@ pub const TestContext = struct {
     }
 
     pub fn deinit(self: *TestContext) void {
+        if (self.send_queue) |*sq| sq.deinit();
         if (self.test_dir.len > 0) {
             std.fs.cwd().deleteTree(self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
@@ -300,11 +304,11 @@ pub fn normalizeTestStorageOptions(options: StorageEngine.Options) StorageEngine
     return effective;
 }
 
-pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, schema: *const Schema, options: StorageEngine.Options) !void {
+pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, options: StorageEngine.Options) !void {
     try setupTestEngineWithPerformance(engine, allocator, memory_strategy, context, schema, .{}, options);
 }
 
-pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, schema: *const Schema, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
     const effective_options = normalizeTestStorageOptions(options);
     try engine.init(allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
@@ -334,5 +338,11 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
         try executor.execute(plan, schema.version);
     }
 
-    try engine.start();
+    context.send_queue = try send_queue_type.init(allocator);
+    errdefer {
+        context.send_queue.?.deinit();
+        context.send_queue = null;
+    }
+
+    try engine.start(&context.send_queue.?);
 }

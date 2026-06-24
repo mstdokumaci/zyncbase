@@ -56,8 +56,15 @@ pub fn destroyMockWebSocket(allocator: Allocator, ws: *WebSocket) void {
     }
 }
 /// Helper function to route a message through an arena and return a duped result for testing.
-/// The caller is responsible for freeing the returned []u8.
+/// Errors on async (deferred) responses. The caller is responsible for freeing the returned []u8.
 pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) ![]u8 {
+    const result = try routeWithArenaOptional(handler, allocator, conn, bytes);
+    return result orelse error.TestAsyncResponseNotSupported;
+}
+
+/// Helper function to route a message through an arena and return a duped result for testing.
+/// Returns null for async (deferred) responses. The caller is responsible for freeing the returned []u8.
+pub fn routeWithArenaOptional(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) !?[]u8 {
     const envelope = try wire.extractEnvelopeFast(bytes);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -66,7 +73,7 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
     const result = (handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
         const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
         return try allocator.dupe(u8, error_msg);
-    }) orelse return error.AsyncResponsePending;
+    }) orelse return null;
 
     return try allocator.dupe(u8, result);
 }

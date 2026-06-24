@@ -334,7 +334,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
                 .int => key.int == field_index,
                 .str => blk: {
                     if (std.mem.eql(u8, key.str.value(), field)) break :blk true;
-                    const parsed = std.fmt.parseUnsigned(usize, key.str.value(), 10) catch break :blk false;
+                    const parsed = std.fmt.parseUnsigned(usize, key.str.value(), 10) catch break :blk false; // zwanzig-disable-line: swallowed-error
                     break :blk parsed == field_index;
                 },
                 else => false,

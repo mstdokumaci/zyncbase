@@ -20,6 +20,9 @@ const filter_eval = @import("filter_eval.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
 const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
+const read_buffer = @import("storage_engine/read_buffer.zig");
+const reader_pool = @import("storage_engine/reader_pool.zig");
+const send_queue_type = @import("send_queue.zig").send_queue;
 
 pub const StorageError = storage_errors.StorageError;
 pub const PkSet = pk_set_mod.PkSet;
@@ -32,6 +35,9 @@ pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
+pub const ReadRequest = read_buffer.ReadRequest;
+pub const ReadResponse = read_buffer.ReadResponse;
+pub const ReadKind = read_buffer.ReadKind;
 const DocId = typed.DocId;
 const Value = typed.Value;
 const Record = typed.Record;
@@ -89,7 +95,10 @@ pub const StorageEngine = struct {
     pub const State = enum(u8) { setup, running, shutdown };
 
     allocator: Allocator,
-    reader_pool: []ReaderNode,
+    reader_nodes: []ReaderNode,
+    read_request_queue: read_buffer.read_request_queue,
+    reader_thread_pool: ?reader_pool.ReaderPool,
+
     state: std.atomic.Value(State),
     next_reader_idx: std.atomic.Value(usize),
     migration_active: std.atomic.Value(bool),
@@ -160,18 +169,18 @@ pub const StorageEngine = struct {
             return error.InvalidReaderPoolSize;
         }
         const num_readers = options.reader_pool_size;
-        const reader_pool = try allocator.alloc(ReaderNode, num_readers);
-        errdefer allocator.free(reader_pool);
+        const reader_nodes = try allocator.alloc(ReaderNode, num_readers);
+        errdefer allocator.free(reader_nodes);
 
         var initialized_readers: usize = 0;
         errdefer {
-            for (reader_pool[0..initialized_readers]) |*node| {
+            for (reader_nodes[0..initialized_readers]) |*node| {
                 node.stmt_cache.deinit(allocator);
                 node.conn.deinit();
             }
         }
 
-        for (reader_pool) |*node| {
+        for (reader_nodes) |*node| {
             node.conn = try sqlite.Db.init(.{
                 .mode = sqlite.Db.Mode{ .File = db_path },
                 .open_flags = .{
@@ -189,7 +198,9 @@ pub const StorageEngine = struct {
 
         self.* = .{
             .allocator = allocator,
-            .reader_pool = reader_pool,
+            .reader_nodes = reader_nodes,
+            .read_request_queue = read_buffer.read_request_queue.init(allocator),
+            .reader_thread_pool = null,
             .options = options,
             // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
@@ -241,6 +252,7 @@ pub const StorageEngine = struct {
             // SAFETY: Initialized below
             .pk_sets = undefined,
         };
+        errdefer self.read_request_queue.deinit();
 
         self.writer.stmt_cache.init(allocator, self.writer.performance_config.statement_cache_size);
         errdefer self.writer.stmt_cache.deinit(allocator);
@@ -281,30 +293,41 @@ pub const StorageEngine = struct {
 
         const gpa = self.allocator;
 
-        // 1. Signal shutdown to the thread only if it was running
-        if (old_state == .running) {
-            self.writer.stopThread();
+        // 1. Stop reader pool
+        if (self.reader_thread_pool) |*pool| {
+            pool.stop();
         }
 
-        // 3. Deinit cache
+        // 2. Stop writer thread
+        self.writer.stopThread();
+
+        // 3. Deinit reader pool
+        if (self.reader_thread_pool) |*pool| {
+            pool.deinit();
+        }
+
+        // 4. Deinit queues
+        self.read_request_queue.deinit();
+
+        // 5. Deinit cache
         self.metadata_cache.deinit();
         self.namespace_cache.deinit();
         self.identity_cache.deinit();
 
-        // 4. Deinit pk_sets
+        // 6. Deinit pk_sets
         for (self.pk_sets) |*pk_set| {
             pk_set.deinit(gpa);
         }
         gpa.free(self.pk_sets);
 
-        // 5. Clean up readers
-        for (self.reader_pool) |*node| {
+        // 7. Clean up readers
+        for (self.reader_nodes) |*node| {
             node.stmt_cache.deinit(self.allocator);
             node.conn.deinit();
         }
-        gpa.free(self.reader_pool);
+        gpa.free(self.reader_nodes);
 
-        // 6. Clean up the writer and queue
+        // 8. Clean up the writer and queue
         self.writer.deinit();
         self.node_pool.deinit();
     }
@@ -339,7 +362,7 @@ pub const StorageEngine = struct {
             self.writer.db_path,
             self.writer.in_memory,
             &self.writer.conn,
-            self.reader_pool,
+            self.reader_nodes,
             self.reconnection_config,
         );
     }
@@ -349,7 +372,7 @@ pub const StorageEngine = struct {
             self.writer.db_path,
             self.writer.in_memory,
             &self.writer.conn,
-            self.reader_pool,
+            self.reader_nodes,
         );
     }
 
@@ -398,7 +421,7 @@ pub const StorageEngine = struct {
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
     /// Once called, the schema is locked and only data operations are permitted.
-    pub fn start(self: *StorageEngine) !void {
+    pub fn start(self: *StorageEngine, send_queue: *send_queue_type) !void {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
         }
@@ -426,12 +449,46 @@ pub const StorageEngine = struct {
 
         // Spawn the write thread
         try self.writer.spawnThread();
+
+        // Initialize and start the reader thread pool
+        var rp = try reader_pool.ReaderPool.init(
+            self.allocator,
+            self.reader_nodes,
+            &self.read_request_queue,
+            send_queue,
+            self.schema,
+            &self.metadata_cache,
+            &self.writer.version,
+            self.writer.notifier_ptr,
+            self.writer.notifier_ctx,
+        );
+        errdefer {
+            rp.stop();
+            rp.deinit();
+        }
+        try rp.start();
+        self.reader_thread_pool = rp;
+
         self.state.store(.running, .release);
 
         // Wait deterministically for the write thread to signal readiness
         self.writer.waitUntilReady();
 
         std.log.info("Storage engine started (Runtime Phase)", .{});
+    }
+
+    pub fn enqueueRead(self: *StorageEngine, request: ReadRequest) !void {
+        try self.read_request_queue.push(request);
+    }
+
+    pub fn stopReaderPool(self: *StorageEngine) void {
+        if (self.reader_thread_pool) |*pool| {
+            pool.stop();
+        }
+    }
+
+    pub fn readRequestQueue(self: *StorageEngine) *read_buffer.read_request_queue {
+        return &self.read_request_queue;
     }
 
     /// Return the raw writer connection for setup-time tools (migrations).
@@ -821,8 +878,8 @@ pub const StorageEngine = struct {
             else => return err,
         }
 
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const node = &self.reader_pool[reader_idx];
+        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
+        const node = &self.reader_nodes[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
@@ -881,8 +938,8 @@ pub const StorageEngine = struct {
             }
         }
 
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const node = &self.reader_pool[reader_idx];
+        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
+        const node = &self.reader_nodes[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 

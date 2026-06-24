@@ -200,6 +200,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             RefCountOverflow,
             OutOfMemory,
             NotFound,
+            CasFailed,
         };
 
         pub const Snapshot = struct {
