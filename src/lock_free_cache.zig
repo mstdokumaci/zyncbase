@@ -200,6 +200,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             RefCountOverflow,
             OutOfMemory,
             NotFound,
+            CasFailed,
         };
 
         pub const Snapshot = struct {
@@ -263,123 +264,115 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
         /// Create a new version of the namespace entry (COW)
         pub fn update(self: *Self, key: KeyType, new_data: t) Error!void {
-            while (true) {
-                const epoch_slot = self.epoch_manager.enter();
-                defer self.epoch_manager.exit(epoch_slot);
+            const epoch_slot = self.epoch_manager.enter();
+            defer self.epoch_manager.exit(epoch_slot);
 
-                const old_entries = self.entries.load(.acquire);
+            const old_entries = self.entries.load(.acquire);
 
-                const new_entries = try self.cloneEntries(old_entries);
-                errdefer {
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                }
-
-                const old_entry = old_entries.get(key);
-                const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
-
-                const entry = try CacheEntry.init(self.allocator, new_data);
-                errdefer self.allocator.destroy(entry);
-                entry.version.store(new_version, .release);
-
-                const gop = try new_entries.getOrPut(key);
-
-                var deferred_old_value: ?*CacheEntry = null;
-                if (gop.found_existing) {
-                    deferred_old_value = gop.value_ptr.*;
-                    gop.value_ptr.* = entry;
-                } else {
-                    gop.value_ptr.* = entry;
-                }
-
-                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |actual| {
-                    self.allocator.destroy(entry);
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    _ = actual;
-                    continue;
-                }
-
-                if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
-                self.internalDefer(.{ .map = old_entries });
-
-                _ = self.epoch_manager.bump();
-                return;
+            const new_entries = try self.cloneEntries(old_entries);
+            errdefer {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
             }
+
+            const old_entry = old_entries.get(key);
+            const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
+
+            const entry = try CacheEntry.init(self.allocator, new_data);
+            errdefer self.allocator.destroy(entry);
+            entry.version.store(new_version, .release);
+
+            const gop = try new_entries.getOrPut(key);
+
+            var deferred_old_value: ?*CacheEntry = null;
+            if (gop.found_existing) {
+                deferred_old_value = gop.value_ptr.*;
+                gop.value_ptr.* = entry;
+            } else {
+                gop.value_ptr.* = entry;
+            }
+
+            if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                self.allocator.destroy(entry);
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+                return Error.CasFailed;
+            }
+
+            if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
+            self.internalDefer(.{ .map = old_entries });
+
+            _ = self.epoch_manager.bump();
         }
 
         /// Update an entry in the cache with extended options (e.g., size limit)
         pub fn updateExt(self: *Self, key: KeyType, new_data: t, options: UpdateOptions) !void {
-            while (true) {
-                const epoch_slot = self.epoch_manager.enter();
-                defer self.epoch_manager.exit(epoch_slot);
+            const epoch_slot = self.epoch_manager.enter();
+            defer self.epoch_manager.exit(epoch_slot);
 
-                const old_entries = self.entries.load(.acquire);
+            const old_entries = self.entries.load(.acquire);
 
-                const new_entries = try self.cloneEntries(old_entries);
-                errdefer {
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                }
+            const new_entries = try self.cloneEntries(old_entries);
+            errdefer {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+            }
 
-                var evicted_batch = std.ArrayListUnmanaged(struct { key: KeyType, value: *CacheEntry }).empty;
-                defer evicted_batch.deinit(self.allocator);
+            var evicted_batch = std.ArrayListUnmanaged(struct { key: KeyType, value: *CacheEntry }).empty;
+            defer evicted_batch.deinit(self.allocator);
 
-                if (options.max_capacity) |max| {
-                    const exists = new_entries.contains(key);
-                    if (!exists and new_entries.count() >= max) {
-                        const to_evict = @min(options.evict_batch_size, new_entries.count());
-                        var evicted_count: usize = 0;
-                        var nit = new_entries.iterator();
-                        while (nit.next()) |entry| {
-                            if (evicted_count >= to_evict) break;
-                            if (std.meta.eql(entry.key_ptr.*, key)) continue;
+            if (options.max_capacity) |max| {
+                const exists = new_entries.contains(key);
+                if (!exists and new_entries.count() >= max) {
+                    const to_evict = @min(options.evict_batch_size, new_entries.count());
+                    var evicted_count: usize = 0;
+                    var nit = new_entries.iterator();
+                    while (nit.next()) |entry| {
+                        if (evicted_count >= to_evict) break;
+                        if (std.meta.eql(entry.key_ptr.*, key)) continue;
 
-                            try evicted_batch.append(self.allocator, .{ .key = entry.key_ptr.*, .value = entry.value_ptr.* });
-                            evicted_count += 1;
-                        }
+                        try evicted_batch.append(self.allocator, .{ .key = entry.key_ptr.*, .value = entry.value_ptr.* });
+                        evicted_count += 1;
+                    }
 
-                        for (evicted_batch.items) |eb| {
-                            _ = new_entries.remove(eb.key);
-                        }
+                    for (evicted_batch.items) |eb| {
+                        _ = new_entries.remove(eb.key);
                     }
                 }
-
-                const old_entry = old_entries.get(key);
-                const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
-
-                const entry = try CacheEntry.init(self.allocator, new_data);
-                errdefer self.allocator.destroy(entry);
-                entry.version.store(new_version, .release);
-
-                const gop = try new_entries.getOrPut(key);
-
-                var deferred_old_value: ?*CacheEntry = null;
-                if (gop.found_existing) {
-                    deferred_old_value = gop.value_ptr.*;
-                    gop.value_ptr.* = entry;
-                } else {
-                    gop.value_ptr.* = entry;
-                }
-
-                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |actual| {
-                    self.allocator.destroy(entry);
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    _ = actual;
-                    continue;
-                }
-
-                if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
-                for (evicted_batch.items) |eb| {
-                    self.internalDefer(.{ .entry = eb.value });
-                }
-
-                self.internalDefer(.{ .map = old_entries });
-
-                _ = self.epoch_manager.bump();
-                return;
             }
+
+            const old_entry = old_entries.get(key);
+            const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
+
+            const entry = try CacheEntry.init(self.allocator, new_data);
+            errdefer self.allocator.destroy(entry);
+            entry.version.store(new_version, .release);
+
+            const gop = try new_entries.getOrPut(key);
+
+            var deferred_old_value: ?*CacheEntry = null;
+            if (gop.found_existing) {
+                deferred_old_value = gop.value_ptr.*;
+                gop.value_ptr.* = entry;
+            } else {
+                gop.value_ptr.* = entry;
+            }
+
+            if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                self.allocator.destroy(entry);
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+                return error.CasFailed;
+            }
+
+            if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
+            for (evicted_batch.items) |eb| {
+                self.internalDefer(.{ .entry = eb.value });
+            }
+
+            self.internalDefer(.{ .map = old_entries });
+
+            _ = self.epoch_manager.bump();
         }
 
         /// Evict an entry from the cache

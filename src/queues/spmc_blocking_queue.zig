@@ -76,19 +76,21 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            var timer = std.time.Timer.start() catch {
-                return null;
-            };
-
-            while (self.head == null and !self.shutdown_requested) {
-                const elapsed = timer.read();
-                if (elapsed >= timeout_ns) break;
-                const remaining = timeout_ns - elapsed;
-                self.cond.timedWait(&self.mutex, remaining) catch |err| {
-                    if (err == error.Timeout) break;
-                    std.log.err("SpmcBlockingQueue popTimed: timedWait failed: {}", .{err});
-                    break;
+            if (self.head == null and !self.shutdown_requested and timeout_ns > 0) {
+                var timer = std.time.Timer.start() catch {
+                    return null;
                 };
+
+                while (self.head == null and !self.shutdown_requested) {
+                    const elapsed = timer.read();
+                    if (elapsed >= timeout_ns) break;
+                    const remaining = timeout_ns - elapsed;
+                    self.cond.timedWait(&self.mutex, remaining) catch |err| {
+                        if (err == error.Timeout) break;
+                        std.log.err("SpmcBlockingQueue popTimed: timedWait failed: {}", .{err});
+                        break;
+                    };
+                }
             }
 
             if (self.head) |node| {

@@ -256,9 +256,7 @@ pub const ReaderThread = struct {
             else => return .{ .record = null },
         }
 
-        self.node.mutex.lock();
-        defer self.node.mutex.unlock();
-
+        // Build SQL outside the node mutex — only accesses allocator + read-only metadata
         var rendered_guard = filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate) catch {
             return .{ .record = null };
         };
@@ -269,26 +267,44 @@ pub const ReaderThread = struct {
         };
         defer self.allocator.free(sql_query);
 
+        // Snapshot writer version before the DB read to detect concurrent writes
         const seq_before = self.writer_version.load(.acquire);
 
-        var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, sql_query) catch {
-            return .{ .record = null };
-        };
-        defer mstmt.release();
-        const stmt = mstmt.stmt;
+        // Execute DB read under the node mutex
+        const result: ?Record = blk: {
+            self.node.mutex.lock();
+            defer self.node.mutex.unlock();
 
-        const result = read_mod.execSelectDocument(self.allocator, &self.node.conn, stmt, id, namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null) catch {
-            return .{ .record = null };
+            var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, sql_query) catch {
+                break :blk null;
+            };
+            defer mstmt.release();
+
+            break :blk read_mod.execSelectDocument(
+                self.allocator,
+                &self.node.conn,
+                mstmt.stmt,
+                id,
+                namespace_id,
+                table_metadata,
+                if (rendered_guard) |rendered| rendered.values else null,
+            ) catch null;
         };
 
+        // Cache update outside the node mutex — lock-free cache, version-gated
         if (result) |record| {
             if (self.writer_version.load(.acquire) == seq_before) {
                 const cache_record = record.clone(self.allocator) catch {
                     return .{ .record = record };
                 };
                 self.metadata_cache.update(cache_key, cache_record) catch |err| {
+                    cache_record.deinit(self.allocator);
                     std.log.err("ReaderThread: cache.update failed: {}", .{err});
                 };
+                // Double-check: if a write snuck in during the cache update, evict stale entry
+                if (self.writer_version.load(.acquire) != seq_before) {
+                    _ = self.metadata_cache.evict(cache_key);
+                }
             }
             return .{ .record = record };
         }
@@ -316,15 +332,18 @@ pub const ReaderThread = struct {
             }
         }
 
-        self.node.mutex.lock();
-        defer self.node.mutex.unlock();
-
+        // Build SQL outside the node mutex — only accesses allocator + read-only metadata
         const query_res = read_mod.buildSelectQuery(self.allocator, table_metadata, namespace_id, filter, guard_predicate) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
         defer query_res.deinit(self.allocator);
 
         const sort_field_index = filter.order_by.field_index;
+
+        // Execute DB read under the node mutex
+        self.node.mutex.lock();
+        defer self.node.mutex.unlock();
+
         var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, query_res.sql) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
