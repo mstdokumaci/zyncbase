@@ -126,8 +126,10 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             var current = self.head;
             while (current) |node| {
                 const next = node.next;
-                if (@hasDecl(T, "deinit")) {
-                    node.data.deinit();
+                if (comptime @typeInfo(T) == .@"struct" or @typeInfo(T) == .@"union" or @typeInfo(T) == .@"enum") {
+                    if (@hasDecl(T, "deinit")) {
+                        node.data.deinit();
+                    }
                 }
                 self.allocator.destroy(node);
                 current = next;
