@@ -19,7 +19,6 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/queues/mpsc_queue.zig` | Generic lock-free MPSC queue (linked list, atomic tail swap). |
 | `src/queues/spmc_blocking_queue.zig` | Generic SPMC blocking queue (mutex + CV + linked list). |
 | `src/notification_dispatcher.zig` | Converts committed record changes into subscription pushes. Legacy event-loop dispatcher until notification workers replace it. |
-| `src/write_outcome_dispatcher.zig` | Sends deferred committed write acknowledgements/errors. Legacy event-loop dispatcher until writer-side `SendQueue` production replaces it. |
 | `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
 | `src/storage_engine/reader_pool.zig` | Dedicated reader OS threads that consume from ReadRequestQueue, encode responses, and push to SendQueue. |
 | `src/storage_engine/read_buffer.zig` | `ReadRequest`, `ReadResponse` types and queue aliases. |
@@ -39,7 +38,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `ReaderPool` | `ReaderNode`, `ReadRequestQueue`, `SendQueue` | Owns N reader threads, each with exclusive SQLite connection. Threads consume requests, encode responses, and push encoded messages to `SendQueue`. |
 | `ReadRequestQueue` | `Allocator`, `Mutex`, `Condition` | SPMC blocking queue; event loop (single producer) enqueues read requests, reader threads (multiple consumers) pop and execute. |
 | `NotificationDispatcher` | `ConnectionManager`, `SubscriptionEngine` | Fans committed store changes out to subscribers. |
-| `WriteOutcomeDispatcher` | `ConnectionManager`, `WriteOutcomeBuffer` | Sends `WriteCommitted`/`WriteError` events to the origin connection. |
+| `Writer` | SQLite writer connection, `SendQueue` | Executes mutations and encodes `WriteCommitted`/`WriteError` outcomes directly onto `SendQueue`. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Maintains subscription groups shared across network workers. |
 
 ## Concurrency Model
@@ -52,6 +51,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - A single connection must observe sequential scope and subscription state changes through `Connection` methods.
 - Store writes are serialized through `WriteQueue`; readers and subscribers observe committed results.
 - Subscription fanout and write-outcome delivery happen after storage commit, not before durable ordering is known.
+- The writer thread is a `SendQueue` producer: it encodes `WriteCommitted`/`WriteError` outcomes after the transaction outcome is known, pushes owned bytes to `SendQueue`, and wakes the event loop.
 - Presence state is in-memory and connection-scoped; disconnect teardown removes the connection's presence records.
 
 ## Synchronization Boundaries

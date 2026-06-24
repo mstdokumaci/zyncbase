@@ -19,7 +19,6 @@ const filter_sql = @import("storage_engine/filter_sql.zig");
 const filter_eval = @import("filter_eval.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
-const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const reader_pool = @import("storage_engine/reader_pool.zig");
 const send_queue_type = @import("send_queue.zig").send_queue;
@@ -74,18 +73,15 @@ pub const StorageEngine = struct {
     const Buffers = struct {
         change_buffer: ChangeBuffer,
         session_resolution_buffer: SessionResolutionBuffer,
-        write_outcome_buffer: WriteOutcomeBuffer,
 
         fn init(allocator: Allocator) !Buffers {
             var cb = try ChangeBuffer.init(allocator);
             errdefer cb.deinit();
             var srb = try SessionResolutionBuffer.init(allocator);
             errdefer srb.deinit();
-            const wob = try WriteOutcomeBuffer.init(allocator);
             return .{
                 .change_buffer = cb,
                 .session_resolution_buffer = srb,
-                .write_outcome_buffer = wob,
             };
         }
     };
@@ -226,7 +222,7 @@ pub const StorageEngine = struct {
                 .pending_count = std.atomic.Value(usize).init(0),
                 .change_buffer = buffers.change_buffer,
                 .session_resolution_buffer = buffers.session_resolution_buffer,
-                .write_outcome_buffer = buffers.write_outcome_buffer,
+                .send_queue = null,
                 .notifier_ptr = event_loop_notifier,
                 .notifier_ctx = notifier_ctx,
                 // SAFETY: Set after metadata_cache init below
@@ -450,6 +446,8 @@ pub const StorageEngine = struct {
         // Spawn the write thread
         try self.writer.spawnThread();
 
+        self.writer.send_queue = send_queue;
+
         // Initialize and start the reader thread pool
         var rp = try reader_pool.ReaderPool.init(
             self.allocator,
@@ -506,10 +504,6 @@ pub const StorageEngine = struct {
 
     pub fn sessionResolutionBuffer(self: *StorageEngine) *SessionResolutionBuffer {
         return &self.writer.session_resolution_buffer;
-    }
-
-    pub fn writeOutcomeBuffer(self: *StorageEngine) *WriteOutcomeBuffer {
-        return &self.writer.write_outcome_buffer;
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
