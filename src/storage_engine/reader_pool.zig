@@ -178,6 +178,7 @@ pub const ReaderThread = struct {
         var req = request;
 
         const table_metadata = self.schema.tableByIndex(req.table_index) orelse {
+            req.deinit();
             // SAFETY: Table metadata is undefined because the table index was not found.
             return .{
                 .conn_id = req.conn_id,
@@ -421,8 +422,7 @@ pub const ReaderPool = struct {
         notifier_ctx: ?*anyopaque,
     ) !ReaderPool {
         const threads = try allocator.alloc(ReaderThread, reader_nodes.len);
-        var init_count: usize = 0;
-        errdefer allocator.free(threads[0..init_count]);
+        errdefer allocator.free(threads);
 
         for (reader_nodes, 0..) |*node, i| {
             threads[i] = ReaderThread.init(
@@ -436,7 +436,6 @@ pub const ReaderPool = struct {
                 notifier_fn,
                 notifier_ctx,
             );
-            init_count += 1;
         }
 
         return .{ .threads = threads, .allocator = allocator };

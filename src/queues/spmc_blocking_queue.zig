@@ -76,12 +76,14 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            const deadline = std.time.nanoTimestamp() + @as(i128, timeout_ns);
+            var timer = std.time.Timer.start() catch {
+                return null;
+            };
 
             while (self.head == null and !self.shutdown_requested) {
-                const now = std.time.nanoTimestamp();
-                if (now >= deadline) break;
-                const remaining: u64 = @intCast(deadline - now);
+                const elapsed = timer.read();
+                if (elapsed >= timeout_ns) break;
+                const remaining = timeout_ns - elapsed;
                 self.cond.timedWait(&self.mutex, remaining) catch |err| {
                     if (err == error.Timeout) break;
                     std.log.err("SpmcBlockingQueue popTimed: timedWait failed: {}", .{err});

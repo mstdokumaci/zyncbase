@@ -344,10 +344,10 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     );
     defer ctx.deinit();
 
-    const start = std.time.nanoTimestamp();
+    var timer = std.time.Timer.start() catch unreachable;
     try ctx.insertText("items", 1, 5, "val", "value1");
     try ctx.engine.flushPendingWrites();
-    const elapsed = std.time.nanoTimestamp() - start;
+    const elapsed = timer.read();
     try testing.expect(elapsed < std.time.ns_per_s);
 
     var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
