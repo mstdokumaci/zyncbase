@@ -97,7 +97,7 @@ pub const StorageEngine = struct {
     allocator: Allocator,
     reader_nodes: []ReaderNode,
     read_request_queue: read_buffer.read_request_queue,
-    reader_thread_pool: reader_pool.ReaderPool,
+    reader_thread_pool: ?reader_pool.ReaderPool,
 
     state: std.atomic.Value(State),
     next_reader_idx: std.atomic.Value(usize),
@@ -200,8 +200,7 @@ pub const StorageEngine = struct {
             .allocator = allocator,
             .reader_nodes = reader_nodes,
             .read_request_queue = read_buffer.read_request_queue.init(allocator),
-            // SAFETY: Initialized below via reader_pool.ReaderPool.init().
-            .reader_thread_pool = undefined,
+            .reader_thread_pool = null,
             .options = options,
             // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
@@ -294,19 +293,17 @@ pub const StorageEngine = struct {
 
         const gpa = self.allocator;
 
-        // 1. Stop reader pool (if running)
-        if (old_state == .running) {
-            self.reader_thread_pool.stop();
+        // 1. Stop reader pool
+        if (self.reader_thread_pool) |*pool| {
+            pool.stop();
         }
 
-        // 2. Signal shutdown to the write thread only if it was running
-        if (old_state == .running) {
-            self.writer.stopThread();
-        }
+        // 2. Stop writer thread
+        self.writer.stopThread();
 
-        // 3. Deinit reader pool (if initialized)
-        if (old_state == .running) {
-            self.reader_thread_pool.deinit();
+        // 3. Deinit reader pool
+        if (self.reader_thread_pool) |*pool| {
+            pool.deinit();
         }
 
         // 4. Deinit queues
@@ -454,7 +451,7 @@ pub const StorageEngine = struct {
         try self.writer.spawnThread();
 
         // Initialize and start the reader thread pool
-        self.reader_thread_pool = try reader_pool.ReaderPool.init(
+        var rp = try reader_pool.ReaderPool.init(
             self.allocator,
             self.reader_nodes,
             &self.read_request_queue,
@@ -465,7 +462,12 @@ pub const StorageEngine = struct {
             self.writer.notifier_ptr,
             self.writer.notifier_ctx,
         );
-        try self.reader_thread_pool.start();
+        errdefer {
+            rp.stop();
+            rp.deinit();
+        }
+        try rp.start();
+        self.reader_thread_pool = rp;
 
         self.state.store(.running, .release);
 
@@ -480,8 +482,8 @@ pub const StorageEngine = struct {
     }
 
     pub fn stopReaderPool(self: *StorageEngine) void {
-        if (self.state.load(.acquire) == .running) {
-            self.reader_thread_pool.stop();
+        if (self.reader_thread_pool) |*pool| {
+            pool.stop();
         }
     }
 

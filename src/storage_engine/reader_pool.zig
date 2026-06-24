@@ -461,6 +461,7 @@ pub const ReaderPool = struct {
     }
 
     pub fn start(self: *ReaderPool) !void {
+        errdefer self.stop();
         for (self.threads) |*rt| {
             try rt.spawn();
         }
