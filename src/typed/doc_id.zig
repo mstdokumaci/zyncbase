@@ -8,7 +8,6 @@ pub const DocIdError = error{
 pub const DocId = u128;
 pub const zero: DocId = 0;
 const uuid_family_tag: u128 = @as(u128, 1) << 127;
-const uuid_payload_mask: u128 = (@as(u128, 1) << 122) - 1;
 
 pub fn fromBytes(bytes: []const u8) DocIdError!DocId {
     if (bytes.len != 16) return error.InvalidLength;
@@ -30,10 +29,6 @@ pub fn eql(a: DocId, b: DocId) bool {
 
 pub fn order(a: DocId, b: DocId) std.math.Order {
     return std.math.order(a, b);
-}
-
-pub fn lessThan(a: DocId, b: DocId) bool {
-    return order(a, b) == .lt;
 }
 
 pub fn hexSlice(id: DocId, buf: *[32]u8) []const u8 {
@@ -62,13 +57,6 @@ pub fn generateUuidV7() DocId {
     bytes[6] = (bytes[6] & 0x0f) | 0x70;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     return packUuidV7Bytes(&bytes);
-}
-
-pub fn fromStableString(value: []const u8) DocId {
-    const high = std.hash.Wyhash.hash(0x9e3779b97f4a7c15, value);
-    const low = std.hash.Wyhash.hash(0xd1b54a32d192ed03, value);
-    const payload = ((@as(u128, high) << 64) | @as(u128, low)) & uuid_payload_mask;
-    return uuid_family_tag | payload;
 }
 
 fn packUuidV7Bytes(bytes: *const [16]u8) DocId {

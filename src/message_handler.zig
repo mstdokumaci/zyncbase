@@ -343,8 +343,8 @@ pub const MessageHandler = struct {
         if (filter_clone.after) |*old| old.deinit(self.allocator);
         filter_clone.after = cursor;
 
-        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
         const request = read_buffer.ReadRequest{
             .conn_id = conn.id,
@@ -492,8 +492,8 @@ pub const MessageHandler = struct {
             .namespace = namespace,
         });
 
-        const filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
-        errdefer @constCast(&filter).deinit(self.allocator);
+        var filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
+        errdefer filter.deinit(self.allocator);
 
         // Register subscription synchronously before async read so notifications are not missed
         _ = try self.subscription_engine.subscribe(namespace_id, table_index, filter, conn.id, sub_id);
@@ -501,8 +501,8 @@ pub const MessageHandler = struct {
         try conn.addSubscription(sub_id);
         errdefer conn.removeSubscription(sub_id);
 
-        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
         const request = read_buffer.ReadRequest{
             .conn_id = conn.id,
@@ -550,11 +550,11 @@ pub const MessageHandler = struct {
             .namespace = namespace,
         });
 
-        const filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
-        errdefer @constCast(&filter).deinit(self.allocator);
+        var filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
+        errdefer filter.deinit(self.allocator);
 
-        const auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) @constCast(&auth_clone).*.?.deinit(self.allocator);
+        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
+        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
         const request = read_buffer.ReadRequest{
             .conn_id = conn.id,

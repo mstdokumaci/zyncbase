@@ -21,6 +21,11 @@ const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
 const ReaderNode = connection.ReaderNode;
 
+fn cleanupRequest(req: ReadRequest) void {
+    var mutable_req = req;
+    mutable_req.deinit();
+}
+
 fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
     const conds = filter.predicate.conditions orelse return null;
     if (conds.len != 1) return null;
@@ -156,7 +161,7 @@ pub const ReaderThread = struct {
                 .message = "shutdown",
             }) catch |err| {
                 std.log.err("ReaderThread: failed to encode shutdown error: {}", .{err});
-                @constCast(&request).deinit();
+                cleanupRequest(request);
                 if (self.notifier_fn) |n| n(self.notifier_ctx);
                 continue;
             };
@@ -164,7 +169,7 @@ pub const ReaderThread = struct {
                 std.log.err("ReaderThread: failed to push shutdown error: {}", .{err});
                 self.allocator.free(shutdown_encoded);
             };
-            @constCast(&request).deinit();
+            cleanupRequest(request);
             if (self.notifier_fn) |n| n(self.notifier_ctx);
         }
     }

@@ -42,8 +42,6 @@ pub const authorizePresenceSharedWrite = evaluate_mod.authorizePresenceSharedWri
 pub const buildDocPredicate = doc_predicate_mod.buildDocPredicate;
 pub const authorizeWriteCondition = doc_predicate_mod.authorizeWriteCondition;
 pub const validateDocPredicate = doc_predicate_mod.validateDocPredicate;
-pub const validateAuthConfig = parse_mod.validateConfig;
-
 pub const ReadAuthInput = read_auth_mod.ReadAuthInput;
 pub const authorizeStoreRead = read_auth_mod.authorizeStoreRead;
 

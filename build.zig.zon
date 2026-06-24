@@ -12,8 +12,8 @@
             .hash = "zig_msgpack-0.0.14-evvueEc7BQATytDqy8wFvDb883Jv3yLk_8cF5EoYaKFB",
         },
         .zwanzig = .{
-            .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.11.0.tar.gz",
-            .hash = "zwanzig-0.11.0-oiXZlqj7FgDQVjcn0XkxcmayLn6WPUCl2DHWZNkHQ4rm",
+            .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.14.0.tar.gz",
+            .hash = "zwanzig-0.14.0-oiXZljvxGACKRbJD3WEVSKM_gbCm6GUsrz2_TbFP7xfe",
         },
     },
     .paths = .{

@@ -4,17 +4,6 @@ const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
 const schema = @import("schema.zig");
 const typed = @import("typed.zig");
 
-pub fn createStoreSetMessage(
-    allocator: std.mem.Allocator,
-    id: u64,
-    namespace_id: i64,
-    table_index: usize,
-    doc_id_value: typed.DocId,
-    value: msgpack_utils.Payload,
-) ![]u8 {
-    return createStoreSetMessageWithPayload(allocator, id, namespace_id, table_index, doc_id_value, value);
-}
-
 pub fn createStoreSetMessageWithPayload(
     allocator: std.mem.Allocator,
     id: u64,
@@ -50,45 +39,6 @@ pub fn createStoreSetMessageWithPayload(
     try msgpack_utils.writeMsgPackStr(writer, "value");
     try msgpack_utils.encode(value, buf.writer(allocator));
     return buf.toOwnedSlice(allocator);
-}
-
-pub fn createStoreQueryMessage(
-    allocator: std.mem.Allocator,
-    id: u64,
-    _namespace_id: i64,
-    table_index: usize,
-    filter: msgpack_utils.Payload,
-) ![]u8 {
-    _ = _namespace_id;
-    var p = msgpack_utils.Payload.mapPayload(allocator);
-    defer p.free(allocator);
-
-    {
-        const k_val = try msgpack_utils.Payload.strToPayload("StoreQuery", allocator);
-        errdefer k_val.free(allocator);
-        try p.mapPut("type", k_val);
-    }
-    try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    {
-        try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
-    }
-
-    // Flat filter fields
-    if (filter == .map) {
-        var it = filter.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str) {
-                const cloned = try entry.value_ptr.*.deepClone(allocator);
-                errdefer cloned.free(allocator);
-                try p.mapPut(entry.key_ptr.*.str.value(), cloned);
-            }
-        }
-    }
-
-    var list: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer list.deinit(allocator);
-    try msgpack_utils.encode(p, list.writer(allocator));
-    return try list.toOwnedSlice(allocator);
 }
 
 pub fn createStoreQueryMessageWithFilterKey(

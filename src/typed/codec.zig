@@ -238,7 +238,7 @@ fn payloadAsBool(payload: msgpack.Payload) !bool {
 fn jsonAsInt(value: std.json.Value) !i64 {
     return switch (value) {
         .integer => |v| v,
-        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch error.TypeMismatch,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch error.TypeMismatch, // zwanzig-disable-line: swallowed-error
         else => error.TypeMismatch,
     };
 }
@@ -247,7 +247,7 @@ fn jsonAsFloat(value: std.json.Value) !f64 {
     return switch (value) {
         .float => |v| v,
         .integer => |v| @floatFromInt(v),
-        .number_string => |s| std.fmt.parseFloat(f64, s) catch error.TypeMismatch,
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch error.TypeMismatch, // zwanzig-disable-line: swallowed-error
         else => error.TypeMismatch,
     };
 }
