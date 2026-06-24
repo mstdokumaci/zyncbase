@@ -103,9 +103,9 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Thread count | `ThreadBudget.readers` (1–4) | Formula: min(4, max(1, (cpu-4)/2)). |
+| Thread count | `ThreadBudget.readers` (1–4) | Formula: `remaining = max(cpu_count, 4) - 4`; `min(4, max(1, remaining / 2))`. |
 | Work queue | SPMC blocking (mutex + CV) | Event loop (single producer) enqueues `ReadRequest`. Reader threads (multiple consumers) pop and execute. |
-| Response delivery | Lock-free MPSC (atomic tail swap) | Reader threads encode responses to MessagePack and push `{conn_id, encoded_bytes}` to `SendQueue`. Event loop drains in post-handler. |
+| Response delivery | Lock-free MPSC (atomic tail swap) | Reader threads encode responses to MessagePack, push owned `{conn_id, encoded_bytes}` to `SendQueue`, then wake the event loop. Event loop drains in post-handler. |
 | Statement cache | 100 per connection | LRU eviction for prepared statements. |
 
 ### Reconnection
@@ -132,14 +132,14 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 |-----------|--------|-----------------|-------------------|
 | Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; sole producer of change/outcome/resolution buffers. |
 | Write queue | MPSC: uWS thread (producers) + writer thread (consumer) | Lock-free (atomic tail swap + atomic next pointers) | Thread-safe by design. |
-| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
+| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for owned encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
 | Change/Outcome/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
 | SendQueue drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
 
 **Key invariants**:
 - All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
-- The writer thread communicates back to the event loop through three lock-free ring buffers.
-- The writer calls `us_wakeup_loop()` to ensure the event loop processes buffers promptly.
+- The writer currently communicates deferred outcomes/resolutions through lock-free ring buffers; writer-side `SendQueue` delivery is the target for write outcomes.
+- Background producers call `us_wakeup_loop()` after successful enqueue so the event loop processes queued work promptly.
 - Reader threads execute SQLite queries on dedicated connections; no contention with the event loop or writer thread.
 - StoreSubscribe registration happens in `MessageHandler` before the read request is enqueued to the reader pool.
 - Metadata cache is lock-free and safe for concurrent reads from reader threads and the writer thread. Cache population uses writer version snapshot for race protection.

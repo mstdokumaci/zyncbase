@@ -125,11 +125,11 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
 
-**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 3 CPU cores. There are no configuration overrides for thread counts.
+**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 3 CPU cores. There are no configuration overrides for thread counts. Background worker domains may encode outbound messages, but uWebSockets sends are event-loop-only and cross-thread delivery goes through `SendQueue`.
 
 ### Minimum Hardware Requirement
 
-The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase — the thread budget formula cannot produce a valid allocation.
+The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 3 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one notification worker.
 
 ### Thread Budget Formula
 
@@ -143,22 +143,24 @@ fixed:
   presence     = 1
 
 variable:
-  readers      = min(4, max(1, (cpu_count - 4) / 2))
-  notification = max(1, cpu_count - 4 - readers)
+  remaining    = max(cpu_count, 4) - 4
+  readers      = min(4, max(1, remaining / 2))
+  notification = max(1, remaining - readers)
 ```
 
 ### Threading Topology
 
 | CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
 |-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
 | 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
 | 32        | 1          | 1      | 1          | 1        | 4       | 24           | 32    |
 
-**Event loop thread** — runs the uWebSockets reactor, handles all WebSocket I/O and message dispatch. Must never block.
+**Event loop thread** — runs the uWebSockets reactor, handles all WebSocket I/O and message dispatch, and drains `SendQueue` to call `Connection.send()`. Must never block.
 
-**Writer thread** — receives mutations from the write queue, commits them to SQLite, and pushes change events to the Subscription Engine. Serialization is by design: SQLite supports only one concurrent writer, and total write ordering is architecturally valuable (ADR-002).
+**Writer thread** — receives mutations from the write queue, commits them to SQLite, and publishes durable outcomes/change events for downstream delivery. Serialization is by design: SQLite supports only one concurrent writer, and total write ordering is architecturally valuable (ADR-002).
 
 **Checkpoint thread** — background WAL→main database flush, decoupled from the write path.
 
@@ -183,9 +185,10 @@ Collection query results and subscription state are managed exclusively by the S
 
 **Consequences**:
 - Deterministic resource usage — no configuration-induced performance cliffs.
-- Fail-fast on underpowered machines — clear error at startup.
+- Fail-fast on machines with fewer than 3 CPU cores — clear error at startup while still supporting constrained CI runners.
 - Full CPU core utilization — benchmarks show ~Nx throughput improvement on a cpu with N cores, moving from a single-threaded to a multi-threaded core.
 - uWS reactor thread remains non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
+- Background workers never call uWS send APIs directly; they enqueue owned encoded bytes and wake the event loop after successful enqueue.
 
 **Principles**: P-PPF, P-VSF
 

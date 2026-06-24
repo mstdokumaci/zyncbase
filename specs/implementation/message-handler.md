@@ -82,9 +82,9 @@ Errors flow through four distinct paths depending on when they occur:
 ### Asynchronous Write Errors
 
 1. Write op is enqueued with `conn_id` and `write_id`.
-2. Writer thread commits the transaction; on failure, pushes `WriteOutcomeResult` with error into `WriteOutcomeBuffer`.
-3. `WriteOutcomeDispatcher` drains the buffer and calls `wire.encodeWriteError()` with `write_id` and optional `batch_index`.
-4. `ConnectionManager.sendToConnection()` delivers the `WriteError` push to the origin connection.
+2. Writer thread commits or rejects the transaction after durable ordering is known.
+3. Deferred write-outcome delivery encodes `WriteError` with the original `write_id` and optional `batch_index`.
+4. The event loop delivers the encoded `WriteError` push to the origin connection.
 
 ### Asynchronous Session Resolution Errors
 

@@ -21,8 +21,8 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 │  │   (1 fixed)  │  │   (1 fixed)  │  │   (1 fixed)  │           │
 │  │              │  │              │  │              │           │
 │  │  WebSocket   │  │  SQLite WAL  │  │  Background  │           │
-│  │  I/O + Msg   │  │  Commit      │  │  WAL→DB      │           │
-│  │  Dispatch    │  │  Serialization│ │  Flush       │           │
+│  │  I/O + Msg   │  │  Commit      │  │  WAL->DB     │           │
+│  │  Send Drain  │  │  Serialization│ │  Flush       │           │
 │  └──────┬───────┘  └──────┬───────┘  └──────────────┘           │
 │         │                 │                                     │
 │         │          ┌──────▼───────┐  ┌──────────────┐           │
@@ -31,8 +31,8 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 │         │          │              │  │              │           │
 │         │          │  Broadcast   │  │  Change      │           │
 │         │          │  Encoding    │  │  Evaluation  │           │
-│         │          └──────────────┘  │  + Dispatch  │           │
-│         │                            └──────────────┘           │
+│         │          └──────┬───────┘  │  + Encoding  │           │
+│         │                 │          └──────┬───────┘           │
 │         │                                                       │
 │  ┌──────▼──────────────────────────────────────────────────┐    │
 │  │                    Reader Pool                          │    │
@@ -42,6 +42,11 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 │  │   │SQLite│  │SQLite│  │SQLite│  │SQLite│                │    │
 │  │   │ WAL  │  │ WAL  │  │ WAL  │  │ WAL  │                │    │
 │  │   └──────┘  └──────┘  └──────┘  └──────┘                │    │
+│  └──────┬──────────────────────────────────────────────────┘    │
+│         │                                                       │
+│  ┌──────▼──────────────────────────────────────────────────┐    │
+│  │                       SendQueue                         │    │
+│  │      MPSC owned-message handoff to event loop drain     │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -84,13 +89,14 @@ variable:
 ### Event Loop (1 thread, fixed)
 - Runs the uWebSockets reactor
 - Handles all WebSocket I/O (connect, message, disconnect)
-- Dispatches post-handler callbacks (notification poll, presence poll, write outcome poll)
+- Drains `SendQueue` in the post-handler and calls `Connection.send()`
 - Must never block — all I/O is non-blocking
 
 ### Writer (1 thread, fixed)
 - Receives mutations from the write queue
 - Commits to SQLite in serialized order
 - Publishes `RecordChange` events to the Subscription Engine after commit
+- Pushes acknowledged write outcomes through `SendQueue`
 - Total write ordering is architecturally guaranteed
 
 ### Checkpoint (1 thread, fixed)
@@ -107,13 +113,14 @@ variable:
 - Each reader holds its own SQLite connection in WAL read mode
 - Serves cold queries (subscriptions with no active warm state)
 - Serves `loadMore` operations for pagination
+- Encodes read responses and pushes owned messages to `SendQueue`
 - Scales with CPU cores up to 4 readers
 
 ### Notification (variable)
 - Drains the change buffer after storage commits
 - Evaluates subscription filters (CPU-heavy)
 - Encodes delta messages
-- Pushes to the send queue for event loop delivery
+- Pushes owned delta messages to `SendQueue` for event loop delivery
 
 ---
 
@@ -135,12 +142,12 @@ variable:
 - Warm reads (active subscriptions) evaluate in-memory via Subscription Engine
 - Cold reads (no active subscription) use reader pool
 - Reader pool threads execute SQLite queries in parallel
-- Results are encoded and sent via event loop
+- Results are encoded, pushed to `SendQueue`, and sent by the event loop
 
 ### 4. Presence Path (Dedicated)
 - Presence updates are batched in PresenceManager
 - Presence dispatch thread encodes broadcasts
-- Broadcasts are pushed to send queue for event loop delivery
+- Broadcasts are pushed to `SendQueue` for event loop delivery
 
 ---
 
@@ -153,7 +160,7 @@ The core engine routes incoming messages to either the parallel read path or the
 - Storage writes: serialized through WriteQueue
 - Storage reads: use reader connections, no statement sharing
 - Subscriptions: register/unregister through SubscriptionEngine
-- WebSocket sends: use connection/manager helpers
+- WebSocket sends: background workers push owned bytes to `SendQueue`; only the event loop drains and calls `Connection.send()`
 
 ---
 
