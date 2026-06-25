@@ -16,7 +16,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
         mutex: std.Thread.Mutex,
         cond: std.Thread.Condition,
         count: usize,
-        shutdown_requested: bool,
+        shutdown_requested: std.atomic.Value(bool),
         allocator: Allocator,
 
         pub fn init(allocator: Allocator) Self {
@@ -26,7 +26,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
                 .mutex = .{},
                 .cond = .{},
                 .count = 0,
-                .shutdown_requested = false,
+                .shutdown_requested = std.atomic.Value(bool).init(false),
                 .allocator = allocator,
             };
         }
@@ -55,7 +55,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            while (self.head == null and !self.shutdown_requested) {
+            while (self.head == null and !self.shutdown_requested.load(.acquire)) {
                 self.cond.wait(&self.mutex);
             }
 
@@ -76,12 +76,12 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            if (self.head == null and !self.shutdown_requested and timeout_ns > 0) {
+            if (self.head == null and !self.shutdown_requested.load(.acquire) and timeout_ns > 0) {
                 var timer = std.time.Timer.start() catch {
                     return null;
                 };
 
-                while (self.head == null and !self.shutdown_requested) {
+                while (self.head == null and !self.shutdown_requested.load(.acquire)) {
                     const elapsed = timer.read();
                     if (elapsed >= timeout_ns) break;
                     const remaining = timeout_ns - elapsed;
@@ -109,7 +109,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
         pub fn shutdown(self: *Self) void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            self.shutdown_requested = true;
+            self.shutdown_requested.store(true, .release);
             self.cond.broadcast();
         }
 

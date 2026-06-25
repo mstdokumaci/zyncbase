@@ -170,6 +170,7 @@ pub const ReaderThread = struct {
                 std.log.err("ReaderThread: failed to push shutdown error: {}", .{err});
                 self.allocator.free(shutdown_encoded);
                 cleanupRequest(request);
+                if (self.notifier_fn) |n| n(self.notifier_ctx);
                 continue;
             };
             cleanupRequest(request);

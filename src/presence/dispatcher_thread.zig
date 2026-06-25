@@ -57,6 +57,7 @@ pub const PresenceDispatcherThread = struct {
 
     pub fn start(self: *PresenceDispatcherThread) !void {
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
+        errdefer self.stop();
         self.waitUntilReady();
     }
 
@@ -109,6 +110,7 @@ pub const PresenceDispatcherThread = struct {
     }
 
     fn flush(self: *PresenceDispatcherThread) void {
+        if (self.shutdown_requested.load(.acquire)) return;
         const pm = self.presence_manager;
 
         pm.evictExpiredGracePeriods();
