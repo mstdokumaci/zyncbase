@@ -64,9 +64,9 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
         &notifier_called,
     );
     defer dispatcher.deinit();
+    defer dispatcher.stop();
 
     try dispatcher.start();
-    dispatcher.stop();
 }
 
 test "PresenceDispatcherThread: flush drains pending user updates to send_queue" {
