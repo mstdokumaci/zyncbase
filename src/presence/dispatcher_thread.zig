@@ -12,8 +12,6 @@ pub const PresenceDispatcherThread = struct {
     notifier_ctx: ?*anyopaque,
     thread: ?std.Thread,
     shutdown_requested: std.atomic.Value(bool),
-    mutex: std.Thread.Mutex,
-    cond: std.Thread.Condition,
     is_ready: std.atomic.Value(bool),
     ready_mutex: std.Thread.Mutex,
     ready_cond: std.Thread.Condition,
@@ -35,8 +33,6 @@ pub const PresenceDispatcherThread = struct {
             .notifier_ctx = notifier_ctx,
             .thread = null,
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .mutex = .{},
-            .cond = .{},
             .is_ready = std.atomic.Value(bool).init(false),
             .ready_mutex = .{},
             .ready_cond = .{},
@@ -49,10 +45,7 @@ pub const PresenceDispatcherThread = struct {
     }
 
     pub fn signal(self: *PresenceDispatcherThread) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         self.pending_work.store(true, .release);
-        self.cond.signal();
     }
 
     pub fn start(self: *PresenceDispatcherThread) !void {
@@ -63,9 +56,6 @@ pub const PresenceDispatcherThread = struct {
 
     pub fn stop(self: *PresenceDispatcherThread) void {
         self.shutdown_requested.store(true, .release);
-        self.mutex.lock();
-        self.cond.signal();
-        self.mutex.unlock();
 
         if (self.thread) |t| {
             t.join();
@@ -90,31 +80,19 @@ pub const PresenceDispatcherThread = struct {
         const flush_interval_ns: u64 = 50 * std.time.ns_per_ms;
 
         while (!self.shutdown_requested.load(.acquire)) {
-            self.mutex.lock();
-            var needs_unlock = true;
-            if (!self.pending_work.load(.acquire) and !self.shutdown_requested.load(.acquire)) {
-                self.cond.timedWait(&self.mutex, flush_interval_ns) catch |err| {
-                    if (err != error.Timeout) {
-                        std.log.err("PresenceDispatcherThread timedWait failed: {}", .{err});
-                        needs_unlock = false;
-                    }
-                };
+            if (self.pending_work.swap(false, .acq_rel)) {
+                self.flush();
+            } else {
+                std.Thread.sleep(flush_interval_ns);
             }
-            self.pending_work.store(false, .release);
-            if (needs_unlock) {
-                self.mutex.unlock();
-            }
-
-            if (self.shutdown_requested.load(.acquire)) break;
-
-            self.flush();
         }
 
-        self.flush();
+        if (self.pending_work.swap(false, .acq_rel)) {
+            self.flush();
+        }
     }
 
     fn flush(self: *PresenceDispatcherThread) void {
-        if (self.shutdown_requested.load(.acquire)) return;
         const pm = self.presence_manager;
 
         pm.evictExpiredGracePeriods();
