@@ -77,9 +77,9 @@ test "NotificationWorkerPool: lifecycle start and stop" {
         &ctx.notifier_called,
     );
     defer pool.deinit();
+    defer pool.stop();
 
     try pool.start();
-    pool.stop();
 }
 
 test "NotificationWorkerPool: matching change is processed and pushed to send_queue" {
@@ -111,9 +111,9 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
         &ctx.notifier_called,
     );
     defer pool.deinit();
+    defer pool.stop();
 
     try pool.start();
-    defer pool.stop();
 
     // Push a matching change (status = "active")
     const doc_id: typed.DocId = 42;
@@ -171,9 +171,9 @@ test "NotificationWorkerPool: non-matching change does not push to send_queue" {
         &ctx.notifier_called,
     );
     defer pool.deinit();
+    defer pool.stop();
 
     try pool.start();
-    defer pool.stop();
 
     // Push a non-matching change (status = "inactive")
     const doc_id: typed.DocId = 43;

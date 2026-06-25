@@ -113,9 +113,9 @@ test "PresenceDispatcherThread: flush drains pending user updates to send_queue"
         &notifier_called,
     );
     defer dispatcher.deinit();
+    defer dispatcher.stop();
 
     try dispatcher.start();
-    defer dispatcher.stop();
 
     dispatcher.signal();
 
@@ -169,9 +169,9 @@ test "PresenceDispatcherThread: no pending work does not push to send_queue" {
         &notifier_called,
     );
     defer dispatcher.deinit();
+    defer dispatcher.stop();
 
     try dispatcher.start();
-    defer dispatcher.stop();
 
     dispatcher.signal();
 
