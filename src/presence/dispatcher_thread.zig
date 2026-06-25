@@ -91,15 +91,19 @@ pub const PresenceDispatcherThread = struct {
 
         while (!self.shutdown_requested.load(.acquire)) {
             self.mutex.lock();
+            var needs_unlock = true;
             if (!self.pending_work.load(.acquire) and !self.shutdown_requested.load(.acquire)) {
                 self.cond.timedWait(&self.mutex, flush_interval_ns) catch |err| {
                     if (err != error.Timeout) {
                         std.log.err("PresenceDispatcherThread timedWait failed: {}", .{err});
+                        needs_unlock = false;
                     }
                 };
             }
             self.pending_work.store(false, .release);
-            self.mutex.unlock();
+            if (needs_unlock) {
+                self.mutex.unlock();
+            }
 
             if (self.shutdown_requested.load(.acquire)) break;
 
