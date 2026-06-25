@@ -55,7 +55,8 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    var dispatcher: PresenceDispatcherThread = undefined;
+    const dispatcher = try allocator.create(PresenceDispatcherThread);
+    defer allocator.destroy(dispatcher);
     dispatcher.init(
         allocator,
         &presence_manager,
@@ -63,7 +64,6 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
         notifierFn,
         &notifier_called,
     );
-    defer dispatcher.deinit();
     defer dispatcher.stop();
 
     try dispatcher.start();
@@ -104,7 +104,8 @@ test "PresenceDispatcherThread: flush drains pending user updates to send_queue"
     try presence_manager.setUser(namespace_id, user_id, patch);
 
     // Start dispatcher and signal it
-    var dispatcher: PresenceDispatcherThread = undefined;
+    const dispatcher = try allocator.create(PresenceDispatcherThread);
+    defer allocator.destroy(dispatcher);
     dispatcher.init(
         allocator,
         &presence_manager,
@@ -112,7 +113,6 @@ test "PresenceDispatcherThread: flush drains pending user updates to send_queue"
         notifierFn,
         &notifier_called,
     );
-    defer dispatcher.deinit();
     defer dispatcher.stop();
 
     try dispatcher.start();
@@ -160,7 +160,8 @@ test "PresenceDispatcherThread: no pending work does not push to send_queue" {
     defer snapshot.deinit(allocator);
 
     // Start dispatcher and signal it
-    var dispatcher: PresenceDispatcherThread = undefined;
+    const dispatcher = try allocator.create(PresenceDispatcherThread);
+    defer allocator.destroy(dispatcher);
     dispatcher.init(
         allocator,
         &presence_manager,
@@ -168,7 +169,6 @@ test "PresenceDispatcherThread: no pending work does not push to send_queue" {
         notifierFn,
         &notifier_called,
     );
-    defer dispatcher.deinit();
     defer dispatcher.stop();
 
     try dispatcher.start();
