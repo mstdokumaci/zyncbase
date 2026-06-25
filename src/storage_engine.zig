@@ -17,7 +17,7 @@ const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const filter_eval = @import("filter_eval.zig");
-const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
+const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const reader_pool = @import("storage_engine/reader_pool.zig");
@@ -71,16 +71,12 @@ pub const StorageEngine = struct {
     };
 
     const Buffers = struct {
-        change_buffer: ChangeBuffer,
         session_resolution_buffer: SessionResolutionBuffer,
 
         fn init(allocator: Allocator) !Buffers {
-            var cb = try ChangeBuffer.init(allocator);
-            errdefer cb.deinit();
             var srb = try SessionResolutionBuffer.init(allocator);
             errdefer srb.deinit();
             return .{
-                .change_buffer = cb,
                 .session_resolution_buffer = srb,
             };
         }
@@ -220,7 +216,7 @@ pub const StorageEngine = struct {
                 .mutex = .{},
                 .flush_cond = .{},
                 .pending_count = std.atomic.Value(usize).init(0),
-                .change_buffer = buffers.change_buffer,
+                .change_queue = null,
                 .session_resolution_buffer = buffers.session_resolution_buffer,
                 .send_queue = null,
                 .notifier_ptr = event_loop_notifier,
@@ -417,7 +413,7 @@ pub const StorageEngine = struct {
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
     /// Once called, the schema is locked and only data operations are permitted.
-    pub fn start(self: *StorageEngine, send_queue: *send_queue_type) !void {
+    pub fn start(self: *StorageEngine, send_queue: *send_queue_type, change_queue: ?*ChangeQueue) !void {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
         }
@@ -447,6 +443,7 @@ pub const StorageEngine = struct {
         try self.writer.spawnThread();
 
         self.writer.send_queue = send_queue;
+        self.writer.change_queue = change_queue;
 
         // Initialize and start the reader thread pool
         var rp = try reader_pool.ReaderPool.init(
@@ -498,8 +495,8 @@ pub const StorageEngine = struct {
         return self.writer.setupConn();
     }
 
-    pub fn changeBuffer(self: *StorageEngine) *ChangeBuffer {
-        return &self.writer.change_buffer;
+    pub fn changeQueue(self: *StorageEngine) ?*ChangeQueue {
+        return self.writer.change_queue;
     }
 
     pub fn sessionResolutionBuffer(self: *StorageEngine) *SessionResolutionBuffer {

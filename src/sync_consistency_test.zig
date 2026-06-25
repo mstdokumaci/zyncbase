@@ -5,7 +5,7 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
 const sub_eng = @import("subscription_engine.zig");
-const cb = @import("change_buffer.zig");
+const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
 const RecordChange = sub_eng.RecordChange;
 const query_ast = @import("query_ast.zig");
@@ -50,17 +50,23 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     _ = try sub_engine.subscribe(1, (ctx.schema.table("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
 
-    // 4) Flush queued writes into DB + change buffer.
+    // 4) Flush queued writes into DB + change queue.
     try engine.flushPendingWrites();
 
     // 5) Drain captured changes and verify the queued write was captured.
-    var drain_buf = std.ArrayListUnmanaged(cb.OwnedRecordChange).empty;
+    var change_queue = ctx.test_context.change_queue orelse return error.TestExpectedValue;
+    var drain_buf = std.ArrayListUnmanaged(OwnedRecordChange).empty;
     defer {
         for (drain_buf.items) |*c| c.deinit(allocator);
         drain_buf.deinit(allocator);
     }
 
-    try engine.changeBuffer().drainInto(&drain_buf, allocator);
+    // Drain all shards (test uses 1 shard)
+    var shard = (&change_queue).getShard(0);
+    while (shard.popTimed(0)) |job| {
+        try drain_buf.append(allocator, job.change);
+    }
+
     try testing.expectEqual(@as(usize, 1), drain_buf.items.len);
 
     // 6) Feed the captured change into subscription engine and verify delivery.

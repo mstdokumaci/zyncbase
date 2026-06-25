@@ -34,6 +34,10 @@ pub const MessageHandler = struct {
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
+    /// Optional callback to signal presence dispatcher thread when pending presence work is added
+    signal_presence_fn: ?*const fn (?*anyopaque) void = null,
+    signal_presence_ctx: ?*anyopaque = null,
+
     /// Initialize message handler with all required components
     pub fn init(
         self: *MessageHandler,
@@ -61,7 +65,24 @@ pub const MessageHandler = struct {
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
+            .signal_presence_fn = null,
+            .signal_presence_ctx = null,
         };
+    }
+
+    pub fn setSignalPresenceCallback(
+        self: *MessageHandler,
+        callback: *const fn (?*anyopaque) void,
+        ctx: ?*anyopaque,
+    ) void {
+        self.signal_presence_fn = callback;
+        self.signal_presence_ctx = ctx;
+    }
+
+    fn signalPresence(self: *MessageHandler) void {
+        if (self.signal_presence_fn) |f| {
+            f(self.signal_presence_ctx);
+        }
     }
 
     /// Clean up message handler resources
@@ -677,6 +698,7 @@ pub const MessageHandler = struct {
         );
 
         try self.presence_manager.setUser(session.namespace_id, session.user_doc_id, req.data);
+        self.signalPresence();
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -705,6 +727,7 @@ pub const MessageHandler = struct {
         );
 
         try self.presence_manager.setShared(session.namespace_id, req.data, conn.id);
+        self.signalPresence();
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -797,6 +820,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
         try self.presence_manager.removeUser(session.namespace_id, session.user_doc_id);
+        self.signalPresence();
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
@@ -830,6 +854,7 @@ pub const MessageHandler = struct {
             self.presence_manager.removeUser(old_ns, old_user) catch |err| {
                 std.log.err("Failed to remove user presence from old namespace during switch: {}", .{err});
             };
+            self.signalPresence();
         }
 
         return scope_seq;

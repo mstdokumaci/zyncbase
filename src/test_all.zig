@@ -27,12 +27,10 @@ test {
     _ = @import("query_parser_test.zig");
     _ = @import("filter_eval_test.zig");
     _ = @import("storage_query_test.zig");
-    _ = @import("change_buffer_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
     _ = @import("wire_test.zig");
-    _ = @import("notification_dispatcher_test.zig");
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
 
