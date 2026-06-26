@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 
 // 1. No data loss occurs during checkpoint
@@ -177,7 +177,7 @@ test "checkpoint: escalation logic - works correctly when needed" {
 test "checkpoint: Prometheus formatting - output contains all required metrics" {
     const allocator = testing.allocator;
 
-    const metrics = CheckpointManager.CheckpointMetrics{
+    const metrics = CheckpointWorker.CheckpointMetrics{
         .last_checkpoint_time = 1234567890,
         .last_checkpoint_duration_ms = 150,
         .wal_size_bytes = 5000000,

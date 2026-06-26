@@ -1,5 +1,5 @@
 const std = @import("std");
-const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const Schema = @import("schema.zig").Schema;
@@ -11,9 +11,9 @@ pub const Context = struct {
     schema: Schema,
     test_context: schema_helpers.TestContext,
     storage_engine: StorageEngine,
-    manager: CheckpointManager,
+    manager: CheckpointWorker,
 
-    pub fn init(self: *Context, allocator: std.mem.Allocator, config: CheckpointManager.Config) !void {
+    pub fn init(self: *Context, allocator: std.mem.Allocator, config: CheckpointWorker.Config) !void {
         self.allocator = allocator;
 
         self.schema = try schema_helpers.createTestSchema(allocator, &.{

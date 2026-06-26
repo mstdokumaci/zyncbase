@@ -13,7 +13,7 @@ const wire = @import("wire.zig");
 const schema_mod = @import("schema.zig");
 
 pub const NotificationWorkerPool = struct {
-    workers: []WorkerThread,
+    workers: []NotificationWorker,
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
@@ -34,11 +34,11 @@ pub const NotificationWorkerPool = struct {
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) !NotificationWorkerPool {
-        const workers = try allocator.alloc(WorkerThread, num_workers);
+        const workers = try allocator.alloc(NotificationWorker, num_workers);
         errdefer allocator.free(workers);
 
         for (workers, 0..) |*w, i| {
-            w.* = WorkerThread.init(
+            w.* = NotificationWorker.init(
                 i,
                 change_queue,
                 subscription_engine,
@@ -68,9 +68,6 @@ pub const NotificationWorkerPool = struct {
         for (self.workers) |*w| {
             try w.spawn();
         }
-        for (self.workers) |*w| {
-            w.waitUntilReady();
-        }
     }
 
     pub fn stop(self: *NotificationWorkerPool) void {
@@ -85,7 +82,7 @@ pub const NotificationWorkerPool = struct {
     }
 };
 
-const WorkerThread = struct {
+const NotificationWorker = struct {
     thread: ?std.Thread,
     id: usize,
     change_queue: *ChangeQueue,
@@ -96,9 +93,6 @@ const WorkerThread = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
-    ready_mutex: std.Thread.Mutex,
-    ready_cond: std.Thread.Condition,
 
     fn init(
         id: usize,
@@ -109,7 +103,7 @@ const WorkerThread = struct {
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) WorkerThread {
+    ) NotificationWorker {
         return .{
             .thread = null,
             .id = id,
@@ -121,25 +115,15 @@ const WorkerThread = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .is_ready = std.atomic.Value(bool).init(false),
-            .ready_mutex = .{},
-            .ready_cond = .{},
         };
     }
 
-    fn spawn(self: *WorkerThread) !void {
+    fn spawn(self: *NotificationWorker) !void {
+        if (self.thread != null) return error.ThreadAlreadyRunning;
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
     }
 
-    fn waitUntilReady(self: *WorkerThread) void {
-        self.ready_mutex.lock();
-        defer self.ready_mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.ready_cond.wait(&self.ready_mutex);
-        }
-    }
-
-    fn stop(self: *WorkerThread) void {
+    fn stop(self: *NotificationWorker) void {
         self.shutdown_requested.store(true, .release);
         if (self.thread) |t| {
             t.join();
@@ -147,12 +131,7 @@ const WorkerThread = struct {
         }
     }
 
-    fn workerLoop(self: *WorkerThread) void {
-        self.is_ready.store(true, .release);
-        self.ready_mutex.lock();
-        self.ready_cond.broadcast();
-        self.ready_mutex.unlock();
-
+    fn workerLoop(self: *NotificationWorker) void {
         const shard_idx = self.id % self.change_queue.shardCount();
         const shard = self.change_queue.getShard(shard_idx);
 
@@ -166,7 +145,7 @@ const WorkerThread = struct {
         }
     }
 
-    fn processChange(self: *WorkerThread, job: ChangeJob) void {
+    fn processChange(self: *NotificationWorker, job: ChangeJob) void {
         var job_mut = job;
         defer job_mut.deinit();
 

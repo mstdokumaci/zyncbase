@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const PresenceThread = @import("presence/thread.zig").PresenceThread;
+const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const schema_mod = @import("schema.zig");
 const msgpack = @import("msgpack_utils.zig");
@@ -43,14 +43,14 @@ fn setupDispatcher(
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
     notifier_counter: *std.atomic.Value(u32),
-) !*PresenceThread {
-    const dispatcher = try allocator.create(PresenceThread);
+) !*PresenceWorker {
+    const dispatcher = try allocator.create(PresenceWorker);
     try dispatcher.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
-    try dispatcher.start();
+    try dispatcher.spawn();
     return dispatcher;
 }
 
-test "PresenceThread: lifecycle start and stop" {
+test "PresenceWorker: lifecycle start and stop" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
@@ -74,7 +74,7 @@ test "PresenceThread: lifecycle start and stop" {
     }
 }
 
-test "PresenceThread: set_user op produces broadcast to send_queue" {
+test "PresenceWorker: set_user op produces broadcast to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
@@ -137,7 +137,7 @@ test "PresenceThread: set_user op produces broadcast to send_queue" {
     }
 }
 
-test "PresenceThread: no ops enqueued does not push to send_queue" {
+test "PresenceWorker: no ops enqueued does not push to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
@@ -178,7 +178,7 @@ test "PresenceThread: no ops enqueued does not push to send_queue" {
     try testing.expectEqual(@as(u32, 0), notifier_called.load(.monotonic));
 }
 
-test "PresenceThread: subscribe_user op sends snapshot via send_queue" {
+test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
@@ -230,7 +230,7 @@ test "PresenceThread: subscribe_user op sends snapshot via send_queue" {
     }
 }
 
-test "PresenceThread: multiple ops batched into single flush" {
+test "PresenceWorker: multiple ops batched into single flush" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);

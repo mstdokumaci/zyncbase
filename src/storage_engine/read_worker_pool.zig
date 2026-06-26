@@ -40,7 +40,7 @@ fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
     return val.scalar.doc_id;
 }
 
-pub const ReaderThread = struct {
+pub const ReadWorker = struct {
     thread: ?std.Thread,
     node: *ReaderNode,
     request_queue: *req_queue_type,
@@ -52,9 +52,6 @@ pub const ReaderThread = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
-    ready_mutex: std.Thread.Mutex,
-    ready_cond: std.Thread.Condition,
 
     pub fn init(
         allocator: Allocator,
@@ -66,7 +63,7 @@ pub const ReaderThread = struct {
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) ReaderThread {
+    ) ReadWorker {
         return .{
             .thread = null,
             .node = node,
@@ -79,25 +76,15 @@ pub const ReaderThread = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .is_ready = std.atomic.Value(bool).init(false),
-            .ready_mutex = .{},
-            .ready_cond = .{},
         };
     }
 
-    pub fn spawn(self: *ReaderThread) !void {
+    pub fn spawn(self: *ReadWorker) !void {
+        if (self.thread != null) return error.ThreadAlreadyRunning;
         self.thread = try std.Thread.spawn(.{}, threadLoop, .{self});
     }
 
-    pub fn waitUntilReady(self: *ReaderThread) void {
-        self.ready_mutex.lock();
-        defer self.ready_mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.ready_cond.wait(&self.ready_mutex);
-        }
-    }
-
-    pub fn stop(self: *ReaderThread) void {
+    pub fn stop(self: *ReadWorker) void {
         self.shutdown_requested.store(true, .release);
         self.request_queue.shutdown();
         if (self.thread) |t| {
@@ -106,12 +93,7 @@ pub const ReaderThread = struct {
         }
     }
 
-    fn threadLoop(self: *ReaderThread) void {
-        self.is_ready.store(true, .release);
-        self.ready_mutex.lock();
-        self.ready_cond.broadcast();
-        self.ready_mutex.unlock();
-
+    fn threadLoop(self: *ReadWorker) void {
         while (!self.shutdown_requested.load(.acquire)) {
             const request = self.request_queue.pop() orelse break;
             var response = self.executeRead(request);
@@ -122,12 +104,12 @@ pub const ReaderThread = struct {
                     .code = "STORE_QUERY",
                     .message = @errorName(err),
                 }) catch {
-                    std.log.err("ReaderThread: failed to encode error", .{});
+                    std.log.err("ReadWorker: failed to encode error", .{});
                     response.deinit(self.allocator);
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
-                    std.log.err("ReaderThread: failed to push error to send queue", .{});
+                    std.log.err("ReadWorker: failed to push error to send queue", .{});
                     self.allocator.free(encoded);
                     response.deinit(self.allocator);
                     continue;
@@ -141,12 +123,12 @@ pub const ReaderThread = struct {
                     .table = response.table,
                     .next_cursor = response.next_cursor_str,
                 }) catch {
-                    std.log.err("ReaderThread: failed to encode query", .{});
+                    std.log.err("ReadWorker: failed to encode query", .{});
                     response.deinit(self.allocator);
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
-                    std.log.err("ReaderThread: failed to push to send queue", .{});
+                    std.log.err("ReadWorker: failed to push to send queue", .{});
                     self.allocator.free(encoded);
                     response.deinit(self.allocator);
                     continue;
@@ -161,13 +143,13 @@ pub const ReaderThread = struct {
                 .code = "STORE_QUERY",
                 .message = "shutdown",
             }) catch |err| {
-                std.log.err("ReaderThread: failed to encode shutdown error: {}", .{err});
+                std.log.err("ReadWorker: failed to encode shutdown error: {}", .{err});
                 cleanupRequest(request);
                 if (self.notifier_fn) |n| n(self.notifier_ctx);
                 continue;
             };
             self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded }) catch |err| {
-                std.log.err("ReaderThread: failed to push shutdown error: {}", .{err});
+                std.log.err("ReadWorker: failed to push shutdown error: {}", .{err});
                 self.allocator.free(shutdown_encoded);
             };
             cleanupRequest(request);
@@ -175,7 +157,7 @@ pub const ReaderThread = struct {
         }
     }
 
-    fn executeRead(self: *ReaderThread, request: ReadRequest) ReadResponse {
+    fn executeRead(self: *ReadWorker, request: ReadRequest) ReadResponse {
         var req = request;
 
         const table_metadata = self.schema.tableByIndex(req.table_index) orelse {
@@ -224,7 +206,7 @@ pub const ReaderThread = struct {
     const SelectDocumentResult = struct { record: ?Record };
 
     fn executeSelectDocument(
-        self: *ReaderThread,
+        self: *ReadWorker,
         table_metadata: *const schema_mod.Table,
         id: DocId,
         namespace_id: i64,
@@ -300,7 +282,7 @@ pub const ReaderThread = struct {
                 };
                 self.metadata_cache.update(cache_key, cache_record) catch |err| {
                     cache_record.deinit(self.allocator);
-                    std.log.err("ReaderThread: cache.update failed: {}", .{err});
+                    std.log.err("ReadWorker: cache.update failed: {}", .{err});
                 };
                 // Double-check: if a write snuck in during the cache update, evict stale entry
                 if (self.writer_version.load(.acquire) != seq_before) {
@@ -318,7 +300,7 @@ pub const ReaderThread = struct {
     };
 
     fn executeSelectQuery(
-        self: *ReaderThread,
+        self: *ReadWorker,
         table_metadata: *const schema_mod.Table,
         namespace_id: i64,
         filter: *const query_ast.QueryFilter,
@@ -370,7 +352,7 @@ pub const ReaderThread = struct {
     }
 
     fn buildResponse(
-        self: *ReaderThread,
+        self: *ReadWorker,
         request: ReadRequest,
         table_metadata: *const schema_mod.Table,
         result: SelectDocumentResult,
@@ -408,7 +390,7 @@ pub const ReaderThread = struct {
     }
 
     fn buildQueryResponse(
-        self: *ReaderThread,
+        self: *ReadWorker,
         request: ReadRequest,
         table_metadata: *const schema_mod.Table,
         result: SelectQueryResult,
@@ -426,8 +408,8 @@ pub const ReaderThread = struct {
     }
 };
 
-pub const ReaderPool = struct {
-    threads: []ReaderThread,
+pub const ReadWorkerPool = struct {
+    threads: []ReadWorker,
     allocator: Allocator,
 
     pub fn init(
@@ -440,12 +422,12 @@ pub const ReaderPool = struct {
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) !ReaderPool {
-        const threads = try allocator.alloc(ReaderThread, reader_nodes.len);
+    ) !ReadWorkerPool {
+        const threads = try allocator.alloc(ReadWorker, reader_nodes.len);
         errdefer allocator.free(threads);
 
         for (reader_nodes, 0..) |*node, i| {
-            threads[i] = ReaderThread.init(
+            threads[i] = ReadWorker.init(
                 allocator,
                 node,
                 request_queue,
@@ -461,23 +443,20 @@ pub const ReaderPool = struct {
         return .{ .threads = threads, .allocator = allocator };
     }
 
-    pub fn start(self: *ReaderPool) !void {
+    pub fn start(self: *ReadWorkerPool) !void {
         errdefer self.stop();
         for (self.threads) |*rt| {
             try rt.spawn();
         }
-        for (self.threads) |*rt| {
-            rt.waitUntilReady();
-        }
     }
 
-    pub fn stop(self: *ReaderPool) void {
+    pub fn stop(self: *ReadWorkerPool) void {
         for (self.threads) |*rt| {
             rt.stop();
         }
     }
 
-    pub fn deinit(self: *ReaderPool) void {
+    pub fn deinit(self: *ReadWorkerPool) void {
         self.allocator.free(self.threads);
     }
 };

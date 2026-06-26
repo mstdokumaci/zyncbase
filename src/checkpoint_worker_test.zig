@@ -1,13 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
-const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 
-// Unit tests for CheckpointManager
+// Unit tests for CheckpointWorker
 // These tests verify specific examples and edge cases
 
-test "CheckpointManager: initialization" {
+test "CheckpointWorker: initialization" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -23,7 +23,7 @@ test "CheckpointManager: initialization" {
     try testing.expect(metrics.last_checkpoint_time > 0); // Should be initialized to current time
 }
 
-test "CheckpointManager: shouldCheckpoint - size threshold" {
+test "CheckpointWorker: shouldCheckpoint - size threshold" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -48,7 +48,7 @@ test "CheckpointManager: shouldCheckpoint - size threshold" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "CheckpointManager: shouldCheckpoint - time threshold" {
+test "CheckpointWorker: shouldCheckpoint - time threshold" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -72,7 +72,7 @@ test "CheckpointManager: shouldCheckpoint - time threshold" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "CheckpointManager: shouldCheckpoint - both thresholds" {
+test "CheckpointWorker: shouldCheckpoint - both thresholds" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -105,7 +105,7 @@ test "CheckpointManager: shouldCheckpoint - both thresholds" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "CheckpointManager: performCheckpoint - passive mode" {
+test "CheckpointWorker: performCheckpoint - passive mode" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -121,7 +121,7 @@ test "CheckpointManager: performCheckpoint - passive mode" {
     try testing.expect(result.duration_ms >= 0);
 }
 
-test "CheckpointManager: performCheckpoint - all modes" {
+test "CheckpointWorker: performCheckpoint - all modes" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -140,7 +140,7 @@ test "CheckpointManager: performCheckpoint - all modes" {
     }
 }
 
-test "CheckpointManager: performCheckpoint - metrics update" {
+test "CheckpointWorker: performCheckpoint - metrics update" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -162,7 +162,7 @@ test "CheckpointManager: performCheckpoint - metrics update" {
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 }
 
-test "CheckpointManager: getMetrics" {
+test "CheckpointWorker: getMetrics" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -185,10 +185,10 @@ test "CheckpointManager: getMetrics" {
     try testing.expect(metrics.last_checkpoint_duration_ms == 150);
 }
 
-test "CheckpointManager: Prometheus metrics format" {
+test "CheckpointWorker: Prometheus metrics format" {
     const allocator = testing.allocator;
 
-    const metrics = CheckpointManager.CheckpointMetrics{
+    const metrics = CheckpointWorker.CheckpointMetrics{
         .last_checkpoint_time = 1234567890,
         .last_checkpoint_duration_ms = 150,
         .wal_size_bytes = 5000000,
@@ -218,7 +218,7 @@ test "CheckpointManager: Prometheus metrics format" {
     try testing.expect(std.mem.indexOf(u8, output, "3") != null);
 }
 
-test "CheckpointManager: performCheckpointWithEscalation - no escalation needed" {
+test "CheckpointWorker: performCheckpointWithEscalation - no escalation needed" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -235,8 +235,8 @@ test "CheckpointManager: performCheckpointWithEscalation - no escalation needed"
     try testing.expect(result.mode == .full);
 }
 
-test "CheckpointManager: Config defaults" {
-    const config = CheckpointManager.Config{};
+test "CheckpointWorker: Config defaults" {
+    const config = CheckpointWorker.Config{};
 
     try testing.expect(config.wal_size_threshold == 10 * 1024 * 1024); // 10MB
     try testing.expect(config.time_threshold_sec == 300); // 5 minutes
@@ -245,8 +245,8 @@ test "CheckpointManager: Config defaults" {
     try testing.expect(config.max_attempts == 3);
 }
 
-test "CheckpointManager: CheckpointResult structure" {
-    const result = CheckpointManager.CheckpointResult{
+test "CheckpointWorker: CheckpointResult structure" {
+    const result = CheckpointWorker.CheckpointResult{
         .mode = .passive,
         .duration_ms = 100,
         .wal_size_before = 5000,
@@ -261,7 +261,31 @@ test "CheckpointManager: CheckpointResult structure" {
     try testing.expect(result.success);
 }
 
-test "CheckpointManager: fast shutdown" {
+test "CheckpointWorker: shouldCheckpoint - clock rollback" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1000,
+        .time_threshold_sec = 60,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Simulate clock rollback: last_checkpoint is in the future
+    manager.last_checkpoint.store(std.time.timestamp() + 3600, .release);
+    manager.wal_size.store(500, .release);
+
+    // Should not panic and should NOT trigger time-based checkpoint
+    try testing.expect(!manager.shouldCheckpoint());
+
+    // Even with clock rolled back, size threshold should still work
+    manager.wal_size.store(2000, .release);
+    try testing.expect(manager.shouldCheckpoint());
+}
+
+test "CheckpointWorker: fast shutdown" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -274,7 +298,7 @@ test "CheckpointManager: fast shutdown" {
     const manager = &ctx.manager;
 
     const start_time = std.time.milliTimestamp();
-    try manager.startBackgroundLoop();
+    try manager.spawn();
 
     // Signal shutdown immediately
     manager.stop();

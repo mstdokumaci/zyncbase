@@ -12,7 +12,7 @@ const std = @import("std");
 /// `MemoryStrategy.AllocPool` for simple on-demand allocation.
 ///
 /// The queue is not blocking — callers are expected to pair it with a condition
-/// variable for blocking semantics (see Writer or PresenceThread).
+/// variable for blocking semantics (see WriteWorker or PresenceWorker).
 ///
 /// `deinit` only releases the stub node. Callers must drain remaining items
 /// (calling `pop` + item `deinit`) before calling `deinit`.

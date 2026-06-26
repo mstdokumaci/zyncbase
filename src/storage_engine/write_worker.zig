@@ -26,7 +26,7 @@ const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
 
-pub const Writer = struct {
+pub const WriteWorker = struct {
     allocator: Allocator,
     conn: sqlite.Db,
     stmt_cache: StatementCache,
@@ -46,7 +46,6 @@ pub const Writer = struct {
     pk_sets: []@import("pk_set.zig").PkSet,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
     performance_config: PerformanceConfig,
@@ -54,15 +53,15 @@ pub const Writer = struct {
     in_memory: bool,
     write_thread: ?std.Thread = null,
 
-    pub fn beginOp(self: *Writer) void {
+    pub fn beginOp(self: *WriteWorker) void {
         _ = self.pending_count.fetchAdd(1, .acq_rel);
     }
 
-    pub fn endOp(self: *Writer, count: usize) void {
+    pub fn endOp(self: *WriteWorker, count: usize) void {
         _ = self.pending_count.fetchSub(count, .acq_rel);
     }
 
-    pub fn enqueueOp(self: *Writer, op: WriteOp) !void {
+    pub fn enqueueOp(self: *WriteWorker, op: WriteOp) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (!self.is_healthy.load(.acquire)) {
@@ -76,73 +75,66 @@ pub const Writer = struct {
         self.work_cond.signal();
     }
 
-    pub fn isHealthy(self: *const Writer) bool {
+    pub fn isHealthy(self: *const WriteWorker) bool {
         return self.is_healthy.load(.acquire);
     }
 
-    pub fn pendingOpCount(self: *const Writer) usize {
+    pub fn pendingOpCount(self: *const WriteWorker) usize {
         return self.pending_count.load(.acquire);
     }
 
-    pub fn bumpVersion(self: *Writer) void {
+    pub fn bumpVersion(self: *WriteWorker) void {
         _ = self.version.fetchAdd(1, .acq_rel);
     }
 
-    pub fn snapshotVersion(self: *const Writer) u64 {
+    pub fn snapshotVersion(self: *const WriteWorker) u64 {
         return self.version.load(.acquire);
     }
 
-    pub fn notifyChanges(self: *Writer) void {
+    pub fn notifyChanges(self: *WriteWorker) void {
         if (self.notifier_ptr) |n| {
             n(self.notifier_ctx);
         }
     }
 
-    fn pushWriteOutcome(self: *Writer, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
+    fn pushWriteOutcome(self: *WriteWorker, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
         const sq = self.send_queue orelse {
-            std.log.warn("Writer: send_queue not set, dropping write outcome for conn_id={d}", .{conn_id});
+            std.log.warn("WriteWorker: send_queue not set, dropping write outcome for conn_id={d}", .{conn_id});
             return;
         };
 
         const msg = if (err) |e| blk: {
             const wire_err = wire.getWireError(e);
             break :blk wire.encodeWriteError(self.allocator, write_id, wire_err, batch_index) catch |encode_err| {
-                std.log.err("Writer: failed to encode WriteError: {}", .{encode_err});
+                std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
                 return;
             };
         } else blk: {
             break :blk wire.encodeWriteCommitted(self.allocator, write_id) catch |encode_err| {
-                std.log.err("Writer: failed to encode WriteCommitted: {}", .{encode_err});
+                std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
                 return;
             };
         };
 
         sq.push(.{ .conn_id = conn_id, .data = msg }) catch |push_err| {
-            std.log.err("Writer: failed to push write outcome to SendQueue: {}", .{push_err});
+            std.log.err("WriteWorker: failed to push write outcome to SendQueue: {}", .{push_err});
             self.allocator.free(msg);
             return;
         };
     }
 
-    pub fn wakeFlushWaiters(self: *Writer) void {
+    pub fn wakeFlushWaiters(self: *WriteWorker) void {
         self.mutex.lock();
         self.flush_cond.broadcast();
         self.mutex.unlock();
     }
 
-    pub fn spawnThread(self: *Writer) !void {
+    pub fn spawn(self: *WriteWorker) !void {
+        if (self.write_thread != null) return error.ThreadAlreadyRunning;
         self.write_thread = try std.Thread.spawn(.{}, writeThreadLoop, .{self});
     }
 
-    pub fn waitUntilReady(self: *Writer) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.work_cond.wait(&self.mutex);
-        }
-    }
-
-    pub fn stopThread(self: *Writer) void {
+    pub fn stop(self: *WriteWorker) void {
         self.shutdown_requested.store(true, .release);
         self.mutex.lock();
         self.work_cond.signal();
@@ -154,7 +146,7 @@ pub const Writer = struct {
         }
     }
 
-    pub fn flushPendingWrites(self: *Writer) void {
+    pub fn flushPendingWrites(self: *WriteWorker) void {
         std.log.debug("flushPendingWrites: count={}", .{self.pendingOpCount()});
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -163,11 +155,11 @@ pub const Writer = struct {
         }
     }
 
-    pub fn setupConn(self: *Writer) *sqlite.Db {
+    pub fn setupConn(self: *WriteWorker) *sqlite.Db {
         return &self.conn;
     }
 
-    pub fn deinit(self: *Writer) void {
+    pub fn deinit(self: *WriteWorker) void {
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
@@ -192,7 +184,7 @@ pub const Writer = struct {
     }
 
     fn getDocumentHelper(
-        self: *Writer,
+        self: *WriteWorker,
         table_index: usize,
         namespace_id: i64,
         id: DocId,
@@ -231,7 +223,7 @@ pub const Writer = struct {
     }
 
     fn flushPendingChanges(
-        self: *Writer,
+        self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
     ) void {
         var changes_pushed = false;
@@ -252,7 +244,7 @@ pub const Writer = struct {
     }
 
     fn executeBatch(
-        self: *Writer,
+        self: *WriteWorker,
         ops: []const WriteOp,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         guard_rejected: *std.ArrayListUnmanaged(usize),
@@ -427,7 +419,7 @@ pub const Writer = struct {
     }
 
     pub fn flushBatch(
-        self: *Writer,
+        self: *WriteWorker,
         batch: *std.ArrayListUnmanaged(WriteOp),
         last_batch_time: *i64,
     ) void {
@@ -543,7 +535,7 @@ pub const Writer = struct {
         last_batch_time.* = std.time.milliTimestamp();
     }
 
-    fn writeThreadLoop(self: *Writer) void {
+    fn writeThreadLoop(self: *WriteWorker) void {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
             {
@@ -568,7 +560,7 @@ pub const Writer = struct {
         };
     }
 
-    fn waitForWriteSignal(self: *Writer, timeout_ns: ?u64) void {
+    fn waitForWriteSignal(self: *WriteWorker, timeout_ns: ?u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -587,13 +579,7 @@ pub const Writer = struct {
         }
     }
 
-    fn writeThreadLoopImpl(self: *Writer) !void {
-        // Signal that the write thread is up and running
-        self.is_ready.store(true, .release);
-        self.mutex.lock();
-        self.work_cond.signal();
-        self.mutex.unlock();
-
+    fn writeThreadLoopImpl(self: *WriteWorker) !void {
         const batch_size = if (self.performance_config.batch_writes)
             self.performance_config.batch_size
         else
@@ -676,7 +662,7 @@ pub const Writer = struct {
     }
 
     pub fn executeBatchOp(
-        self: *Writer,
+        self: *WriteWorker,
         bop: anytype,
         last_batch_time: *i64,
     ) void {
@@ -933,7 +919,7 @@ pub const Writer = struct {
         }
     }
 
-    fn executeResolveSessionOp(self: *Writer, sop: anytype) void {
+    fn executeResolveSessionOp(self: *WriteWorker, sop: anytype) void {
         var result = SessionResolutionResult{
             .conn_id = sop.conn_id,
             .msg_id = sop.msg_id,
@@ -993,7 +979,7 @@ pub const Writer = struct {
     }
 
     fn executeImmediateOp(
-        self: *Writer,
+        self: *WriteWorker,
         op: WriteOp,
         batch: *std.ArrayListUnmanaged(WriteOp),
         last_batch_time: *i64,
@@ -1029,7 +1015,7 @@ pub const Writer = struct {
     }
 
     fn executeUpsert(
-        self: *Writer,
+        self: *WriteWorker,
         op: anytype,
         namespace_id: i64,
         owner_id: DocId,
@@ -1091,7 +1077,7 @@ pub const Writer = struct {
     }
 
     fn executeUpdate(
-        self: *Writer,
+        self: *WriteWorker,
         op: anytype,
         namespace_id: i64,
         table_metadata: *const schema.Table,
@@ -1143,7 +1129,7 @@ pub const Writer = struct {
     }
 
     fn executeDelete(
-        self: *Writer,
+        self: *WriteWorker,
         op: anytype,
         namespace_id: i64,
         table_metadata: *const schema.Table,
