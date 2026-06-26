@@ -10,6 +10,8 @@ const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
+const PresenceOp = @import("presence/thread.zig").PresenceOp;
+const PresenceThread = @import("presence/thread.zig").PresenceThread;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
@@ -33,6 +35,10 @@ pub const MessageHandler = struct {
     schema: *const schema_mod.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
+
+    /// Pointer to the presence worker thread. Set by the server
+    /// after both MessageHandler and PresenceThread are initialized.
+    presence_thread: ?*PresenceThread = null,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -61,6 +67,26 @@ pub const MessageHandler = struct {
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
+            .presence_thread = null,
+        };
+    }
+
+    pub fn setPresenceThread(
+        self: *MessageHandler,
+        thread: *PresenceThread,
+    ) void {
+        self.presence_thread = thread;
+    }
+
+    fn enqueuePresenceOp(self: *MessageHandler, op: PresenceOp.Op) void {
+        var temp_op = PresenceOp{ .op = op, .allocator = self.allocator };
+        const presence = self.presence_thread orelse {
+            temp_op.deinit();
+            return;
+        };
+        presence.enqueue(temp_op) catch |err| {
+            std.log.err("Failed to enqueue presence op: {}", .{err});
+            temp_op.deinit();
         };
     }
 
@@ -205,9 +231,11 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
 
         if (presence_ns != connection_mod.unset_namespace_id) {
-            self.presence_manager.removeAllForConnection(presence_ns, presence_user, conn.id) catch |err| {
-                std.log.err("Failed to clean up presence on disconnect: {}", .{err});
-            };
+            self.enqueuePresenceOp(.{ .remove_all_for_connection = .{
+                .namespace_id = presence_ns,
+                .user_id = presence_user,
+                .conn_id = conn.id,
+            } });
         }
     }
 
@@ -676,7 +704,12 @@ pub const MessageHandler = struct {
             &req.data,
         );
 
-        try self.presence_manager.setUser(session.namespace_id, session.user_doc_id, req.data);
+        const cloned_patch = try req.data.deepClone(self.allocator);
+        self.enqueuePresenceOp(.{ .set_user = .{
+            .namespace_id = session.namespace_id,
+            .user_id = session.user_doc_id,
+            .patch = cloned_patch,
+        } });
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -704,13 +737,18 @@ pub const MessageHandler = struct {
             &req.data,
         );
 
-        try self.presence_manager.setShared(session.namespace_id, req.data, conn.id);
+        const cloned_patch = try req.data.deepClone(self.allocator);
+        self.enqueuePresenceOp(.{ .set_shared = .{
+            .namespace_id = session.namespace_id,
+            .patch = cloned_patch,
+            .source_conn = conn.id,
+        } });
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceSubscribe(
         self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
+        _: std.mem.Allocator,
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
@@ -722,10 +760,13 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        var snapshot = try self.presence_manager.onSubscribeUser(session.namespace_id, conn.id, sub_id);
-        defer snapshot.deinit(self.presence_manager.allocator);
-
-        return try wire.encodePresenceUserSnapshot(arena_allocator, msg_id, sub_id, snapshot.users.items);
+        self.enqueuePresenceOp(.{ .subscribe_user = .{
+            .namespace_id = session.namespace_id,
+            .conn_id = conn.id,
+            .sub_id = sub_id,
+            .msg_id = msg_id,
+        } });
+        return null;
     }
 
     fn handlePresenceUnsubscribe(
@@ -740,15 +781,18 @@ pub const MessageHandler = struct {
         };
 
         const session = try requirePresenceSession(conn);
-        self.presence_manager.onUnsubscribeUser(session.namespace_id, conn.id);
-        _ = req; // sub_id not tracked separately for presence
+        _ = req;
 
+        self.enqueuePresenceOp(.{ .unsubscribe_user = .{
+            .namespace_id = session.namespace_id,
+            .conn_id = conn.id,
+        } });
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceSubscribeShared(
         self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
+        _: std.mem.Allocator,
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
@@ -760,10 +804,13 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id, sub_id);
-        defer if (shared) |*s| s.deinit(self.presence_manager.allocator);
-
-        return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |*s| s else null);
+        self.enqueuePresenceOp(.{ .subscribe_shared = .{
+            .namespace_id = session.namespace_id,
+            .conn_id = conn.id,
+            .sub_id = sub_id,
+            .msg_id = msg_id,
+        } });
+        return null;
     }
 
     fn handlePresenceUnsubscribeShared(
@@ -778,9 +825,12 @@ pub const MessageHandler = struct {
         };
 
         const session = try requirePresenceSession(conn);
-        self.presence_manager.onUnsubscribeShared(session.namespace_id, conn.id);
-        _ = req; // sub_id not tracked separately for presence
+        _ = req;
 
+        self.enqueuePresenceOp(.{ .unsubscribe_shared = .{
+            .namespace_id = session.namespace_id,
+            .conn_id = conn.id,
+        } });
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -796,8 +846,11 @@ pub const MessageHandler = struct {
         };
 
         const session = try requirePresenceSession(conn);
-        try self.presence_manager.removeUser(session.namespace_id, session.user_doc_id);
 
+        self.enqueuePresenceOp(.{ .remove_user = .{
+            .namespace_id = session.namespace_id,
+            .user_id = session.user_doc_id,
+        } });
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -823,13 +876,13 @@ pub const MessageHandler = struct {
         transferred = true;
         const scope_seq = conn.presence_scope_seq;
 
-        // Unsubscribe from old namespace before switching to the new one
+        // Enqueue cleanup of old namespace presence to the dispatcher thread
         if (old_ns != connection_mod.unset_namespace_id) {
-            self.presence_manager.onUnsubscribeUser(old_ns, conn.id);
-            self.presence_manager.onUnsubscribeShared(old_ns, conn.id);
-            self.presence_manager.removeUser(old_ns, old_user) catch |err| {
-                std.log.err("Failed to remove user presence from old namespace during switch: {}", .{err});
-            };
+            self.enqueuePresenceOp(.{ .remove_all_for_connection = .{
+                .namespace_id = old_ns,
+                .user_id = old_user,
+                .conn_id = conn.id,
+            } });
         }
 
         return scope_seq;

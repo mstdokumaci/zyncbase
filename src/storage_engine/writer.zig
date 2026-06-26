@@ -9,20 +9,20 @@ const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
 const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
-const change_buffer = @import("../change_buffer.zig");
-const OwnedRecordChange = change_buffer.OwnedRecordChange;
-const ChangeBuffer = change_buffer.ChangeBuffer;
+const change_queue_mod = @import("../change_queue.zig");
+const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
+const ChangeQueue = change_queue_mod.ChangeQueue;
 const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const SessionResolutionResult = @import("../connection.zig").SessionResolutionResult;
-const write_outcome = @import("../write_outcome_buffer.zig");
-const WriteOutcomeBuffer = write_outcome.WriteOutcomeBuffer;
+const wire = @import("../wire.zig");
+const send_queue_type = @import("../send_queue.zig").send_queue;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
 const WriteOp = write_queue.WriteOp;
-const WriteQueue = write_queue.WriteQueue;
+const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
 
@@ -35,9 +35,9 @@ pub const Writer = struct {
     mutex: std.Thread.Mutex,
     flush_cond: std.Thread.Condition,
     pending_count: std.atomic.Value(usize),
-    change_buffer: ChangeBuffer,
+    change_queue: ?*ChangeQueue,
     session_resolution_buffer: SessionResolutionBuffer,
-    write_outcome_buffer: WriteOutcomeBuffer,
+    send_queue: ?*send_queue_type,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     metadata_cache: *storage_cache.metadata_cache_type,
@@ -48,7 +48,7 @@ pub const Writer = struct {
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
     is_healthy: std.atomic.Value(bool),
-    queue: WriteQueue,
+    queue: write_queue_type,
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,
@@ -98,6 +98,32 @@ pub const Writer = struct {
         }
     }
 
+    fn pushWriteOutcome(self: *Writer, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
+        const sq = self.send_queue orelse {
+            std.log.warn("Writer: send_queue not set, dropping write outcome for conn_id={d}", .{conn_id});
+            return;
+        };
+
+        const msg = if (err) |e| blk: {
+            const wire_err = wire.getWireError(e);
+            break :blk wire.encodeWriteError(self.allocator, write_id, wire_err, batch_index) catch |encode_err| {
+                std.log.err("Writer: failed to encode WriteError: {}", .{encode_err});
+                return;
+            };
+        } else blk: {
+            break :blk wire.encodeWriteCommitted(self.allocator, write_id) catch |encode_err| {
+                std.log.err("Writer: failed to encode WriteCommitted: {}", .{encode_err});
+                return;
+            };
+        };
+
+        sq.push(.{ .conn_id = conn_id, .data = msg }) catch |push_err| {
+            std.log.err("Writer: failed to push write outcome to SendQueue: {}", .{push_err});
+            self.allocator.free(msg);
+            return;
+        };
+    }
+
     pub fn wakeFlushWaiters(self: *Writer) void {
         self.mutex.lock();
         self.flush_cond.broadcast();
@@ -145,10 +171,11 @@ pub const Writer = struct {
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
+        while (self.queue.pop()) |op| {
+            op.deinit(self.allocator);
+        }
         self.queue.deinit();
-        self.change_buffer.deinit();
         self.session_resolution_buffer.deinit();
-        self.write_outcome_buffer.deinit();
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -188,6 +215,7 @@ pub const Writer = struct {
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         namespace_id: i64,
         table_index: usize,
+        doc_id: DocId,
         op: OwnedRecordChange.Operation,
         old_record: ?Record,
         new_record: ?Record,
@@ -195,6 +223,7 @@ pub const Writer = struct {
         try pending_changes.append(allocator, .{
             .namespace_id = namespace_id,
             .table_index = table_index,
+            .doc_id = doc_id,
             .operation = op,
             .old_record = old_record,
             .new_record = new_record,
@@ -205,19 +234,19 @@ pub const Writer = struct {
         self: *Writer,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
     ) void {
-        var dispatcher_woken = false;
+        var changes_pushed = false;
         for (pending_changes.items) |raw_change| {
             var change = raw_change;
-            self.change_buffer.push(change) catch |err| {
-                std.log.err("Failed to push to change_buffer: {}", .{err});
+            if (self.change_queue) |cq| {
+                cq.push(change, self.allocator);
+                changes_pushed = true;
+            } else {
                 change.deinit(self.allocator);
-                continue;
-            };
-            dispatcher_woken = true;
+            }
         }
         pending_changes.clearRetainingCapacity();
 
-        if (dispatcher_woken) {
+        if (changes_pushed) {
             self.notifyChanges();
         }
     }
@@ -278,7 +307,7 @@ pub const Writer = struct {
                                 std.log.warn("Failed to track pk_insert for table {d}: {}", .{ iop.table_index, err });
                             };
                         }
-                        pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_record, new_record) catch |err| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, iop.id, op_type, old_record, new_record) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
                             if (old_record) |r| r.deinit(self.allocator);
@@ -316,7 +345,7 @@ pub const Writer = struct {
                     };
 
                     if (maybe_new_record) |new_record| {
-                        pushOwnedChange(self.allocator, pending_changes, namespace_id, uop.table_index, .update, old_record, new_record) catch |err| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, uop.table_index, uop.id, .update, old_record, new_record) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
                             if (old_record) |r| r.deinit(self.allocator);
@@ -350,7 +379,7 @@ pub const Writer = struct {
                         pk_deletes.append(self.allocator, .{ .table_index = dop.table_index, .id = dop.id }) catch |err| {
                             std.log.warn("Failed to track pk_delete for table {d}: {}", .{ dop.table_index, err });
                         };
-                        pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_record, null) catch |err| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, dop.id, .delete, old_record, null) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
                             var r = old_record;
@@ -481,13 +510,7 @@ pub const Writer = struct {
 
                     const outcome_err: ?anyerror = if (is_guard_rejected) error.PermissionDenied else null;
 
-                    self.write_outcome_buffer.push(.{
-                        .conn_id = info.conn_id,
-                        .write_id = info.write_id,
-                        .err = outcome_err,
-                    }) catch |push_err| {
-                        std.log.err("Failed to push write outcome: {}", .{push_err});
-                    };
+                    self.pushWriteOutcome(info.conn_id, info.write_id, outcome_err, null);
                     pushed_outcome = true;
                 }
                 if (op.getCompletionSignal()) |sig| sig.signal(null);
@@ -504,13 +527,7 @@ pub const Writer = struct {
             var pushed_outcome = false;
             for (batch.items) |op| {
                 if (op.getWriteAckInfo()) |info| {
-                    self.write_outcome_buffer.push(.{
-                        .conn_id = info.conn_id,
-                        .write_id = info.write_id,
-                        .err = classified_err,
-                    }) catch |push_err| {
-                        std.log.err("Failed to push write outcome (error path): {}", .{push_err});
-                    };
+                    self.pushWriteOutcome(info.conn_id, info.write_id, classified_err, null);
                     pushed_outcome = true;
                 }
                 if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
@@ -540,13 +557,7 @@ pub const Writer = struct {
                     sig.signal(StorageError.EngineUnhealthy);
                 }
                 if (op.getWriteAckInfo()) |info| {
-                    self.write_outcome_buffer.push(.{
-                        .conn_id = info.conn_id,
-                        .write_id = info.write_id,
-                        .err = StorageError.EngineUnhealthy,
-                    }) catch |push_err| {
-                        std.log.err("Failed to push write outcome during crash drain: {}", .{push_err});
-                    };
+                    self.pushWriteOutcome(info.conn_id, info.write_id, StorageError.EngineUnhealthy, null);
                 }
                 op.deinit(self.allocator);
                 self.endOp(1);
@@ -690,14 +701,7 @@ pub const Writer = struct {
             if (@hasField(@TypeOf(bop), "conn_id")) {
                 if (bop.conn_id) |cid| {
                     if (bop.write_id) |wid| {
-                        self.write_outcome_buffer.push(.{
-                            .conn_id = cid,
-                            .write_id = wid,
-                            .err = final_err,
-                            .batch_index = if (final_err != null) failed_batch_index else null,
-                        }) catch |push_err| {
-                            std.log.err("Failed to push batch write outcome: {}", .{push_err});
-                        };
+                        self.pushWriteOutcome(cid, wid, final_err, if (final_err != null) failed_batch_index else null);
                         self.notifyChanges();
                     }
                 }
@@ -781,7 +785,7 @@ pub const Writer = struct {
                                     std.log.warn("Failed to track pk_insert for table {d}: {}", .{ entry.table_index, err });
                                 };
                             }
-                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_record, new_record)) |_| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, entry.id, op_type, old_record, new_record)) |_| {
                                 // success
                             } else |err| {
                                 const classified_err = errors.classifyError(err);
@@ -823,7 +827,7 @@ pub const Writer = struct {
 
                     if (executeUpdate(self, entry, namespace_id, table_metadata)) |maybe_new_record| {
                         if (maybe_new_record) |new_record| {
-                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .update, old_record, new_record)) |_| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, entry.id, .update, old_record, new_record)) |_| {
                                 // success
                             } else |err| {
                                 const classified_err = errors.classifyError(err);
@@ -861,7 +865,7 @@ pub const Writer = struct {
                             pk_deletes.append(self.allocator, .{ .table_index = entry.table_index, .id = entry.id }) catch |err| {
                                 std.log.warn("Failed to track pk_delete for table {d}: {}", .{ entry.table_index, err });
                             };
-                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_record, null)) |_| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, entry.id, .delete, old_record, null)) |_| {
                                 // success
                             } else |err| {
                                 const classified_err = errors.classifyError(err);

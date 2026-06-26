@@ -27,12 +27,10 @@ test {
     _ = @import("query_parser_test.zig");
     _ = @import("filter_eval_test.zig");
     _ = @import("storage_query_test.zig");
-    _ = @import("change_buffer_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
     _ = @import("wire_test.zig");
-    _ = @import("notification_dispatcher_test.zig");
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
 
@@ -58,11 +56,14 @@ test {
     _ = @import("storage_engine_query_property_test.zig");
     _ = @import("subscription_engine_test.zig");
     _ = @import("subscription_engine_perf_test.zig");
+    _ = @import("change_queue_test.zig");
+    _ = @import("notification_worker_pool_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
     _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
     _ = @import("presence_test.zig");
+    _ = @import("presence_thread_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

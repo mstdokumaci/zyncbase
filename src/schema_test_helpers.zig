@@ -10,6 +10,7 @@ const MigrationExecutor = migration_executor.MigrationExecutor;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_mod = @import("send_queue.zig");
 const send_queue_type = send_queue_mod.send_queue;
+const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
@@ -252,6 +253,7 @@ pub const TestContext = struct {
     allocator: std.mem.Allocator,
     test_dir: []const u8,
     send_queue: ?send_queue_type = null,
+    change_queue: ?ChangeQueue = null,
 
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8) !TestContext {
         // Generate a unique directory name using timestamp and random bits
@@ -286,6 +288,7 @@ pub const TestContext = struct {
 
     pub fn deinit(self: *TestContext) void {
         if (self.send_queue) |*sq| sq.deinit();
+        if (self.change_queue) |*cq| cq.deinit();
         if (self.test_dir.len > 0) {
             std.fs.cwd().deleteTree(self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
@@ -344,5 +347,8 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
         context.send_queue = null;
     }
 
-    try engine.start(&context.send_queue.?);
+    context.change_queue = try ChangeQueue.init(allocator, 1);
+    errdefer context.change_queue.?.deinit();
+
+    try engine.start(&context.send_queue.?, &context.change_queue.?);
 }

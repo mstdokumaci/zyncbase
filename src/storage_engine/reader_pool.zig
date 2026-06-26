@@ -115,7 +115,6 @@ pub const ReaderThread = struct {
         while (!self.shutdown_requested.load(.acquire)) {
             const request = self.request_queue.pop() orelse break;
             var response = self.executeRead(request);
-            if (self.notifier_fn) |n| n(self.notifier_ctx);
 
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
@@ -133,6 +132,7 @@ pub const ReaderThread = struct {
                     response.deinit(self.allocator);
                     continue;
                 };
+                if (self.notifier_fn) |n| n(self.notifier_ctx);
             } else {
                 const encoded = wire.encodeQuery(self.allocator, .{
                     .msg_id = response.msg_id,
@@ -151,6 +151,7 @@ pub const ReaderThread = struct {
                     response.deinit(self.allocator);
                     continue;
                 };
+                if (self.notifier_fn) |n| n(self.notifier_ctx);
             }
             response.deinit(self.allocator);
         }

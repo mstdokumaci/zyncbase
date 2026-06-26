@@ -66,7 +66,7 @@
 - Public codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 - Message format and parser-limit failures are recorded in `ConnectionViolationTracker`.
 - Repeated security-sensitive violations close the WebSocket instead of allowing unbounded error responses.
-- Write operations that request committed acknowledgement may complete through `WriteCommitted` or `WriteError` pushes after the immediate request phase.
+- Write operations that request committed acknowledgement complete through `WriteCommitted` or `WriteError` pushes after the immediate request phase. The writer thread encodes the outcome after the transaction commits or rejects, pushes owned bytes to `SendQueue`, and wakes the event loop.
 
 ## Error Propagation
 
@@ -81,10 +81,11 @@ Errors flow through four distinct paths depending on when they occur:
 
 ### Asynchronous Write Errors
 
-1. Write op is enqueued with `conn_id` and `write_id`.
-2. Writer thread commits the transaction; on failure, pushes `WriteOutcomeResult` with error into `WriteOutcomeBuffer`.
-3. `WriteOutcomeDispatcher` drains the buffer and calls `wire.encodeWriteError()` with `write_id` and optional `batch_index`.
-4. `ConnectionManager.sendToConnection()` delivers the `WriteError` push to the origin connection.
+1. Event loop enqueues the write operation with `conn_id` and `write_id`.
+2. Writer thread commits or rejects the transaction after durable ordering is known.
+3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the original `write_id` and optional `batch_index`.
+4. Writer pushes owned encoded bytes to `SendQueue` and wakes the event loop.
+5. The event loop drains `SendQueue` and delivers the encoded push to the origin connection via `Connection.send()`.
 
 ### Asynchronous Session Resolution Errors
 

@@ -323,4 +323,24 @@ pub const MemoryStrategy = struct {
             }
         };
     }
+
+    /// Simple allocator-backed pool. Allocates and frees nodes on demand.
+    /// Use when op frequency is low enough that per-op allocation is acceptable.
+    pub fn AllocPool(comptime T: type) type {
+        return struct {
+            allocator: Allocator,
+
+            pub fn init(allocator: Allocator) @This() {
+                return .{ .allocator = allocator };
+            }
+
+            pub fn acquire(self: *@This()) !*T {
+                return self.allocator.create(T);
+            }
+
+            pub fn release(self: *@This(), item: *T) void {
+                self.allocator.destroy(item);
+            }
+        };
+    }
 };

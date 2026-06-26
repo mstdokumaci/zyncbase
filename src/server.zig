@@ -11,10 +11,10 @@ const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
+const NotificationWorkerPool = @import("notification_worker_pool.zig").NotificationWorkerPool;
+const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const connection = @import("connection.zig");
 const SessionResolver = connection.SessionResolver;
-const WriteOutcomeDispatcher = @import("write_outcome_dispatcher.zig").WriteOutcomeDispatcher;
 const ConnectionManager = connection.ConnectionManager;
 const ViolationTracker = connection.ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
@@ -25,7 +25,7 @@ const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
+const PresenceThread = @import("presence.zig").PresenceThread;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
@@ -50,14 +50,14 @@ pub const ZyncBaseServer = struct {
     subscription_engine: SubscriptionEngine,
     checkpoint_manager: CheckpointManager,
     storage_engine: StorageEngine,
-    notification_dispatcher: NotificationDispatcher,
+    change_queue: ChangeQueue,
+    notification_worker_pool: ?NotificationWorkerPool,
     session_resolver: SessionResolver,
-    write_outcome_dispatcher: WriteOutcomeDispatcher,
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
-    presence_dispatcher: PresenceDispatcher,
+    presence_thread: ?*PresenceThread,
     send_queue: send_queue_type,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
@@ -202,6 +202,15 @@ pub const ZyncBaseServer = struct {
         self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
         errdefer self.send_queue.deinit();
 
+        // Initialize change queue for sharded notification work distribution.
+        // Must be initialized before storage_engine.start() — the writer thread receives
+        // a pointer to it and begins pushing committed changes immediately.
+        self.change_queue = try ChangeQueue.init(
+            self.memory_strategy.generalAllocator(),
+            self.thread_budget.notification,
+        );
+        errdefer self.change_queue.deinit();
+
         // Initialize storage engine, which now requires a schema and notification callbacks
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
@@ -250,7 +259,7 @@ pub const ZyncBaseServer = struct {
             }
 
             // Lock the engine and start the runtime thread
-            try self.storage_engine.start(&self.send_queue);
+            try self.storage_engine.start(&self.send_queue, &self.change_queue);
         }
 
         // Initialize checkpoint manager
@@ -287,10 +296,19 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
-        self.presence_dispatcher.init(
+        const pdt = try self.memory_strategy.generalAllocator().create(PresenceThread);
+        errdefer self.memory_strategy.generalAllocator().destroy(pdt);
+        try pdt.init(
             self.memory_strategy.generalAllocator(),
             &self.presence_manager,
+            &self.send_queue,
+            storageEngineWakeup,
+            self,
         );
+        errdefer pdt.deinit();
+        errdefer pdt.stop();
+        try pdt.start();
+        self.presence_thread = pdt;
 
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
@@ -338,6 +356,9 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.message_handler.deinit();
 
+        // Set presence dispatcher for queue-based work distribution
+        self.message_handler.setPresenceThread(self.presence_thread.?);
+
         // Initialize connection manager
         std.log.debug("Initializing connection manager", .{});
         try self.connection_manager.init(
@@ -349,15 +370,24 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.connection_manager.deinit();
 
-        // Initialize Notification Dispatcher
-        try self.notification_dispatcher.init(
+        // Initialize Notification Worker Pool
+        var pool = try NotificationWorkerPool.init(
             self.memory_strategy.generalAllocator(),
-            self.storage_engine.changeBuffer(),
+            self.thread_budget.notification,
+            &self.change_queue,
             &self.subscription_engine,
             &self.memory_strategy,
             &self.schema,
+            &self.send_queue,
+            storageEngineWakeup,
+            self,
         );
-        errdefer self.notification_dispatcher.deinit();
+        errdefer {
+            pool.stop();
+            pool.deinit();
+        }
+        try pool.start();
+        self.notification_worker_pool = pool;
 
         self.session_resolver.init(
             self.memory_strategy.generalAllocator(),
@@ -365,13 +395,6 @@ pub const ZyncBaseServer = struct {
             &self.memory_strategy,
         );
         errdefer self.session_resolver.deinit();
-
-        self.write_outcome_dispatcher.init(
-            self.memory_strategy.generalAllocator(),
-            self.storage_engine.writeOutcomeBuffer(),
-            &self.memory_strategy,
-        );
-        errdefer self.write_outcome_dispatcher.deinit();
 
         // Wire Notification Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
@@ -405,6 +428,8 @@ pub const ZyncBaseServer = struct {
         self.shutdown_start_time = 0;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
+        self.workers_stopped = false;
+        self.last_token_sweep_ms = 0;
 
         return self;
     }
@@ -528,6 +553,12 @@ pub const ZyncBaseServer = struct {
         // even if already stopped — stopThread() checks and sets write_thread to null.
         self.storage_engine.writer.stopThread();
 
+        // Stop notification workers to ensure no one pushes to change_queue/send_queue during their deinit.
+        if (self.notification_worker_pool) |*pool| pool.stop();
+
+        // Stop presence dispatcher thread to ensure no one pushes to send_queue during its deinit.
+        if (self.presence_thread) |pdt| pdt.stop();
+
         // Stop reader threads to ensure no one pushes to send_queue during its deinit.
         self.storage_engine.stopReaderPool();
     }
@@ -567,6 +598,10 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing send_queue", .{});
         self.send_queue.deinit();
 
+        // change_queue.deinit() frees any remaining unconsumed change jobs.
+        std.log.debug("Deinitializing change_queue", .{});
+        self.change_queue.deinit();
+
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
 
@@ -576,20 +611,20 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
-        std.log.debug("Deinitializing presence_dispatcher", .{});
-        self.presence_dispatcher.deinit();
+        std.log.debug("Deinitializing presence_thread", .{});
+        if (self.presence_thread) |pdt| {
+            pdt.deinit();
+            self.memory_strategy.generalAllocator().destroy(pdt);
+        }
 
         std.log.debug("Deinitializing presence_manager", .{});
         self.presence_manager.deinit();
 
-        std.log.debug("Deinitializing write_outcome_dispatcher", .{});
-        self.write_outcome_dispatcher.deinit();
-
         std.log.debug("Deinitializing session_resolver", .{});
         self.session_resolver.deinit();
 
-        std.log.debug("Deinitializing notification_dispatcher", .{});
-        self.notification_dispatcher.deinit();
+        std.log.debug("Deinitializing notification_worker_pool", .{});
+        if (self.notification_worker_pool) |*pool| pool.deinit();
 
         std.log.debug("Deinitializing websocket_server", .{});
         self.websocket_server.deinit();
@@ -662,10 +697,7 @@ pub const ZyncBaseServer = struct {
             }
         }
 
-        self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
-        self.write_outcome_dispatcher.poll(&self.connection_manager);
-        self.presence_dispatcher.poll(&self.connection_manager);
         self.connection_manager.drainSendQueue(&self.send_queue);
 
         const now_ms = std.time.milliTimestamp();

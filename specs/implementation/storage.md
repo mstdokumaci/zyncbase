@@ -27,7 +27,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `StorageEngine` | SQLite, schema, memory strategy, write queue | Main persistence API for store service and server lifecycle. |
-| `WriteQueue` | `Writer`, connection manager, outcome buffers | Serializes durable writes and coordinates checkpoint/write health. |
+| `WriteQueue` | `Writer`, connection manager, `SendQueue` | Serializes durable writes and coordinates checkpoint/write health. |
 | `Writer` | SQLite writer connection, schema, cache | Executes inserts/updates/deletes/batches and emits `RecordChange` values. |
 | `QueryResult` | decoded records, table metadata, cursor | Owns read result data returned to store service/wire encoding. |
 | `PkSet` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
@@ -58,6 +58,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 2. Mutation is enqueued through the single-writer path.
 3. Writer applies schema validation, ownership checks, and conflict semantics.
 4. Commit produces `RecordChange` entries for subscriptions.
+5. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
 5. Immediate and committed acknowledgements follow ADR-018 semantics.
 
 ## Invariants
@@ -103,9 +104,9 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Thread count | `ThreadBudget.readers` (1–4) | Formula: min(4, max(1, (cpu-4)/2)). |
+| Thread count | `ThreadBudget.readers` (1–4) | Formula: `remaining = max(cpu_count, 4) - 4`; `min(4, max(1, remaining / 2))`. |
 | Work queue | SPMC blocking (mutex + CV) | Event loop (single producer) enqueues `ReadRequest`. Reader threads (multiple consumers) pop and execute. |
-| Response delivery | Lock-free MPSC (atomic tail swap) | Reader threads encode responses to MessagePack and push `{conn_id, encoded_bytes}` to `SendQueue`. Event loop drains in post-handler. |
+| Response delivery | Lock-free MPSC (atomic tail swap) | Reader threads encode responses to MessagePack, push owned `{conn_id, encoded_bytes}` to `SendQueue`, then wake the event loop. Event loop drains in post-handler. |
 | Statement cache | 100 per connection | LRU eviction for prepared statements. |
 
 ### Reconnection
@@ -122,7 +123,6 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 | Buffer | Capacity | Notes |
 |--------|----------|-------|
 | Change buffer | 8,192 | Ring buffer for record changes (power of 2 for cheap modulo). |
-| Write outcome buffer | 256 + overflow | Ring buffer for write acknowledgements. |
 | Session resolution buffer | 256 + 512 overflow | Ring buffer for namespace/user resolutions. |
 | Read request queue | Unbounded (linked list) | SPMC blocking queue for async read requests. |
 
@@ -130,16 +130,17 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 
 | Subsystem | Thread | Synchronization | Ownership Boundary |
 |-----------|--------|-----------------|-------------------|
-| Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; sole producer of change/outcome/resolution buffers. |
+| Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; produces record changes, session resolutions, and `SendQueue` outcome messages. |
 | Write queue | MPSC: uWS thread (producers) + writer thread (consumer) | Lock-free (atomic tail swap + atomic next pointers) | Thread-safe by design. |
-| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
-| Change/Outcome/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
+| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for owned encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
+| Change/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
+| Write outcome delivery | Writer thread (producer) → uWS event loop (consumer) | Lock-free MPSC `SendQueue` | Writer encodes `WriteCommitted`/`WriteError` and pushes owned bytes to `SendQueue`. |
 | SendQueue drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
 
 **Key invariants**:
 - All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
-- The writer thread communicates back to the event loop through three lock-free ring buffers.
-- The writer calls `us_wakeup_loop()` to ensure the event loop processes buffers promptly.
+- Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known. The writer pushes owned byte slices to `SendQueue` and wakes the event loop.
+- Background producers call `us_wakeup_loop()` after successful enqueue so the event loop processes queued work promptly.
 - Reader threads execute SQLite queries on dedicated connections; no contention with the event loop or writer thread.
 - StoreSubscribe registration happens in `MessageHandler` before the read request is enqueued to the reader pool.
 - Metadata cache is lock-free and safe for concurrent reads from reader threads and the writer thread. Cache population uses writer version snapshot for race protection.

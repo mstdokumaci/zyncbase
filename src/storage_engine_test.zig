@@ -564,7 +564,16 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
 
 const query_ast = @import("query_ast.zig");
 const typed = @import("typed.zig");
-const WriteOutcomeResult = @import("write_outcome_buffer.zig").WriteOutcomeResult;
+const send_queue_mod = @import("send_queue.zig");
+const send_queue_entry = send_queue_mod.Entry;
+
+fn drainOutcomes(sq: *send_queue_mod.send_queue) []send_queue_entry {
+    var entries = std.ArrayListUnmanaged(send_queue_entry).empty;
+    while (sq.pop()) |entry| {
+        entries.append(std.testing.allocator, entry) catch break;
+    }
+    return entries.toOwnedSlice(std.testing.allocator) catch &[_]send_queue_entry{};
+}
 
 fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
     const conditions = try allocator.alloc(query_ast.Condition, 1);
@@ -613,14 +622,16 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
-    defer outcomes.deinit(allocator);
-    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
 
-    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
-    try testing.expect(outcomes.items[0].err != null);
-    try testing.expectEqual(error.PermissionDenied, outcomes.items[0].err.?);
-    try testing.expectEqual(conn_id, outcomes.items[0].conn_id);
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 }
 
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
@@ -656,10 +667,12 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, null, null);
     try ctx.engine.flushPendingWrites();
 
-    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
-    defer outcomes.deinit(allocator);
-    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
-    try testing.expectEqual(@as(usize, 0), outcomes.items.len);
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 0), entries.len);
 
     var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
     defer result.deinit();
@@ -702,13 +715,15 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
-    defer outcomes.deinit(allocator);
-    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
 
-    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
-    try testing.expect(outcomes.items[0].err != null);
-    try testing.expectEqual(error.PermissionDenied, outcomes.items[0].err.?);
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 
     var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
     defer result.deinit();
@@ -740,10 +755,12 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
     try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
-    defer outcomes.deinit(allocator);
-    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
 
-    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
-    try testing.expect(outcomes.items[0].err == null);
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
 }
