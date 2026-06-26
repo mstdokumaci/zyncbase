@@ -66,7 +66,7 @@ pub const PresenceOp = struct {
     }
 };
 
-pub const WorkQueue = spscQueue(PresenceOp, MemoryStrategy.AllocPool);
+pub const work_queue_type = spscQueue(PresenceOp, MemoryStrategy.AllocPool);
 
 pub const PresenceDispatcherThread = struct {
     allocator: Allocator,
@@ -75,8 +75,8 @@ pub const PresenceDispatcherThread = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     thread: ?std.Thread,
-    pool: MemoryStrategy.AllocPool(WorkQueue.Node),
-    work_queue: WorkQueue,
+    pool: MemoryStrategy.AllocPool(work_queue_type.Node),
+    work_queue: work_queue_type,
     work_cond: std.Thread.Condition,
     work_mutex: std.Thread.Mutex,
     shutdown_requested: std.atomic.Value(bool),
@@ -99,7 +99,8 @@ pub const PresenceDispatcherThread = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .thread = null,
-            .pool = MemoryStrategy.AllocPool(WorkQueue.Node).init(allocator),
+            .pool = MemoryStrategy.AllocPool(work_queue_type.Node).init(allocator),
+            // SAFETY: work_queue is initialized inline below via init()
             .work_queue = undefined,
             .work_cond = .{},
             .work_mutex = .{},
@@ -108,7 +109,7 @@ pub const PresenceDispatcherThread = struct {
             .ready_mutex = .{},
             .ready_cond = .{},
         };
-        self.work_queue = try WorkQueue.init(&self.pool);
+        self.work_queue = try work_queue_type.init(&self.pool);
     }
 
     pub fn deinit(self: *PresenceDispatcherThread) void {

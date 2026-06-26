@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 /// Generic lock-free single-producer single-consumer queue.
 ///
@@ -18,8 +17,8 @@ const Allocator = std.mem.Allocator;
 /// `deinit` only releases the stub node. Callers must drain remaining items
 /// (calling `pop` + item `deinit`) before calling `deinit`.
 pub fn spscQueue(
-    comptime T: type,
-    comptime PoolFn: fn (comptime N: type) type,
+    comptime T: type, // zwanzig-disable-line: unused-parameter identifier-style
+    comptime PoolFn: fn (comptime N: type) type, // zwanzig-disable-line: unused-parameter identifier-style
 ) type {
     return struct {
         const Self = @This();

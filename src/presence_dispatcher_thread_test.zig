@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const PresenceDispatcherThread = @import("presence/dispatcher_thread.zig").PresenceDispatcherThread;
-const PresenceOp = @import("presence/dispatcher_thread.zig").PresenceOp;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const schema_mod = @import("schema.zig");
 const msgpack = @import("msgpack_utils.zig");

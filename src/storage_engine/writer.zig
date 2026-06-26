@@ -22,7 +22,7 @@ const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
 const WriteOp = write_queue.WriteOp;
-const WriteQueue = write_queue.WriteQueue;
+const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
 
@@ -48,7 +48,7 @@ pub const Writer = struct {
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
     is_healthy: std.atomic.Value(bool),
-    queue: WriteQueue,
+    queue: write_queue_type,
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,

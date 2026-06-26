@@ -33,7 +33,7 @@ pub const CheckpointStats = write_queue.CheckpointStats;
 pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
-pub const WriteQueue = write_queue.WriteQueue;
+pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
 pub const ReadKind = read_buffer.ReadKind;
@@ -95,7 +95,7 @@ pub const StorageEngine = struct {
     next_reader_idx: std.atomic.Value(usize),
     migration_active: std.atomic.Value(bool),
     reconnection_config: ReconnectionConfig,
-    node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
+    node_pool: MemoryStrategy.IndexPool(write_queue_type.Node),
     schema: *const Schema,
     metadata_cache: metadata_cache_type,
     namespace_cache: namespace_cache_type,
@@ -264,7 +264,7 @@ pub const StorageEngine = struct {
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
 
-        self.writer.queue = try WriteQueue.init(&self.node_pool);
+        self.writer.queue = try write_queue_type.init(&self.node_pool);
         errdefer self.writer.queue.deinit();
 
         const num_tables = schema.tables.len;

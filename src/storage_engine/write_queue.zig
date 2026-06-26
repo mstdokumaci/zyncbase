@@ -221,4 +221,4 @@ pub const WriteOp = union(enum) {
     }
 };
 
-pub const WriteQueue = spscQueue(WriteOp, MemoryStrategy.IndexPool);
+pub const write_queue_type = spscQueue(WriteOp, MemoryStrategy.IndexPool);
