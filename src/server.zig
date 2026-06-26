@@ -25,7 +25,7 @@ const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceDispatcherThread = @import("presence.zig").PresenceDispatcherThread;
+const PresenceThread = @import("presence.zig").PresenceThread;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
@@ -57,7 +57,7 @@ pub const ZyncBaseServer = struct {
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
-    presence_dispatcher_thread: ?*PresenceDispatcherThread,
+    presence_thread: ?*PresenceThread,
     send_queue: send_queue_type,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
@@ -296,7 +296,7 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
-        const pdt = try self.memory_strategy.generalAllocator().create(PresenceDispatcherThread);
+        const pdt = try self.memory_strategy.generalAllocator().create(PresenceThread);
         errdefer self.memory_strategy.generalAllocator().destroy(pdt);
         try pdt.init(
             self.memory_strategy.generalAllocator(),
@@ -308,7 +308,7 @@ pub const ZyncBaseServer = struct {
         errdefer pdt.deinit();
         errdefer pdt.stop();
         try pdt.start();
-        self.presence_dispatcher_thread = pdt;
+        self.presence_thread = pdt;
 
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
@@ -357,7 +357,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.message_handler.deinit();
 
         // Set presence dispatcher for queue-based work distribution
-        self.message_handler.setPresenceDispatcher(self.presence_dispatcher_thread.?);
+        self.message_handler.setPresenceThread(self.presence_thread.?);
 
         // Initialize connection manager
         std.log.debug("Initializing connection manager", .{});
@@ -557,7 +557,7 @@ pub const ZyncBaseServer = struct {
         if (self.notification_worker_pool) |*pool| pool.stop();
 
         // Stop presence dispatcher thread to ensure no one pushes to send_queue during its deinit.
-        if (self.presence_dispatcher_thread) |pdt| pdt.stop();
+        if (self.presence_thread) |pdt| pdt.stop();
 
         // Stop reader threads to ensure no one pushes to send_queue during its deinit.
         self.storage_engine.stopReaderPool();
@@ -611,8 +611,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
-        std.log.debug("Deinitializing presence_dispatcher_thread", .{});
-        if (self.presence_dispatcher_thread) |pdt| {
+        std.log.debug("Deinitializing presence_thread", .{});
+        if (self.presence_thread) |pdt| {
             pdt.deinit();
             self.memory_strategy.generalAllocator().destroy(pdt);
         }

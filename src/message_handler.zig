@@ -10,8 +10,8 @@ const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceOp = @import("presence/dispatcher_thread.zig").PresenceOp;
-const PresenceDispatcherThread = @import("presence/dispatcher_thread.zig").PresenceDispatcherThread;
+const PresenceOp = @import("presence/thread.zig").PresenceOp;
+const PresenceThread = @import("presence/thread.zig").PresenceThread;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
@@ -36,9 +36,9 @@ pub const MessageHandler = struct {
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
-    /// Pointer to the presence dispatcher thread. Set by the server
-    /// after both MessageHandler and PresenceDispatcherThread are initialized.
-    presence_dispatcher: ?*PresenceDispatcherThread = null,
+    /// Pointer to the presence worker thread. Set by the server
+    /// after both MessageHandler and PresenceThread are initialized.
+    presence_thread: ?*PresenceThread = null,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -67,24 +67,24 @@ pub const MessageHandler = struct {
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
-            .presence_dispatcher = null,
+            .presence_thread = null,
         };
     }
 
-    pub fn setPresenceDispatcher(
+    pub fn setPresenceThread(
         self: *MessageHandler,
-        dispatcher: *PresenceDispatcherThread,
+        thread: *PresenceThread,
     ) void {
-        self.presence_dispatcher = dispatcher;
+        self.presence_thread = thread;
     }
 
     fn enqueuePresenceOp(self: *MessageHandler, op: PresenceOp.Op) void {
         var temp_op = PresenceOp{ .op = op, .allocator = self.allocator };
-        const dispatcher = self.presence_dispatcher orelse {
+        const presence = self.presence_thread orelse {
             temp_op.deinit();
             return;
         };
-        dispatcher.enqueue(temp_op) catch |err| {
+        presence.enqueue(temp_op) catch |err| {
             std.log.err("Failed to enqueue presence op: {}", .{err});
             temp_op.deinit();
         };

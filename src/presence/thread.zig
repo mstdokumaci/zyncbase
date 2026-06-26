@@ -68,7 +68,7 @@ pub const PresenceOp = struct {
 
 pub const work_queue_type = spscQueue(PresenceOp, MemoryStrategy.AllocPool);
 
-pub const PresenceDispatcherThread = struct {
+pub const PresenceThread = struct {
     allocator: Allocator,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
@@ -85,7 +85,7 @@ pub const PresenceDispatcherThread = struct {
     ready_cond: std.Thread.Condition,
 
     pub fn init(
-        self: *PresenceDispatcherThread,
+        self: *PresenceThread,
         allocator: Allocator,
         presence_manager: *PresenceManager,
         send_queue: *send_queue_type,
@@ -112,7 +112,7 @@ pub const PresenceDispatcherThread = struct {
         self.work_queue = try work_queue_type.init(&self.pool);
     }
 
-    pub fn deinit(self: *PresenceDispatcherThread) void {
+    pub fn deinit(self: *PresenceThread) void {
         while (self.work_queue.pop()) |op| {
             var op_mut = op;
             op_mut.deinit();
@@ -121,20 +121,20 @@ pub const PresenceDispatcherThread = struct {
     }
 
     /// Enqueue a presence operation and wake the dispatcher thread.
-    pub fn enqueue(self: *PresenceDispatcherThread, op: PresenceOp) !void {
+    pub fn enqueue(self: *PresenceThread, op: PresenceOp) !void {
         try self.work_queue.push(op);
         self.work_mutex.lock();
         self.work_cond.signal();
         self.work_mutex.unlock();
     }
 
-    pub fn start(self: *PresenceDispatcherThread) !void {
+    pub fn start(self: *PresenceThread) !void {
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
         errdefer self.stop();
         self.waitUntilReady();
     }
 
-    pub fn stop(self: *PresenceDispatcherThread) void {
+    pub fn stop(self: *PresenceThread) void {
         self.shutdown_requested.store(true, .release);
         self.work_mutex.lock();
         self.work_cond.signal();
@@ -146,7 +146,7 @@ pub const PresenceDispatcherThread = struct {
         }
     }
 
-    fn waitUntilReady(self: *PresenceDispatcherThread) void {
+    fn waitUntilReady(self: *PresenceThread) void {
         self.ready_mutex.lock();
         defer self.ready_mutex.unlock();
         while (!self.is_ready.load(.acquire)) {
@@ -154,7 +154,7 @@ pub const PresenceDispatcherThread = struct {
         }
     }
 
-    fn workerLoop(self: *PresenceDispatcherThread) void {
+    fn workerLoop(self: *PresenceThread) void {
         self.is_ready.store(true, .release);
         self.ready_mutex.lock();
         self.ready_cond.broadcast();
@@ -186,24 +186,24 @@ pub const PresenceDispatcherThread = struct {
         if (processed) self.flush();
     }
 
-    fn processOp(self: *PresenceDispatcherThread, op: PresenceOp) void {
+    fn processOp(self: *PresenceThread, op: PresenceOp) void {
         var op_mut = op;
         defer op_mut.deinit();
 
         switch (op_mut.op) {
             .set_user => |su| {
                 self.presence_manager.setUser(su.namespace_id, su.user_id, su.patch) catch |err| {
-                    std.log.err("PresenceDispatcherThread setUser failed: {}", .{err});
+                    std.log.err("PresenceThread setUser failed: {}", .{err});
                 };
             },
             .set_shared => |ss| {
                 self.presence_manager.setShared(ss.namespace_id, ss.patch, ss.source_conn) catch |err| {
-                    std.log.err("PresenceDispatcherThread setShared failed: {}", .{err});
+                    std.log.err("PresenceThread setShared failed: {}", .{err});
                 };
             },
             .remove_user => |ru| {
                 self.presence_manager.removeUser(ru.namespace_id, ru.user_id) catch |err| {
-                    std.log.err("PresenceDispatcherThread removeUser failed: {}", .{err});
+                    std.log.err("PresenceThread removeUser failed: {}", .{err});
                 };
             },
             .subscribe_user => |sub| {
@@ -220,31 +220,31 @@ pub const PresenceDispatcherThread = struct {
             },
             .remove_all_for_connection => |rac| {
                 self.presence_manager.removeAllForConnection(rac.namespace_id, rac.user_id, rac.conn_id) catch |err| {
-                    std.log.err("PresenceDispatcherThread removeAllForConnection failed: {}", .{err});
+                    std.log.err("PresenceThread removeAllForConnection failed: {}", .{err});
                 };
             },
         }
     }
 
-    fn processSubscribeUser(self: *PresenceDispatcherThread, sub: anytype) void {
+    fn processSubscribeUser(self: *PresenceThread, sub: anytype) void {
         var snapshot = self.presence_manager.onSubscribeUser(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
-            std.log.err("PresenceDispatcherThread onSubscribeUser failed: {}", .{err});
+            std.log.err("PresenceThread onSubscribeUser failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "subscribe failed");
             return;
         };
         defer snapshot.deinit(self.allocator);
 
         const msg = wire.encodePresenceUserSnapshot(self.allocator, sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
-            std.log.err("PresenceDispatcherThread encodePresenceUserSnapshot failed: {}", .{err});
+            std.log.err("PresenceThread encodePresenceUserSnapshot failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
             return;
         };
         self.pushToSendQueue(sub.conn_id, msg);
     }
 
-    fn processSubscribeShared(self: *PresenceDispatcherThread, sub: anytype) void {
+    fn processSubscribeShared(self: *PresenceThread, sub: anytype) void {
         var shared = self.presence_manager.onSubscribeShared(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
-            std.log.err("PresenceDispatcherThread onSubscribeShared failed: {}", .{err});
+            std.log.err("PresenceThread onSubscribeShared failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "subscribe failed");
             return;
         };
@@ -256,23 +256,23 @@ pub const PresenceDispatcherThread = struct {
             sub.sub_id,
             if (shared) |*s| s else null,
         ) catch |err| {
-            std.log.err("PresenceDispatcherThread encodePresenceSharedSnapshot failed: {}", .{err});
+            std.log.err("PresenceThread encodePresenceSharedSnapshot failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "encode failed");
             return;
         };
         self.pushToSendQueue(sub.conn_id, msg);
     }
 
-    fn pushToSendQueue(self: *PresenceDispatcherThread, conn_id: u64, msg: []const u8) void {
+    fn pushToSendQueue(self: *PresenceThread, conn_id: u64, msg: []const u8) void {
         self.send_queue.push(.{ .conn_id = conn_id, .data = msg }) catch |err| {
-            std.log.err("PresenceDispatcherThread send_queue push failed: {}", .{err});
+            std.log.err("PresenceThread send_queue push failed: {}", .{err});
             self.allocator.free(msg);
             return;
         };
         if (self.notifier_fn) |n| n(self.notifier_ctx);
     }
 
-    fn sendError(self: *PresenceDispatcherThread, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
+    fn sendError(self: *PresenceThread, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
         const err_msg = wire.encodeError(self.allocator, msg_id, .{
             .code = code,
             .message = message,
@@ -280,7 +280,7 @@ pub const PresenceDispatcherThread = struct {
         self.pushToSendQueue(conn_id, err_msg);
     }
 
-    fn flush(self: *PresenceDispatcherThread) void {
+    fn flush(self: *PresenceThread) void {
         const pm = self.presence_manager;
 
         pm.evictExpiredGracePeriods();
@@ -310,7 +310,7 @@ pub const PresenceDispatcherThread = struct {
         }
 
         pm.drainPendingBatches(&user_batches, &shared_batches) catch |err| {
-            std.log.err("PresenceDispatcherThread drain failed: {}", .{err});
+            std.log.err("PresenceThread drain failed: {}", .{err});
             return;
         };
 
@@ -323,11 +323,11 @@ pub const PresenceDispatcherThread = struct {
             if (batch.subscribers.items.len == 0) continue;
             for (batch.subscribers.items) |subscriber| {
                 const msg = wire.encodePresenceBroadcast(gpa, subscriber.sub_id, batch.updates.items) catch |err| {
-                    std.log.err("PresenceDispatcherThread encode user broadcast failed: {}", .{err});
+                    std.log.err("PresenceThread encode user broadcast failed: {}", .{err});
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
-                    std.log.err("PresenceDispatcherThread push user broadcast failed: {}", .{err});
+                    std.log.err("PresenceThread push user broadcast failed: {}", .{err});
                     gpa.free(msg);
                     continue;
                 };
@@ -339,11 +339,11 @@ pub const PresenceDispatcherThread = struct {
             if (batch.subscribers.items.len == 0) continue;
             for (batch.subscribers.items) |subscriber| {
                 const msg = wire.encodeSharedStateBroadcast(gpa, subscriber.sub_id, batch.updates.items) catch |err| {
-                    std.log.err("PresenceDispatcherThread encode shared broadcast failed: {}", .{err});
+                    std.log.err("PresenceThread encode shared broadcast failed: {}", .{err});
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
-                    std.log.err("PresenceDispatcherThread push shared broadcast failed: {}", .{err});
+                    std.log.err("PresenceThread push shared broadcast failed: {}", .{err});
                     gpa.free(msg);
                     continue;
                 };
