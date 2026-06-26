@@ -6,7 +6,7 @@ pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
@@ -25,7 +25,7 @@ const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceThread = @import("presence.zig").PresenceThread;
+const PresenceWorker = @import("presence.zig").PresenceWorker;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const TicketExchange = connection.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
@@ -48,7 +48,7 @@ pub const ZyncBaseServer = struct {
     thread_budget: ThreadBudget,
     violation_tracker: ViolationTracker,
     subscription_engine: SubscriptionEngine,
-    checkpoint_manager: CheckpointManager,
+    checkpoint_manager: CheckpointWorker,
     storage_engine: StorageEngine,
     change_queue: ChangeQueue,
     notification_worker_pool: ?NotificationWorkerPool,
@@ -57,7 +57,7 @@ pub const ZyncBaseServer = struct {
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
-    presence_thread: ?*PresenceThread,
+    presence_thread: ?*PresenceWorker,
     send_queue: send_queue_type,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
@@ -296,7 +296,7 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
-        const pdt = try self.memory_strategy.generalAllocator().create(PresenceThread);
+        const pdt = try self.memory_strategy.generalAllocator().create(PresenceWorker);
         errdefer self.memory_strategy.generalAllocator().destroy(pdt);
         try pdt.init(
             self.memory_strategy.generalAllocator(),
@@ -357,7 +357,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.message_handler.deinit();
 
         // Set presence dispatcher for queue-based work distribution
-        self.message_handler.setPresenceThread(self.presence_thread.?);
+        self.message_handler.setPresenceWorker(self.presence_thread.?);
 
         // Initialize connection manager
         std.log.debug("Initializing connection manager", .{});
@@ -458,7 +458,7 @@ pub const ZyncBaseServer = struct {
         );
 
         // Start checkpoint manager background thread
-        try self.checkpoint_manager.startBackgroundLoop();
+        try self.checkpoint_manager.spawn();
 
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
@@ -550,8 +550,8 @@ pub const ZyncBaseServer = struct {
 
         // Stop the storage engine writer thread. Must be after final flush+checkpoint
         // in finishGracefulShutdown(), which uses the writer thread. Safe to call
-        // even if already stopped — stopThread() checks and sets write_thread to null.
-        self.storage_engine.writer.stopThread();
+        // even if already stopped — stop() checks and sets write_thread to null.
+        self.storage_engine.write_worker.stop();
 
         // Stop notification workers to ensure no one pushes to change_queue/send_queue during their deinit.
         if (self.notification_worker_pool) |*pool| pool.stop();
@@ -632,7 +632,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
 
-        // Writer thread already stopped in stopBackgroundWorkers().
+        // WriteWorker already stopped in stopBackgroundWorkers().
         // storage_engine.deinit() guards double-join via state check.
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();

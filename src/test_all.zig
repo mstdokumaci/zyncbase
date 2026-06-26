@@ -13,7 +13,7 @@ test {
     _ = @import("lock_free_cache_test.zig");
     _ = @import("lock_free_cache_leak_test.zig");
     _ = @import("memory_strategy_test.zig");
-    _ = @import("checkpoint_manager_test.zig");
+    _ = @import("checkpoint_worker_test.zig");
     _ = @import("config_loader_test.zig");
     _ = @import("connection_manager_test.zig");
     _ = @import("message_handler_test.zig");
@@ -38,7 +38,7 @@ test {
     _ = @import("message_handler_property_test.zig");
     _ = @import("connection_manager_property_test.zig");
     _ = @import("config_loader_property_test.zig");
-    _ = @import("checkpoint_manager_property_test.zig");
+    _ = @import("checkpoint_worker_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
     _ = @import("connection_state_property_test.zig");
     _ = @import("storage_engine_property_test.zig");
@@ -63,7 +63,7 @@ test {
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
     _ = @import("presence_test.zig");
-    _ = @import("presence_thread_test.zig");
+    _ = @import("presence_worker_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

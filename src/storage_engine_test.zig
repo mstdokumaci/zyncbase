@@ -84,7 +84,7 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEn
         .entries = entries,
         .completion_signal = signal,
     };
-    ctx.engine.writer.executeBatchOp(op, &last_batch_time);
+    ctx.engine.write_worker.executeBatchOp(op, &last_batch_time);
 }
 
 test "StorageEngine: shutdown drain completes immediate writer ops" {
@@ -119,14 +119,14 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
         },
     };
 
-    try ctx.engine.writer.enqueueOp(session_op);
+    try ctx.engine.write_worker.enqueueOp(session_op);
     session_queued = true;
-    try ctx.engine.writer.enqueueOp(checkpoint_op);
+    try ctx.engine.write_worker.enqueueOp(checkpoint_op);
 
-    ctx.engine.writer.shutdown_requested.store(true, .release);
-    try ctx.engine.writer.spawnThread();
-    ctx.engine.writer.waitUntilReady();
-    ctx.engine.writer.stopThread();
+    ctx.engine.write_worker.shutdown_requested.store(true, .release);
+    try ctx.engine.write_worker.spawn();
+    ctx.engine.write_worker.waitUntilReady();
+    ctx.engine.write_worker.stop();
 
     try checkpoint_signal.wait();
     const checkpoint_stats = checkpoint_signal.result orelse return error.TestExpectedValue;
@@ -140,7 +140,7 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     try testing.expect(results.items[0].namespace_id > 0);
     try testing.expect(results.items[0].user_doc_id != 0);
     try testing.expectEqual(storage_mod.CheckpointMode.passive, checkpoint_stats.mode);
-    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
 }
 
 test "StorageEngine: init and deinit" {
@@ -365,16 +365,16 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    ctx.engine.writer.beginOp();
-    try ctx.engine.writer.conn.exec("BEGIN TRANSACTION", .{}, .{});
-    defer ctx.engine.writer.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
+    ctx.engine.write_worker.beginOp();
+    try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    defer ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
         std.log.warn("failed to roll back test transaction: {}", .{err});
     };
 
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
 }
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
@@ -387,16 +387,16 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    const version_before = ctx.engine.writer.snapshotVersion();
-    ctx.engine.writer.beginOp();
+    const version_before = ctx.engine.write_worker.snapshotVersion();
+    ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
-    try testing.expectEqual(version_before, ctx.engine.writer.snapshotVersion());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
+    try testing.expectEqual(version_before, ctx.engine.write_worker.snapshotVersion());
 
-    try ctx.engine.writer.conn.exec("BEGIN TRANSACTION", .{}, .{});
-    try ctx.engine.writer.conn.exec("ROLLBACK", .{}, .{});
+    try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
 }
 
 test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
@@ -411,7 +411,7 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
 
     ctx.engine.batchWrite(entries, null, null) catch |err| {
         try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
-        try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+        try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
         return;
     };
 
@@ -523,7 +523,7 @@ test "StorageEngine: engine healthy after start" {
     defer ctx.deinit();
 
     try testing.expect(ctx.engine.isHealthy());
-    try testing.expect(ctx.engine.writer.isHealthy());
+    try testing.expect(ctx.engine.write_worker.isHealthy());
 }
 test "StorageEngine: writes rejected when engine unhealthy" {
     const allocator = testing.allocator;
@@ -534,8 +534,8 @@ test "StorageEngine: writes rejected when engine unhealthy" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    engine.writer.is_healthy.store(false, .release);
-    defer engine.writer.is_healthy.store(true, .release);
+    engine.write_worker.is_healthy.store(false, .release);
+    defer engine.write_worker.is_healthy.store(true, .release);
 
     try testing.expect(!engine.isHealthy());
 
@@ -556,8 +556,8 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
 
     try engine.ensureHealthy();
 
-    engine.writer.is_healthy.store(false, .release);
-    defer engine.writer.is_healthy.store(true, .release);
+    engine.write_worker.is_healthy.store(false, .release);
+    defer engine.write_worker.is_healthy.store(true, .release);
 
     try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
 }

@@ -2,10 +2,10 @@ const std = @import("std");
 const storage_mod = @import("storage_engine.zig");
 const Allocator = std.mem.Allocator;
 
-/// CheckpointManager manages SQLite WAL checkpointing to prevent unbounded WAL growth
+/// CheckpointWorker manages SQLite WAL checkpointing to prevent unbounded WAL growth
 /// and ensure predictable performance. It monitors WAL file size and age, triggering
 /// checkpoints based on configurable thresholds.
-pub const CheckpointManager = struct {
+pub const CheckpointWorker = struct {
     allocator: Allocator,
     storage_engine: *storage_mod.StorageEngine,
     config: Config,
@@ -78,8 +78,8 @@ pub const CheckpointManager = struct {
         }
     };
 
-    /// Initialize a new CheckpointManager
-    pub fn init(self: *CheckpointManager, allocator: Allocator, storage_engine: *storage_mod.StorageEngine, config: Config) !void {
+    /// Initialize a new CheckpointWorker
+    pub fn init(self: *CheckpointWorker, allocator: Allocator, storage_engine: *storage_mod.StorageEngine, config: Config) !void {
         const now = std.time.timestamp();
 
         self.* = .{
@@ -103,7 +103,7 @@ pub const CheckpointManager = struct {
     }
 
     /// Clean up resources
-    pub fn deinit(self: *CheckpointManager) void {
+    pub fn deinit(self: *CheckpointWorker) void {
         // If background thread is running, stop it and join
         if (self.background_thread) |thread| {
             self.stop();
@@ -113,7 +113,7 @@ pub const CheckpointManager = struct {
     }
 
     /// Get current metrics for monitoring
-    pub fn getMetrics(self: *CheckpointManager) CheckpointMetrics {
+    pub fn getMetrics(self: *CheckpointWorker) CheckpointMetrics {
         return .{
             .last_checkpoint_time = self.last_checkpoint.load(.acquire),
             .last_checkpoint_duration_ms = self.last_checkpoint_duration_ms.load(.acquire),
@@ -125,7 +125,7 @@ pub const CheckpointManager = struct {
 
     /// Determine if a checkpoint should be triggered based on thresholds
     ///
-    /// PRECONDITION: CheckpointManager is initialized
+    /// PRECONDITION: CheckpointWorker is initialized
     /// POSTCONDITION: Returns true if checkpoint needed, false otherwise
     ///
     /// Checks two conditions:
@@ -133,7 +133,7 @@ pub const CheckpointManager = struct {
     /// 2. Time since last checkpoint exceeds configured threshold
     ///
     /// Returns true if either condition is met.
-    pub fn shouldCheckpoint(self: *CheckpointManager) bool {
+    pub fn shouldCheckpoint(self: *CheckpointWorker) bool {
         const now = std.time.timestamp();
         const last_checkpoint = self.last_checkpoint.load(.acquire);
         const current_wal_size = self.wal_size.load(.acquire);
@@ -159,7 +159,7 @@ pub const CheckpointManager = struct {
     /// increments failed checkpoint count.
     ///
     /// Returns CheckpointResult with timing and size information.
-    pub fn performCheckpoint(self: *CheckpointManager, mode: storage_mod.CheckpointMode) !CheckpointResult {
+    pub fn performCheckpoint(self: *CheckpointWorker, mode: storage_mod.CheckpointMode) !CheckpointResult {
         const start_time = std.time.milliTimestamp();
         const wal_size_before = self.wal_size.load(.acquire);
 
@@ -210,7 +210,7 @@ pub const CheckpointManager = struct {
 
     /// Perform checkpoint with automatic escalation on failure
     ///
-    /// PRECONDITION: CheckpointManager is initialized
+    /// PRECONDITION: CheckpointWorker is initialized
     /// POSTCONDITION: Checkpoint attempted with escalation if needed
     ///
     /// Attempts checkpoint with the configured mode and retry logic. If passive
@@ -219,7 +219,7 @@ pub const CheckpointManager = struct {
     /// metrics accordingly.
     ///
     /// Returns CheckpointResult with final outcome.
-    pub fn performCheckpointWithEscalation(self: *CheckpointManager) !CheckpointResult {
+    pub fn performCheckpointWithEscalation(self: *CheckpointWorker) !CheckpointResult {
         const wal_size_before_initial = self.wal_size.load(.acquire);
 
         // Try with configured mode first, with retry on transient failures
@@ -267,12 +267,12 @@ pub const CheckpointManager = struct {
 
     /// Handle checkpoint failure with retry logic
     ///
-    /// PRECONDITION: CheckpointManager is initialized
+    /// PRECONDITION: CheckpointWorker is initialized
     /// POSTCONDITION: Checkpoint attempted with retries
     ///
     /// Attempts checkpoint with exponential backoff on failure. Logs all failures
     /// and provides detailed error information for debugging.
-    pub fn performCheckpointWithRetry(self: *CheckpointManager, mode: storage_mod.CheckpointMode, max_attempts: u32) !CheckpointResult {
+    pub fn performCheckpointWithRetry(self: *CheckpointWorker, mode: storage_mod.CheckpointMode, max_attempts: u32) !CheckpointResult {
         const attempts = if (max_attempts == 0) @as(u32, 1) else max_attempts;
         var attempt: u32 = 0;
         var backoff_ms: u64 = 100; // Start with 100ms
@@ -301,7 +301,7 @@ pub const CheckpointManager = struct {
 
     /// Background checkpoint loop for automatic checkpointing
     ///
-    /// PRECONDITION: CheckpointManager is initialized
+    /// PRECONDITION: CheckpointWorker is initialized
     /// POSTCONDITION: Runs indefinitely, checking and performing checkpoints
     ///
     /// This function should be run in a separate thread. It periodically checks
@@ -310,7 +310,7 @@ pub const CheckpointManager = struct {
     /// stays under control.
     ///
     /// The loop runs every check_interval_sec seconds (default: 10 seconds).
-    pub fn backgroundCheckpointLoop(self: *CheckpointManager) !void {
+    pub fn backgroundCheckpointLoop(self: *CheckpointWorker) !void {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
         self.shutdown_mutex.lock();
@@ -353,7 +353,7 @@ pub const CheckpointManager = struct {
     }
 
     /// Stop the background checkpoint loop
-    pub fn stop(self: *CheckpointManager) void {
+    pub fn stop(self: *CheckpointWorker) void {
         self.shutdown_requested.store(true, .release);
         self.shutdown_mutex.lock();
         self.shutdown_cond.signal();
@@ -362,12 +362,12 @@ pub const CheckpointManager = struct {
 
     /// Start background checkpoint loop in a separate thread
     ///
-    /// PRECONDITION: CheckpointManager is initialized
+    /// PRECONDITION: CheckpointWorker is initialized
     /// POSTCONDITION: Background thread started
     ///
     /// Spawns a new thread that runs the background checkpoint loop.
     /// Returns the thread handle for later joining if needed.
-    pub fn startBackgroundLoop(self: *CheckpointManager) !void {
+    pub fn spawn(self: *CheckpointWorker) !void {
         const thread = try std.Thread.spawn(.{}, backgroundCheckpointLoop, .{self});
         self.background_thread = thread;
     }

@@ -10,8 +10,8 @@ const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceOp = @import("presence/thread.zig").PresenceOp;
-const PresenceThread = @import("presence/thread.zig").PresenceThread;
+const PresenceOp = @import("presence/worker.zig").PresenceOp;
+const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
@@ -37,8 +37,8 @@ pub const MessageHandler = struct {
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
     /// Pointer to the presence worker thread. Set by the server
-    /// after both MessageHandler and PresenceThread are initialized.
-    presence_thread: ?*PresenceThread = null,
+    /// after both MessageHandler and PresenceWorker are initialized.
+    presence_worker: ?*PresenceWorker = null,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -67,20 +67,20 @@ pub const MessageHandler = struct {
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
-            .presence_thread = null,
+            .presence_worker = null,
         };
     }
 
-    pub fn setPresenceThread(
+    pub fn setPresenceWorker(
         self: *MessageHandler,
-        thread: *PresenceThread,
+        worker: *PresenceWorker,
     ) void {
-        self.presence_thread = thread;
+        self.presence_worker = worker;
     }
 
     fn enqueuePresenceOp(self: *MessageHandler, op: PresenceOp.Op) void {
         var temp_op = PresenceOp{ .op = op, .allocator = self.allocator };
-        const presence = self.presence_thread orelse {
+        const presence = self.presence_worker orelse {
             temp_op.deinit();
             return;
         };
