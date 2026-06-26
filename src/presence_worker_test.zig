@@ -46,7 +46,7 @@ fn setupDispatcher(
 ) !*PresenceWorker {
     const dispatcher = try allocator.create(PresenceWorker);
     try dispatcher.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
-    try dispatcher.start();
+    try dispatcher.spawn();
     return dispatcher;
 }
 

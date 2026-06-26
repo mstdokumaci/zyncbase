@@ -307,7 +307,7 @@ pub const ZyncBaseServer = struct {
         );
         errdefer pdt.deinit();
         errdefer pdt.stop();
-        try pdt.start();
+        try pdt.spawn();
         self.presence_thread = pdt;
 
         const auth_cfg = &config.authentication;

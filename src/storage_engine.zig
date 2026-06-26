@@ -231,7 +231,6 @@ pub const StorageEngine = struct {
                 .pk_sets = undefined,
                 .schema = schema,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
-                .is_ready = std.atomic.Value(bool).init(false),
                 .is_healthy = std.atomic.Value(bool).init(true),
                 // SAFETY: Initialized below via .write_queue.init().
                 .queue = undefined,
@@ -465,9 +464,6 @@ pub const StorageEngine = struct {
         self.read_worker_pool = rp;
 
         self.state.store(.running, .release);
-
-        // Wait deterministically for the write thread to signal readiness
-        self.write_worker.waitUntilReady();
 
         std.log.info("Storage engine started (Runtime Phase)", .{});
     }

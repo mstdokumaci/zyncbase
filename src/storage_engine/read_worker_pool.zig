@@ -52,9 +52,6 @@ pub const ReadWorker = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
-    ready_mutex: std.Thread.Mutex,
-    ready_cond: std.Thread.Condition,
 
     pub fn init(
         allocator: Allocator,
@@ -79,22 +76,11 @@ pub const ReadWorker = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .is_ready = std.atomic.Value(bool).init(false),
-            .ready_mutex = .{},
-            .ready_cond = .{},
         };
     }
 
     pub fn spawn(self: *ReadWorker) !void {
         self.thread = try std.Thread.spawn(.{}, threadLoop, .{self});
-    }
-
-    pub fn waitUntilReady(self: *ReadWorker) void {
-        self.ready_mutex.lock();
-        defer self.ready_mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.ready_cond.wait(&self.ready_mutex);
-        }
     }
 
     pub fn stop(self: *ReadWorker) void {
@@ -107,11 +93,6 @@ pub const ReadWorker = struct {
     }
 
     fn threadLoop(self: *ReadWorker) void {
-        self.is_ready.store(true, .release);
-        self.ready_mutex.lock();
-        self.ready_cond.broadcast();
-        self.ready_mutex.unlock();
-
         while (!self.shutdown_requested.load(.acquire)) {
             const request = self.request_queue.pop() orelse break;
             var response = self.executeRead(request);
@@ -465,9 +446,6 @@ pub const ReadWorkerPool = struct {
         errdefer self.stop();
         for (self.threads) |*rt| {
             try rt.spawn();
-        }
-        for (self.threads) |*rt| {
-            rt.waitUntilReady();
         }
     }
 

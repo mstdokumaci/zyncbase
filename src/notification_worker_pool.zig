@@ -68,9 +68,6 @@ pub const NotificationWorkerPool = struct {
         for (self.workers) |*w| {
             try w.spawn();
         }
-        for (self.workers) |*w| {
-            w.waitUntilReady();
-        }
     }
 
     pub fn stop(self: *NotificationWorkerPool) void {
@@ -96,9 +93,6 @@ const NotificationWorker = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
-    ready_mutex: std.Thread.Mutex,
-    ready_cond: std.Thread.Condition,
 
     fn init(
         id: usize,
@@ -121,22 +115,11 @@ const NotificationWorker = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .is_ready = std.atomic.Value(bool).init(false),
-            .ready_mutex = .{},
-            .ready_cond = .{},
         };
     }
 
     fn spawn(self: *NotificationWorker) !void {
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
-    }
-
-    fn waitUntilReady(self: *NotificationWorker) void {
-        self.ready_mutex.lock();
-        defer self.ready_mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.ready_cond.wait(&self.ready_mutex);
-        }
     }
 
     fn stop(self: *NotificationWorker) void {
@@ -148,11 +131,6 @@ const NotificationWorker = struct {
     }
 
     fn workerLoop(self: *NotificationWorker) void {
-        self.is_ready.store(true, .release);
-        self.ready_mutex.lock();
-        self.ready_cond.broadcast();
-        self.ready_mutex.unlock();
-
         const shard_idx = self.id % self.change_queue.shardCount();
         const shard = self.change_queue.getShard(shard_idx);
 

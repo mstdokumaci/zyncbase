@@ -125,7 +125,6 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
 
     ctx.engine.write_worker.shutdown_requested.store(true, .release);
     try ctx.engine.write_worker.spawn();
-    ctx.engine.write_worker.waitUntilReady();
     ctx.engine.write_worker.stop();
 
     try checkpoint_signal.wait();

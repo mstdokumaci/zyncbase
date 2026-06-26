@@ -80,9 +80,6 @@ pub const PresenceWorker = struct {
     work_cond: std.Thread.Condition,
     work_mutex: std.Thread.Mutex,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
-    ready_mutex: std.Thread.Mutex,
-    ready_cond: std.Thread.Condition,
 
     pub fn init(
         self: *PresenceWorker,
@@ -105,9 +102,6 @@ pub const PresenceWorker = struct {
             .work_cond = .{},
             .work_mutex = .{},
             .shutdown_requested = std.atomic.Value(bool).init(false),
-            .is_ready = std.atomic.Value(bool).init(false),
-            .ready_mutex = .{},
-            .ready_cond = .{},
         };
         self.work_queue = try work_queue_type.init(&self.pool);
     }
@@ -128,10 +122,8 @@ pub const PresenceWorker = struct {
         self.work_mutex.unlock();
     }
 
-    pub fn start(self: *PresenceWorker) !void {
+    pub fn spawn(self: *PresenceWorker) !void {
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
-        errdefer self.stop();
-        self.waitUntilReady();
     }
 
     pub fn stop(self: *PresenceWorker) void {
@@ -146,20 +138,7 @@ pub const PresenceWorker = struct {
         }
     }
 
-    fn waitUntilReady(self: *PresenceWorker) void {
-        self.ready_mutex.lock();
-        defer self.ready_mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.ready_cond.wait(&self.ready_mutex);
-        }
-    }
-
     fn workerLoop(self: *PresenceWorker) void {
-        self.is_ready.store(true, .release);
-        self.ready_mutex.lock();
-        self.ready_cond.broadcast();
-        self.ready_mutex.unlock();
-
         while (!self.shutdown_requested.load(.acquire)) {
             // Drain all available ops (non-blocking) — natural batching.
             var processed = false;

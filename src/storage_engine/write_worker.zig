@@ -46,7 +46,6 @@ pub const WriteWorker = struct {
     pk_sets: []@import("pk_set.zig").PkSet,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
-    is_ready: std.atomic.Value(bool),
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
     performance_config: PerformanceConfig,
@@ -132,14 +131,6 @@ pub const WriteWorker = struct {
 
     pub fn spawn(self: *WriteWorker) !void {
         self.write_thread = try std.Thread.spawn(.{}, writeThreadLoop, .{self});
-    }
-
-    pub fn waitUntilReady(self: *WriteWorker) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        while (!self.is_ready.load(.acquire)) {
-            self.work_cond.wait(&self.mutex);
-        }
     }
 
     pub fn stop(self: *WriteWorker) void {
@@ -588,12 +579,6 @@ pub const WriteWorker = struct {
     }
 
     fn writeThreadLoopImpl(self: *WriteWorker) !void {
-        // Signal that the write thread is up and running
-        self.is_ready.store(true, .release);
-        self.mutex.lock();
-        self.work_cond.signal();
-        self.mutex.unlock();
-
         const batch_size = if (self.performance_config.batch_writes)
             self.performance_config.batch_size
         else
