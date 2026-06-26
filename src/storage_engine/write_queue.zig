@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const typed = @import("../typed.zig");
+const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers
@@ -220,54 +221,4 @@ pub const WriteOp = union(enum) {
     }
 };
 
-pub const WriteQueue = struct {
-    pub const Node = struct {
-        op: WriteOp,
-        next: std.atomic.Value(?*Node),
-    };
-
-    head: *Node,
-    tail: std.atomic.Value(*Node),
-    allocator: Allocator,
-    pool: *MemoryStrategy.IndexPool(Node),
-
-    pub fn init(self: *WriteQueue, allocator: Allocator, node_pool: *MemoryStrategy.IndexPool(Node)) !void {
-        const stub = try node_pool.acquire();
-        stub.next = std.atomic.Value(?*Node).init(null);
-        self.* = WriteQueue{
-            .head = stub,
-            .tail = std.atomic.Value(*Node).init(stub),
-            .allocator = allocator,
-            .pool = node_pool,
-        };
-    }
-
-    pub fn deinit(self: *WriteQueue) void {
-        while (self.pop()) |op| {
-            op.deinit(self.allocator);
-        }
-        self.pool.release(self.head);
-    }
-
-    pub fn push(self: *WriteQueue, op: WriteOp) !void {
-        const node = try self.pool.acquire();
-        node.op = op;
-        node.next = std.atomic.Value(?*Node).init(null);
-        const prev = self.tail.swap(node, .acq_rel);
-        prev.next.store(node, .release);
-    }
-
-    pub fn pop(self: *WriteQueue) ?WriteOp {
-        const head = self.head;
-        const next = head.next.load(.acquire) orelse return null;
-
-        self.head = next;
-        const op = next.op;
-        self.pool.release(head);
-        return op;
-    }
-
-    pub fn hasItems(self: *WriteQueue) bool {
-        return self.head.next.load(.acquire) != null;
-    }
-};
+pub const WriteQueue = spscQueue(WriteOp, MemoryStrategy.IndexPool);

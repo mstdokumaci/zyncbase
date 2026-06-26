@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const PresenceDispatcherThread = @import("presence/dispatcher_thread.zig").PresenceDispatcherThread;
+const PresenceOp = @import("presence/dispatcher_thread.zig").PresenceOp;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const schema_mod = @import("schema.zig");
 const msgpack = @import("msgpack_utils.zig");
@@ -38,6 +39,18 @@ fn notifierFn(ctx: ?*anyopaque) void {
     _ = counter.fetchAdd(1, .monotonic);
 }
 
+fn setupDispatcher(
+    allocator: std.mem.Allocator,
+    presence_manager: *PresenceManager,
+    send_queue: *send_queue_type,
+    notifier_counter: *std.atomic.Value(u32),
+) !*PresenceDispatcherThread {
+    const dispatcher = try allocator.create(PresenceDispatcherThread);
+    try dispatcher.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
+    try dispatcher.start();
+    return dispatcher;
+}
+
 test "PresenceDispatcherThread: lifecycle start and stop" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
@@ -45,7 +58,6 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
     const shared_fields = try makeTestSharedFields(allocator);
     defer freeTestFields(allocator, shared_fields);
 
-    // SAFETY: Immediately initialized by init() call below.
     var presence_manager: PresenceManager = undefined;
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
@@ -55,28 +67,20 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    const dispatcher = try allocator.create(PresenceDispatcherThread);
-    defer allocator.destroy(dispatcher);
-    dispatcher.init(
-        allocator,
-        &presence_manager,
-        &send_queue,
-        notifierFn,
-        &notifier_called,
-    );
-    defer dispatcher.stop();
-
-    try dispatcher.start();
+    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    defer {
+        dispatcher.stop();
+        allocator.destroy(dispatcher);
+    }
 }
 
-test "PresenceDispatcherThread: flush drains pending user updates to send_queue" {
+test "PresenceDispatcherThread: set_user op produces broadcast to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
     defer freeTestFields(allocator, shared_fields);
 
-    // SAFETY: Immediately initialized by init() call below.
     var presence_manager: PresenceManager = undefined;
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
@@ -86,41 +90,39 @@ test "PresenceDispatcherThread: flush drains pending user updates to send_queue"
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    // Add a subscriber for namespace 1
     const conn_id: u64 = 100;
     const sub_id: u64 = 200;
     const namespace_id: i64 = 1;
 
+    // Subscribe synchronously so the dispatcher has a subscriber to broadcast to
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    // Create a pending user update
+    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    defer {
+        dispatcher.stop();
+        allocator.destroy(dispatcher);
+    }
+
+    // Enqueue a set_user op — the patch is cloned into the op's allocator
     const user_id: typed.DocId = 42;
-    var patch = try makePresencePatch(allocator, &.{
+    const patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
     defer patch.free(allocator);
 
-    try presence_manager.setUser(namespace_id, user_id, patch);
+    const cloned_patch = try patch.deepClone(allocator);
+    try dispatcher.enqueue(.{
+        .op = .{ .set_user = .{
+            .namespace_id = namespace_id,
+            .user_id = user_id,
+            .patch = cloned_patch,
+        } },
+        .allocator = allocator,
+    });
 
-    // Start dispatcher and signal it
-    const dispatcher = try allocator.create(PresenceDispatcherThread);
-    defer allocator.destroy(dispatcher);
-    dispatcher.init(
-        allocator,
-        &presence_manager,
-        &send_queue,
-        notifierFn,
-        &notifier_called,
-    );
-    defer dispatcher.stop();
-
-    try dispatcher.start();
-
-    dispatcher.signal();
-
-    // Wait for processing (flush interval is 50ms)
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    // Wait for processing (condvar-based wakeup should be near-instant)
+    std.Thread.sleep(50 * std.time.ns_per_ms);
 
     // Verify send_queue received the broadcast
     try testing.expect(send_queue.hasItems());
@@ -134,14 +136,13 @@ test "PresenceDispatcherThread: flush drains pending user updates to send_queue"
     }
 }
 
-test "PresenceDispatcherThread: no pending work does not push to send_queue" {
+test "PresenceDispatcherThread: no ops enqueued does not push to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
     defer freeTestFields(allocator, shared_fields);
 
-    // SAFETY: Immediately initialized by init() call below.
     var presence_manager: PresenceManager = undefined;
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
@@ -151,36 +152,138 @@ test "PresenceDispatcherThread: no pending work does not push to send_queue" {
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    // Add a subscriber but no pending updates
     const conn_id: u64 = 100;
     const sub_id: u64 = 200;
     const namespace_id: i64 = 1;
 
+    // Add a subscriber but enqueue no ops
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    // Start dispatcher and signal it
-    const dispatcher = try allocator.create(PresenceDispatcherThread);
-    defer allocator.destroy(dispatcher);
-    dispatcher.init(
-        allocator,
-        &presence_manager,
-        &send_queue,
-        notifierFn,
-        &notifier_called,
-    );
-    defer dispatcher.stop();
+    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    defer {
+        dispatcher.stop();
+        allocator.destroy(dispatcher);
+    }
 
-    try dispatcher.start();
+    // Wait briefly — no work enqueued, nothing should happen
+    std.Thread.sleep(50 * std.time.ns_per_ms);
 
-    dispatcher.signal();
-
-    // Wait for processing
-    std.Thread.sleep(100 * std.time.ns_per_ms);
-
-    // Verify send_queue is empty (no pending work)
+    // Verify send_queue is empty
     try testing.expect(!send_queue.hasItems());
 
     // Verify notifier was NOT called
     try testing.expectEqual(@as(u32, 0), notifier_called.load(.monotonic));
+}
+
+test "PresenceDispatcherThread: subscribe_user op sends snapshot via send_queue" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var send_queue = try send_queue_type.init(allocator);
+    defer send_queue.deinit();
+
+    var notifier_called = std.atomic.Value(u32).init(0);
+
+    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    defer {
+        dispatcher.stop();
+        allocator.destroy(dispatcher);
+    }
+
+    // Enqueue a subscribe_user op
+    const conn_id: u64 = 100;
+    const sub_id: u64 = 200;
+    const namespace_id: i64 = 1;
+    const msg_id: u64 = 42;
+
+    try dispatcher.enqueue(.{
+        .op = .{ .subscribe_user = .{
+            .namespace_id = namespace_id,
+            .conn_id = conn_id,
+            .sub_id = sub_id,
+            .msg_id = msg_id,
+        } },
+        .allocator = allocator,
+    });
+
+    // Wait for processing
+    std.Thread.sleep(50 * std.time.ns_per_ms);
+
+    // Verify send_queue received the snapshot response
+    try testing.expect(send_queue.hasItems());
+    try testing.expect(notifier_called.load(.monotonic) > 0);
+
+    // Drain and free
+    if (send_queue.pop()) |entry| {
+        allocator.free(entry.data);
+    }
+}
+
+test "PresenceDispatcherThread: multiple ops batched into single flush" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var send_queue = try send_queue_type.init(allocator);
+    defer send_queue.deinit();
+
+    var notifier_called = std.atomic.Value(u32).init(0);
+
+    const conn_id: u64 = 100;
+    const sub_id: u64 = 200;
+    const namespace_id: i64 = 1;
+    const user_id: typed.DocId = 42;
+
+    // Subscribe synchronously
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    defer snapshot.deinit(allocator);
+
+    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    defer {
+        dispatcher.stop();
+        allocator.destroy(dispatcher);
+    }
+
+    // Enqueue multiple set_user ops rapidly — they should coalesce in the
+    // PresenceManager's pending list and produce a single broadcast.
+    for (0..5) |i| {
+        const patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = .{ .float = @floatFromInt(i) } },
+        });
+        defer patch.free(allocator);
+        const cloned = try patch.deepClone(allocator);
+        try dispatcher.enqueue(.{
+            .op = .{ .set_user = .{
+                .namespace_id = namespace_id,
+                .user_id = user_id,
+                .patch = cloned,
+            } },
+            .allocator = allocator,
+        });
+    }
+
+    // Wait for processing
+    std.Thread.sleep(50 * std.time.ns_per_ms);
+
+    // The coalesced updates should produce at least one broadcast
+    try testing.expect(send_queue.hasItems());
+
+    // Drain all entries
+    while (send_queue.pop()) |entry| {
+        allocator.free(entry.data);
+    }
 }

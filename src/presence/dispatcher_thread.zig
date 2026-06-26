@@ -1,8 +1,72 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const typed = @import("../typed.zig");
+const msgpack = @import("../msgpack_utils.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
 const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
+const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+
+/// A presence operation enqueued by the event loop for the dispatcher thread.
+/// The `allocator` field owns any heap-allocated data inside `op` (e.g. cloned
+/// patches) so that `deinit` can free them without external context.
+pub const PresenceOp = struct {
+    op: Op,
+    allocator: Allocator,
+
+    pub const Op = union(enum) {
+        set_user: struct {
+            namespace_id: i64,
+            user_id: typed.DocId,
+            patch: msgpack.Payload,
+        },
+        set_shared: struct {
+            namespace_id: i64,
+            patch: msgpack.Payload,
+            source_conn: u64,
+        },
+        remove_user: struct {
+            namespace_id: i64,
+            user_id: typed.DocId,
+        },
+        subscribe_user: struct {
+            namespace_id: i64,
+            conn_id: u64,
+            sub_id: u64,
+            msg_id: u64,
+        },
+        subscribe_shared: struct {
+            namespace_id: i64,
+            conn_id: u64,
+            sub_id: u64,
+            msg_id: u64,
+        },
+        unsubscribe_user: struct {
+            namespace_id: i64,
+            conn_id: u64,
+        },
+        unsubscribe_shared: struct {
+            namespace_id: i64,
+            conn_id: u64,
+        },
+        remove_all_for_connection: struct {
+            namespace_id: i64,
+            user_id: typed.DocId,
+            conn_id: u64,
+        },
+    };
+
+    pub fn deinit(self: *PresenceOp) void {
+        switch (self.op) {
+            .set_user => |*su| su.patch.free(self.allocator),
+            .set_shared => |*ss| ss.patch.free(self.allocator),
+            else => {},
+        }
+    }
+};
+
+pub const WorkQueue = spscQueue(PresenceOp, MemoryStrategy.AllocPool);
 
 pub const PresenceDispatcherThread = struct {
     allocator: Allocator,
@@ -11,11 +75,14 @@ pub const PresenceDispatcherThread = struct {
     notifier_fn: ?*const fn (?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     thread: ?std.Thread,
+    pool: MemoryStrategy.AllocPool(WorkQueue.Node),
+    work_queue: WorkQueue,
+    work_cond: std.Thread.Condition,
+    work_mutex: std.Thread.Mutex,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
     ready_mutex: std.Thread.Mutex,
     ready_cond: std.Thread.Condition,
-    pending_work: std.atomic.Value(bool),
 
     pub fn init(
         self: *PresenceDispatcherThread,
@@ -24,7 +91,7 @@ pub const PresenceDispatcherThread = struct {
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) void {
+    ) !void {
         self.* = .{
             .allocator = allocator,
             .presence_manager = presence_manager,
@@ -32,20 +99,32 @@ pub const PresenceDispatcherThread = struct {
             .notifier_fn = notifier_fn,
             .notifier_ctx = notifier_ctx,
             .thread = null,
+            .pool = MemoryStrategy.AllocPool(WorkQueue.Node).init(allocator),
+            .work_queue = undefined,
+            .work_cond = .{},
+            .work_mutex = .{},
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .is_ready = std.atomic.Value(bool).init(false),
             .ready_mutex = .{},
             .ready_cond = .{},
-            .pending_work = std.atomic.Value(bool).init(false),
         };
+        self.work_queue = try WorkQueue.init(&self.pool);
     }
 
     pub fn deinit(self: *PresenceDispatcherThread) void {
-        _ = self;
+        while (self.work_queue.pop()) |op| {
+            var op_mut = op;
+            op_mut.deinit();
+        }
+        self.work_queue.deinit();
     }
 
-    pub fn signal(self: *PresenceDispatcherThread) void {
-        self.pending_work.store(true, .release);
+    /// Enqueue a presence operation and wake the dispatcher thread.
+    pub fn enqueue(self: *PresenceDispatcherThread, op: PresenceOp) !void {
+        try self.work_queue.push(op);
+        self.work_mutex.lock();
+        self.work_cond.signal();
+        self.work_mutex.unlock();
     }
 
     pub fn start(self: *PresenceDispatcherThread) !void {
@@ -56,6 +135,9 @@ pub const PresenceDispatcherThread = struct {
 
     pub fn stop(self: *PresenceDispatcherThread) void {
         self.shutdown_requested.store(true, .release);
+        self.work_mutex.lock();
+        self.work_cond.signal();
+        self.work_mutex.unlock();
 
         if (self.thread) |t| {
             t.join();
@@ -77,19 +159,124 @@ pub const PresenceDispatcherThread = struct {
         self.ready_cond.broadcast();
         self.ready_mutex.unlock();
 
-        const flush_interval_ns: u64 = 50 * std.time.ns_per_ms;
-
         while (!self.shutdown_requested.load(.acquire)) {
-            if (self.pending_work.swap(false, .acq_rel)) {
-                self.flush();
-            } else {
-                std.Thread.sleep(flush_interval_ns);
+            // Drain all available ops (non-blocking) — natural batching.
+            var processed = false;
+            while (self.work_queue.pop()) |op| {
+                self.processOp(op);
+                processed = true;
             }
+            if (processed) self.flush();
+
+            // Wait for more work (blocking via condvar).
+            self.work_mutex.lock();
+            if (!self.shutdown_requested.load(.acquire) and !self.work_queue.hasItems()) {
+                self.work_cond.wait(&self.work_mutex);
+            }
+            self.work_mutex.unlock();
         }
 
-        if (self.pending_work.swap(false, .acq_rel)) {
-            self.flush();
+        // Final drain + flush on shutdown.
+        var processed = false;
+        while (self.work_queue.pop()) |op| {
+            self.processOp(op);
+            processed = true;
         }
+        if (processed) self.flush();
+    }
+
+    fn processOp(self: *PresenceDispatcherThread, op: PresenceOp) void {
+        var op_mut = op;
+        defer op_mut.deinit();
+
+        switch (op_mut.op) {
+            .set_user => |su| {
+                self.presence_manager.setUser(su.namespace_id, su.user_id, su.patch) catch |err| {
+                    std.log.err("PresenceDispatcherThread setUser failed: {}", .{err});
+                };
+            },
+            .set_shared => |ss| {
+                self.presence_manager.setShared(ss.namespace_id, ss.patch, ss.source_conn) catch |err| {
+                    std.log.err("PresenceDispatcherThread setShared failed: {}", .{err});
+                };
+            },
+            .remove_user => |ru| {
+                self.presence_manager.removeUser(ru.namespace_id, ru.user_id) catch |err| {
+                    std.log.err("PresenceDispatcherThread removeUser failed: {}", .{err});
+                };
+            },
+            .subscribe_user => |sub| {
+                self.processSubscribeUser(sub);
+            },
+            .subscribe_shared => |sub| {
+                self.processSubscribeShared(sub);
+            },
+            .unsubscribe_user => |unsub| {
+                self.presence_manager.onUnsubscribeUser(unsub.namespace_id, unsub.conn_id);
+            },
+            .unsubscribe_shared => |unsub| {
+                self.presence_manager.onUnsubscribeShared(unsub.namespace_id, unsub.conn_id);
+            },
+            .remove_all_for_connection => |rac| {
+                self.presence_manager.removeAllForConnection(rac.namespace_id, rac.user_id, rac.conn_id) catch |err| {
+                    std.log.err("PresenceDispatcherThread removeAllForConnection failed: {}", .{err});
+                };
+            },
+        }
+    }
+
+    fn processSubscribeUser(self: *PresenceDispatcherThread, sub: anytype) void {
+        var snapshot = self.presence_manager.onSubscribeUser(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
+            std.log.err("PresenceDispatcherThread onSubscribeUser failed: {}", .{err});
+            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "subscribe failed");
+            return;
+        };
+        defer snapshot.deinit(self.allocator);
+
+        const msg = wire.encodePresenceUserSnapshot(self.allocator, sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
+            std.log.err("PresenceDispatcherThread encodePresenceUserSnapshot failed: {}", .{err});
+            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
+            return;
+        };
+        self.pushToSendQueue(sub.conn_id, msg);
+    }
+
+    fn processSubscribeShared(self: *PresenceDispatcherThread, sub: anytype) void {
+        var shared = self.presence_manager.onSubscribeShared(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
+            std.log.err("PresenceDispatcherThread onSubscribeShared failed: {}", .{err});
+            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "subscribe failed");
+            return;
+        };
+        defer if (shared) |*s| s.deinit(self.allocator);
+
+        const msg = wire.encodePresenceSharedSnapshot(
+            self.allocator,
+            sub.msg_id,
+            sub.sub_id,
+            if (shared) |*s| s else null,
+        ) catch |err| {
+            std.log.err("PresenceDispatcherThread encodePresenceSharedSnapshot failed: {}", .{err});
+            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "encode failed");
+            return;
+        };
+        self.pushToSendQueue(sub.conn_id, msg);
+    }
+
+    fn pushToSendQueue(self: *PresenceDispatcherThread, conn_id: u64, msg: []const u8) void {
+        self.send_queue.push(.{ .conn_id = conn_id, .data = msg }) catch |err| {
+            std.log.err("PresenceDispatcherThread send_queue push failed: {}", .{err});
+            self.allocator.free(msg);
+            return;
+        };
+        if (self.notifier_fn) |n| n(self.notifier_ctx);
+    }
+
+    fn sendError(self: *PresenceDispatcherThread, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
+        const err_msg = wire.encodeError(self.allocator, msg_id, .{
+            .code = code,
+            .message = message,
+        }) catch return;
+        self.pushToSendQueue(conn_id, err_msg);
     }
 
     fn flush(self: *PresenceDispatcherThread) void {

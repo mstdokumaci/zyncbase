@@ -171,6 +171,9 @@ pub const Writer = struct {
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
+        while (self.queue.pop()) |op| {
+            op.deinit(self.allocator);
+        }
         self.queue.deinit();
         self.session_resolution_buffer.deinit();
     }

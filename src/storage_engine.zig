@@ -264,7 +264,7 @@ pub const StorageEngine = struct {
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
 
-        try self.writer.queue.init(allocator, &self.node_pool);
+        self.writer.queue = try WriteQueue.init(&self.node_pool);
         errdefer self.writer.queue.deinit();
 
         const num_tables = schema.tables.len;

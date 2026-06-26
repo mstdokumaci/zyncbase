@@ -298,7 +298,7 @@ pub const ZyncBaseServer = struct {
 
         const pdt = try self.memory_strategy.generalAllocator().create(PresenceDispatcherThread);
         errdefer self.memory_strategy.generalAllocator().destroy(pdt);
-        pdt.init(
+        try pdt.init(
             self.memory_strategy.generalAllocator(),
             &self.presence_manager,
             &self.send_queue,
@@ -355,11 +355,8 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.message_handler.deinit();
 
-        // Set signal presence callback for presence mutations
-        self.message_handler.setSignalPresenceCallback(
-            presenceDispatcherThreadSignal,
-            self,
-        );
+        // Set presence dispatcher for queue-based work distribution
+        self.message_handler.setPresenceDispatcher(self.presence_dispatcher_thread.?);
 
         // Initialize connection manager
         std.log.debug("Initializing connection manager", .{});
@@ -430,6 +427,8 @@ pub const ZyncBaseServer = struct {
         self.shutdown_start_time = 0;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
+        self.workers_stopped = false;
+        self.last_token_sweep_ms = 0;
 
         return self;
     }
@@ -737,14 +736,6 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
-    }
-}
-
-fn presenceDispatcherThreadSignal(ctx: ?*anyopaque) void {
-    if (ctx == null) return;
-    const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    if (server.presence_dispatcher_thread) |pdt| {
-        pdt.signal();
     }
 }
 
