@@ -70,6 +70,7 @@ test "PresenceDispatcherThread: lifecycle start and stop" {
     const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
         dispatcher.stop();
+        dispatcher.deinit();
         allocator.destroy(dispatcher);
     }
 }
@@ -101,6 +102,7 @@ test "PresenceDispatcherThread: set_user op produces broadcast to send_queue" {
     const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
         dispatcher.stop();
+        dispatcher.deinit();
         allocator.destroy(dispatcher);
     }
 
@@ -163,6 +165,7 @@ test "PresenceDispatcherThread: no ops enqueued does not push to send_queue" {
     const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
         dispatcher.stop();
+        dispatcher.deinit();
         allocator.destroy(dispatcher);
     }
 
@@ -195,6 +198,7 @@ test "PresenceDispatcherThread: subscribe_user op sends snapshot via send_queue"
     const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
         dispatcher.stop();
+        dispatcher.deinit();
         allocator.destroy(dispatcher);
     }
 
@@ -255,6 +259,7 @@ test "PresenceDispatcherThread: multiple ops batched into single flush" {
     const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
         dispatcher.stop();
+        dispatcher.deinit();
         allocator.destroy(dispatcher);
     }
 
