@@ -169,9 +169,6 @@ pub const ReaderThread = struct {
             self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded }) catch |err| {
                 std.log.err("ReaderThread: failed to push shutdown error: {}", .{err});
                 self.allocator.free(shutdown_encoded);
-                cleanupRequest(request);
-                if (self.notifier_fn) |n| n(self.notifier_ctx);
-                continue;
             };
             cleanupRequest(request);
             if (self.notifier_fn) |n| n(self.notifier_ctx);

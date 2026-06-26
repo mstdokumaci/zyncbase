@@ -277,7 +277,7 @@ const WorkerThread = struct {
 
             self.send_queue.push(.{ .conn_id = match.connection_id, .data = owned_msg }) catch |err| {
                 std.log.err("NotificationWorker failed to push to SendQueue: {}", .{err});
-                alloc.free(owned_msg);
+                self.memory_strategy.generalAllocator().free(owned_msg);
                 continue;
             };
             pushed_any = true;

@@ -305,6 +305,7 @@ pub const ZyncBaseServer = struct {
             storageEngineWakeup,
             self,
         );
+        errdefer pdt.deinit();
         errdefer pdt.stop();
         try pdt.start();
         self.presence_dispatcher_thread = pdt;

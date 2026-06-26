@@ -79,9 +79,14 @@ pub const MessageHandler = struct {
     }
 
     fn enqueuePresenceOp(self: *MessageHandler, op: PresenceOp.Op) void {
-        const dispatcher = self.presence_dispatcher orelse return;
-        dispatcher.enqueue(.{ .op = op, .allocator = self.allocator }) catch |err| {
+        var temp_op = PresenceOp{ .op = op, .allocator = self.allocator };
+        const dispatcher = self.presence_dispatcher orelse {
+            temp_op.deinit();
+            return;
+        };
+        dispatcher.enqueue(temp_op) catch |err| {
             std.log.err("Failed to enqueue presence op: {}", .{err});
+            temp_op.deinit();
         };
     }
 

@@ -36,6 +36,7 @@ pub const ChangeQueue = struct {
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, num_shards: usize) !ChangeQueue {
+        std.debug.assert(num_shards > 0);
         const shards = try allocator.alloc(shard_queue_type, num_shards);
         for (shards) |*s| s.* = shard_queue_type.init(allocator);
         return .{
