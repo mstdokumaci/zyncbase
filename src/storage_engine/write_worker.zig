@@ -130,6 +130,7 @@ pub const WriteWorker = struct {
     }
 
     pub fn spawn(self: *WriteWorker) !void {
+        if (self.write_thread != null) return error.ThreadAlreadyRunning;
         self.write_thread = try std.Thread.spawn(.{}, writeThreadLoop, .{self});
     }
 

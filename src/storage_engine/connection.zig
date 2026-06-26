@@ -103,7 +103,7 @@ pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path
     }
 
     const wal_size_after = try getWalSize(allocator, db_path, in_memory);
-    const duration: u64 = @intCast(std.time.milliTimestamp() - start_time);
+    const duration: u64 = @intCast(@max(@as(i64, 0), std.time.milliTimestamp() - start_time));
 
     std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
         @tagName(mode),

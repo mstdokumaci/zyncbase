@@ -261,6 +261,30 @@ test "CheckpointWorker: CheckpointResult structure" {
     try testing.expect(result.success);
 }
 
+test "CheckpointWorker: shouldCheckpoint - clock rollback" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1000,
+        .time_threshold_sec = 60,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Simulate clock rollback: last_checkpoint is in the future
+    manager.last_checkpoint.store(std.time.timestamp() + 3600, .release);
+    manager.wal_size.store(500, .release);
+
+    // Should not panic and should NOT trigger time-based checkpoint
+    try testing.expect(!manager.shouldCheckpoint());
+
+    // Even with clock rolled back, size threshold should still work
+    manager.wal_size.store(2000, .release);
+    try testing.expect(manager.shouldCheckpoint());
+}
+
 test "CheckpointWorker: fast shutdown" {
     const allocator = testing.allocator;
 

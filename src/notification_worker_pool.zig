@@ -119,6 +119,7 @@ const NotificationWorker = struct {
     }
 
     fn spawn(self: *NotificationWorker) !void {
+        if (self.thread != null) return error.ThreadAlreadyRunning;
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
     }
 

@@ -123,6 +123,7 @@ pub const PresenceWorker = struct {
     }
 
     pub fn spawn(self: *PresenceWorker) !void {
+        if (self.thread != null) return error.ThreadAlreadyRunning;
         self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
     }
 

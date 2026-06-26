@@ -80,6 +80,7 @@ pub const ReadWorker = struct {
     }
 
     pub fn spawn(self: *ReadWorker) !void {
+        if (self.thread != null) return error.ThreadAlreadyRunning;
         self.thread = try std.Thread.spawn(.{}, threadLoop, .{self});
     }
 

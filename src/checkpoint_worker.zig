@@ -104,12 +104,7 @@ pub const CheckpointWorker = struct {
 
     /// Clean up resources
     pub fn deinit(self: *CheckpointWorker) void {
-        // If background thread is running, stop it and join
-        if (self.background_thread) |thread| {
-            self.stop();
-            thread.join();
-            self.background_thread = null;
-        }
+        self.stop();
     }
 
     /// Get current metrics for monitoring
@@ -142,6 +137,7 @@ pub const CheckpointWorker = struct {
         const size_exceeded = current_wal_size >= self.config.wal_size_threshold;
 
         // Check time threshold
+        if (now <= last_checkpoint) return size_exceeded;
         const time_elapsed: u64 = @intCast(now - last_checkpoint);
         const time_exceeded = time_elapsed >= self.config.time_threshold_sec;
 
@@ -173,7 +169,7 @@ pub const CheckpointWorker = struct {
 
             return CheckpointResult{
                 .mode = mode,
-                .duration_ms = @intCast(std.time.milliTimestamp() - start_time),
+                .duration_ms = @intCast(@max(@as(i64, 0), std.time.milliTimestamp() - start_time)),
                 .wal_size_before = wal_size_before,
                 .wal_size_after = wal_size_before,
                 .success = false,
@@ -329,7 +325,8 @@ pub const CheckpointWorker = struct {
             if (self.shouldCheckpoint()) {
                 const wal_size = self.wal_size.load(.acquire);
                 const last_checkpoint = self.last_checkpoint.load(.acquire);
-                const time_since_last = std.time.timestamp() - last_checkpoint;
+                const raw_time = std.time.timestamp() - last_checkpoint;
+                const time_since_last = if (raw_time < 0) @as(i64, 0) else raw_time;
 
                 std.log.info("Checkpoint triggered: wal_size={} bytes, time_since_last={}s", .{ wal_size, time_since_last });
 
@@ -358,6 +355,10 @@ pub const CheckpointWorker = struct {
         self.shutdown_mutex.lock();
         self.shutdown_cond.signal();
         self.shutdown_mutex.unlock();
+        if (self.background_thread) |thread| {
+            thread.join();
+            self.background_thread = null;
+        }
     }
 
     /// Start background checkpoint loop in a separate thread
@@ -368,6 +369,7 @@ pub const CheckpointWorker = struct {
     /// Spawns a new thread that runs the background checkpoint loop.
     /// Returns the thread handle for later joining if needed.
     pub fn spawn(self: *CheckpointWorker) !void {
+        if (self.background_thread != null) return error.ThreadAlreadyRunning;
         const thread = try std.Thread.spawn(.{}, backgroundCheckpointLoop, .{self});
         self.background_thread = thread;
     }
