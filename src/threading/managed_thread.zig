@@ -36,10 +36,12 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
             self.requestStop();
             self.cond.signal();
             const maybe_thread = self.thread;
-            self.thread = null;
             self.mutex.unlock();
             if (maybe_thread) |t| {
                 t.join();
+                self.mutex.lock();
+                defer self.mutex.unlock();
+                self.thread = null;
             }
         }
 

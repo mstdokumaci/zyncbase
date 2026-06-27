@@ -47,3 +47,18 @@ test "managedThread: stop bundles requestStop signal join" {
 
     try testing.expect(mt.isRequested());
 }
+
+test "managedThread: stop frees the slot for a subsequent spawn" {
+    var ctx = TestContext{};
+    var mt = managedThread(TestContext).init();
+
+    try mt.spawn(worker, &ctx);
+    mt.stop();
+    try testing.expect(ctx.ran);
+
+    // After stop, the thread slot is available again.
+    ctx.ran = false;
+    try mt.spawn(worker, &ctx);
+    mt.stop();
+    try testing.expect(ctx.ran);
+}
