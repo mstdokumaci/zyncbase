@@ -40,6 +40,7 @@ test "workerPool: init and deinit" {
     const allocator = testing.allocator;
     var pool = try workerPool(TestWorker).init(allocator, 2);
     defer pool.deinit();
+    initWorkers(&pool);
     try testing.expectEqual(@as(usize, 2), pool.workers.len);
 }
 
