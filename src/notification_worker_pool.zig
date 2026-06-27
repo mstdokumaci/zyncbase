@@ -11,16 +11,18 @@ const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const wire = @import("wire.zig");
 const schema_mod = @import("schema.zig");
+const managedThread = @import("threading/managed_thread.zig").managedThread;
+const workerPool = @import("threading/worker_pool.zig").workerPool;
+const Notifier = @import("threading/notifier.zig").Notifier;
 
 pub const NotificationWorkerPool = struct {
-    workers: []NotificationWorker,
+    pool: workerPool(NotificationWorker),
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
     schema: *const schema_mod.Schema,
     send_queue: *send_queue_type,
-    notifier_fn: ?*const fn (?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
+    notifier: Notifier,
     allocator: Allocator,
 
     pub fn init(
@@ -34,10 +36,10 @@ pub const NotificationWorkerPool = struct {
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) !NotificationWorkerPool {
-        const workers = try allocator.alloc(NotificationWorker, num_workers);
-        errdefer allocator.free(workers);
+        var pool = try workerPool(NotificationWorker).init(allocator, num_workers);
+        errdefer pool.deinit();
 
-        for (workers, 0..) |*w, i| {
+        for (pool.workers, 0..) |*w, i| {
             w.* = NotificationWorker.init(
                 i,
                 change_queue,
@@ -51,48 +53,40 @@ pub const NotificationWorkerPool = struct {
         }
 
         return .{
-            .workers = workers,
+            .pool = pool,
             .change_queue = change_queue,
             .subscription_engine = subscription_engine,
             .memory_strategy = memory_strategy,
             .schema = schema,
             .send_queue = send_queue,
-            .notifier_fn = notifier_fn,
-            .notifier_ctx = notifier_ctx,
+            .notifier = Notifier.init(notifier_fn, notifier_ctx),
             .allocator = allocator,
         };
     }
 
     pub fn start(self: *NotificationWorkerPool) !void {
-        errdefer self.stop();
-        for (self.workers) |*w| {
-            try w.spawn();
-        }
+        try self.pool.start();
     }
 
     pub fn stop(self: *NotificationWorkerPool) void {
         self.change_queue.shutdown();
-        for (self.workers) |*w| {
-            w.stop();
-        }
+        self.pool.stop();
     }
 
     pub fn deinit(self: *NotificationWorkerPool) void {
-        self.allocator.free(self.workers);
+        self.pool.deinit();
     }
 };
 
 const NotificationWorker = struct {
-    thread: ?std.Thread,
+    thread: managedThread(NotificationWorker),
     id: usize,
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
     schema: *const schema_mod.Schema,
     send_queue: *send_queue_type,
-    notifier_fn: ?*const fn (?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
-    shutdown_requested: std.atomic.Value(bool),
+    notifier: Notifier,
 
     fn init(
         id: usize,
@@ -105,37 +99,30 @@ const NotificationWorker = struct {
         notifier_ctx: ?*anyopaque,
     ) NotificationWorker {
         return .{
-            .thread = null,
+            .thread = managedThread(NotificationWorker).init(),
             .id = id,
             .change_queue = change_queue,
             .subscription_engine = subscription_engine,
             .memory_strategy = memory_strategy,
             .schema = schema,
             .send_queue = send_queue,
-            .notifier_fn = notifier_fn,
-            .notifier_ctx = notifier_ctx,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
+            .notifier = Notifier.init(notifier_fn, notifier_ctx),
         };
     }
 
-    fn spawn(self: *NotificationWorker) !void {
-        if (self.thread != null) return error.ThreadAlreadyRunning;
-        self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
+    pub fn spawn(self: *NotificationWorker) !void {
+        try self.thread.spawn(workerLoop, self);
     }
 
-    fn stop(self: *NotificationWorker) void {
-        self.shutdown_requested.store(true, .release);
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
-        }
+    pub fn stop(self: *NotificationWorker) void {
+        self.thread.stop();
     }
 
     fn workerLoop(self: *NotificationWorker) void {
         const shard_idx = self.id % self.change_queue.shardCount();
         const shard = self.change_queue.getShard(shard_idx);
 
-        while (!self.shutdown_requested.load(.acquire)) {
+        while (!self.thread.isRequested()) {
             const job = shard.pop() orelse break;
             self.processChange(job);
         }
@@ -263,7 +250,7 @@ const NotificationWorker = struct {
         }
 
         if (pushed_any) {
-            if (self.notifier_fn) |n| n(self.notifier_ctx);
+            self.notifier.notify();
         }
     }
 };

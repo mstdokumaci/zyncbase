@@ -1,6 +1,7 @@
 const std = @import("std");
 const storage_mod = @import("storage_engine.zig");
 const Allocator = std.mem.Allocator;
+const managedThread = @import("threading/managed_thread.zig").managedThread;
 
 /// CheckpointWorker manages SQLite WAL checkpointing to prevent unbounded WAL growth
 /// and ensure predictable performance. It monitors WAL file size and age, triggering
@@ -14,10 +15,7 @@ pub const CheckpointWorker = struct {
     checkpoint_count: std.atomic.Value(u64),
     failed_checkpoint_count: std.atomic.Value(u64),
     last_checkpoint_duration_ms: std.atomic.Value(u64),
-    background_thread: ?std.Thread,
-    shutdown_requested: std.atomic.Value(bool),
-    shutdown_cond: std.Thread.Condition,
-    shutdown_mutex: std.Thread.Mutex,
+    thread: managedThread(CheckpointWorker),
 
     /// Configuration for checkpoint behavior
     pub const Config = struct {
@@ -91,10 +89,7 @@ pub const CheckpointWorker = struct {
             .checkpoint_count = std.atomic.Value(u64).init(0),
             .failed_checkpoint_count = std.atomic.Value(u64).init(0),
             .last_checkpoint_duration_ms = std.atomic.Value(u64).init(0),
-            .background_thread = null,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
-            .shutdown_cond = .{},
-            .shutdown_mutex = .{},
+            .thread = managedThread(CheckpointWorker).init(),
         };
 
         // Query initial WAL size
@@ -119,15 +114,6 @@ pub const CheckpointWorker = struct {
     }
 
     /// Determine if a checkpoint should be triggered based on thresholds
-    ///
-    /// PRECONDITION: CheckpointWorker is initialized
-    /// POSTCONDITION: Returns true if checkpoint needed, false otherwise
-    ///
-    /// Checks two conditions:
-    /// 1. WAL size exceeds configured threshold
-    /// 2. Time since last checkpoint exceeds configured threshold
-    ///
-    /// Returns true if either condition is met.
     pub fn shouldCheckpoint(self: *CheckpointWorker) bool {
         const now = std.time.timestamp();
         const last_checkpoint = self.last_checkpoint.load(.acquire);
@@ -146,15 +132,6 @@ pub const CheckpointWorker = struct {
     }
 
     /// Perform a checkpoint operation
-    ///
-    /// PRECONDITION: Storage layer is initialized and database is in WAL mode
-    /// POSTCONDITION: WAL checkpointed or error returned, metrics updated
-    ///
-    /// Executes a SQLite checkpoint using the specified mode. On success, updates
-    /// metrics including checkpoint count, timestamp, and WAL size. On failure,
-    /// increments failed checkpoint count.
-    ///
-    /// Returns CheckpointResult with timing and size information.
     pub fn performCheckpoint(self: *CheckpointWorker, mode: storage_mod.CheckpointMode) !CheckpointResult {
         const start_time = std.time.milliTimestamp();
         const wal_size_before = self.wal_size.load(.acquire);
@@ -205,16 +182,6 @@ pub const CheckpointWorker = struct {
     }
 
     /// Perform checkpoint with automatic escalation on failure
-    ///
-    /// PRECONDITION: CheckpointWorker is initialized
-    /// POSTCONDITION: Checkpoint attempted with escalation if needed
-    ///
-    /// Attempts checkpoint with the configured mode and retry logic. If passive
-    /// mode succeeds but doesn't reduce WAL significantly, automatically
-    /// escalates to full mode (also with retry). Logs all failures and updates
-    /// metrics accordingly.
-    ///
-    /// Returns CheckpointResult with final outcome.
     pub fn performCheckpointWithEscalation(self: *CheckpointWorker) !CheckpointResult {
         const wal_size_before_initial = self.wal_size.load(.acquire);
 
@@ -262,12 +229,6 @@ pub const CheckpointWorker = struct {
     }
 
     /// Handle checkpoint failure with retry logic
-    ///
-    /// PRECONDITION: CheckpointWorker is initialized
-    /// POSTCONDITION: Checkpoint attempted with retries
-    ///
-    /// Attempts checkpoint with exponential backoff on failure. Logs all failures
-    /// and provides detailed error information for debugging.
     pub fn performCheckpointWithRetry(self: *CheckpointWorker, mode: storage_mod.CheckpointMode, max_attempts: u32) !CheckpointResult {
         const attempts = if (max_attempts == 0) @as(u32, 1) else max_attempts;
         var attempt: u32 = 0;
@@ -296,30 +257,20 @@ pub const CheckpointWorker = struct {
     }
 
     /// Background checkpoint loop for automatic checkpointing
-    ///
-    /// PRECONDITION: CheckpointWorker is initialized
-    /// POSTCONDITION: Runs indefinitely, checking and performing checkpoints
-    ///
-    /// This function should be run in a separate thread. It periodically checks
-    /// if a checkpoint is needed based on configured thresholds and performs
-    /// checkpoints automatically. Uses escalation logic to ensure WAL size
-    /// stays under control.
-    ///
-    /// The loop runs every check_interval_sec seconds (default: 10 seconds).
-    pub fn backgroundCheckpointLoop(self: *CheckpointWorker) !void {
+    pub fn backgroundCheckpointLoop(self: *CheckpointWorker) void {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
-        while (!self.shutdown_requested.load(.acquire)) {
+        self.thread.mutex.lock();
+        defer self.thread.mutex.unlock();
+        while (!self.thread.isRequested()) {
             // Wait for configured interval or shutdown signal
-            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch |err| {
+            self.thread.cond.timedWait(&self.thread.mutex, self.config.check_interval_sec * std.time.ns_per_s) catch |err| {
                 if (err != error.Timeout) {
                     std.log.err("shutdown_cond.timedWait failed: {}", .{err});
                 }
             };
 
-            if (self.shutdown_requested.load(.acquire)) break;
+            if (self.thread.isRequested()) break;
 
             // Check if checkpoint is needed
             if (self.shouldCheckpoint()) {
@@ -331,13 +282,13 @@ pub const CheckpointWorker = struct {
                 std.log.info("Checkpoint triggered: wal_size={} bytes, time_since_last={}s", .{ wal_size, time_since_last });
 
                 // Unlock for actual work
-                self.shutdown_mutex.unlock();
+                self.thread.mutex.unlock();
                 const result = self.performCheckpointWithEscalation() catch |err| {
                     std.log.err("Background checkpoint failed: {}", .{err});
-                    self.shutdown_mutex.lock();
+                    self.thread.mutex.lock();
                     continue;
                 };
-                self.shutdown_mutex.lock();
+                self.thread.mutex.lock();
 
                 if (result.success) {
                     std.log.info("Background checkpoint completed successfully", .{});
@@ -351,26 +302,11 @@ pub const CheckpointWorker = struct {
 
     /// Stop the background checkpoint loop
     pub fn stop(self: *CheckpointWorker) void {
-        self.shutdown_requested.store(true, .release);
-        self.shutdown_mutex.lock();
-        self.shutdown_cond.signal();
-        self.shutdown_mutex.unlock();
-        if (self.background_thread) |thread| {
-            thread.join();
-            self.background_thread = null;
-        }
+        self.thread.stop();
     }
 
     /// Start background checkpoint loop in a separate thread
-    ///
-    /// PRECONDITION: CheckpointWorker is initialized
-    /// POSTCONDITION: Background thread started
-    ///
-    /// Spawns a new thread that runs the background checkpoint loop.
-    /// Returns the thread handle for later joining if needed.
     pub fn spawn(self: *CheckpointWorker) !void {
-        if (self.background_thread != null) return error.ThreadAlreadyRunning;
-        const thread = try std.Thread.spawn(.{}, backgroundCheckpointLoop, .{self});
-        self.background_thread = thread;
+        try self.thread.spawn(backgroundCheckpointLoop, self);
     }
 };

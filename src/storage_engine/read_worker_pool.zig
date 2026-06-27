@@ -12,6 +12,9 @@ const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const workerPool = @import("../threading/worker_pool.zig").workerPool;
+const Notifier = @import("../threading/notifier.zig").Notifier;
 
 const DocId = typed.DocId;
 const Record = typed.Record;
@@ -41,7 +44,7 @@ fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
 }
 
 pub const ReadWorker = struct {
-    thread: ?std.Thread,
+    thread: managedThread(ReadWorker),
     node: *ReaderNode,
     request_queue: *req_queue_type,
     send_queue: *send_queue_type,
@@ -49,9 +52,7 @@ pub const ReadWorker = struct {
     metadata_cache: *metadata_cache_type,
     writer_version: *std.atomic.Value(u64),
     allocator: Allocator,
-    notifier_fn: ?*const fn (?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
-    shutdown_requested: std.atomic.Value(bool),
+    notifier: Notifier,
 
     pub fn init(
         allocator: Allocator,
@@ -65,7 +66,7 @@ pub const ReadWorker = struct {
         notifier_ctx: ?*anyopaque,
     ) ReadWorker {
         return .{
-            .thread = null,
+            .thread = managedThread(ReadWorker).init(),
             .node = node,
             .request_queue = request_queue,
             .send_queue = send_queue,
@@ -73,28 +74,20 @@ pub const ReadWorker = struct {
             .metadata_cache = metadata_cache,
             .writer_version = writer_version,
             .allocator = allocator,
-            .notifier_fn = notifier_fn,
-            .notifier_ctx = notifier_ctx,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
+            .notifier = Notifier.init(notifier_fn, notifier_ctx),
         };
     }
 
     pub fn spawn(self: *ReadWorker) !void {
-        if (self.thread != null) return error.ThreadAlreadyRunning;
-        self.thread = try std.Thread.spawn(.{}, threadLoop, .{self});
+        try self.thread.spawn(threadLoop, self);
     }
 
     pub fn stop(self: *ReadWorker) void {
-        self.shutdown_requested.store(true, .release);
-        self.request_queue.shutdown();
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
-        }
+        self.thread.stop();
     }
 
     fn threadLoop(self: *ReadWorker) void {
-        while (!self.shutdown_requested.load(.acquire)) {
+        while (!self.thread.isRequested()) {
             const request = self.request_queue.pop() orelse break;
             var response = self.executeRead(request);
 
@@ -114,7 +107,7 @@ pub const ReadWorker = struct {
                     response.deinit(self.allocator);
                     continue;
                 };
-                if (self.notifier_fn) |n| n(self.notifier_ctx);
+                self.notifier.notify();
             } else {
                 const encoded = wire.encodeQuery(self.allocator, .{
                     .msg_id = response.msg_id,
@@ -133,7 +126,7 @@ pub const ReadWorker = struct {
                     response.deinit(self.allocator);
                     continue;
                 };
-                if (self.notifier_fn) |n| n(self.notifier_ctx);
+                self.notifier.notify();
             }
             response.deinit(self.allocator);
         }
@@ -145,7 +138,7 @@ pub const ReadWorker = struct {
             }) catch |err| {
                 std.log.err("ReadWorker: failed to encode shutdown error: {}", .{err});
                 cleanupRequest(request);
-                if (self.notifier_fn) |n| n(self.notifier_ctx);
+                self.notifier.notify();
                 continue;
             };
             self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded }) catch |err| {
@@ -153,7 +146,7 @@ pub const ReadWorker = struct {
                 self.allocator.free(shutdown_encoded);
             };
             cleanupRequest(request);
-            if (self.notifier_fn) |n| n(self.notifier_ctx);
+            self.notifier.notify();
         }
     }
 
@@ -409,7 +402,8 @@ pub const ReadWorker = struct {
 };
 
 pub const ReadWorkerPool = struct {
-    threads: []ReadWorker,
+    pool: workerPool(ReadWorker),
+    request_queue: *req_queue_type,
     allocator: Allocator,
 
     pub fn init(
@@ -423,11 +417,11 @@ pub const ReadWorkerPool = struct {
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) !ReadWorkerPool {
-        const threads = try allocator.alloc(ReadWorker, reader_nodes.len);
-        errdefer allocator.free(threads);
+        var pool = try workerPool(ReadWorker).init(allocator, reader_nodes.len);
+        errdefer pool.deinit();
 
         for (reader_nodes, 0..) |*node, i| {
-            threads[i] = ReadWorker.init(
+            pool.workers[i] = ReadWorker.init(
                 allocator,
                 node,
                 request_queue,
@@ -440,23 +434,23 @@ pub const ReadWorkerPool = struct {
             );
         }
 
-        return .{ .threads = threads, .allocator = allocator };
+        return .{
+            .pool = pool,
+            .request_queue = request_queue,
+            .allocator = allocator,
+        };
     }
 
     pub fn start(self: *ReadWorkerPool) !void {
-        errdefer self.stop();
-        for (self.threads) |*rt| {
-            try rt.spawn();
-        }
+        try self.pool.start();
     }
 
     pub fn stop(self: *ReadWorkerPool) void {
-        for (self.threads) |*rt| {
-            rt.stop();
-        }
+        self.request_queue.shutdown();
+        self.pool.stop();
     }
 
     pub fn deinit(self: *ReadWorkerPool) void {
-        self.allocator.free(self.threads);
+        self.pool.deinit();
     }
 };

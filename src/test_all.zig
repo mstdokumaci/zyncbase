@@ -73,4 +73,10 @@ test {
     // Integration tests
     _ = @import("integration_wiring_test.zig");
     _ = @import("message_handler_verification_test.zig");
+
+    // Threading primitives
+    _ = @import("threading/managed_thread_test.zig");
+    _ = @import("threading/worker_pool_test.zig");
+    _ = @import("threading/notifier_test.zig");
+    _ = @import("threading/wait_group_test.zig");
 }

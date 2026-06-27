@@ -123,7 +123,6 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     session_queued = true;
     try ctx.engine.write_worker.enqueueOp(checkpoint_op);
 
-    ctx.engine.write_worker.shutdown_requested.store(true, .release);
     try ctx.engine.write_worker.spawn();
     ctx.engine.write_worker.stop();
 

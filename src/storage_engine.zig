@@ -4,6 +4,7 @@ const sqlite = @import("sqlite");
 const reader = @import("storage_engine/reader.zig");
 const write_worker_mod = @import("storage_engine/write_worker.zig");
 const WriteWorker = write_worker_mod.WriteWorker;
+const managedThread = @import("threading/managed_thread.zig").managedThread;
 const connection = @import("storage_engine/connection.zig");
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
@@ -212,15 +213,12 @@ pub const StorageEngine = struct {
                 // SAFETY: Initialized below
                 .stmt_cache = undefined,
                 .version = std.atomic.Value(u64).init(0),
-                .work_cond = .{},
-                .mutex = .{},
-                .flush_cond = .{},
-                .pending_count = std.atomic.Value(usize).init(0),
+                .thread = managedThread(WriteWorker).init(),
+                .flush_wg = .{},
                 .change_queue = null,
                 .session_resolution_buffer = buffers.session_resolution_buffer,
                 .send_queue = null,
-                .notifier_ptr = event_loop_notifier,
-                .notifier_ctx = notifier_ctx,
+                .notifier = .{ .callback = event_loop_notifier, .ctx = notifier_ctx },
                 // SAFETY: Set after metadata_cache init below
                 .metadata_cache = undefined,
                 // SAFETY: Set after cache init below
@@ -230,14 +228,12 @@ pub const StorageEngine = struct {
                 // SAFETY: Set after pk_sets init below
                 .pk_sets = undefined,
                 .schema = schema,
-                .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_healthy = std.atomic.Value(bool).init(true),
                 // SAFETY: Initialized below via .write_queue.init().
                 .queue = undefined,
                 .performance_config = performance_config,
                 .db_path = db_path,
                 .in_memory = options.in_memory,
-                .write_thread = null,
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
             // SAFETY: Initialized below
@@ -453,8 +449,8 @@ pub const StorageEngine = struct {
             self.schema,
             &self.metadata_cache,
             &self.write_worker.version,
-            self.write_worker.notifier_ptr,
-            self.write_worker.notifier_ctx,
+            self.write_worker.notifier.callback,
+            self.write_worker.notifier.ctx,
         );
         errdefer {
             rp.stop();
@@ -596,7 +592,6 @@ pub const StorageEngine = struct {
                 .values = values,
                 .guard_values = guard_values,
                 .timestamp = std.time.timestamp(),
-                .completion_signal = null,
                 .conn_id = conn_id,
                 .write_id = write_id,
             },
@@ -650,7 +645,6 @@ pub const StorageEngine = struct {
                 .values = values,
                 .guard_values = guard_values,
                 .timestamp = std.time.timestamp(),
-                .completion_signal = null,
                 .conn_id = conn_id,
                 .write_id = write_id,
             },
@@ -991,7 +985,6 @@ pub const StorageEngine = struct {
                 .namespace_id = effective_namespace_id,
                 .sql = sql_string,
                 .guard_values = guard_values,
-                .completion_signal = null,
                 .conn_id = conn_id,
                 .write_id = write_id,
             },
