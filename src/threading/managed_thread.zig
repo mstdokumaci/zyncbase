@@ -21,6 +21,7 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
 
         pub fn spawn(self: *Self, comptime func: fn (*Context) void, ctx: *Context) !void {
             if (self.thread != null) return error.ThreadAlreadyRunning;
+            self.shutdown_requested.store(false, .release);
             self.thread = try std.Thread.spawn(.{}, func, .{ctx});
         }
 
@@ -49,21 +50,6 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
 
         pub fn broadcast(self: *Self) void {
             self.cond.broadcast();
-        }
-
-        pub fn wait(self: *Self) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            self.cond.wait(&self.mutex);
-        }
-
-        pub fn timedWait(self: *Self, ns: u64) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            self.cond.timedWait(&self.mutex, ns) catch {
-                return false;
-            };
-            return true;
         }
     };
 }

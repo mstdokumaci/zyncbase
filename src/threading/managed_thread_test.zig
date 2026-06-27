@@ -27,30 +27,6 @@ test "managedThread: requestStop and isRequested" {
     try testing.expect(mt.isRequested());
 }
 
-test "managedThread: signal and wait" {
-    var mt = managedThread(TestContext).init();
-    var signaled = false;
-
-    const ThreadContext = struct {
-        mt: *managedThread(TestContext),
-        signaled: *bool,
-    };
-
-    var thread_ctx = ThreadContext{ .mt = &mt, .signaled = &signaled };
-
-    const thread = try std.Thread.spawn(.{}, struct {
-        fn threadFn(ctx: *ThreadContext) void {
-            ctx.mt.wait();
-            ctx.signaled.* = true;
-        }
-    }.threadFn, .{&thread_ctx});
-
-    std.Thread.sleep(10 * std.time.ns_per_ms);
-    mt.signal();
-    thread.join();
-    try testing.expect(signaled);
-}
-
 test "managedThread: re-spawn guard" {
     var mt = managedThread(TestContext).init();
     var ctx = TestContext{};
@@ -70,9 +46,4 @@ test "managedThread: stop bundles requestStop signal join" {
     mt.stop();
 
     try testing.expect(mt.isRequested());
-}
-
-test "managedThread: timedWait returns false on timeout" {
-    var mt = managedThread(TestContext).init();
-    try testing.expect(!mt.timedWait(1 * std.time.ns_per_ms));
 }
