@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const WaitGroup = struct {
-    count: std.atomic.Value(usize) = .{ .raw = 0 },
+    count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     cond: std.Thread.Condition = .{},
     mutex: std.Thread.Mutex = .{},
 
@@ -15,7 +15,7 @@ pub const WaitGroup = struct {
 
     pub fn done(self: *WaitGroup, delta: usize) void {
         const prev = self.count.fetchSub(delta, .acq_rel);
-        if (prev > 0 and prev - delta == 0) {
+        if (prev == delta) {
             self.mutex.lock();
             self.cond.broadcast();
             self.mutex.unlock();

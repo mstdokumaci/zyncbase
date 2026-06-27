@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unused-parameter
     return struct {
         thread: ?std.Thread = null,
-        shutdown_requested: std.atomic.Value(bool) = .{ .raw = false },
+        shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         cond: std.Thread.Condition = .{},
         mutex: std.Thread.Mutex = .{},
 
