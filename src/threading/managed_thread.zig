@@ -33,23 +33,36 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         }
 
         pub fn stop(self: *Self) void {
+            const t = self.tryJoin() orelse return;
+            t.join();
+            self.doneJoining();
+        }
+
+        fn tryJoin(self: *Self) ?std.Thread {
             self.mutex.lock();
+            defer self.mutex.unlock();
+
             self.requestStop();
             self.cond.signal();
-            if (self.is_joining or self.thread == null) {
-                self.mutex.unlock();
-                return;
+
+            if (self.is_joining) {
+                while (self.is_joining) {
+                    self.cond.wait(&self.mutex);
+                }
+                return null;
             }
+
+            const t = self.thread orelse return null;
             self.is_joining = true;
-            const t = self.thread.?;
-            self.mutex.unlock();
+            return t;
+        }
 
-            t.join();
-
+        fn doneJoining(self: *Self) void {
             self.mutex.lock();
             defer self.mutex.unlock();
             self.thread = null;
             self.is_joining = false;
+            self.cond.broadcast();
         }
 
         pub fn signal(self: *Self) void {
