@@ -57,7 +57,7 @@ pub const ZyncBaseServer = struct {
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
-    presence_thread: ?*PresenceWorker,
+    presence_worker: ?*PresenceWorker,
     send_queue: send_queue_type,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
@@ -296,19 +296,19 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
-        const pdt = try self.memory_strategy.generalAllocator().create(PresenceWorker);
-        errdefer self.memory_strategy.generalAllocator().destroy(pdt);
-        try pdt.init(
+        const presence_worker = try self.memory_strategy.generalAllocator().create(PresenceWorker);
+        errdefer self.memory_strategy.generalAllocator().destroy(presence_worker);
+        try presence_worker.init(
             self.memory_strategy.generalAllocator(),
             &self.presence_manager,
             &self.send_queue,
             storageEngineWakeup,
             self,
         );
-        errdefer pdt.deinit();
-        errdefer pdt.stop();
-        try pdt.spawn();
-        self.presence_thread = pdt;
+        errdefer presence_worker.deinit();
+        errdefer presence_worker.stop();
+        try presence_worker.spawn();
+        self.presence_worker = presence_worker;
 
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
@@ -357,7 +357,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.message_handler.deinit();
 
         // Set presence dispatcher for queue-based work distribution
-        self.message_handler.setPresenceWorker(self.presence_thread.?);
+        self.message_handler.setPresenceWorker(self.presence_worker.?);
 
         // Initialize connection manager
         std.log.debug("Initializing connection manager", .{});
@@ -557,7 +557,7 @@ pub const ZyncBaseServer = struct {
         if (self.notification_worker_pool) |*pool| pool.stop();
 
         // Stop presence dispatcher thread to ensure no one pushes to send_queue during its deinit.
-        if (self.presence_thread) |pdt| pdt.stop();
+        if (self.presence_worker) |presence_worker| presence_worker.stop();
 
         // Stop reader threads to ensure no one pushes to send_queue during its deinit.
         self.storage_engine.stopReaderPool();
@@ -611,10 +611,10 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
-        std.log.debug("Deinitializing presence_thread", .{});
-        if (self.presence_thread) |pdt| {
-            pdt.deinit();
-            self.memory_strategy.generalAllocator().destroy(pdt);
+        std.log.debug("Deinitializing presence_worker", .{});
+        if (self.presence_worker) |presence_worker| {
+            presence_worker.deinit();
+            self.memory_strategy.generalAllocator().destroy(presence_worker);
         }
 
         std.log.debug("Deinitializing presence_manager", .{});

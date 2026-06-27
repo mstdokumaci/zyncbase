@@ -59,29 +59,6 @@ fn makeRecordWithId(allocator: std.mem.Allocator, id: typed.DocId, status: []con
     return record;
 }
 
-test "NotificationWorkerPool: lifecycle start and stop" {
-    const allocator = testing.allocator;
-    var ctx: TestContext = undefined;
-    try ctx.init(allocator);
-    defer ctx.deinit();
-
-    var pool = try NotificationWorkerPool.init(
-        allocator,
-        2,
-        &ctx.change_queue,
-        &ctx.subscription_engine,
-        &ctx.memory_strategy,
-        &ctx.schema,
-        &ctx.send_queue,
-        TestContext.notifierFn,
-        &ctx.notifier_called,
-    );
-    defer pool.deinit();
-    defer pool.stop();
-
-    try pool.start();
-}
-
 test "NotificationWorkerPool: matching change is processed and pushed to send_queue" {
     const allocator = testing.allocator;
     var ctx: TestContext = undefined;

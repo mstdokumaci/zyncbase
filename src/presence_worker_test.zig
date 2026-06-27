@@ -38,40 +38,16 @@ fn notifierFn(ctx: ?*anyopaque) void {
     _ = counter.fetchAdd(1, .monotonic);
 }
 
-fn setupDispatcher(
+fn setupWorker(
     allocator: std.mem.Allocator,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
     notifier_counter: *std.atomic.Value(u32),
 ) !*PresenceWorker {
-    const dispatcher = try allocator.create(PresenceWorker);
-    try dispatcher.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
-    try dispatcher.spawn();
-    return dispatcher;
-}
-
-test "PresenceWorker: lifecycle start and stop" {
-    const allocator = testing.allocator;
-    const user_fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, user_fields);
-    const shared_fields = try makeTestSharedFields(allocator);
-    defer freeTestFields(allocator, shared_fields);
-
-    var presence_manager: PresenceManager = undefined;
-    presence_manager.init(allocator, user_fields, shared_fields);
-    defer presence_manager.deinit();
-
-    var send_queue = try send_queue_type.init(allocator);
-    defer send_queue.deinit();
-
-    var notifier_called = std.atomic.Value(u32).init(0);
-
-    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
-    defer {
-        dispatcher.stop();
-        dispatcher.deinit();
-        allocator.destroy(dispatcher);
-    }
+    const worker = try allocator.create(PresenceWorker);
+    try worker.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
+    try worker.spawn();
+    return worker;
 }
 
 test "PresenceWorker: set_user op produces broadcast to send_queue" {
@@ -94,15 +70,15 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     const sub_id: u64 = 200;
     const namespace_id: i64 = 1;
 
-    // Subscribe synchronously so the dispatcher has a subscriber to broadcast to
+    // Subscribe synchronously so the worker has a subscriber to broadcast to
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
-        dispatcher.stop();
-        dispatcher.deinit();
-        allocator.destroy(dispatcher);
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
     }
 
     // Enqueue a set_user op — the patch is cloned into the op's allocator
@@ -113,7 +89,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     defer patch.free(allocator);
 
     const cloned_patch = try patch.deepClone(allocator);
-    try dispatcher.enqueue(.{
+    try worker.enqueue(.{
         .op = .{ .set_user = .{
             .namespace_id = namespace_id,
             .user_id = user_id,
@@ -161,11 +137,11 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
-        dispatcher.stop();
-        dispatcher.deinit();
-        allocator.destroy(dispatcher);
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
     }
 
     // Wait briefly — no work enqueued, nothing should happen
@@ -194,11 +170,11 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
-        dispatcher.stop();
-        dispatcher.deinit();
-        allocator.destroy(dispatcher);
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
     }
 
     // Enqueue a subscribe_user op
@@ -207,7 +183,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     const namespace_id: i64 = 1;
     const msg_id: u64 = 42;
 
-    try dispatcher.enqueue(.{
+    try worker.enqueue(.{
         .op = .{ .subscribe_user = .{
             .namespace_id = namespace_id,
             .conn_id = conn_id,
@@ -255,11 +231,11 @@ test "PresenceWorker: multiple ops batched into single flush" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const dispatcher = try setupDispatcher(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
     defer {
-        dispatcher.stop();
-        dispatcher.deinit();
-        allocator.destroy(dispatcher);
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
     }
 
     // Enqueue multiple set_user ops rapidly — they should coalesce in the
@@ -270,7 +246,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
         });
         defer patch.free(allocator);
         const cloned = try patch.deepClone(allocator);
-        try dispatcher.enqueue(.{
+        try worker.enqueue(.{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
                 .user_id = user_id,
