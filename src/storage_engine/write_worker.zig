@@ -17,6 +17,9 @@ const SessionResolutionResult = @import("../connection.zig").SessionResolutionRe
 const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
@@ -31,39 +34,34 @@ pub const WriteWorker = struct {
     conn: sqlite.Db,
     stmt_cache: StatementCache,
     version: std.atomic.Value(u64),
-    work_cond: std.Thread.Condition,
-    mutex: std.Thread.Mutex,
-    flush_cond: std.Thread.Condition,
-    pending_count: std.atomic.Value(usize),
+    thread: managedThread(WriteWorker),
+    flush_wg: WaitGroup,
     change_queue: ?*ChangeQueue,
     session_resolution_buffer: SessionResolutionBuffer,
     send_queue: ?*send_queue_type,
-    notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
+    notifier: Notifier,
     metadata_cache: *storage_cache.metadata_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
     pk_sets: []@import("pk_set.zig").PkSet,
     schema: *const schema.Schema,
-    shutdown_requested: std.atomic.Value(bool),
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,
-    write_thread: ?std.Thread = null,
 
     pub fn beginOp(self: *WriteWorker) void {
-        _ = self.pending_count.fetchAdd(1, .acq_rel);
+        self.flush_wg.add(1);
     }
 
     pub fn endOp(self: *WriteWorker, count: usize) void {
-        _ = self.pending_count.fetchSub(count, .acq_rel);
+        self.flush_wg.done(count);
     }
 
     pub fn enqueueOp(self: *WriteWorker, op: WriteOp) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.thread.mutex.lock();
+        defer self.thread.mutex.unlock();
         if (!self.is_healthy.load(.acquire)) {
             return StorageError.EngineUnhealthy;
         }
@@ -72,7 +70,7 @@ pub const WriteWorker = struct {
             self.endOp(1);
             return err;
         };
-        self.work_cond.signal();
+        self.thread.signal();
     }
 
     pub fn isHealthy(self: *const WriteWorker) bool {
@@ -80,7 +78,7 @@ pub const WriteWorker = struct {
     }
 
     pub fn pendingOpCount(self: *const WriteWorker) usize {
-        return self.pending_count.load(.acquire);
+        return self.flush_wg.value();
     }
 
     pub fn bumpVersion(self: *WriteWorker) void {
@@ -92,9 +90,7 @@ pub const WriteWorker = struct {
     }
 
     pub fn notifyChanges(self: *WriteWorker) void {
-        if (self.notifier_ptr) |n| {
-            n(self.notifier_ctx);
-        }
+        self.notifier.notify();
     }
 
     fn pushWriteOutcome(self: *WriteWorker, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
@@ -124,35 +120,20 @@ pub const WriteWorker = struct {
     }
 
     pub fn wakeFlushWaiters(self: *WriteWorker) void {
-        self.mutex.lock();
-        self.flush_cond.broadcast();
-        self.mutex.unlock();
+        self.flush_wg.broadcast();
     }
 
     pub fn spawn(self: *WriteWorker) !void {
-        if (self.write_thread != null) return error.ThreadAlreadyRunning;
-        self.write_thread = try std.Thread.spawn(.{}, writeThreadLoop, .{self});
+        try self.thread.spawn(writeThreadLoop, self);
     }
 
     pub fn stop(self: *WriteWorker) void {
-        self.shutdown_requested.store(true, .release);
-        self.mutex.lock();
-        self.work_cond.signal();
-        self.mutex.unlock();
-
-        if (self.write_thread) |thread| {
-            thread.join();
-            self.write_thread = null;
-        }
+        self.thread.stop();
     }
 
     pub fn flushPendingWrites(self: *WriteWorker) void {
         std.log.debug("flushPendingWrites: count={}", .{self.pendingOpCount()});
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        while (self.pendingOpCount() > 0) {
-            self.flush_cond.wait(&self.mutex);
-        }
+        self.flush_wg.wait();
     }
 
     pub fn setupConn(self: *WriteWorker) *sqlite.Db {
@@ -539,9 +520,9 @@ pub const WriteWorker = struct {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
             {
-                self.mutex.lock();
+                self.thread.mutex.lock();
                 self.is_healthy.store(false, .release);
-                self.mutex.unlock();
+                self.thread.mutex.unlock();
             }
 
             while (self.queue.pop()) |op| {
@@ -552,7 +533,7 @@ pub const WriteWorker = struct {
                     self.pushWriteOutcome(info.conn_id, info.write_id, StorageError.EngineUnhealthy, null);
                 }
                 op.deinit(self.allocator);
-                self.endOp(1);
+                self.flush_wg.done(1);
             }
 
             self.wakeFlushWaiters();
@@ -561,21 +542,21 @@ pub const WriteWorker = struct {
     }
 
     fn waitForWriteSignal(self: *WriteWorker, timeout_ns: ?u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.thread.mutex.lock();
+        defer self.thread.mutex.unlock();
 
-        if (self.shutdown_requested.load(.acquire) or self.queue.hasItems()) {
+        if (self.thread.isRequested() or self.queue.hasItems()) {
             return;
         }
 
         if (timeout_ns) |ns| {
-            self.work_cond.timedWait(&self.mutex, ns) catch |err| {
+            self.thread.cond.timedWait(&self.thread.mutex, ns) catch |err| {
                 if (err != error.Timeout) {
                     std.log.err("write_cond.timedWait failed: {}", .{err});
                 }
             };
         } else {
-            self.work_cond.wait(&self.mutex);
+            self.thread.cond.wait(&self.thread.mutex);
         }
     }
 
@@ -600,7 +581,7 @@ pub const WriteWorker = struct {
 
         var last_batch_time = std.time.milliTimestamp();
 
-        while (!self.shutdown_requested.load(.acquire)) {
+        while (!self.thread.isRequested()) {
             // Collect operations for batch
             while (batch.items.len < batch_size) {
                 if (self.queue.pop()) |op| {
@@ -609,7 +590,7 @@ pub const WriteWorker = struct {
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
-                                self.endOp(1);
+                                self.flush_wg.done(1);
                                 self.wakeFlushWaiters();
                                 continue;
                             };
@@ -646,7 +627,7 @@ pub const WriteWorker = struct {
                 .upsert, .update, .delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
-                        self.endOp(1);
+                        self.flush_wg.done(1);
                         self.wakeFlushWaiters();
                     };
                 },
@@ -693,7 +674,7 @@ pub const WriteWorker = struct {
                 }
             }
 
-            self.endOp(1);
+            self.flush_wg.done(1);
             self.wakeFlushWaiters();
             last_batch_time.* = std.time.milliTimestamp();
         }
@@ -995,7 +976,7 @@ pub const WriteWorker = struct {
             .resolve_session => |sop| {
                 self.executeResolveSessionOp(sop);
                 op.deinit(self.allocator);
-                self.endOp(1);
+                self.flush_wg.done(1);
                 self.wakeFlushWaiters();
             },
             .checkpoint => |cop| {
@@ -1007,7 +988,7 @@ pub const WriteWorker = struct {
                 } else |err| {
                     cop.completion_signal.signal(errors.classifyError(err));
                 }
-                self.endOp(1);
+                self.flush_wg.done(1);
                 self.wakeFlushWaiters();
             },
             .upsert, .update, .delete => unreachable,
@@ -1141,6 +1122,7 @@ pub const WriteWorker = struct {
 
         const id_bytes = typed.docIdToBytes(op.id);
         if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+
         if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
 
         var bind_idx: c_int = 3;

@@ -7,6 +7,8 @@ const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
 
 /// A presence operation enqueued by the event loop for the dispatcher thread.
 /// The `allocator` field owns any heap-allocated data inside `op` (e.g. cloned
@@ -72,14 +74,10 @@ pub const PresenceWorker = struct {
     allocator: Allocator,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
-    notifier_fn: ?*const fn (?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
-    thread: ?std.Thread,
+    notifier: Notifier,
+    thread: managedThread(PresenceWorker),
     pool: MemoryStrategy.AllocPool(work_queue_type.Node),
     work_queue: work_queue_type,
-    work_cond: std.Thread.Condition,
-    work_mutex: std.Thread.Mutex,
-    shutdown_requested: std.atomic.Value(bool),
 
     pub fn init(
         self: *PresenceWorker,
@@ -93,15 +91,11 @@ pub const PresenceWorker = struct {
             .allocator = allocator,
             .presence_manager = presence_manager,
             .send_queue = send_queue,
-            .notifier_fn = notifier_fn,
-            .notifier_ctx = notifier_ctx,
-            .thread = null,
+            .notifier = Notifier.init(notifier_fn, notifier_ctx),
+            .thread = managedThread(PresenceWorker).init(),
             .pool = MemoryStrategy.AllocPool(work_queue_type.Node).init(allocator),
             // SAFETY: work_queue is initialized inline below via init()
             .work_queue = undefined,
-            .work_cond = .{},
-            .work_mutex = .{},
-            .shutdown_requested = std.atomic.Value(bool).init(false),
         };
         self.work_queue = try work_queue_type.init(&self.pool);
     }
@@ -117,30 +111,19 @@ pub const PresenceWorker = struct {
     /// Enqueue a presence operation and wake the dispatcher thread.
     pub fn enqueue(self: *PresenceWorker, op: PresenceOp) !void {
         try self.work_queue.push(op);
-        self.work_mutex.lock();
-        self.work_cond.signal();
-        self.work_mutex.unlock();
+        self.thread.signal();
     }
 
     pub fn spawn(self: *PresenceWorker) !void {
-        if (self.thread != null) return error.ThreadAlreadyRunning;
-        self.thread = try std.Thread.spawn(.{}, workerLoop, .{self});
+        try self.thread.spawn(workerLoop, self);
     }
 
     pub fn stop(self: *PresenceWorker) void {
-        self.shutdown_requested.store(true, .release);
-        self.work_mutex.lock();
-        self.work_cond.signal();
-        self.work_mutex.unlock();
-
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
-        }
+        self.thread.stop();
     }
 
     fn workerLoop(self: *PresenceWorker) void {
-        while (!self.shutdown_requested.load(.acquire)) {
+        while (!self.thread.isRequested()) {
             // Drain all available ops (non-blocking) — natural batching.
             var processed = false;
             while (self.work_queue.pop()) |op| {
@@ -150,11 +133,11 @@ pub const PresenceWorker = struct {
             if (processed) self.flush();
 
             // Wait for more work (blocking via condvar).
-            self.work_mutex.lock();
-            if (!self.shutdown_requested.load(.acquire) and !self.work_queue.hasItems()) {
-                self.work_cond.wait(&self.work_mutex);
+            self.thread.mutex.lock();
+            if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
+                self.thread.cond.wait(&self.thread.mutex);
             }
-            self.work_mutex.unlock();
+            self.thread.mutex.unlock();
         }
 
         // Final drain + flush on shutdown.
@@ -249,7 +232,7 @@ pub const PresenceWorker = struct {
             self.allocator.free(msg);
             return;
         };
-        if (self.notifier_fn) |n| n(self.notifier_ctx);
+        self.notifier.notify();
     }
 
     fn sendError(self: *PresenceWorker, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
@@ -332,7 +315,7 @@ pub const PresenceWorker = struct {
         }
 
         if (pushed_any) {
-            if (self.notifier_fn) |n| n(self.notifier_ctx);
+            self.notifier.notify();
         }
     }
 };
