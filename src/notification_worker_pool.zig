@@ -115,8 +115,7 @@ const NotificationWorker = struct {
     }
 
     pub fn stop(self: *NotificationWorker) void {
-        self.thread.requestStop();
-        self.thread.join();
+        self.thread.stop();
     }
 
     fn workerLoop(self: *NotificationWorker) void {

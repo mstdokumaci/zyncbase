@@ -83,8 +83,7 @@ pub const ReadWorker = struct {
     }
 
     pub fn stop(self: *ReadWorker) void {
-        self.thread.requestStop();
-        self.thread.join();
+        self.thread.stop();
     }
 
     fn threadLoop(self: *ReadWorker) void {

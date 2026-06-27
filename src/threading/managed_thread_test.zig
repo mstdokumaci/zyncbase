@@ -15,7 +15,7 @@ test "managedThread: spawn and join lifecycle" {
     var mt = managedThread(TestContext).init();
 
     try mt.spawn(worker, &ctx);
-    mt.join();
+    mt.stop();
 
     try testing.expect(ctx.ran);
 }
@@ -32,7 +32,7 @@ test "managedThread: re-spawn guard" {
     var ctx = TestContext{};
 
     try mt.spawn(worker, &ctx);
-    defer mt.join();
+    defer mt.stop();
 
     try testing.expectError(error.ThreadAlreadyRunning, mt.spawn(worker, &ctx));
 }
