@@ -582,6 +582,10 @@ pub const WriteWorker = struct {
                         .upsert, .update, .delete => {
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
+                                if (op.getWriteAckInfo()) |info| {
+                                    self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
+                                    self.notifyChanges();
+                                }
                                 op.deinit(self.allocator);
                                 self.flush_wg.done(1);
                                 continue;
@@ -617,7 +621,12 @@ pub const WriteWorker = struct {
         while (self.queue.pop()) |op| {
             switch (op) {
                 .upsert, .update, .delete => {
-                    batch.append(self.allocator, op) catch {
+                    batch.append(self.allocator, op) catch |err| {
+                        std.log.err("Failed to append to batch: {}", .{err});
+                        if (op.getWriteAckInfo()) |info| {
+                            self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
+                            self.notifyChanges();
+                        }
                         op.deinit(self.allocator);
                         self.flush_wg.done(1);
                     };

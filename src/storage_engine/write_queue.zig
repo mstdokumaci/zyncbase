@@ -72,7 +72,6 @@ pub const WriteOp = union(enum) {
         values: []typed.Value,
         guard_values: ?[]typed.Value = null,
         timestamp: i64,
-        completion_signal: ?*CompletionSignal = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
@@ -84,7 +83,6 @@ pub const WriteOp = union(enum) {
         values: []typed.Value,
         guard_values: ?[]typed.Value = null,
         timestamp: i64,
-        completion_signal: ?*CompletionSignal = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
@@ -94,7 +92,6 @@ pub const WriteOp = union(enum) {
         namespace_id: i64,
         sql: []const u8,
         guard_values: ?[]typed.Value = null,
-        completion_signal: ?*CompletionSignal = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
@@ -151,9 +148,7 @@ pub const WriteOp = union(enum) {
     pub fn getCompletionSignal(self: WriteOp) ?*CompletionSignal {
         return switch (self) {
             .checkpoint => |op| op.completion_signal,
-            .upsert => |op| op.completion_signal,
-            .update => |op| op.completion_signal,
-            .delete => |op| op.completion_signal,
+            .upsert, .update, .delete => null,
             .resolve_session => null,
             .batch => |op| op.completion_signal,
         };

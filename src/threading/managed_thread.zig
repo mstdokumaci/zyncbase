@@ -6,6 +6,7 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         cond: std.Thread.Condition = .{},
         mutex: std.Thread.Mutex = .{},
+        is_joining: bool = false,
 
         const Self = @This();
 
@@ -22,7 +23,7 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         pub fn spawn(self: *Self, comptime func: fn (*Context) void, ctx: *Context) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            if (self.thread != null) return error.ThreadAlreadyRunning;
+            if (self.thread != null or self.is_joining) return error.ThreadAlreadyRunning;
             self.shutdown_requested.store(false, .release);
             self.thread = try std.Thread.spawn(.{}, func, .{ctx});
         }
@@ -35,14 +36,20 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
             self.mutex.lock();
             self.requestStop();
             self.cond.signal();
-            const maybe_thread = self.thread;
-            self.mutex.unlock();
-            if (maybe_thread) |t| {
-                t.join();
-                self.mutex.lock();
-                defer self.mutex.unlock();
-                self.thread = null;
+            if (self.is_joining or self.thread == null) {
+                self.mutex.unlock();
+                return;
             }
+            self.is_joining = true;
+            const t = self.thread.?;
+            self.mutex.unlock();
+
+            t.join();
+
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            self.thread = null;
+            self.is_joining = false;
         }
 
         pub fn signal(self: *Self) void {

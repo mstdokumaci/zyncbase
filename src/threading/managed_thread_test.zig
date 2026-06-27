@@ -62,3 +62,23 @@ test "managedThread: stop frees the slot for a subsequent spawn" {
     mt.stop();
     try testing.expect(ctx.ran);
 }
+
+test "managedThread: concurrent stop does not double-join" {
+    var ctx = TestContext{};
+    var mt = managedThread(TestContext).init();
+
+    try mt.spawn(worker, &ctx);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
+
+    const Runner = struct {
+        fn run(mt_ptr: *@TypeOf(mt)) void {
+            mt_ptr.stop();
+        }
+    };
+    const t1 = try std.Thread.spawn(.{}, Runner.run, .{&mt});
+    const t2 = try std.Thread.spawn(.{}, Runner.run, .{&mt});
+    t1.join();
+    t2.join();
+
+    try testing.expect(ctx.ran);
+}
