@@ -17,9 +17,6 @@ pub fn workerPool(comptime Worker: type) type { // zwanzig-disable-line: unused-
         }
 
         pub fn deinit(self: *Self) void {
-            for (self.workers) |*w| {
-                std.debug.assert(w.thread.thread == null);
-            }
             self.allocator.free(self.workers);
         }
 

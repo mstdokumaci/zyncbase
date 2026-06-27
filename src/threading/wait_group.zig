@@ -14,12 +14,12 @@ pub const WaitGroup = struct {
     }
 
     pub fn done(self: *WaitGroup, delta: usize) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const prev = self.count.fetchSub(delta, .acq_rel);
         std.debug.assert(prev >= delta);
         if (prev == delta) {
-            self.mutex.lock();
             self.cond.broadcast();
-            self.mutex.unlock();
         }
     }
 
