@@ -6,7 +6,7 @@ pub const WaitGroup = struct {
     mutex: std.Thread.Mutex = .{},
 
     pub fn init() WaitGroup {
-        return .{ .count = std.atomic.Value(usize).init(0) };
+        return .{};
     }
 
     pub fn add(self: *WaitGroup, delta: usize) void {

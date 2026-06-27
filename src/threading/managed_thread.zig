@@ -11,9 +11,7 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         const Self = @This();
 
         pub fn init() Self {
-            return .{
-                .shutdown_requested = std.atomic.Value(bool).init(false),
-            };
+            return .{};
         }
 
         pub fn isRequested(self: *const Self) bool {
