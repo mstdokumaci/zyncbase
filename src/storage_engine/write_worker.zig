@@ -119,10 +119,6 @@ pub const WriteWorker = struct {
         };
     }
 
-    pub fn wakeFlushWaiters(self: *WriteWorker) void {
-        self.flush_wg.broadcast();
-    }
-
     pub fn spawn(self: *WriteWorker) !void {
         try self.thread.spawn(writeThreadLoop, self);
     }
@@ -418,7 +414,6 @@ pub const WriteWorker = struct {
             }
             batch.clearRetainingCapacity();
             self.endOp(batch_len);
-            self.wakeFlushWaiters();
             last_batch_time.* = std.time.milliTimestamp();
             return;
         };
@@ -512,7 +507,6 @@ pub const WriteWorker = struct {
         }
         batch.clearRetainingCapacity();
         self.endOp(batch_len);
-        self.wakeFlushWaiters();
         last_batch_time.* = std.time.milliTimestamp();
     }
 
@@ -536,7 +530,6 @@ pub const WriteWorker = struct {
                 self.flush_wg.done(1);
             }
 
-            self.wakeFlushWaiters();
             self.notifyChanges();
         };
     }
@@ -591,7 +584,6 @@ pub const WriteWorker = struct {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
                                 self.flush_wg.done(1);
-                                self.wakeFlushWaiters();
                                 continue;
                             };
                         },
@@ -628,7 +620,6 @@ pub const WriteWorker = struct {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         self.flush_wg.done(1);
-                        self.wakeFlushWaiters();
                     };
                 },
                 .batch, .resolve_session, .checkpoint => {
@@ -675,7 +666,6 @@ pub const WriteWorker = struct {
             }
 
             self.flush_wg.done(1);
-            self.wakeFlushWaiters();
             last_batch_time.* = std.time.milliTimestamp();
         }
 
@@ -977,7 +967,6 @@ pub const WriteWorker = struct {
                 self.executeResolveSessionOp(sop);
                 op.deinit(self.allocator);
                 self.flush_wg.done(1);
-                self.wakeFlushWaiters();
             },
             .checkpoint => |cop| {
                 const ckpt_result = connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode);
@@ -989,7 +978,6 @@ pub const WriteWorker = struct {
                     cop.completion_signal.signal(errors.classifyError(err));
                 }
                 self.flush_wg.done(1);
-                self.wakeFlushWaiters();
             },
             .upsert, .update, .delete => unreachable,
         }

@@ -36,8 +36,10 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         }
 
         pub fn stop(self: *Self) void {
+            self.mutex.lock();
             self.requestStop();
-            self.signal();
+            self.cond.signal();
+            self.mutex.unlock();
             self.join();
         }
 

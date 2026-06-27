@@ -110,8 +110,10 @@ pub const PresenceWorker = struct {
 
     /// Enqueue a presence operation and wake the dispatcher thread.
     pub fn enqueue(self: *PresenceWorker, op: PresenceOp) !void {
+        self.thread.mutex.lock();
+        defer self.thread.mutex.unlock();
         try self.work_queue.push(op);
-        self.thread.signal();
+        self.thread.cond.signal();
     }
 
     pub fn spawn(self: *PresenceWorker) !void {
