@@ -47,8 +47,9 @@ Some concerns span multiple subsystems. The canonical owner for each flow is:
 |---------|----------------|---------------|-----------------|
 | Namespace resolution | `connection/session_resolver.zig` | `SessionResolutionBuffer` (lock-free ring) | Writer thread → Event loop |
 | Subscription lifecycle | `subscription_engine.zig` | `ChangeBuffer` (lock-free ring, 8192 cap) | Writer thread → Event loop |
-| Write acknowledgement | `write_outcome_dispatcher.zig` | `WriteOutcomeBuffer` (lock-free ring, 256 cap + overflow) | Writer thread → Event loop |
-| Error propagation | `wire/errors.zig` | `getWireError()` switch table | Synchronous + async via dispatchers |
+| Write acknowledgement | `storage_engine/write_worker.zig` | `SendQueue` (lock-free MPSC) | Writer thread (producer) → Event loop (consumer, drains in post-handler) |
+| Notification fanout | `notification_worker_pool.zig` | `ChangeQueue` (sharded SPMC blocking queue) | Writer thread (producer) → `NotificationWorkerPool` workers (consumers) |
+| Error propagation | `wire/errors.zig` | `getWireError()` switch table | Synchronous + async via `SendQueue` |
 | Schema sync | `wire/encode.zig` + `connection/manager.zig` | Pre-encoded `[]const u8` at startup | Startup only, sent on `onOpen` |
 
 Each owner file documents the full flow; other files link rather than duplicate.

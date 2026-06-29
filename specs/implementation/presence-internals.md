@@ -12,7 +12,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 | `src/presence/manager.zig` | Presence state, user/shared snapshots, writes, removals, and subscriber tables. |
 | `src/presence/record.zig` | Typed presence record encoding/decoding and field validation. |
 | `src/presence/subscriber.zig` | Presence subscriber ids and subscriber tables. |
-| `src/presence/dispatcher.zig` | Broadcast delivery through connections and wire encoders. |
+| `src/presence/worker.zig` | Dedicated `PresenceWorker` OS thread; SPSC input queue of `PresenceOp`; drains ops, mutates `PresenceManager`, encodes snapshots and broadcasts, pushes owned bytes to `SendQueue`. |
 | `src/message_handler.zig` | Presence route handling and scoped presence session gates. |
 | `src/wire/decode.zig` | Presence request extractors. |
 | `src/wire/encode.zig` | Presence snapshot and broadcast encoders. |
@@ -24,8 +24,9 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `PresenceManager` | schema, typed values, subscribers | Owns in-memory user/shared presence state and snapshot construction. |
+| `PresenceWorker` | `managedThread(PresenceWorker)`, `spscQueue(PresenceOp, AllocPool)`, `PresenceManager`, `SendQueue`, `Notifier` | Dedicated OS thread; drains `PresenceOp` queue, mutates `PresenceManager`, encodes snapshots/broadcasts, pushes owned bytes to `SendQueue`. |
+| `PresenceOp` | `Allocator` | Typed union of presence operations: `set_user`, `set_shared`, `remove_user`, `subscribe_user`, `subscribe_shared`, `unsubscribe_user`, `unsubscribe_shared`, `remove_all_for_connection`. Each op carries an allocator for correct teardown. |
 | `PresenceRecord` | `Schema.PresenceField`, `typed.Value` | Validates and stores typed presence field values. |
-| `PresenceDispatcher` | `ConnectionManager`, `wire` | Sends presence snapshots and broadcasts to subscribers. |
 | `Subscriber` | connection id, subscription id | Identifies one presence subscription target. |
 | `SubscriberTable` | allocator | Stores subscribers for user/shared presence channels. |
 | `PresenceField` | schema parser | Defines allowed presence fields and field ids. |
@@ -86,14 +87,17 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | Subsystem | Thread | Synchronization | Ownership Boundary |
 |-----------|--------|-----------------|-------------------|
-| `PresenceManager` | uWS event loop | `data_mutex: std.Thread.Mutex` | All mutable state behind single mutex. |
-| `PresenceDispatcher` | uWS event loop (polled) | Reads via `drainPendingBatches()` | Drains batches, sends via `ConnectionManager`. |
+| `PresenceManager` | `PresenceWorker` thread | `data_mutex: std.Thread.Mutex` | All mutable presence state is behind a single mutex; `PresenceWorker` is the sole mutator. |
+| `PresenceWorker` input queue | `PresenceWorker` thread (consumer) + event loop (producer via `enqueue()`) | `managedThread` mutex + condvar; SPSC queue (`spscQueue(PresenceOp, AllocPool)`) | One producer (event loop), one consumer (`PresenceWorker`). `enqueue()` holds `thread.mutex` while pushing and signals `thread.cond`. |
+| Send path | `PresenceWorker` thread (producer) | Lock-free MPSC `SendQueue` | Worker encodes snapshots/broadcasts, pushes owned `{conn_id, encoded_bytes}` to `SendQueue`, calls `Notifier.notify()`. Event loop drains. |
 
 **Key invariants**:
-- Presence state is accessed only from the uWS event loop thread (both message handling and dispatching).
-- The `data_mutex` exists for safety but has no contention in practice because all access is single-threaded.
-- `SubscriberTable` is not thread-safe; `PresenceManager` provides synchronization.
-- No dedicated background thread for presence; the dispatcher is polled from the event loop.
+- `PresenceWorker` is the sole consumer of its SPSC work queue and the sole mutator of `PresenceManager` state.
+- The event loop enqueues `PresenceOp` values via `PresenceWorker.enqueue()`, which holds `thread.mutex` during push and signals `thread.cond`.
+- `PresenceWorker` waits on `thread.cond` when the queue is empty and wakes on signal or shutdown request.
+- Presence broadcasts and snapshots are encoded by the `PresenceWorker` thread and delivered through `SendQueue`; the event loop does not directly call any presence send.
+- `SubscriberTable` is not thread-safe; `PresenceManager` provides synchronization via `data_mutex`.
+- Presence cleanup on disconnect must be idempotent and handled through `PresenceOp.remove_all_for_connection` enqueued by the event loop.
 
 ## See Also
 

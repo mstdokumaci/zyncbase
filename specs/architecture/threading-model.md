@@ -13,42 +13,40 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    ZyncBase Thread Domains                      │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │ Event Loop   │  │    Writer    │  │  Checkpoint  │           │
-│  │   (1 fixed)  │  │   (1 fixed)  │  │   (1 fixed)  │           │
-│  │              │  │              │  │              │           │
-│  │  WebSocket   │  │  SQLite WAL  │  │  Background  │           │
-│  │  I/O + Msg   │  │  Commit      │  │  WAL->DB     │           │
-│  │  Send Drain  │  │  Serialization│ │  Flush       │           │
-│  └──────┬───────┘  └──────┬───────┘  └──────────────┘           │
-│         │                 │                                     │
-│         │          ┌──────▼───────┐  ┌──────────────┐           │
-│         │          │  Presence    │  │ Notification │           │
-│         │          │   (1 fixed)  │  │  (variable)  │           │
-│         │          │              │  │              │           │
-│         │          │  Broadcast   │  │  Change      │           │
-│         │          │  Encoding    │  │  Evaluation  │           │
-│         │          └──────┬───────┘  │  + Encoding  │           │
-│         │                 │          └──────┬───────┘           │
-│         │                                                       │
-│  ┌──────▼──────────────────────────────────────────────────┐    │
-│  │                    Reader Pool                          │    │
-│  │              (variable, max 4)                          │    │
-│  │   ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐                │    │
-│  │   │ R1   │  │ R2   │  │ R3   │  │ R4   │                │    │
-│  │   │SQLite│  │SQLite│  │SQLite│  │SQLite│                │    │
-│  │   │ WAL  │  │ WAL  │  │ WAL  │  │ WAL  │                │    │
-│  │   └──────┘  └──────┘  └──────┘  └──────┘                │    │
-│  └──────┬──────────────────────────────────────────────────┘    │
-│         │                                                       │
-│  ┌──────▼──────────────────────────────────────────────────┐    │
-│  │                       SendQueue                         │    │
-│  │      MPSC owned-message handoff to event loop drain     │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       ZyncBase Thread Domains                           │
+│                                                                         │
+│                           ┌──────────────┐                              │
+│                           │  Event Loop  │◄─────────────────────────┐   │
+│                           │   (1 fixed)  │                          │   │
+│                           └─┬────┬────┬──┘                          │   │
+│                             │    │    │                             │   │
+│               ┌─────────────┘    │    └──────────────┐              │   │
+│          presence ops        write ops         read requests        │   │
+│               │                  │                   │              │   │
+│       ┌───────▼──────┐    ┌──────▼───────┐    ┌──────▼───────┐      │   │
+│       │  Presence    │    │    Writer    │    │  Reader Pool │      │   │
+│       │  (1 fixed)   │    │   (1 fixed)  │    │  (var, max 4)│      │   │
+│       └──────┬───────┘    └─┬─────────┬──┘    └──────┬───────┘      │   │
+│              │              │         │              │              │   │
+│              │        change fan-out  │              │              │   │
+│              │          (sharded)     │              │              │   │
+│              │              │   write outcomes       │              │   │
+│              │    ┌─────────▼──┐      │              │              │   │
+│              │    │Notification│      │              │              │   │
+│              │    │  Workers   │      │              │              │   │
+│              │    │ (variable) │      │              │              │   │
+│              │    └─────┬──────┘      │              │              │   │
+│              │          │             │              │              │   │
+│              ▼          ▼             ▼              ▼              │   │
+│            ┌───────────────────────────────────────────┐            │   │
+│            │                 Send queue                │            │   │
+│            │       (cross-thread message queue)        ├────────────┘   │
+│            └───────────────────────────────────────────┘                │
+│                                                                         │
+│  * Note: The Checkpoint thread (1 fixed) runs independently in the      │
+│    background to flush WAL to the main SQLite database.                 │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -87,40 +85,37 @@ variable:
 ## Thread Domain Responsibilities
 
 ### Event Loop (1 thread, fixed)
-- Runs the uWebSockets reactor
-- Handles all WebSocket I/O (connect, message, disconnect)
-- Drains `SendQueue` in the post-handler and calls `Connection.send()`
+- Runs the network reactor; handles all WebSocket I/O (connect, message, disconnect)
+- Dispatches incoming messages to the write or read path without blocking
+- Drains the cross-thread message queue in the post-handler and delivers outbound payloads to connections
 - Must never block — all I/O is non-blocking
 
 ### Writer (1 thread, fixed)
-- Receives mutations from the write queue
-- Commits to SQLite in serialized order
-- Publishes `RecordChange` events to the Subscription Engine after commit
-- Pushes acknowledged write outcomes through `SendQueue`
-- Total write ordering is architecturally guaranteed
+- Receives mutations through a dedicated write queue
+- Commits to SQLite in serialized order; total write ordering is architecturally guaranteed
+- After each commit, fans committed changes out to notification workers
+- Delivers write outcomes (acknowledged or rejected) back to the event loop for client delivery
 
 ### Checkpoint (1 thread, fixed)
 - Background WAL→main database flush
 - Periodic full checkpoints
-- Decoupled from write path to avoid blocking mutations
+- Decoupled from the write path to avoid blocking mutations
 
 ### Presence (1 thread, fixed)
-- Encodes presence broadcasts from batched state
-- Pushes encoded messages to the send queue
-- Runs on a 50ms tick or condition variable wake
+- Accepts presence operations from the event loop through a dedicated input queue
+- Processes operations serially, updates in-memory presence state, and encodes outbound broadcasts
+- Delivers encoded presence messages to the event loop through the cross-thread message queue
 
 ### Reader Pool (variable, max 4)
-- Each reader holds its own SQLite connection in WAL read mode
-- Serves cold queries (subscriptions with no active warm state)
-- Serves `loadMore` operations for pagination
-- Encodes read responses and pushes owned messages to `SendQueue`
-- Scales with CPU cores up to 4 readers
+- Each reader thread holds its own SQLite connection in WAL read mode
+- Accepts read requests from a shared work queue; multiple readers consume concurrently
+- Encodes read responses and delivers them to the event loop through the cross-thread message queue
+- Scales with CPU cores up to 4 workers
 
 ### Notification (variable)
-- Drains the change buffer after storage commits
-- Evaluates subscription filters (CPU-heavy)
-- Encodes delta messages
-- Pushes owned delta messages to `SendQueue` for event loop delivery
+- A pool of workers; committed changes are distributed across shards so each worker owns one shard
+- Each worker blocks on its shard until a change arrives, then evaluates subscription filters (CPU-heavy)
+- Encodes delta messages and delivers them to the event loop through the cross-thread message queue
 
 ---
 
@@ -128,39 +123,40 @@ variable:
 
 ### 1. Message Arrival
 - WebSocket message arrives on the event loop thread
-- Message handler parses and routes to read or write path
+- Message handler parses and routes to the read or write path
 - No blocking — all operations are dispatched asynchronously
 
 ### 2. Write Path (Serialized)
-- Mutation is enqueued to the write queue
-- Writer thread dequeues, commits to SQLite
-- After commit, `RecordChange` events are published
-- Notification threads evaluate subscriptions and encode deltas
-- Deltas are pushed to send queue, delivered by event loop
+- Mutation is enqueued to the dedicated write queue and the event loop returns immediately
+- Writer thread dequeues and commits to SQLite in serialized order
+- After commit, committed changes are distributed to notification workers for subscription fanout
+- Write outcomes are delivered back to the event loop for client acknowledgement
 
 ### 3. Read Path (Parallel)
-- Warm reads (active subscriptions) evaluate in-memory via Subscription Engine
-- Cold reads (no active subscription) use reader pool
-- Reader pool threads execute SQLite queries in parallel
-- Results are encoded, pushed to `SendQueue`, and sent by the event loop
+- Warm reads (active subscriptions) evaluate in-memory via the Subscription Engine
+- Cold reads and pagination requests are dispatched to the reader pool via a shared work queue
+- Reader threads execute SQLite queries in parallel on dedicated connections
+- Results are encoded and delivered to the event loop through the cross-thread message queue
 
 ### 4. Presence Path (Dedicated)
-- Presence updates are batched in PresenceManager
-- Presence dispatch thread encodes broadcasts
-- Broadcasts are pushed to `SendQueue` for event loop delivery
+- Presence operations from the event loop are enqueued into the presence worker's input queue
+- The presence worker processes operations serially, updates in-memory state, and encodes responses
+- Encoded broadcasts and snapshots are delivered to the event loop through the cross-thread message queue
 
 ---
 
 ## Thread Safety Strategy
 
-The core engine routes incoming messages to either the parallel read path or the serialized write path. The Subscription Engine maintains in-memory collection state updated by the writer thread after each commit. The lock-free cache handles auth/schema/namespace/identity metadata with atomic reference counting and COW map swaps.
+The core engine routes incoming messages to either the parallel read path or the serialized write path. The Subscription Engine maintains in-memory collection state updated by the writer thread after each commit. A lock-free cache handles auth/schema/namespace/identity metadata with atomic reference counting and copy-on-write map swaps.
 
 **Synchronization boundaries:**
-- Connection state: mutated only through Connection methods
-- Storage writes: serialized through WriteQueue
-- Storage reads: use reader connections, no statement sharing
-- Subscriptions: register/unregister through SubscriptionEngine
-- WebSocket sends: background workers push owned bytes to `SendQueue`; only the event loop drains and calls `Connection.send()`
+- Connection state: mutated only through connection management methods; no direct mutation from background threads
+- Storage writes: serialized through the single-writer queue; bypassing it breaks acknowledgement ordering
+- Storage reads: each reader thread owns its SQLite connection exclusively; no connection sharing
+- Notification fanout: committed changes distributed to notification workers via a sharded work queue; each worker owns one shard
+- Subscriptions: register/unregister through the subscription registry; disconnects must detach all connection-owned subscriptions
+- Presence: event loop enqueues operations into the presence worker's input queue; the presence worker is the sole mutator of presence state
+- WebSocket sends: background workers push owned encoded messages to the cross-thread queue; only the event loop drains and delivers to connections
 
 ---
 
@@ -305,3 +301,4 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 - [Storage Layer](./storage-layer.md) - Details on parallel disk access
 - [Core Principles](./core-principles.md) - Design philosophy
 - [Research](./research.md) - Performance validation and benchmarks
+- [Threading](../implementation/threading.md) - Implementation details: source files, types, queue mechanics, and synchronization invariants

@@ -10,10 +10,11 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 |------|----------------|
 | `src/storage_engine.zig` | Public storage facade and re-exports for storage submodules. |
 | `src/storage_engine/connection.zig` | SQLite configuration, WAL/checkpoint helpers, and reconnect behavior. |
-| `src/storage_engine/writer.zig` | Mutations, batch writes, row ownership checks, and committed change creation. |
-| `src/storage_engine/write_queue.zig` | Single-writer queue, checkpoint mode/stats, and writer health. |
+| `src/storage_engine/write_worker.zig` | `WriteWorker` type: dedicated writer OS thread, SPSC write queue, WaitGroup flush backpressure, Notifier, mutation methods, and committed change production. |
+| `src/storage_engine/write_queue.zig` | `WriteOp` union, `write_queue_type` alias (`spscQueue(WriteOp, IndexPool)`), `BatchEntry`, checkpoint types, and `ReconnectionConfig`. |
 | `src/storage_engine/reader.zig` | Select/query execution, record decoding, and query result ownership. |
-| `src/storage_engine/reader_pool.zig` | Dedicated reader OS threads. Consume `ReadRequest`, encode responses, push to `SendQueue`. |
+| `src/storage_engine/read_worker_pool.zig` | `ReadWorkerPool` and `ReadWorker`: dedicated reader OS threads using `managedThread` and `workerPool`. Consume `ReadRequest`, encode responses, push to `SendQueue`. |
+| `src/storage_engine/read_buffer.zig` | `ReadRequest`, `ReadResponse` types and `read_request_queue` alias (`spmcBlockingQueue(ReadRequest)`). |
 | `src/storage_engine/sql.zig` | SQL construction and SQLite binding helpers. |
 | `src/storage_engine/filter_sql.zig` | Query predicate lowering to SQL fragments and bound values. |
 | `src/storage_engine/cache.zig` | Namespace/identity metadata cache keys and values. |
@@ -26,10 +27,11 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `StorageEngine` | SQLite, schema, memory strategy, write queue | Main persistence API for store service and server lifecycle. |
-| `WriteQueue` | `Writer`, connection manager, `SendQueue` | Serializes durable writes and coordinates checkpoint/write health. |
-| `Writer` | SQLite writer connection, schema, cache | Executes inserts/updates/deletes/batches and emits `RecordChange` values. |
-| `QueryResult` | decoded records, table metadata, cursor | Owns read result data returned to store service/wire encoding. |
+| `StorageEngine` | SQLite, schema, memory strategy, write worker | Main persistence API for store service and server lifecycle. |
+| `WriteWorker` | `managedThread`, `spscQueue(WriteOp, IndexPool)`, `WaitGroup`, `Notifier`, SQLite writer connection, schema, caches | Sole writer thread; executes mutations, emits `ChangeJob` entries to `ChangeQueue`, encodes write outcomes to `SendQueue`. |
+| `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | Type alias for the SPSC write op queue. `IndexPool` provides zero-allocation pooled nodes. |
+| `ReadWorkerPool` / `ReadWorker` | `workerPool`, `managedThread`, `read_request_queue`, `SendQueue`, `Notifier` | Pool of dedicated reader threads; each `ReadWorker` owns an exclusive `ReaderNode` (SQLite connection + statement cache). |
+| `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its writer allocator for safe cross-thread handoff to notification workers. |
 | `PkSet` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
 | `ColumnValue` | typed values | Represents values bound into SQLite statements. |
 | `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
@@ -55,11 +57,11 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 ## Write Path
 
 1. Store service validates payload shape and authorization.
-2. Mutation is enqueued through the single-writer path.
-3. Writer applies schema validation, ownership checks, and conflict semantics.
-4. Commit produces `RecordChange` entries for subscriptions.
+2. Mutation is enqueued through the single-writer path (SPSC write queue).
+3. `WriteWorker` applies schema validation, ownership checks, and conflict semantics.
+4. Commit produces `ChangeJob` entries pushed to `ChangeQueue` for notification workers.
 5. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
-5. Immediate and committed acknowledgements follow ADR-018 semantics.
+6. Immediate and committed acknowledgements follow ADR-018 semantics.
 
 ## Invariants
 
@@ -130,12 +132,13 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 
 | Subsystem | Thread | Synchronization | Ownership Boundary |
 |-----------|--------|-----------------|-------------------|
-| Writer | Dedicated writer thread | `mutex` + `work_cond` + `flush_cond` + atomics | Sole consumer of `WriteQueue`; produces record changes, session resolutions, and `SendQueue` outcome messages. |
-| Write queue | MPSC: uWS thread (producers) + writer thread (consumer) | Lock-free (atomic tail swap + atomic next pointers) | Thread-safe by design. |
-| Reader pool | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for owned encoded responses | Each reader thread owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
-| Change/Resolution buffers | Writer thread (producer) → uWS thread (consumer) | Atomic `write_pos`/`read_pos` + `overflow_mutex` | SPSC ring buffers with overflow. |
+| `WriteWorker` | Dedicated writer thread | `managedThread` mutex/condvar + `WaitGroup` (`flush_wg`) + atomics | Sole consumer of SPSC write queue; produces `ChangeJob` entries, session resolutions, and `SendQueue` outcome messages. |
+| Write queue | SPSC: uWS event loop (producer) + writer thread (consumer) | Lock-free (atomic tail swap, Vyukov linked-list); pool-allocated nodes | Thread-safe by construction; one producer, one consumer. |
+| `ReadWorkerPool` | Dedicated reader threads (1–4) | SPMC blocking queue (mutex + CV) for requests; lock-free MPSC `SendQueue` for owned encoded responses | Each `ReadWorker` owns its `ReaderNode` (SQLite conn + stmt cache) exclusively. |
+| `ChangeQueue` | Writer thread (producer) → `NotificationWorkerPool` (consumers) | Sharded SPMC blocking queue (mutex + CV per shard); shard selected by `(namespace_id, table_index, doc_id)` hash | Writer pushes non-blocking; each notification worker blocks on its own shard. |
+| Session resolution buffer | Writer thread (producer) → uWS event loop (consumer) | Atomic ring buffer with overflow mutex | SPSC ring buffer with overflow. |
 | Write outcome delivery | Writer thread (producer) → uWS event loop (consumer) | Lock-free MPSC `SendQueue` | Writer encodes `WriteCommitted`/`WriteError` and pushes owned bytes to `SendQueue`. |
-| SendQueue drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
+| `SendQueue` drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
 
 **Key invariants**:
 - All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
