@@ -24,7 +24,7 @@ pub const ChangeJob = struct {
     change: OwnedRecordChange,
     allocator: Allocator,
 
-    pub fn deinit(self: *ChangeJob) void {
+    pub fn deinit(self: *ChangeJob, _: std.mem.Allocator) void {
         self.change.deinit(self.allocator);
     }
 };

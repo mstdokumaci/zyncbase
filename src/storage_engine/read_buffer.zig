@@ -20,7 +20,7 @@ pub const ReadRequest = struct {
     sub_id: ?u64 = null,
     allocator: Allocator,
 
-    pub fn deinit(self: *ReadRequest) void {
+    pub fn deinit(self: *ReadRequest, _: Allocator) void {
         self.filter.deinit(self.allocator);
         if (self.auth_predicate) |*p| p.deinit(self.allocator);
     }

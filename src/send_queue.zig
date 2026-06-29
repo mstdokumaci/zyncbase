@@ -6,7 +6,7 @@ pub const Entry = struct {
     conn_id: u64,
     data: []const u8,
 
-    pub fn free(self: *Entry, alloc: Allocator) void {
+    pub fn deinit(self: *Entry, alloc: Allocator) void {
         alloc.free(self.data);
     }
 };

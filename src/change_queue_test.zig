@@ -32,7 +32,7 @@ test "ChangeQueue: computeShard determinism and range" {
             try testing.expect(found_shard == null); // Should only find in one shard
             found_shard = i;
             var mut_job = job;
-            mut_job.deinit();
+            mut_job.deinit(alloc);
         }
     }
     try testing.expect(found_shard != null);
@@ -65,7 +65,7 @@ test "ChangeQueue: computeShard distribution across shards" {
         while (shard.popTimed(0)) |job| {
             shard_hits[i] += 1;
             var mut_job = job;
-            mut_job.deinit();
+            mut_job.deinit(alloc);
         }
     }
 
@@ -109,7 +109,7 @@ test "ChangeQueue: push routes to correct shard" {
             try testing.expectEqual(OwnedRecordChange.Operation.update, job.change.operation);
             found = true;
             var mut_job = job;
-            mut_job.deinit();
+            mut_job.deinit(alloc);
         }
     }
     try testing.expect(found);

@@ -60,8 +60,8 @@ pub const WriteWorker = struct {
     }
 
     pub fn enqueueOp(self: *WriteWorker, op: WriteOp) !void {
-        self.thread.mutex.lock();
-        defer self.thread.mutex.unlock();
+        self.thread.lockWork();
+        defer self.thread.unlockWork();
         if (!self.is_healthy.load(.acquire)) {
             return StorageError.EngineUnhealthy;
         }
@@ -409,7 +409,6 @@ pub const WriteWorker = struct {
             const classified_err = errors.classifyError(err);
             std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
             for (batch.items) |op| {
-                if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
                 op.deinit(self.allocator);
             }
             batch.clearRetainingCapacity();
@@ -481,7 +480,6 @@ pub const WriteWorker = struct {
                     self.pushWriteOutcome(info.conn_id, info.write_id, outcome_err, null);
                     pushed_outcome = true;
                 }
-                if (op.getCompletionSignal()) |sig| sig.signal(null);
                 op.deinit(self.allocator);
             }
             if (pushed_outcome) {
@@ -498,7 +496,6 @@ pub const WriteWorker = struct {
                     self.pushWriteOutcome(info.conn_id, info.write_id, classified_err, null);
                     pushed_outcome = true;
                 }
-                if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
                 op.deinit(self.allocator);
             }
             if (pushed_outcome) {
@@ -514,14 +511,16 @@ pub const WriteWorker = struct {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
             {
-                self.thread.mutex.lock();
+                self.thread.lockWork();
                 self.is_healthy.store(false, .release);
-                self.thread.mutex.unlock();
+                self.thread.unlockWork();
             }
 
             while (self.queue.pop()) |op| {
-                if (op.getCompletionSignal()) |sig| {
-                    sig.signal(StorageError.EngineUnhealthy);
+                switch (op) {
+                    .checkpoint => |cop| cop.latch.reject(StorageError.EngineUnhealthy),
+                    .batch => |bop| if (bop.latch) |l| l.reject(StorageError.EngineUnhealthy),
+                    else => {},
                 }
                 if (op.getWriteAckInfo()) |info| {
                     self.pushWriteOutcome(info.conn_id, info.write_id, StorageError.EngineUnhealthy, null);
@@ -535,22 +534,19 @@ pub const WriteWorker = struct {
     }
 
     fn waitForWriteSignal(self: *WriteWorker, timeout_ns: ?u64) void {
-        self.thread.mutex.lock();
-        defer self.thread.mutex.unlock();
+        self.thread.lockWork();
+        defer self.thread.unlockWork();
 
         if (self.thread.isRequested() or self.queue.hasItems()) {
             return;
         }
 
-        if (timeout_ns) |ns| {
-            self.thread.cond.timedWait(&self.thread.mutex, ns) catch |err| {
-                if (err != error.Timeout) {
-                    std.log.err("write_cond.timedWait failed: {}", .{err});
-                }
-            };
-        } else {
-            self.thread.cond.wait(&self.thread.mutex);
-        }
+        _ = if (timeout_ns) |ns|
+            self.thread.waitForWorkTimed(ns)
+        else blk: {
+            self.thread.waitForWork();
+            break :blk @TypeOf(self.thread).WaitResult.signaled;
+        };
     }
 
     fn writeThreadLoopImpl(self: *WriteWorker) !void {
@@ -663,7 +659,9 @@ pub const WriteWorker = struct {
             for (entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
 
-            if (bop.completion_signal) |sig| sig.signal(final_err);
+            if (bop.latch) |l| {
+                if (final_err) |e| l.reject(e) else l.resolve({});
+            }
 
             if (@hasField(@TypeOf(bop), "conn_id")) {
                 if (bop.conn_id) |cid| {
@@ -979,12 +977,11 @@ pub const WriteWorker = struct {
             },
             .checkpoint => |cop| {
                 const ckpt_result = connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode);
-                // No-op for checkpoint, but keeps the pattern uniform.
                 op.deinit(self.allocator);
                 if (ckpt_result) |stats| {
-                    cop.completion_signal.signalWithResult(stats);
+                    cop.latch.resolve(stats);
                 } else |err| {
-                    cop.completion_signal.signal(errors.classifyError(err));
+                    cop.latch.reject(errors.classifyError(err));
                 }
                 self.flush_wg.done(1);
             },

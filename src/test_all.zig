@@ -29,6 +29,7 @@ test {
     _ = @import("storage_query_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");
+    _ = @import("queues/spsc_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
     _ = @import("wire_test.zig");
     _ = @import("sync_consistency_test.zig");
@@ -79,4 +80,5 @@ test {
     _ = @import("threading/worker_pool_test.zig");
     _ = @import("threading/notifier_test.zig");
     _ = @import("threading/wait_group_test.zig");
+    _ = @import("threading/latch_test.zig");
 }

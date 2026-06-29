@@ -134,7 +134,7 @@ const NotificationWorker = struct {
 
     fn processChange(self: *NotificationWorker, job: ChangeJob) void {
         var job_mut = job;
-        defer job_mut.deinit();
+        defer job_mut.deinit(job_mut.allocator);
 
         const change = job_mut.change;
         const table_metadata = self.schema.tableByIndex(change.table_index) orelse {

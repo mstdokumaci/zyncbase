@@ -110,10 +110,10 @@ pub const PresenceWorker = struct {
 
     /// Enqueue a presence operation and wake the dispatcher thread.
     pub fn enqueue(self: *PresenceWorker, op: PresenceOp) !void {
-        self.thread.mutex.lock();
-        defer self.thread.mutex.unlock();
+        self.thread.lockWork();
+        defer self.thread.unlockWork();
         try self.work_queue.push(op);
-        self.thread.cond.signal();
+        self.thread.signal();
     }
 
     pub fn spawn(self: *PresenceWorker) !void {
@@ -135,11 +135,11 @@ pub const PresenceWorker = struct {
             if (processed) self.flush();
 
             // Wait for more work (blocking via condvar).
-            self.thread.mutex.lock();
+            self.thread.lockWork();
             if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
-                self.thread.cond.wait(&self.thread.mutex);
+                self.thread.waitForWork();
             }
-            self.thread.mutex.unlock();
+            self.thread.unlockWork();
         }
 
         // Final drain + flush on shutdown.

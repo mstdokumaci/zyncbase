@@ -6,7 +6,7 @@ const TestEntry = struct {
     id: u64,
     msg: []const u8,
 
-    pub fn free(self: *TestEntry, alloc: std.mem.Allocator) void {
+    pub fn deinit(self: *TestEntry, alloc: std.mem.Allocator) void {
         alloc.free(self.msg);
     }
 };
@@ -80,7 +80,7 @@ test "MpscQueue: pop after drain returns null" {
     try testing.expect(q.pop() == null);
 }
 
-test "MpscQueue: deinit frees remaining entries via free fn" {
+test "MpscQueue: deinit frees remaining entries via deinit fn" {
     const alloc = testing.allocator;
     var q = try mpscQueue(TestEntry).init(alloc);
 

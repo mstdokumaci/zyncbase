@@ -34,6 +34,8 @@ pub const CheckpointStats = write_queue.CheckpointStats;
 pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
+pub const CheckpointLatch = write_queue.CheckpointLatch;
+pub const AckLatch = write_queue.AckLatch;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
@@ -322,18 +324,17 @@ pub const StorageEngine = struct {
     /// Returns statistics about the checkpoint operation
     pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
         try self.ensureRunning();
-        var signal = WriteOp.CompletionSignal{};
+        var latch = CheckpointLatch{};
         const op = WriteOp{
             .checkpoint = .{
                 .mode = mode,
-                .completion_signal = &signal,
+                .latch = &latch,
             },
         };
 
         try self.write_worker.enqueueOp(op);
 
-        try signal.wait();
-        return signal.result orelse error.InvalidOperation;
+        return try latch.wait();
     }
 
     /// Get the current WAL file size in bytes
@@ -679,7 +680,7 @@ pub const StorageEngine = struct {
         const op = WriteOp{
             .batch = .{
                 .entries = entries,
-                .completion_signal = null,
+                .latch = null,
                 .conn_id = conn_id,
                 .write_id = write_id,
             },

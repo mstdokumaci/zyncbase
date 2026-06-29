@@ -260,17 +260,11 @@ pub const CheckpointWorker = struct {
     pub fn backgroundCheckpointLoop(self: *CheckpointWorker) void {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
-        self.thread.mutex.lock();
-        defer self.thread.mutex.unlock();
+        self.thread.lockWork();
+        defer self.thread.unlockWork();
         while (!self.thread.isRequested()) {
-            // Wait for configured interval or shutdown signal
-            self.thread.cond.timedWait(&self.thread.mutex, self.config.check_interval_sec * std.time.ns_per_s) catch |err| {
-                if (err != error.Timeout) {
-                    std.log.err("shutdown_cond.timedWait failed: {}", .{err});
-                }
-            };
-
-            if (self.thread.isRequested()) break;
+            const r = self.thread.waitForWorkTimed(self.config.check_interval_sec * std.time.ns_per_s);
+            if (r == .stop) break;
 
             // Check if checkpoint is needed
             if (self.shouldCheckpoint()) {
@@ -281,14 +275,16 @@ pub const CheckpointWorker = struct {
 
                 std.log.info("Checkpoint triggered: wal_size={} bytes, time_since_last={}s", .{ wal_size, time_since_last });
 
-                // Unlock for actual work
-                self.thread.mutex.unlock();
+                // Release the lock for the duration of the checkpoint — checkpoint operations
+                // can be slow (WAL flush, fsync) and must not block stop() from acquiring the
+                // mutex during that time.
+                self.thread.unlockWork();
                 const result = self.performCheckpointWithEscalation() catch |err| {
                     std.log.err("Background checkpoint failed: {}", .{err});
-                    self.thread.mutex.lock();
+                    self.thread.lockWork();
                     continue;
                 };
-                self.thread.mutex.lock();
+                self.thread.lockWork();
 
                 if (result.success) {
                     std.log.info("Background checkpoint completed successfully", .{});

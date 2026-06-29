@@ -70,5 +70,37 @@ pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unu
         pub fn broadcast(self: *Self) void {
             self.cond.broadcast();
         }
+
+        /// Acquire the thread's internal mutex.
+        /// Pair with unlockWork(). Use when you need the mutex for a push-then-signal sequence.
+        pub fn lockWork(self: *Self) void {
+            self.mutex.lock();
+        }
+
+        /// Release the thread's internal mutex.
+        pub fn unlockWork(self: *Self) void {
+            self.mutex.unlock();
+        }
+
+        /// Block until the thread receives a signal, a broadcast, or a stop request.
+        /// MUST be called while holding the mutex (via lockWork).
+        pub fn waitForWork(self: *Self) void {
+            self.cond.wait(&self.mutex);
+        }
+
+        /// Result of a timed wait.
+        pub const WaitResult = enum { signaled, timeout, stop };
+
+        /// Block for up to `timeout_ns` nanoseconds, or until signaled or stop is requested.
+        /// MUST be called while holding the mutex (via lockWork).
+        /// Returns .stop if shutdown was requested, .timeout if the duration elapsed, .signaled otherwise.
+        pub fn waitForWorkTimed(self: *Self, timeout_ns: u64) WaitResult {
+            if (self.isRequested()) return .stop;
+            self.cond.timedWait(&self.mutex, timeout_ns) catch |err| {
+                if (err == error.Timeout) return if (self.isRequested()) .stop else .timeout;
+                std.log.err("managedThread timedWait failed: {}", .{err});
+            };
+            return if (self.isRequested()) .stop else .signaled;
+        }
     };
 }

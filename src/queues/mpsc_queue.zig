@@ -61,7 +61,7 @@ pub fn mpscQueue(comptime T: type) type {
                     return;
                 };
                 if (comptime @typeInfo(T) == .@"struct" or @typeInfo(T) == .@"union" or @typeInfo(T) == .@"enum") {
-                    if (@hasDecl(T, "free")) next.data.free(self.allocator);
+                    if (@hasDecl(T, "deinit")) next.data.deinit(self.allocator);
                 }
                 self.allocator.destroy(head);
                 self.head = next;
