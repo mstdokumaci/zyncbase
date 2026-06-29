@@ -51,7 +51,7 @@ fn readLen(bytes: []const u8, pos: *usize, n_bytes: u3) SkipError!usize {
 
 /// Advances `pos` past `len` payload bytes, bounds-checking.
 fn skipPayload(bytes: []const u8, pos: *usize, len: usize) SkipError!void {
-    if (pos.* + len > bytes.len) return error.InvalidMessageFormat;
+    if (len > bytes.len - pos.*) return error.InvalidMessageFormat;
     pos.* += len;
 }
 
@@ -100,6 +100,7 @@ pub fn skipArray(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
         0xdd => try readLen(bytes, pos, 4),
         else => return error.InvalidMessageFormat,
     };
+    if (count > bytes.len - pos.*) return error.InvalidMessageFormat;
     for (0..count) |_| try skipValueDepth(bytes, pos, depth + 1);
 }
 
@@ -115,6 +116,7 @@ pub fn skipMap(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
         0xdf => try readLen(bytes, pos, 4),
         else => return error.InvalidMessageFormat,
     };
+    if (count > (bytes.len - pos.*) / 2) return error.InvalidMessageFormat;
     for (0..count * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
 }
 
@@ -130,6 +132,7 @@ pub fn skipExt(bytes: []const u8, pos: *usize) SkipError!void {
         0xc9 => try readLen(bytes, pos, 4),
         else => return error.InvalidMessageFormat,
     };
+    if (len >= bytes.len - pos.*) return error.InvalidMessageFormat;
     try skipPayload(bytes, pos, len + 1);
 }
 

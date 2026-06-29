@@ -203,3 +203,27 @@ test "unknown marker returns InvalidMessageFormat" {
     var pos: usize = 0;
     try std.testing.expectError(error.InvalidMessageFormat, skip.skipValue(&bytes, &pos));
 }
+
+test "skipMap overflow and DoS prevention" {
+    const bytes = [_]u8{ 0xdf, 0xff, 0xff, 0xff, 0xff };
+    var pos: usize = 0;
+    try std.testing.expectError(error.InvalidMessageFormat, skip.skipValue(&bytes, &pos));
+}
+
+test "skipArray overflow and DoS prevention" {
+    const bytes = [_]u8{ 0xdd, 0xff, 0xff, 0xff, 0xff };
+    var pos: usize = 0;
+    try std.testing.expectError(error.InvalidMessageFormat, skip.skipValue(&bytes, &pos));
+}
+
+test "skipExt overflow prevention" {
+    const bytes = [_]u8{ 0xc9, 0xff, 0xff, 0xff, 0xff };
+    var pos: usize = 0;
+    try std.testing.expectError(error.InvalidMessageFormat, skip.skipValue(&bytes, &pos));
+}
+
+test "skipBin payload bounds check overflow prevention" {
+    const bytes = [_]u8{ 0xc6, 0xff, 0xff, 0xff, 0xff };
+    var pos: usize = 0;
+    try std.testing.expectError(error.InvalidMessageFormat, skip.skipValue(&bytes, &pos));
+}
