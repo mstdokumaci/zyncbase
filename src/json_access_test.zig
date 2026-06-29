@@ -87,7 +87,7 @@ test "dupString dups and returns null for absent" {
 
 test "setString sets optional field only when string present" {
     var p = try parseObj(std.testing.allocator,
-        \\{"secret":"abc","noop":42}
+        \\{"secret":"abc","new_secret":"xyz","noop":42}
     );
     defer p.deinit();
     const obj = p.value.object;
@@ -96,6 +96,9 @@ test "setString sets optional field only when string present" {
     defer if (field) |f| std.testing.allocator.free(f);
     try std.testing.expect(field != null);
     try std.testing.expectEqualStrings("abc", field.?);
+
+    try json_access.setString(std.testing.allocator, &field, obj, "new_secret");
+    try std.testing.expectEqualStrings("xyz", field.?);
 
     var untouched: ?[]const u8 = null;
     try json_access.setString(std.testing.allocator, &untouched, obj, "noop");

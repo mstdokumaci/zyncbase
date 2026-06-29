@@ -5,33 +5,29 @@ pub const SkipError = error{ InvalidMessageFormat, MaxDepthExceeded };
 /// Fixed-length MsgPack marker bytes: marker → payload byte count (not counting
 /// the marker itself). Used for ints, floats, fixext, and fixstr/fixbin-style
 /// cases whose length is encoded in the marker.
-const FixedLen = struct { marker: u8, len: usize };
-
-const fixed_len_table = [_]FixedLen{
-    // unsigned ints
-    .{ .marker = 0xcc, .len = 1 },
-    .{ .marker = 0xcd, .len = 2 },
-    .{ .marker = 0xce, .len = 4 },
-    .{ .marker = 0xcf, .len = 8 },
-    // signed ints
-    .{ .marker = 0xd0, .len = 1 },
-    .{ .marker = 0xd1, .len = 2 },
-    .{ .marker = 0xd2, .len = 4 },
-    .{ .marker = 0xd3, .len = 8 },
-    // floats
-    .{ .marker = 0xca, .len = 4 },
-    .{ .marker = 0xcb, .len = 8 },
-    // fixext
-    .{ .marker = 0xd4, .len = 2 },
-    .{ .marker = 0xd5, .len = 3 },
-    .{ .marker = 0xd6, .len = 5 },
-    .{ .marker = 0xd7, .len = 9 },
-    .{ .marker = 0xd8, .len = 17 },
-};
-
 fn fixedLenFor(marker: u8) ?usize {
-    for (fixed_len_table) |e| if (e.marker == marker) return e.len;
-    return null;
+    return switch (marker) {
+        // unsigned ints
+        0xcc => 1,
+        0xcd => 2,
+        0xce => 4,
+        0xcf => 8,
+        // signed ints
+        0xd0 => 1,
+        0xd1 => 2,
+        0xd2 => 4,
+        0xd3 => 8,
+        // floats
+        0xca => 4,
+        0xcb => 8,
+        // fixext
+        0xd4 => 2,
+        0xd5 => 3,
+        0xd6 => 5,
+        0xd7 => 9,
+        0xd8 => 17,
+        else => null,
+    };
 }
 
 /// Reads a big-endian length of `n_bytes` bytes from `bytes[*pos..]`, advancing

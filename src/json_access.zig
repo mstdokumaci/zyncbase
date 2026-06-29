@@ -53,7 +53,9 @@ pub fn setString(
     key: []const u8,
 ) !void {
     const s = getString(obj, key) orelse return;
-    field.* = try allocator.dupe(u8, s);
+    const new = try allocator.dupe(u8, s);
+    if (field.*) |old| allocator.free(old);
+    field.* = new;
 }
 
 /// Replaces a non-optional `[]const u8` field with a freshly duped copy of the

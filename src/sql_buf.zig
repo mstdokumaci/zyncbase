@@ -37,9 +37,10 @@ pub const SqlBuf = struct {
 
     /// Appends `identifier` wrapped in double quotes: `"name"`.
     pub fn appendQuoted(self: *SqlBuf, allocator: Allocator, identifier: []const u8) !void {
-        try self.buf.append(allocator, '"');
-        try self.buf.appendSlice(allocator, identifier);
-        try self.buf.append(allocator, '"');
+        try self.buf.ensureUnusedCapacity(allocator, identifier.len + 2);
+        self.buf.appendAssumeCapacity('"');
+        self.buf.appendSliceAssumeCapacity(identifier);
+        self.buf.appendAssumeCapacity('"');
     }
 
     /// Appends an index name of the form `"idx_<table>_<field>"`.
@@ -49,12 +50,14 @@ pub const SqlBuf = struct {
         table_name: []const u8,
         field_name: []const u8,
     ) !void {
-        try self.buf.append(allocator, '"');
-        try self.buf.appendSlice(allocator, "idx_");
-        try self.buf.appendSlice(allocator, table_name);
-        try self.buf.append(allocator, '_');
-        try self.buf.appendSlice(allocator, field_name);
-        try self.buf.append(allocator, '"');
+        const extra_len = 7 + table_name.len + field_name.len;
+        try self.buf.ensureUnusedCapacity(allocator, extra_len);
+        self.buf.appendAssumeCapacity('"');
+        self.buf.appendSliceAssumeCapacity("idx_");
+        self.buf.appendSliceAssumeCapacity(table_name);
+        self.buf.appendAssumeCapacity('_');
+        self.buf.appendSliceAssumeCapacity(field_name);
+        self.buf.appendAssumeCapacity('"');
     }
 
     /// Appends `separator` only when the buffer is non-empty.
