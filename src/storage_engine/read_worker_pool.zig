@@ -26,7 +26,7 @@ const ReaderNode = connection.ReaderNode;
 
 fn cleanupRequest(req: ReadRequest) void {
     var mutable_req = req;
-    mutable_req.deinit();
+    mutable_req.deinit(mutable_req.allocator);
 }
 
 fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
@@ -154,7 +154,7 @@ pub const ReadWorker = struct {
         var req = request;
 
         const table_metadata = self.schema.tableByIndex(req.table_index) orelse {
-            req.deinit();
+            req.deinit(req.allocator);
             // SAFETY: Table metadata is undefined because the table index was not found.
             return .{
                 .conn_id = req.conn_id,
@@ -181,7 +181,7 @@ pub const ReadWorker = struct {
                 auth_pred,
             );
             const response = self.buildResponse(req, table_metadata, result);
-            req.deinit();
+            req.deinit(req.allocator);
             return response;
         }
 
@@ -192,7 +192,7 @@ pub const ReadWorker = struct {
             auth_pred,
         );
         const response = self.buildQueryResponse(req, table_metadata, result);
-        req.deinit();
+        req.deinit(req.allocator);
         return response;
     }
 
@@ -445,6 +445,13 @@ pub const ReadWorkerPool = struct {
         try self.pool.start();
     }
 
+    /// SHUTDOWN ORDER: The request_queue MUST be shut down (via `request_queue.shutdown()`)
+    /// BEFORE calling this method. ReadWorkers block inside the SPMC queue's own condvar
+    /// (not managedThread's) for new work. Calling shutdown() on the queue unblocks all
+    /// waiting workers, allowing isRequested() to be seen and the thread loop to exit cleanly.
+    ///
+    /// The managedThread inside each ReadWorker is used only for spawn/stop/isRequested —
+    /// it does not participate in the per-request wait cycle.
     pub fn stop(self: *ReadWorkerPool) void {
         self.request_queue.shutdown();
         self.pool.stop();

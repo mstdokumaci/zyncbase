@@ -4,6 +4,7 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const typed = @import("../typed.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
+const latch_mod = @import("../threading/latch.zig");
 
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers
@@ -24,6 +25,12 @@ pub const CheckpointStats = struct {
     wal_size_before: usize,
     wal_size_after: usize,
 };
+
+/// Latch for checkpoint ops that return stats.
+pub const CheckpointLatch = latch_mod.latch(CheckpointStats); // zwanzig-disable-line: identifier-style
+
+/// Latch for batch ops that only need ack/err.
+pub const AckLatch = latch_mod.latch(void); // zwanzig-disable-line: identifier-style
 
 /// Configuration for reconnection logic.
 pub const ReconnectionConfig = struct {
@@ -62,7 +69,7 @@ pub const BatchEntry = struct {
 };
 
 pub const WriteOp = union(enum) {
-    checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
+    checkpoint: struct { mode: CheckpointMode, latch: *CheckpointLatch },
     upsert: struct {
         table_index: usize,
         id: typed.DocId,
@@ -107,52 +114,10 @@ pub const WriteOp = union(enum) {
     },
     batch: struct {
         entries: []BatchEntry,
-        completion_signal: ?*CompletionSignal = null,
+        latch: ?*AckLatch = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
-
-    pub const CompletionSignal = struct {
-        mutex: std.Thread.Mutex = .{},
-        cond: std.Thread.Condition = .{},
-        done: bool = false,
-        err: ?anyerror = null,
-        result: ?CheckpointStats = null,
-
-        pub fn wait(self: *CompletionSignal) !void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            while (!self.done) {
-                self.cond.wait(&self.mutex);
-            }
-            if (self.err) |e| return e;
-        }
-
-        pub fn signal(self: *CompletionSignal, err: ?anyerror) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            self.err = err;
-            self.done = true;
-            self.cond.signal();
-        }
-
-        pub fn signalWithResult(self: *CompletionSignal, result: CheckpointStats) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            self.result = result;
-            self.done = true;
-            self.cond.signal();
-        }
-    };
-
-    pub fn getCompletionSignal(self: WriteOp) ?*CompletionSignal {
-        return switch (self) {
-            .checkpoint => |op| op.completion_signal,
-            .upsert, .update, .delete => null,
-            .resolve_session => null,
-            .batch => |op| op.completion_signal,
-        };
-    }
 
     pub fn getWriteAckInfo(self: WriteOp) ?struct { conn_id: u64, write_id: [16]u8 } {
         return switch (self) {

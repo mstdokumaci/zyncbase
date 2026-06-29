@@ -8,6 +8,9 @@ pub fn workerPool(comptime Worker: type) type { // zwanzig-disable-line: unused-
 
         const Self = @This();
 
+        /// Allocate a worker slice of `count` elements.
+        /// Workers slice is allocated but elements are undefined. Callers must
+        /// initialize each element before calling `start()`.
         pub fn init(allocator: Allocator, count: usize) !Self {
             const workers = try allocator.alloc(Worker, count);
             return .{

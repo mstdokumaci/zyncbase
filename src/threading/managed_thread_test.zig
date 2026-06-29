@@ -82,3 +82,72 @@ test "managedThread: concurrent stop does not double-join" {
 
     try testing.expect(ctx.ran);
 }
+
+test "managedThread: lockWork and unlockWork round-trip" {
+    var mt = managedThread(TestContext).init();
+    mt.lockWork();
+    mt.unlockWork();
+    mt.lockWork();
+    mt.unlockWork();
+}
+
+test "managedThread: waitForWork blocks until signal" {
+    var mt = managedThread(TestContext).init();
+
+    const Signaller = struct {
+        fn run(mt_ptr: *@TypeOf(mt)) void {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            mt_ptr.lockWork();
+            mt_ptr.signal();
+            mt_ptr.unlockWork();
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Signaller.run, .{&mt});
+
+    mt.lockWork();
+    mt.waitForWork();
+    mt.unlockWork();
+    t.join();
+}
+
+test "managedThread: waitForWorkTimed returns timeout" {
+    var mt = managedThread(TestContext).init();
+
+    mt.lockWork();
+    const result = mt.waitForWorkTimed(10 * std.time.ns_per_ms);
+    mt.unlockWork();
+
+    try testing.expectEqual(@TypeOf(mt).WaitResult.timeout, result);
+}
+
+test "managedThread: waitForWorkTimed returns stop when already requested" {
+    var mt = managedThread(TestContext).init();
+    mt.requestStop();
+
+    mt.lockWork();
+    const result = mt.waitForWorkTimed(100 * std.time.ns_per_ms);
+    mt.unlockWork();
+
+    try testing.expectEqual(@TypeOf(mt).WaitResult.stop, result);
+}
+
+test "managedThread: waitForWorkTimed returns signaled when woken" {
+    var mt = managedThread(TestContext).init();
+
+    const Signaller = struct {
+        fn run(mt_ptr: *@TypeOf(mt)) void {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            mt_ptr.lockWork();
+            mt_ptr.signal();
+            mt_ptr.unlockWork();
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Signaller.run, .{&mt});
+
+    mt.lockWork();
+    const result = mt.waitForWorkTimed(100 * std.time.ns_per_ms);
+    mt.unlockWork();
+    t.join();
+
+    try testing.expectEqual(@TypeOf(mt).WaitResult.signaled, result);
+}
