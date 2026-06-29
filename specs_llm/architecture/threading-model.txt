@@ -1,56 +1,66 @@
-Threading Model ZyncBase uses-threaded architecture read/write vertical scaling CPU cores read operations correctness serialized writes Subscription Engine parallel application data reads lock-free cache metadata mutex writes 17x performance improvement Architecture Diagram```
-┌─────────────────────────────────────────────────────────┐
-│          uWebSockets Event Loop (Multi-threaded)        │
-│       │                    │                    │       │
-│    Thread 1             Thread 2             Thread N   │
-│   WebSocket            WebSocket            WebSocket   │
-│  Connections          Connections          Connections  │
-│       │                    │                    │       │
-│       └────────────────────┼────────────────────┘       │
-│                            │                            │
-│                     Callbacks (Zig)                     │
-│                            │                            │
-│              ┌─────────────▼─────────────┐              │
-│              │       Message Router      │              │
-│              └─────────────┬─────────────┘              │
-│                            │                            │
-│              ┌─────────────┴─────────────┐              │
-│              │                           │              │
-│          READ PATH                   WRITE PATH         │
-│    (Parallel, Lock-Free)        (Serialized, Mutex)     │
-│              │                           │              │
-│    ┌─────────▼─────────┐       ┌─────────▼─────────┐    │
-│    │ Subscription      │       │    Write Mutex    │    │
-│    │ Engine (warm)     │       │  ┌──────────────┐ │    │
-│    │ ┌──┐  ┌──┐  ┌──┐  │       │  │ Single Writer│ │    │
-│    │ │T1│  │T2│  │TN│  │       │  └──────────────┘ │    │
-│    │ └──┘  └──┘  └──┘  │       │    State Updates  │    │
-│    │ Lock-Free Cache   │       └─────────┬─────────┘    │
-│    │ (auth/schema/ns)  │                 │              │
-│    └─────────┬─────────┘       ┌─────────▼─────────┐    │
-│         (cold)                 │   SQLite Writer   │    │
-│    ┌─────────▼─────────┐       │  ┌──────────────┐ │    │
-│    │ SQLite Read Pool  │       │  │ WAL Batching │ │    │
-│    │  ┌──┐  ┌──┐  ┌──┐ │       │  └──────────────┘ │    │
-│    │  │R1│  │R2│  │RN│ │       │    (WAL Mode)     │    │
-│    │  └──┘  └──┘  └──┘ │       └───────────────────┘    │
-│    │    (WAL Mode)     │                                 │
-│    └───────────────────┘                                 │
-│                                                         │
-│  Performance (16-core, 90% reads):                      │
-│  - Reads:  16 × 11k = 176k req/sec (parallel)           │
-│  - Writes:  1 × 10k =  10k req/sec (serialized)         │
-│  - Total: ~170k req/sec average                         │
-│  - CPU usage: ~95% (all cores utilized)                 │
-└─────────────────────────────────────────────────────────┘
-```uWebSockets Handles Multi-threading Event loop threads distributes connections Handles network I/O No blocking Zig Callbacks Execute Parallel threads process messages simultaneously router directs read write path No blocking Writes queued serialized Core Engine Uses Read/Write Separation data reads Warm collections evaluated memory no SQLite involvement Cold queries hit SQLite read pool-free serves auth/schema metadata namespace-to-integer mappings user identity mappings immutable wait-free reads Multiple threads execute simultaneously no cross-thread contention Scales linearly with CPU cores Path Mutex-protected Single thread processes batched operations Publishes events Subscription Engine commit Notifies subscribers `NotificationDispatcher Safety Strategy core engine routes messages parallel read path serialized write path Subscription Engine maintains in-memory collection state updated commit lock-free cache handles auth/schema/identity metadata atomic reference counting COW map swaps Performance Workload reads 10% writes-core machine```
-Reads:  16 cores × ~11k each = 176k req/sec (parallel)
-Writes:  1 core  × ~10k      =  10k req/sec (serialized)
-Combined: ~170k req/sec average
-CPU usage: ~95% (all cores utilized)
+Threading Model ZyncBase thread budget six thread domains counts computed CPU core count no configuration overrides server refuses start 3 CPU cores Deterministic thread allocation predictable resource usage eliminates performance cliffs Architecture Diagram```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       ZyncBase Thread Domains                           │
+│                                                                         │
+│                           ┌──────────────┐                              │
+│                           │  Event Loop  │◄─────────────────────────┐   │
+│                           │   (1 fixed)  │                          │   │
+│                           └─┬────┬────┬──┘                          │   │
+│                             │    │    │                             │   │
+│               ┌─────────────┘    │    └──────────────┐              │   │
+│          presence ops        write ops         read requests        │   │
+│               │                  │                   │              │   │
+│       ┌───────▼──────┐    ┌──────▼───────┐    ┌──────▼───────┐      │   │
+│       │  Presence    │    │    Writer    │    │  Reader Pool │      │   │
+│       │  (1 fixed)   │    │   (1 fixed)  │    │  (var, max 4)│      │   │
+│       └──────┬───────┘    └─┬─────────┬──┘    └──────┬───────┘      │   │
+│              │              │         │              │              │   │
+│              │        change fan-out  │              │              │   │
+│              │          (sharded)     │              │              │   │
+│              │              │   write outcomes       │              │   │
+│              │    ┌─────────▼──┐      │              │              │   │
+│              │    │Notification│      │              │              │   │
+│              │    │  Workers   │      │              │              │   │
+│              │    │ (variable) │      │              │              │   │
+│              │    └─────┬──────┘      │              │              │   │
+│              │          │             │              │              │   │
+│              ▼          ▼             ▼              ▼              │   │
+│            ┌───────────────────────────────────────────┐            │   │
+│            │                 Send queue                │            │   │
+│            │       (cross-thread message queue)        ├────────────┘   │
+│            └───────────────────────────────────────────┘                │
+│                                                                         │
+│  * Note: The Checkpoint thread (1 fixed) runs independently in the      │
+│    background to flush WAL to the main SQLite database.                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```Thread Budget Formula computed startup CPU core count:```
+if cpu_count < 3 → server refuses to start
+
+fixed:
+  event_loop   = 1
+  writer       = 1
+  checkpoint   = 1
+  presence     = 1
+
+variable:
+  remaining    = max(cpu_count, 4) - 4
+  readers      = min(4, max(1, remaining / 2))
+  notification = max(1, remaining - readers)
+```Thread Count CPU| CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
+|-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
+| 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
+| 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
+| 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
+| 32        | 1          | 1      | 1          | 1        | 4       | 24           | 32    |
+Thread Domain Responsibilities Event Loop (1 thread Runs network reactor handles WebSocket I/O disconnect Dispatches messages write read path without blocking Drains cross-thread message queue delivers outbound payloads connections I/O non-blocking Writer (1 thread Receives mutations Commits to SQLite serialized order write ordering guaranteed commit changes notification workers Delivers outcomes event loop for client delivery Checkpoint (1 thread fixed Background WAL→main database flush Periodic checkpoints Decoupled from write path avoid blocking Presence (1 thread Accepts operations queue Processes operations serially updates presence state encodes outbound broadcasts Delivers encoded messages Reader Pool (variable max 4) Each SQLite connection Accepts requests shared queue Encodes responses delivers event loop Scales 4 workers Notification (variable) pool workers changes distributed across shards each worker owns one shard blocks shard until change arrives evaluates subscription filters Encodes delta messages delivers event loop Message Arrival WebSocket message arrives event loop thread handler parses routes to read or write path No blocking operations dispatched asynchronouslyWrite Path (Serialized Mutation enqueued queue event loop returns Writer thread commits SQLite serialized changes distributed workers subscription fanout outcomes delivered client acknowledgement Read Path (Parallel Warm reads evaluate in-memory Subscription Engine Cold reads pagination requests reader pool shared work queue threads execute SQLite queries connections Results encoded delivered event loop cross-thread message queue Presence Path (Dedicated operations enqueued presence worker's input queue processes operations updates-memory state encodes responses Encoded broadcasts snapshots delivered-thread message queue Thread Safety Strategy engine routes messages parallel read serialized write path Subscription Engine maintains in-memory collection state commit lock-free cache handles auth/schema metadata atomic reference counting copy-on-write map swapsboundaries Connection state mutated management no mutation Storage writes serialized single-writer queue bypassing breaks acknowledgement ordering reads reader thread owns SQLite connection no sharing Notification changes sharded queue one shard Subscriptions register/unregister registry disconnects detach subscriptions Presence event loop enqueues worker input queue sole mutator state WebSocket sends workers push messages cross-thread queue event loop drains delivers connections Performance Characteristics Workload reads 10% writes-core machine```
+Readers:      4 threads × ~11k each = 44k cold reads/sec
+Notification: 8 threads × ~5k each  = 40k change evaluations/sec
+Writes:       1 thread  × ~10k      = 10k writes/sec (serialized)
+Event Loop:   1 thread  × ~200k     = 200k messages/sec dispatch
+Total: ~150k+ req/sec average
+CPU usage: ~85% (all cores utilized)
 ```Single-threaded```
-Reads:  1 core × 10k = 10k req/sec
-Writes: 1 core × 10k = 10k req/sec
 Combined: 10k req/sec
 CPU usage: 6% (1/16 cores)
-```17x performance Warm reads lock-free in Subscription Engine evaluates in-memory No SQLite round-trip scales CPU cores Cold reads parallel SQLite read One reader connection per CPU core WAL mode enables parallel reads Writes correctness SQLite single-writer limitation Batching throughput high (10k+ writes/sec Read-heavy workloads scale real-time apps 80-95% reads use CPU cores bottleneck Memory Management ZyncBase specialized allocation patterns minimize overhead request-scoped data common structures**Allocator Strategies** (Arena Pool GPA). Pros Cons all CPU vertical scaling **Warm reads in-memory** Subscription Engine eliminates SQLite round-trips active data parallel reads** for cold queries **17x better single-threaded-free metadata** Auth/schema/namespace lookups wait-free Cons **Writes SQLite single-writer limitation atomic lock-free cache queries hit First subscribe incurs read single-threaded Mitigation serialized writes workloads read-heavy (90%+) 10k writes/sec Batching increases throughput cold queries After first subscribe subsequent reads in-memory `loadMore` hits SQLite Comparison Alternatives Single-threaded Core (Rejected Simpler implementation No race conditions Easier reason multiple CPU cores Limited to ~10k req/sec total Wastes SQLite parallel read capability Not competitive with systems Thread-per-Namespace (Future Natural isolation per tenant scale beyond single-writer limit complex Harder load balance sophisticated scheduling [ADRs [Storage Layer parallel disk access [Core Principlesmd Design philosophy.md Performance validation benchmarks
+```15x+ performance Deterministic thread No performance cliffs balanced resource allocation start underpowered machines Warm reads lock-free in Subscription Engine evaluates in-memory No SQLite round-trip scales CPU cores Cold reads parallel SQLite read 4 reader threads WAL mode parallel reads Writes correctness SQLite single-writer limitation Batching throughput high (10k+ writes/sec Notification evaluation Multiple threads evaluate subscription filters CPU-heavy work distributed across cores Memory Management Strategy ZyncBase specialized allocation minimize overhead high request-scoped data common structures**Allocator Strategies** (Arena Pool Pros Cons all CPU vertical scaling No configuration knobs reads in-memory** Subscription Engine eliminates SQLite round-trips parallel cold queries-free Auth/schema/namespace lookups wait-free **Fail start underpowered machines Cons 3 cores run small instances **Writes SQLite single-writer limitation atomic lock-free cache **Cold queries hit First subscribe collection incurs read single Mitigation minimum core requirement Modern servers 3+ cores Small instances not target error message startup serialized writes workloads read-heavy 10k writes/sec Batching increases throughput cold queries subscribe subsequent reads in-memory `loadMore` hits SQLite design Comparison Alternatives Single-threaded Core (Rejected Simpler implementation No race conditions Easier reason multiple CPU cores Limited to ~10k req/sec total Wastes SQLite parallel read capability Not competitive with systems Configuration-Driven Thread Counts (Rejected Flexibility deployments Tuning knobs performance Configuration-induced performance cliffs Support burden misconfiguration users understand thread tuning Deterministic formulasufficient target workloads Thread-per-Namespace (Future) Natural isolation per tenant scale beyond single-writer limit complex read/write separation Harder load balance Requires sophisticated scheduling [ADRs Architectural Decision Records [Storage Layer parallel disk access Principles Design Performance validation benchmarks [Threading details source files types queue synchronization invariants
