@@ -180,8 +180,7 @@ const NotificationWorker = struct {
 
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
-        encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix);
-        if (set_suffix == null and remove_suffix == null) return;
+        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix)) return;
 
         dispatchDeltasToMatches(self, matches, set_suffix, remove_suffix, alloc);
     }
@@ -247,12 +246,12 @@ fn encodeDeltaSuffixes(
     alloc: std.mem.Allocator,
     set_suffix: *?[]const u8,
     remove_suffix: *?[]const u8,
-) void {
+) bool {
     for (matches) |match| {
         if (set_suffix.* == null and match.op == MatchOp.set_op) {
             const new_record = change.new_record orelse {
                 std.log.err("NotificationWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
-                return;
+                return false;
             };
             set_suffix.* = wire.encodeSetDeltaSuffix(
                 alloc,
@@ -262,7 +261,7 @@ fn encodeDeltaSuffixes(
                 table_metadata,
             ) catch |err| {
                 std.log.err("NotificationWorker failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
-                return;
+                return false;
             };
         }
         if (remove_suffix.* == null and match.op == MatchOp.remove) {
@@ -272,9 +271,10 @@ fn encodeDeltaSuffixes(
                 id_val_actual,
             ) catch |err| {
                 std.log.err("NotificationWorker failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
-                return;
+                return false;
             };
         }
         if (set_suffix.* != null and remove_suffix.* != null) break;
     }
+    return true;
 }
