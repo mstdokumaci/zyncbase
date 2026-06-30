@@ -324,9 +324,19 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        for (value.arr) |pair_payload| {
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        // Iterate backward, skip already-seen indices to build deduplicated columns.
+        var seen = std.StaticBitSet(512).initEmpty();
+        var pair_i: usize = value.arr.len;
+        while (pair_i > 0) {
+            pair_i -= 1;
+            const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
             const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            if (f_idx < 512) {
+                if (seen.isSet(f_idx)) continue;
+                seen.set(f_idx);
+            }
 
             const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
             const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
@@ -379,9 +389,19 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        for (value.arr) |pair_payload| {
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        // Iterate backward, skip already-seen indices to build deduplicated columns.
+        var seen = std.StaticBitSet(512).initEmpty();
+        var pair_i: usize = value.arr.len;
+        while (pair_i > 0) {
+            pair_i -= 1;
+            const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
             const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            if (f_idx < 512) {
+                if (seen.isSet(f_idx)) continue;
+                seen.set(f_idx);
+            }
 
             const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
             const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);

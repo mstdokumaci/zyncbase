@@ -939,6 +939,51 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
     try testing.expect(predicate != null);
 }
 
+test "duplicate field index in value pair-array resolves to last-wins" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
+
+    // Build pair-array with duplicate field index: [[idx, "first"], [idx, "second"]]
+    var pair1 = try allocator.alloc(msgpack.Payload, 2);
+    pair1[0] = msgpack.Payload.uintToPayload(status_idx);
+    pair1[1] = try msgpack.Payload.strToPayload("first", allocator);
+    var pair2 = try allocator.alloc(msgpack.Payload, 2);
+    pair2[0] = msgpack.Payload.uintToPayload(status_idx);
+    pair2[1] = try msgpack.Payload.strToPayload("second", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 2);
+    pairs[0] = .{ .arr = pair1 };
+    pairs[1] = .{ .arr = pair2 };
+    var payload = msgpack.Payload{ .arr = pairs };
+    defer payload.free(allocator);
+
+    // Condition: $value.status == "second" (should pass with last-wins)
+    const status_field = try allocator.dupe(u8, "status");
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .value, .field = status_field },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "second") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = typed.generateUuidV7(),
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = typed.generateUuidV7(),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    try testing.expect(result);
+}
+
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {

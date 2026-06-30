@@ -398,8 +398,9 @@ pub const PresenceManager = struct {
                 if (target_pair.* != .arr or target_pair.*.arr.len != 2) continue;
                 const target_idx = target_pair.*.arr[0];
                 if (payloadUintEqual(source_idx, target_idx)) {
+                    const cloned_val = try source_pair.arr[1].deepClone(self.allocator);
                     target_pair.*.arr[1].free(self.allocator);
-                    target_pair.*.arr[1] = try source_pair.arr[1].deepClone(self.allocator);
+                    target_pair.*.arr[1] = cloned_val;
                     found = true;
                     break;
                 }
@@ -407,6 +408,7 @@ pub const PresenceManager = struct {
 
             if (!found) {
                 const cloned_pair = try source_pair.deepClone(self.allocator);
+                errdefer cloned_pair.free(self.allocator);
                 const old_len = target.*.arr.len;
                 const new_slice = try self.allocator.realloc(target.*.arr, old_len + 1);
                 new_slice[old_len] = cloned_pair;

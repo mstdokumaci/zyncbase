@@ -325,7 +325,11 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         } else return null;
         const field_type = fields[field_index].declared_type;
 
-        for (pairs) |pair_payload| {
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        var i: usize = pairs.len;
+        while (i > 0) {
+            i -= 1;
+            const pair_payload = pairs[i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
             const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
             if (idx == field_index) {
@@ -342,7 +346,11 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
     const field_index = table.fieldIndex(field) orelse return null;
     const field_meta = table.fields[field_index];
 
-    for (pairs) |pair_payload| {
+    // Wire protocol: duplicate field index in one pair-array → last-wins.
+    var i: usize = pairs.len;
+    while (i > 0) {
+        i -= 1;
+        const pair_payload = pairs[i];
         if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
         const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
         if (idx == field_index) {
