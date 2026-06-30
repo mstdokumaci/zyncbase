@@ -50,13 +50,22 @@ pub fn skipNumber(json: []const u8, pos: *usize) ?void {
     if (pos.* >= json.len) return null;
     const c = json[pos.*];
     if (c != '-' and (c < '0' or c > '9')) return null;
+    const start = pos.*;
+    var has_digit = false;
     while (pos.* < json.len) {
         const ch = json[pos.*];
-        if ((ch >= '0' and ch <= '9') or ch == '.' or ch == '-' or ch == '+' or ch == 'e' or ch == 'E') {
+        if (ch >= '0' and ch <= '9') {
+            has_digit = true;
+            pos.* += 1;
+        } else if (ch == '.' or ch == '-' or ch == '+' or ch == 'e' or ch == 'E') {
             pos.* += 1;
         } else {
             break;
         }
+    }
+    if (!has_digit) {
+        pos.* = start;
+        return null;
     }
 }
 

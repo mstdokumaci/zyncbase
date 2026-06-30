@@ -84,9 +84,17 @@ test "skipNumber integer and float" {
 }
 
 test "skipNumber non-number returns null" {
-    const s = "abc";
-    var pos: usize = 0;
-    try std.testing.expect(js.skipNumber(s, &pos) == null);
+    const cases = [_][]const u8{
+        "abc",
+        "-",
+        "-e",
+        "-e+",
+    };
+    for (cases) |c| {
+        var pos: usize = 0;
+        try std.testing.expect(js.skipNumber(c, &pos) == null);
+        try std.testing.expectEqual(@as(usize, 0), pos);
+    }
 }
 
 test "skipValue dispatches by first byte" {
