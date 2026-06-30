@@ -143,38 +143,10 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
         .bool => |b| return .{ .boolean = b },
         .object => |obj| {
             if (obj.get("and")) |and_val| {
-                if (obj.count() != 1) return error.InvalidCondition;
-                if (and_val != .array) return error.InvalidCondition;
-                const arr = and_val.array.items;
-                if (arr.len == 0) return error.InvalidCondition;
-                const conds = try allocator.alloc(types.Condition, arr.len);
-                var initialized: usize = 0;
-                errdefer {
-                    for (conds[0..initialized]) |*cond| cond.deinit(allocator);
-                    allocator.free(conds);
-                }
-                for (arr, 0..) |item, i| {
-                    conds[i] = try parseCondition(allocator, item);
-                    initialized += 1;
-                }
-                return .{ .logical_and = conds };
+                return .{ .logical_and = try parseLogicalOpArray(allocator, and_val) };
             }
             if (obj.get("or")) |or_val| {
-                if (obj.count() != 1) return error.InvalidCondition;
-                if (or_val != .array) return error.InvalidCondition;
-                const arr = or_val.array.items;
-                if (arr.len == 0) return error.InvalidCondition;
-                const conds = try allocator.alloc(types.Condition, arr.len);
-                var initialized: usize = 0;
-                errdefer {
-                    for (conds[0..initialized]) |*cond| cond.deinit(allocator);
-                    allocator.free(conds);
-                }
-                for (arr, 0..) |item, i| {
-                    conds[i] = try parseCondition(allocator, item);
-                    initialized += 1;
-                }
-                return .{ .logical_or = conds };
+                return .{ .logical_or = try parseLogicalOpArray(allocator, or_val) };
             }
 
             // Must be a single-key comparison
@@ -189,6 +161,23 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
         },
         else => return error.InvalidCondition,
     }
+}
+
+fn parseLogicalOpArray(allocator: Allocator, val: std.json.Value) anyerror![]types.Condition {
+    if (val != .array) return error.InvalidCondition;
+    const arr = val.array.items;
+    if (arr.len == 0) return error.InvalidCondition;
+    const conds = try allocator.alloc(types.Condition, arr.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (conds[0..initialized]) |*cond| cond.deinit(allocator);
+        allocator.free(conds);
+    }
+    for (arr, 0..) |item, i| {
+        conds[i] = try parseCondition(allocator, item);
+        initialized += 1;
+    }
+    return conds;
 }
 
 fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.Value) !types.Condition {

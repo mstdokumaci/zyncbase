@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const system = @import("system.zig");
 const json = @import("json.zig");
 const index = @import("index.zig");
+const json_access = @import("../json_access.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -43,7 +44,48 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
         declared_tables.deinit(allocator);
     }
 
-    if (store_val.object.get("users")) |users_def| {
+    try collectTables(allocator, store_val.object, &declared_tables);
+
+    // Parse presence block if exists, else synthesize implicit minimal schema
+    var presence_user_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
+    var presence_shared_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
+    defer {
+        for (presence_user_fields.items) |f| f.deinit(allocator);
+        presence_user_fields.deinit(allocator);
+        for (presence_shared_fields.items) |f| f.deinit(allocator);
+        presence_shared_fields.deinit(allocator);
+    }
+
+    try collectPresenceFields(allocator, root.object, &presence_user_fields, &presence_shared_fields);
+
+    // Build name arrays for presence fields
+    var user_names = std.ArrayListUnmanaged([]const u8).empty;
+    defer user_names.deinit(allocator);
+    for (presence_user_fields.items) |f| try user_names.append(allocator, f.name);
+
+    var shared_names = std.ArrayListUnmanaged([]const u8).empty;
+    defer shared_names.deinit(allocator);
+    for (presence_shared_fields.items) |f| try shared_names.append(allocator, f.name);
+
+    return initFromTables(
+        allocator,
+        version_val.string,
+        root_metadata,
+        declared_tables.items,
+        presence_user_fields.items,
+        presence_shared_fields.items,
+        user_names.items,
+        shared_names.items,
+    );
+}
+
+fn collectTables(
+    allocator: Allocator,
+    store_obj: std.json.ObjectMap,
+    declared_tables: *std.ArrayListUnmanaged(types.Table),
+) !void {
+    // Users table first — explicit or implicit
+    if (store_obj.get("users")) |users_def| {
         var table = try parseTable(allocator, "users", users_def, true);
         var appended = false;
         errdefer if (!appended) table.deinit(allocator);
@@ -57,7 +99,8 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
         appended = true;
     }
 
-    var store_iter = store_val.object.iterator();
+    // Remaining store tables
+    var store_iter = store_obj.iterator();
     while (store_iter.next()) |entry| {
         const table_name = entry.key_ptr.*;
         if (std.mem.eql(u8, table_name, "users")) continue;
@@ -67,26 +110,21 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
         try declared_tables.append(allocator, table);
         appended = true;
     }
+}
 
-    // Parse presence block if exists, else synthesize implicit minimal schema
-    var presence_user_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
-    var presence_shared_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
-    defer {
-        for (presence_user_fields.items) |f| f.deinit(allocator);
-        presence_user_fields.deinit(allocator);
-        for (presence_shared_fields.items) |f| f.deinit(allocator);
-        presence_shared_fields.deinit(allocator);
-    }
-
-    if (root.object.get("presence")) |presence_val| {
-        if (presence_val != .object) return error.InvalidSchema;
-        const presence_obj = presence_val.object;
-
-        if (presence_obj.get("user")) |user_val| {
-            try parsePresenceTier(allocator, user_val, &presence_user_fields);
+fn collectPresenceFields(
+    allocator: Allocator,
+    root_obj: std.json.ObjectMap,
+    presence_user_fields: *std.ArrayListUnmanaged(types.PresenceField),
+    presence_shared_fields: *std.ArrayListUnmanaged(types.PresenceField),
+) !void {
+    const presence_obj = json_access.getObject(root_obj, "presence");
+    if (presence_obj) |po| {
+        if (po.get("user")) |user_val| {
+            try parsePresenceTier(allocator, user_val, presence_user_fields);
         }
-        if (presence_obj.get("shared")) |shared_val| {
-            try parsePresenceTier(allocator, shared_val, &presence_shared_fields);
+        if (po.get("shared")) |shared_val| {
+            try parsePresenceTier(allocator, shared_val, presence_shared_fields);
         }
     } else {
         // Synthesize implicit minimal schema: user.status: string
@@ -97,31 +135,6 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
             .declared_type = .text,
         });
     }
-
-    // Build name arrays for presence fields
-    // These borrow from presence_user_fields which outlives initFromTables.
-    var user_names = std.ArrayListUnmanaged([]const u8).empty;
-    defer user_names.deinit(allocator);
-    for (presence_user_fields.items) |f| {
-        try user_names.append(allocator, f.name);
-    }
-
-    var shared_names = std.ArrayListUnmanaged([]const u8).empty;
-    defer shared_names.deinit(allocator);
-    for (presence_shared_fields.items) |f| {
-        try shared_names.append(allocator, f.name);
-    }
-
-    return initFromTables(
-        allocator,
-        version_val.string,
-        root_metadata,
-        declared_tables.items,
-        presence_user_fields.items,
-        presence_shared_fields.items,
-        user_names.items,
-        shared_names.items,
-    );
 }
 
 const max_presence_fields: usize = 500;
@@ -208,21 +221,17 @@ const StoreFieldContext = struct {
 
         var items_type: ?types.FieldType = null;
         if (declared_type == .array) {
-            const items_value = field_def.object.get("items") orelse return error.MissingArrayItems;
-            if (items_value != .string) return error.InvalidArrayItems;
-            items_type = try mapPrimitiveType(items_value.string);
+            const items_str = json_access.getString(field_def.object, "items") orelse return error.MissingArrayItems;
+            items_type = try mapPrimitiveType(items_str);
         }
 
-        const indexed = if (field_def.object.get("indexed")) |value| blk: {
-            if (value != .bool) return error.InvalidFieldDefinition;
-            break :blk value.bool;
-        } else false;
+        const indexed = json_access.getBool(field_def.object, "indexed") orelse false;
 
-        const references = if (field_def.object.get("references")) |value| blk: {
-            if (value != .string) return error.InvalidReference;
-            if (!isValidTableIdentifier(value.string)) return error.InvalidTableName;
-            break :blk try allocator.dupe(u8, value.string);
-        } else null;
+        const references = blk: {
+            const ref_str = json_access.getString(field_def.object, "references") orelse break :blk null;
+            if (!isValidTableIdentifier(ref_str)) return error.InvalidTableName;
+            break :blk try allocator.dupe(u8, ref_str);
+        };
         errdefer if (references) |ref| allocator.free(ref);
 
         if (references != null) {
@@ -230,10 +239,11 @@ const StoreFieldContext = struct {
             storage_type = .doc_id;
         }
 
-        const on_delete: ?types.OnDelete = if (field_def.object.get("onDelete")) |value| blk: {
-            if (value != .string) return error.InvalidOnDelete;
-            break :blk try parseOnDelete(value.string);
-        } else if (references != null) .restrict else null;
+        const on_delete: ?types.OnDelete = blk: {
+            const od_str = json_access.getString(field_def.object, "onDelete");
+            if (od_str) |s| break :blk try parseOnDelete(s);
+            break :blk if (references != null) .restrict else null;
+        };
 
         if (on_delete) |on_del| {
             if (on_del == .set_null and required) return error.InvalidOnDelete;
