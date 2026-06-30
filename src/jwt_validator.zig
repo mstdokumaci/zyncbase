@@ -298,6 +298,8 @@ fn splitToken(allocator: Allocator, token: []const u8) !DecodedToken {
     const payload_parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload_bytes, .{});
     errdefer payload_parsed.deinit();
 
+    if (payload_parsed.value != .object) return error.InvalidToken;
+
     return .{
         .msg = msg,
         .header_alg = header_parsed.value.alg,
@@ -338,20 +340,28 @@ fn verifyTokenSignature(
 }
 
 fn verifyHmacSignature(alg: []const u8, secret: []const u8, msg: []const u8, sig_bytes: []const u8) !bool {
-    var computed_sig: [64]u8 = undefined;
-    const sig_len: usize = if (std.mem.eql(u8, alg, "HS256")) blk: {
-        std.crypto.auth.hmac.sha2.HmacSha256.create(computed_sig[0..32], msg, secret);
-        break :blk 32;
-    } else if (std.mem.eql(u8, alg, "HS384")) blk: {
-        std.crypto.auth.hmac.sha2.HmacSha384.create(computed_sig[0..48], msg, secret);
-        break :blk 48;
-    } else if (std.mem.eql(u8, alg, "HS512")) blk: {
-        std.crypto.auth.hmac.sha2.HmacSha512.create(computed_sig[0..64], msg, secret);
-        break :blk 64;
+    if (std.mem.eql(u8, alg, "HS256")) {
+        if (sig_bytes.len != 32) return false;
+        var computed: [32]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha256.create(&computed, msg, secret);
+        var sig_copy: [32]u8 = undefined;
+        @memcpy(&sig_copy, sig_bytes);
+        return std.crypto.timing_safe.eql([32]u8, computed, sig_copy);
+    } else if (std.mem.eql(u8, alg, "HS384")) {
+        if (sig_bytes.len != 48) return false;
+        var computed: [48]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha384.create(&computed, msg, secret);
+        var sig_copy: [48]u8 = undefined;
+        @memcpy(&sig_copy, sig_bytes);
+        return std.crypto.timing_safe.eql([48]u8, computed, sig_copy);
+    } else if (std.mem.eql(u8, alg, "HS512")) {
+        if (sig_bytes.len != 64) return false;
+        var computed: [64]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha512.create(&computed, msg, secret);
+        var sig_copy: [64]u8 = undefined;
+        @memcpy(&sig_copy, sig_bytes);
+        return std.crypto.timing_safe.eql([64]u8, computed, sig_copy);
     } else return error.UnsupportedAlgorithm;
-
-    if (sig_bytes.len != sig_len) return false;
-    return std.mem.eql(u8, computed_sig[0..sig_len], sig_bytes);
 }
 
 fn validateStandardClaims(config: JwtValidationConfig, payload: std.json.Value) !void {

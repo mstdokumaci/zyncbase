@@ -118,8 +118,9 @@ fn collectPresenceFields(
     presence_user_fields: *std.ArrayListUnmanaged(types.PresenceField),
     presence_shared_fields: *std.ArrayListUnmanaged(types.PresenceField),
 ) !void {
-    const presence_obj = json_access.getObject(root_obj, "presence");
-    if (presence_obj) |po| {
+    if (root_obj.get("presence")) |presence_val| {
+        if (presence_val != .object) return error.InvalidSchema;
+        const po = presence_val.object;
         if (po.get("user")) |user_val| {
             try parsePresenceTier(allocator, user_val, presence_user_fields);
         }
@@ -225,13 +226,16 @@ const StoreFieldContext = struct {
             items_type = try mapPrimitiveType(items_str);
         }
 
-        const indexed = json_access.getBool(field_def.object, "indexed") orelse false;
+        const indexed = if (field_def.object.get("indexed")) |val| blk: {
+            if (val != .bool) return error.InvalidFieldDefinition;
+            break :blk val.bool;
+        } else false;
 
-        const references = blk: {
-            const ref_str = json_access.getString(field_def.object, "references") orelse break :blk null;
-            if (!isValidTableIdentifier(ref_str)) return error.InvalidTableName;
-            break :blk try allocator.dupe(u8, ref_str);
-        };
+        const references = if (field_def.object.get("references")) |val| blk: {
+            if (val != .string) return error.InvalidReference;
+            if (!isValidTableIdentifier(val.string)) return error.InvalidTableName;
+            break :blk try allocator.dupe(u8, val.string);
+        } else null;
         errdefer if (references) |ref| allocator.free(ref);
 
         if (references != null) {
@@ -239,11 +243,10 @@ const StoreFieldContext = struct {
             storage_type = .doc_id;
         }
 
-        const on_delete: ?types.OnDelete = blk: {
-            const od_str = json_access.getString(field_def.object, "onDelete");
-            if (od_str) |s| break :blk try parseOnDelete(s);
-            break :blk if (references != null) .restrict else null;
-        };
+        const on_delete: ?types.OnDelete = if (field_def.object.get("onDelete")) |val| blk: {
+            if (val != .string) return error.InvalidOnDelete;
+            break :blk try parseOnDelete(val.string);
+        } else if (references != null) .restrict else null;
 
         if (on_delete) |on_del| {
             if (on_del == .set_null and required) return error.InvalidOnDelete;

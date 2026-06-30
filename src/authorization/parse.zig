@@ -143,9 +143,11 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
         .bool => |b| return .{ .boolean = b },
         .object => |obj| {
             if (obj.get("and")) |and_val| {
+                if (obj.count() != 1) return error.InvalidCondition;
                 return .{ .logical_and = try parseLogicalOpArray(allocator, and_val) };
             }
             if (obj.get("or")) |or_val| {
+                if (obj.count() != 1) return error.InvalidCondition;
                 return .{ .logical_or = try parseLogicalOpArray(allocator, or_val) };
             }
 
