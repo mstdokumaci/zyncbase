@@ -6,6 +6,7 @@ const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
 const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
 
 pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Record) !bool {
     switch (predicate.state) {
@@ -36,50 +37,72 @@ pub fn evaluateCondition(cond: *const Condition, record: *const Record) !bool {
     const val = record.values[cond.field_index];
 
     return switch (cond.op) {
-        .eq => val.eql(cond.value orelse return false),
-        .ne => !val.eql(cond.value orelse return true),
-        .gt => val.order(cond.value orelse return false) == .gt,
-        .gte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .gt or res == .eq;
-        },
-        .lt => val.order(cond.value orelse return false) == .lt,
-        .lte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .lt or res == .eq;
-        },
+        .eq, .ne, .gt, .lt, .gte, .lte => try evalComparison(cond.op, val, cond.value),
         .isNull => val == .nil,
         .isNotNull => val != .nil,
-        .startsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.startsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
-        .endsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
+        .startsWith => evalTextMatchBool(val, cond.value, std.ascii.startsWithIgnoreCase),
+        .endsWith => evalTextMatchBool(val, cond.value, std.ascii.endsWithIgnoreCase),
         .contains => blk: {
-            if (cond.field_type == .array) {
-                if (val != .array) break :blk false;
-                if (cond.value == null) break :blk false;
-                if (cond.value.? != .scalar) break :blk false;
-                break :blk std.sort.binarySearch(ScalarValue, val.array, cond.value.?.scalar, ScalarValue.order) != null;
-            }
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+            if (cond.field_type == .array) break :blk evalArrayContains(val, cond.value);
+            break :blk evalTextMatchIndex(val, cond.value) != null;
         },
-        .in => blk: {
-            if (val != .scalar) break :blk false;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(ScalarValue, cond.value.?.array, val.scalar, ScalarValue.order) != null;
-        },
-        .notIn => blk: {
-            if (val != .scalar) break :blk true;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(ScalarValue, cond.value.?.array, val.scalar, ScalarValue.order) == null;
-        },
+        .in => evalIn(val, cond.value),
+        .notIn => !evalIn(val, cond.value),
     };
+}
+
+fn evalComparison(op: query_ast.Operator, val: Value, maybe_target: ?Value) !bool {
+    const target = maybe_target orelse return switch (op) {
+        .eq => false,
+        .ne => true,
+        .gt, .lt, .gte, .lte => false,
+        else => unreachable,
+    };
+    return switch (op) {
+        .eq => val.eql(target),
+        .ne => !val.eql(target),
+        .gt => val.order(target) == .gt,
+        .lt => val.order(target) == .lt,
+        .gte => blk: {
+            const res = val.order(target);
+            break :blk res == .gt or res == .eq;
+        },
+        .lte => blk: {
+            const res = val.order(target);
+            break :blk res == .lt or res == .eq;
+        },
+        else => unreachable,
+    };
+}
+
+fn evalTextMatchBool(
+    val: Value,
+    maybe_target: ?Value,
+    comptime match_fn: fn ([]const u8, []const u8) bool,
+) bool {
+    if (val != .scalar or val.scalar != .text) return false;
+    const target = maybe_target orelse return false;
+    if (target != .scalar or target.scalar != .text) return false;
+    return match_fn(val.scalar.text, target.scalar.text);
+}
+
+fn evalTextMatchIndex(val: Value, maybe_target: ?Value) ?usize {
+    if (val != .scalar or val.scalar != .text) return null;
+    const target = maybe_target orelse return null;
+    if (target != .scalar or target.scalar != .text) return null;
+    return std.ascii.indexOfIgnoreCase(val.scalar.text, target.scalar.text);
+}
+
+fn evalArrayContains(val: Value, maybe_target: ?Value) bool {
+    if (val != .array) return false;
+    const target = maybe_target orelse return false;
+    if (target != .scalar) return false;
+    return std.sort.binarySearch(ScalarValue, val.array, target.scalar, ScalarValue.order) != null;
+}
+
+fn evalIn(val: Value, maybe_target: ?Value) bool {
+    if (val != .scalar) return false;
+    const target = maybe_target orelse return false;
+    if (target != .array) return false;
+    return std.sort.binarySearch(ScalarValue, target.array, val.scalar, ScalarValue.order) != null;
 }
