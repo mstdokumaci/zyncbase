@@ -235,9 +235,7 @@ pub const StorageEngine = struct {
             // file:zync_mem_{id}?mode=memory&cache=shared
             const id = unique_id_counter.fetchAdd(1, .seq_cst);
             const ts = std.time.nanoTimestamp();
-            const uri_fmt = try std.fmt.allocPrint(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id });
-            defer allocator.free(uri_fmt);
-            return try allocator.dupeZ(u8, uri_fmt);
+            return try std.fmt.allocPrintSentinel(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id }, 0);
         }
         // Ensure data directory exists
         if (std.fs.cwd().openDir(data_dir, .{})) |_| {
@@ -249,9 +247,7 @@ pub const StorageEngine = struct {
             error.NotDir => return error.NotDir,
             else => return err,
         }
-        const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
-        defer allocator.free(db_path_buf);
-        return try allocator.dupeZ(u8, db_path_buf);
+        return try std.fmt.allocPrintSentinel(allocator, "{s}/zyncbase.db", .{data_dir}, 0);
     }
 
     fn createReaderPool(
