@@ -72,8 +72,10 @@ describe("PresenceImpl", () => {
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceSet");
-		const data = conn.dispatched[0].data as Record<number, unknown>;
-		expect(data[2]).toBe("active");
+		const data = conn.dispatched[0].data as Array<[number, unknown]>;
+		const statusPair = data.find((pair) => pair[0] === 2);
+		expect(statusPair).toBeDefined();
+		expect(statusPair?.[1]).toBe("active");
 	});
 
 	test("set() throttles to ~60fps", async () => {
@@ -101,8 +103,10 @@ describe("PresenceImpl", () => {
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceSetShared");
-		const data = conn.dispatched[0].data as Record<number, unknown>;
-		expect(data[0]).toBe(5);
+		const data = conn.dispatched[0].data as Array<[number, unknown]>;
+		const slidePair = data.find((pair) => pair[0] === 0);
+		expect(slidePair).toBeDefined();
+		expect(slidePair?.[1]).toBe(5);
 	});
 
 	test("remove() dispatches PresenceRemove", () => {
@@ -130,11 +134,11 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(1),
-							data: conn.schema.decodePresenceUserValue({
-								0: 100,
-								1: 200,
-								2: "active",
-							}),
+							data: conn.schema.decodePresenceUserValue([
+								[0, 100],
+								[1, 200],
+								[2, "active"],
+							]),
 							joinedAt: 1234567890,
 						},
 					],
@@ -200,7 +204,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(1),
-							data: conn.schema.decodePresenceUserValue({ 2: "active" }),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234567890,
 						},
 					],
@@ -235,7 +239,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(1),
-							data: conn.schema.decodePresenceUserValue({ 2: "active" }),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234567890,
 						},
 					],
@@ -284,7 +288,10 @@ describe("PresenceImpl", () => {
 				{
 					userId: new Uint8Array(16).fill(2),
 					event: "join",
-					data: conn.schema.decodePresenceUserValue({ 0: 50, 1: 75 }),
+					data: conn.schema.decodePresenceUserValue([
+						[0, 50],
+						[1, 75],
+					]),
 					joinedAt: 9999,
 				},
 			],
@@ -310,7 +317,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(3),
-							data: conn.schema.decodePresenceUserValue({ 2: "active" }),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1111,
 						},
 					],
@@ -349,7 +356,10 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue({ 0: 5, 1: true }),
+					shared: conn.schema.decodePresenceSharedValue([
+						[0, 5],
+						[1, true],
+					]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -377,7 +387,7 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue({ 0: 10 }),
+					shared: conn.schema.decodePresenceSharedValue([[0, 10]]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -400,7 +410,7 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue({ 0: 1 }),
+					shared: conn.schema.decodePresenceSharedValue([[0, 1]]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -415,7 +425,7 @@ describe("PresenceImpl", () => {
 		conn.fireBroadcast({
 			type: "SharedStateBroadcast",
 			subId: 200,
-			data: conn.schema.decodePresenceSharedValue({ 1: false }),
+			data: [conn.schema.decodePresenceSharedValue([[1, false]])],
 		} as SharedStateBroadcast);
 
 		expect(receivedShared).toEqual({ slide: 1, playing: false });
@@ -437,7 +447,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(1),
-							data: conn.schema.decodePresenceUserValue({ 2: "active" }),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234,
 						},
 					],
@@ -491,9 +501,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: new Uint8Array(16).fill(2),
-							data: conn.schema.decodePresenceUserValue({
-								2: "new_status",
-							}),
+							data: conn.schema.decodePresenceUserValue([[2, "new_status"]]),
 							joinedAt: 5678,
 						},
 					],
@@ -521,9 +529,7 @@ describe("PresenceImpl", () => {
 			users: [
 				{
 					userId: new Uint8Array(16).fill(1),
-					data: conn.schema.decodePresenceUserValue({
-						2: "stale_status",
-					}),
+					data: conn.schema.decodePresenceUserValue([[2, "stale_status"]]),
 					joinedAt: 1234,
 				},
 			],
@@ -693,18 +699,22 @@ describe("SchemaDictionary presence encode/decode", () => {
 			status: "active",
 		});
 
-		expect(encoded).toEqual({ 0: 100, 1: 200, 2: "active" });
+		expect(encoded).toEqual([
+			[0, 100],
+			[1, 200],
+			[2, "active"],
+		]);
 	});
 
 	test("decodePresenceUserValue unindexes and unflattens wire data", async () => {
 		const schema = new SchemaDictionary();
 		await setupSchema(schema);
 
-		const decoded = schema.decodePresenceUserValue({
-			0: 100,
-			1: 200,
-			2: "active",
-		});
+		const decoded = schema.decodePresenceUserValue([
+			[0, 100],
+			[1, 200],
+			[2, "active"],
+		]);
 
 		expect(decoded).toEqual({
 			cursor: { x: 100, y: 200 },
@@ -721,14 +731,20 @@ describe("SchemaDictionary presence encode/decode", () => {
 			playing: true,
 		});
 
-		expect(encoded).toEqual({ 0: 5, 1: true });
+		expect(encoded).toEqual([
+			[0, 5],
+			[1, true],
+		]);
 	});
 
 	test("decodePresenceSharedValue unindexes and unflattens wire data", async () => {
 		const schema = new SchemaDictionary();
 		await setupSchema(schema);
 
-		const decoded = schema.decodePresenceSharedValue({ 0: 5, 1: true });
+		const decoded = schema.decodePresenceSharedValue([
+			[0, 5],
+			[1, true],
+		]);
 
 		expect(decoded).toEqual({ slide: 5, playing: true });
 	});
@@ -784,12 +800,12 @@ describe("SchemaDictionary presence encode/decode", () => {
 		// Without the null check in path.ts's setDeepProperty, typeof null === "object"
 		// bypasses the initialization block and throws TypeError.
 		expect(() =>
-			schema.decodePresenceUserValue({
-				0: null,
-				1: 100,
-				2: 200,
-				3: "active",
-			}),
+			schema.decodePresenceUserValue([
+				[0, null],
+				[1, 100],
+				[2, 200],
+				[3, "active"],
+			]),
 		).not.toThrow();
 	});
 });

@@ -206,7 +206,7 @@ pub const PresenceManager = struct {
         const maybe_existing = self.findPendingUserUpdate(namespace_id, user_id);
         if (maybe_existing) |existing| {
             if (existing.patch != null) {
-                try self.mergePayloadMaps(&existing.patch.?, patch);
+                try self.mergePayloadArrays(&existing.patch.?, patch);
             } else {
                 const cloned_patch = try patch.deepClone(self.allocator);
                 existing.patch = cloned_patch;
@@ -264,7 +264,7 @@ pub const PresenceManager = struct {
 
         // Coalesce pending shared updates for the namespace.
         if (self.findPendingSharedUpdate(namespace_id)) |existing| {
-            try self.mergePayloadMaps(&existing.patch, patch);
+            try self.mergePayloadArrays(&existing.patch, patch);
             existing.source_conn = source_conn;
             return;
         }
@@ -382,29 +382,43 @@ pub const PresenceManager = struct {
         return null;
     }
 
-    fn mergePayloadMaps(
+    fn mergePayloadArrays(
         self: *PresenceManager,
         target: *msgpack.Payload,
         source: msgpack.Payload,
     ) !void {
-        if (target.* != .map or source != .map) return;
+        if (target.* != .arr or source != .arr) return;
 
-        var it = source.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const new_value = try entry.value_ptr.*.deepClone(self.allocator);
-            errdefer new_value.free(self.allocator);
+        for (source.arr) |source_pair| {
+            if (source_pair != .arr or source_pair.arr.len != 2) continue;
+            const source_idx = source_pair.arr[0];
 
-            if (target.map.getPtr(key)) |existing_value| {
-                existing_value.*.free(self.allocator);
-                existing_value.* = new_value;
-            } else {
-                var owned_key = try key.deepClone(self.allocator);
-                defer if (owned_key != .nil) owned_key.free(self.allocator);
-                try target.mapPutGeneric(owned_key, new_value);
-                owned_key = .nil;
+            var found = false;
+            for (target.*.arr) |*target_pair| {
+                if (target_pair.* != .arr or target_pair.*.arr.len != 2) continue;
+                const target_idx = target_pair.*.arr[0];
+                if (payloadUintEqual(source_idx, target_idx)) {
+                    target_pair.*.arr[1].free(self.allocator);
+                    target_pair.*.arr[1] = try source_pair.arr[1].deepClone(self.allocator);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                const cloned_pair = try source_pair.deepClone(self.allocator);
+                const old_len = target.*.arr.len;
+                const new_slice = try self.allocator.realloc(target.*.arr, old_len + 1);
+                new_slice[old_len] = cloned_pair;
+                target.*.arr = new_slice;
             }
         }
+    }
+
+    fn payloadUintEqual(a: msgpack.Payload, b: msgpack.Payload) bool {
+        const a_uint = msgpack.extractPayloadUint(a) orelse return false;
+        const b_uint = msgpack.extractPayloadUint(b) orelse return false;
+        return a_uint == b_uint;
     }
 
     /// Subscribe to user presence updates in a namespace.

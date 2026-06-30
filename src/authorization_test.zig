@@ -357,9 +357,13 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
     const presence_fields = [_]schema_mod.PresenceField{
         .{ .name = "cursor_x", .declared_type = .real },
     };
-    var patch = msgpack.Payload.mapPayload(allocator);
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = .{ .float = 42.0 };
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
-    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .float = 42.0 });
 
     try authorization.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
@@ -377,9 +381,13 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
     const presence_fields = [_]schema_mod.PresenceField{
         .{ .name = "status", .declared_type = .text },
     };
-    var patch = msgpack.Payload.mapPayload(allocator);
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = try msgpack.Payload.strToPayload("online", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
-    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), try msgpack.Payload.strToPayload("online", allocator));
 
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch));
 }
@@ -396,9 +404,13 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     const presence_fields = [_]schema_mod.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
-    var patch = msgpack.Payload.mapPayload(allocator);
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = .{ .uint = 5 };
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
-    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .uint = 5 });
 
     try authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
@@ -416,9 +428,13 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
     const presence_fields = [_]schema_mod.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
-    var patch = msgpack.Payload.mapPayload(allocator);
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = .{ .uint = 5 };
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
-    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .uint = 5 });
 
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch));
 }
@@ -572,9 +588,14 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
     });
     defer table.deinit(allocator);
 
-    var payload = msgpack.Payload.mapPayload(allocator);
+    const visibility_idx = table.fieldIndex("visibility").?; // zwanzig-disable-line: optional-unwrap
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(visibility_idx);
+    pair[1] = try msgpack.Payload.strToPayload("private", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var payload = msgpack.Payload{ .arr = pairs };
     defer payload.free(allocator);
-    try payload.mapPut("visibility", try msgpack.Payload.strToPayload("private", allocator));
 
     const eval_ctx = EvalContext{
         .allocator = allocator,
@@ -758,7 +779,7 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
     } };
     defer condition.deinit(allocator);
 
-    var payload = msgpack.Payload.mapPayload(allocator);
+    var payload = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 0) };
     defer payload.free(allocator);
 
     const ctx = EvalContext{
@@ -790,9 +811,14 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
     } };
     defer condition.deinit(allocator);
 
-    var payload = msgpack.Payload.mapPayload(allocator);
+    const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(status_idx);
+    pair[1] = try msgpack.Payload.strToPayload("draft", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var payload = msgpack.Payload{ .arr = pairs };
     defer payload.free(allocator);
-    try payload.mapPut("status", try msgpack.Payload.strToPayload("draft", allocator));
 
     const ctx = EvalContext{
         .allocator = allocator,
@@ -823,9 +849,14 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
     } };
     defer condition.deinit(allocator);
 
-    var payload = msgpack.Payload.mapPayload(allocator);
+    const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(status_idx);
+    pair[1] = try msgpack.Payload.strToPayload("published", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var payload = msgpack.Payload{ .arr = pairs };
     defer payload.free(allocator);
-    try payload.mapPut("status", try msgpack.Payload.strToPayload("published", allocator));
 
     const ctx = EvalContext{
         .allocator = allocator,
@@ -856,9 +887,14 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
     } };
     defer condition.deinit(allocator);
 
-    var payload = msgpack.Payload.mapPayload(allocator);
+    const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(status_idx);
+    pair[1] = try msgpack.Payload.strToPayload("published", allocator);
+    var pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    var payload = msgpack.Payload{ .arr = pairs };
     defer payload.free(allocator);
-    try payload.mapPut("status", try msgpack.Payload.strToPayload("published", allocator));
 
     const ctx = EvalContext{
         .allocator = allocator,

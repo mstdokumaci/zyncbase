@@ -392,8 +392,9 @@ pub fn encodeSetDeltaSuffix(
 
 pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_mod.Table) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
-    try msgpack.encodeMapHeader(writer, record.values.len);
+    try msgpack.encodeArrayHeader(writer, record.values.len);
     for (record.values, 0..) |typed_value, idx| {
+        try msgpack.encodeArrayHeader(writer, 2);
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
         try typed.writeMsgPack(typed_value, writer);
     }
@@ -557,15 +558,9 @@ pub fn encodeSharedStateBroadcast(
     try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
 
     try writer.writeAll(Keys.data);
-    // Merge all updates into a single patch for broadcast
-    if (updates.len == 1) {
-        try msgpack.encode(updates[0].patch, writer);
-    } else {
-        // For multiple updates, encode as array of patches
-        try msgpack.encodeArrayHeader(writer, updates.len);
-        for (updates) |update| {
-            try msgpack.encode(update.patch, writer);
-        }
+    try msgpack.encodeArrayHeader(writer, updates.len);
+    for (updates) |update| {
+        try msgpack.encode(update.patch, writer);
     }
 
     return list.toOwnedSlice(allocator);
@@ -646,18 +641,18 @@ pub fn encodePresenceSharedSnapshot(
     return list.toOwnedSlice(allocator);
 }
 
-/// Encode a PresenceRecord as an integer-keyed map.
+/// Encode a PresenceRecord as a pair-array of [field_index, value].
 fn encodePresenceRecord(writer: anytype, record: PresenceRecord) !void {
-    // Count non-null fields
     var count: usize = 0;
     for (record.values) |slot| {
         if (slot != null) count += 1;
     }
 
-    try msgpack.encodeMapHeader(writer, count);
+    try msgpack.encodeArrayHeader(writer, count);
 
     for (record.values, 0..) |slot, idx| {
         if (slot) |value| {
+            try msgpack.encodeArrayHeader(writer, 2);
             try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
             try typed.writeMsgPack(value, writer);
         }

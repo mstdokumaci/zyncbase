@@ -26,11 +26,14 @@ fn makeTestSharedFields(allocator: std.mem.Allocator) ![]const schema_mod.Presen
 }
 
 fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    var patch = msgpack.Payload.mapPayload(allocator);
-    for (entries) |entry| {
-        try patch.mapPutGeneric(msgpack.Payload.uintToPayload(entry.idx), entry.value);
+    var pairs = try allocator.alloc(msgpack.Payload, entries.len);
+    for (entries, 0..) |entry, i| {
+        var pair = try allocator.alloc(msgpack.Payload, 2);
+        pair[0] = msgpack.Payload.uintToPayload(entry.idx);
+        pair[1] = entry.value;
+        pairs[i] = .{ .arr = pair };
     }
-    return patch;
+    return .{ .arr = pairs };
 }
 
 fn notifierFn(ctx: ?*anyopaque) void {

@@ -58,7 +58,10 @@ describe("ConnectionWireCodec", () => {
 					{
 						op: "set",
 						path: [0, "u1"],
-						value: { 1: "Ada", 2: "London" },
+						value: [
+							[1, "Ada"],
+							[2, "London"],
+						],
 					},
 				],
 			}),
@@ -83,7 +86,12 @@ describe("ConnectionWireCodec", () => {
 			{
 				type: "ok",
 				id: 2,
-				value: [{ 1: "Ada", 2: "London" } as never],
+				value: [
+					[
+						[1, "Ada"],
+						[2, "London"],
+					],
+				] as never,
 			},
 			{ type: "StoreQuery", responseTableIndex: 0 },
 		);

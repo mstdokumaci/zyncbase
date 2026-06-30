@@ -136,7 +136,9 @@ export class ConnectionWireCodec {
 				...ok,
 				users: ok.users.map((user) => ({
 					userId: user.userId,
-					data: this.schema.decodePresenceUserValue(user.data),
+					data: this.schema.decodePresenceUserValue(
+						user.data as unknown as Array<[number, unknown]>,
+					),
 					joinedAt: user.joinedAt,
 				})),
 			};
@@ -146,7 +148,7 @@ export class ConnectionWireCodec {
 			return {
 				...ok,
 				shared: this.schema.decodePresenceSharedValue(
-					ok.shared as Record<number, unknown>,
+					ok.shared as unknown as Array<[number, unknown]>,
 				),
 			};
 		}
@@ -373,15 +375,14 @@ export class ConnectionWireCodec {
 				wirePath.length === 2 &&
 				op.value !== null &&
 				typeof op.value === "object" &&
-				!Array.isArray(op.value) &&
-				isNumericKeyedObject(op.value as Record<string, unknown>)
+				Array.isArray(op.value)
 			) {
 				return {
 					...op,
 					path: decodedPath,
 					value: this.schema.decodeValue(
 						tableIndex,
-						op.value as unknown as Record<number, unknown>,
+						op.value as Array<[number, unknown]>,
 					) as unknown as typeof op.value,
 				};
 			}
@@ -402,17 +403,12 @@ export class ConnectionWireCodec {
 	}
 
 	private decodeRow(tableIndex: number, row: JsonValue): JsonValue {
-		if (
-			row === null ||
-			typeof row !== "object" ||
-			Array.isArray(row) ||
-			!isNumericKeyedObject(row as Record<string, unknown>)
-		) {
+		if (row === null || typeof row !== "object" || !Array.isArray(row)) {
 			return row;
 		}
 		return this.schema.decodeValue(
 			tableIndex,
-			row as unknown as Record<number, unknown>,
+			row as Array<[number, unknown]>,
 		) as JsonValue;
 	}
 
@@ -430,7 +426,9 @@ export class ConnectionWireCodec {
 					event: entry.event,
 				};
 				if (entry.data != null) {
-					decoded.data = this.schema.decodePresenceUserValue(entry.data);
+					decoded.data = this.schema.decodePresenceUserValue(
+						entry.data as unknown as Array<[number, unknown]>,
+					);
 				}
 				if (entry.joinedAt != null) {
 					decoded.joinedAt = entry.joinedAt;
@@ -443,18 +441,10 @@ export class ConnectionWireCodec {
 	private decodeSharedStateBroadcast(
 		msg: SharedStateBroadcast,
 	): SharedStateBroadcast {
-		if (Array.isArray(msg.data)) {
-			return {
-				...msg,
-				data: msg.data.map((patch) =>
-					this.schema.decodePresenceSharedValue(patch),
-				),
-			} as SharedStateBroadcast;
-		}
 		return {
 			...msg,
-			data: this.schema.decodePresenceSharedValue(
-				msg.data as Record<number, unknown>,
+			data: (msg.data as unknown as Array<Array<[number, unknown]>>).map(
+				(patch) => this.schema.decodePresenceSharedValue(patch),
 			),
 		} as SharedStateBroadcast;
 	}
@@ -487,11 +477,6 @@ export class ConnectionWireCodec {
 			retryable: false,
 		});
 	}
-}
-
-function isNumericKeyedObject(obj: Record<string, unknown>): boolean {
-	const keys = Object.keys(obj);
-	return keys.length > 0 && keys.every((key) => /^\d+$/.test(key));
 }
 
 export function errorResponseToError(err: ErrorResponse): ZyncBaseError {

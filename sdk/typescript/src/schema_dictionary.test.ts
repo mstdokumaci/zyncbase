@@ -30,13 +30,16 @@ describe("SchemaDictionary doc IDs", () => {
 			title: "hello",
 			owner_id: "owner_1",
 		});
-		expect(encoded[5]).toBeInstanceOf(Uint8Array);
+		// Find the pair with field index 5
+		const ownerPair = encoded.find((pair) => pair[0] === 5);
+		expect(ownerPair).toBeDefined();
+		expect(ownerPair?.[1]).toBeInstanceOf(Uint8Array);
 
-		const decoded = schema.decodeValue(0, {
-			0: packDocId("task_1"),
-			4: "hello",
-			5: packDocId("owner_1"),
-		} as unknown as Record<number, unknown>);
+		const decoded = schema.decodeValue(0, [
+			[0, packDocId("task_1")],
+			[4, "hello"],
+			[5, packDocId("owner_1")],
+		]);
 		expect(decoded).toEqual({
 			id: "task_1",
 			title: "hello",

@@ -361,11 +361,8 @@ test "encodeSetDeltaSuffix: set operation" {
 
     const value = try op_obj.mapGet("value");
     try testing.expect(value != null);
-    try testing.expect(value.? == .map);
-    var val_it = value.?.map.iterator();
-    var found_entries: usize = 0;
-    while (val_it.next()) |_| found_entries += 1;
-    try testing.expectEqual(@as(usize, 6), found_entries);
+    try testing.expect(value.? == .arr);
+    try testing.expectEqual(@as(usize, 6), value.?.arr.len);
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {
@@ -531,9 +528,12 @@ test "encodeDeleteDeltaSuffix: with string id" {
 test "encodePresenceBroadcast - update event round-trips with correct map size" {
     const allocator = testing.allocator;
 
-    var patch = Payload.mapPayload(allocator);
+    var patch = Payload{ .arr = try allocator.alloc(Payload, 1) };
     defer patch.free(allocator);
-    try patch.mapPut("cursor__x", Payload{ .float = 100.5 });
+    var pair = try allocator.alloc(Payload, 2);
+    pair[0] = Payload.uintToPayload(0);
+    pair[1] = Payload{ .float = 100.5 };
+    patch.arr[0] = .{ .arr = pair };
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
@@ -569,7 +569,9 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
 
     const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
     try testing.expectEqualStrings("update", event_val.str.value());
-    try testing.expect((try user_entry.mapGet("data")) != null);
+    const data_val = (try user_entry.mapGet("data")) orelse return error.MissingData;
+    try testing.expect(data_val == .arr);
+    try testing.expectEqual(@as(usize, 1), data_val.arr.len);
 }
 
 test "encodePresenceBroadcast - leave event round-trips with correct map size" {

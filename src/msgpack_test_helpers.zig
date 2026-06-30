@@ -77,11 +77,11 @@ pub fn getMapValue(payload: Payload, key: []const u8) !?Payload {
 }
 
 pub fn getMapValueByUint(payload: Payload, index: usize) !?Payload {
-    if (payload != .map) return null;
-    var it = payload.map.iterator();
-    while (it.next()) |entry| {
-        const k = entry.key_ptr.*;
-        const val = entry.value_ptr.*;
+    if (payload != .arr) return null;
+    for (payload.arr) |pair| {
+        if (pair != .arr or pair.arr.len != 2) continue;
+        const k = pair.arr[0];
+        const val = pair.arr[1];
         if (k == .uint and k.uint == index) return val;
     }
     return null;

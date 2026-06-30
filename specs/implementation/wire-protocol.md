@@ -48,6 +48,37 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
+| Value encoding | Integer-keyed field maps are encoded as pair-arrays: `[[field_index, value], ...]`. See [Value Encoding](#value-encoding). |
+
+## Value Encoding
+
+All values that represent integer-keyed field maps (store documents, presence data, query result rows) are encoded as **pair-arrays** on the wire: a MessagePack array of 2-element arrays.
+
+**Format:** `[[field_index, value], ...]`
+
+- `field_index` — uint, the dense positional index within the table (from `SchemaSync`).
+- `value` — the typed MessagePack value, unchanged encoding (same doc-id bin packing, same type coercion). Only the container changes, not the values.
+
+**Affected locations:**
+
+| Location | Direction | Format |
+|----------|-----------|--------|
+| `StoreSet.value` | C→S | pair-array |
+| `StoreBatch` set-op `op[2]` | C→S | pair-array |
+| `StoreDelta` set-op `value` | S→C | pair-array |
+| Query result row (`ok.value[]`) | S→C | pair-array |
+| `PresenceSet.data` | C→S | pair-array |
+| `PresenceSetShared.data` | C→S | pair-array |
+| `PresenceBroadcast` user `data` | S→C | pair-array |
+| `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
+| `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
+| `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
+
+**Semantics:**
+
+- Duplicate field index in one pair-array: processed in order, last-wins.
+- Ordering: pairs are unordered; server/SDK must not assume sorted-by-index.
+- Empty `[]`: valid; means no fields.
 
 ## Client Messages
 
