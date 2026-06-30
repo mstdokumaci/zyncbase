@@ -395,18 +395,27 @@ pub fn buildUpsertDocumentSql(
     columns: []const ColumnValue,
     guard_sql: ?[]const u8,
 ) ![]const u8 {
-    const table_quoted = table_metadata.name_quoted;
-
-    // Build SQL: INSERT INTO <table> (id, namespace_id, owner_id, col1, .., created_at, updated_at)
-    // VALUES (?, ?, ?, .., ?, ?)
-    // ON CONFLICT(id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
-    // WHERE <table>.namespace_id = excluded.namespace_id
-    // Array columns use jsonb(?) instead of ? as the placeholder.
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
+    try appendInsertColumnList(allocator, &sql_buf, table_metadata, columns);
+    try appendValuePlaceholders(allocator, &sql_buf, table_metadata, columns);
+    try appendOnConflictUpdateSet(allocator, &sql_buf, table_metadata, columns);
+    try appendUpsertWhereClause(allocator, &sql_buf, table_metadata, guard_sql);
+    try sql_buf.appendSlice(allocator, " RETURNING ");
+    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+
+    return sql_buf.toOwnedSlice(allocator);
+}
+
+fn appendInsertColumnList(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema.Table,
+    columns: []const ColumnValue,
+) !void {
     try sql_buf.appendSlice(allocator, "INSERT INTO ");
-    try sql_buf.appendSlice(allocator, table_quoted);
+    try sql_buf.appendSlice(allocator, table_metadata.name_quoted);
     try sql_buf.appendSlice(allocator, " (");
     try sql_buf.appendSlice(allocator, schema.quoted_id);
     try sql_buf.appendSlice(allocator, ", ");
@@ -426,6 +435,14 @@ pub fn buildUpsertDocumentSql(
     try sql_buf.appendSlice(allocator, schema.quoted_created_at);
     try sql_buf.appendSlice(allocator, ", ");
     try sql_buf.appendSlice(allocator, schema.quoted_updated_at);
+}
+
+fn appendValuePlaceholders(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema.Table,
+    columns: []const ColumnValue,
+) !void {
     try sql_buf.appendSlice(allocator, ") VALUES (?, ?, ?");
     if (table_metadata.is_users_table) {
         try sql_buf.appendSlice(allocator, ", ?");
@@ -439,11 +456,19 @@ pub fn buildUpsertDocumentSql(
         }
     }
     // created_at and updated_at placeholders
-    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(");
+    try sql_buf.appendSlice(allocator, ", ?, ?)");
+}
+
+fn appendOnConflictUpdateSet(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema.Table,
+    columns: []const ColumnValue,
+) !void {
+    try sql_buf.appendSlice(allocator, " ON CONFLICT(");
     try sql_buf.appendSlice(allocator, schema.quoted_id);
     try sql_buf.appendSlice(allocator, ") DO UPDATE SET ");
 
-    // Update each column provided
     for (columns, 0..) |col, i| {
         const field = try getColumnField(table_metadata, col);
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
@@ -456,8 +481,16 @@ pub fn buildUpsertDocumentSql(
     try sql_buf.appendSlice(allocator, schema.quoted_updated_at);
     try sql_buf.appendSlice(allocator, " = excluded.");
     try sql_buf.appendSlice(allocator, schema.quoted_updated_at);
+}
+
+fn appendUpsertWhereClause(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema.Table,
+    guard_sql: ?[]const u8,
+) !void {
     try sql_buf.appendSlice(allocator, " WHERE ");
-    try sql_buf.appendSlice(allocator, table_quoted);
+    try sql_buf.appendSlice(allocator, table_metadata.name_quoted);
     try sql_buf.appendSlice(allocator, ".");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, " = excluded.");
@@ -465,10 +498,6 @@ pub fn buildUpsertDocumentSql(
     if (guard_sql) |fragment| {
         try sql_buf.appendSlice(allocator, fragment);
     }
-    try sql_buf.appendSlice(allocator, " RETURNING ");
-    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
-
-    return sql_buf.toOwnedSlice(allocator);
 }
 
 fn getColumnField(
@@ -488,14 +517,7 @@ pub fn buildDeleteDocumentSql(
     defer sql_buf.deinit(allocator);
     try sql_buf.appendSlice(allocator, "DELETE FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.name_quoted);
-    try sql_buf.appendSlice(allocator, " WHERE ");
-    try sql_buf.appendSlice(allocator, schema.quoted_id);
-    try sql_buf.appendSlice(allocator, "=? AND ");
-    try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
-    try sql_buf.appendSlice(allocator, "=?");
-    if (guard_sql) |fragment| {
-        try sql_buf.appendSlice(allocator, fragment);
-    }
+    try appendDocIdNamespaceWhere(allocator, &sql_buf, guard_sql);
     try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     return sql_buf.toOwnedSlice(allocator);
@@ -514,6 +536,20 @@ pub fn buildUpdateDocumentSql(
     try sql_buf.appendSlice(allocator, table_metadata.name_quoted);
     try sql_buf.appendSlice(allocator, " SET ");
 
+    try appendUpdateColumnSet(allocator, &sql_buf, table_metadata, columns);
+    try appendDocIdNamespaceWhere(allocator, &sql_buf, guard_sql);
+    try sql_buf.appendSlice(allocator, " RETURNING ");
+    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+
+    return sql_buf.toOwnedSlice(allocator);
+}
+
+fn appendUpdateColumnSet(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema.Table,
+    columns: []const ColumnValue,
+) !void {
     for (columns, 0..) |col, i| {
         const field = try getColumnField(table_metadata, col);
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
@@ -528,7 +564,13 @@ pub fn buildUpdateDocumentSql(
     try sql_buf.appendSlice(allocator, ", ");
     try sql_buf.appendSlice(allocator, schema.quoted_updated_at);
     try sql_buf.appendSlice(allocator, " = ?");
+}
 
+fn appendDocIdNamespaceWhere(
+    allocator: Allocator,
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    guard_sql: ?[]const u8,
+) !void {
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql_buf.appendSlice(allocator, schema.quoted_id);
     try sql_buf.appendSlice(allocator, "=? AND ");
@@ -537,8 +579,4 @@ pub fn buildUpdateDocumentSql(
     if (guard_sql) |fragment| {
         try sql_buf.appendSlice(allocator, fragment);
     }
-    try sql_buf.appendSlice(allocator, " RETURNING ");
-    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
-
-    return sql_buf.toOwnedSlice(allocator);
 }

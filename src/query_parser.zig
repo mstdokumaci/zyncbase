@@ -135,40 +135,19 @@ pub fn parseQueryFilter(
         if (after_token) |token| allocator.free(token);
     }
 
+    var ctx = FilterParseCtx{
+        .allocator = allocator,
+        .table_metadata = table_metadata,
+        .predicate = &predicate,
+        .order_by = &order_by,
+        .limit = &limit,
+        .after_token = &after_token,
+    };
+
     var it = payload.map.iterator();
     while (it.next()) |entry| {
         if (entry.key_ptr.* != .str) continue;
-        const key = entry.key_ptr.*.str.value();
-        const value = entry.value_ptr.*;
-
-        if (std.mem.eql(u8, key, "conditions") and value == .arr) {
-            const new_conds = try parseConditions(allocator, table_metadata, value);
-            if (predicate.conditions) |old| {
-                for (old) |*c| c.deinit(allocator);
-                allocator.free(old);
-            }
-            predicate.conditions = new_conds;
-        } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
-            const new_or = try parseConditions(allocator, table_metadata, value);
-            if (predicate.or_conditions) |old| {
-                for (old) |*c| c.deinit(allocator);
-                allocator.free(old);
-            }
-            predicate.or_conditions = new_or;
-        } else if (std.mem.eql(u8, key, "orderBy")) {
-            order_by = try parseSortDescriptor(table_metadata, value);
-        } else if (std.mem.eql(u8, key, "limit")) {
-            if (value == .uint) {
-                limit = @intCast(value.uint);
-            } else if (value == .int and value.int >= 0) {
-                limit = @intCast(value.int);
-            }
-            if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
-        } else if (std.mem.eql(u8, key, "after")) {
-            if (value != .str) return error.InvalidMessageFormat;
-            if (after_token) |old| allocator.free(old);
-            after_token = try allocator.dupe(u8, value.str.value());
-        }
+        try ctx.handleFilterKey(entry.key_ptr.*.str.value(), entry.value_ptr.*);
     }
 
     if (after_token) |token| {
@@ -186,6 +165,54 @@ pub fn parseQueryFilter(
         .after = after,
     };
 }
+
+const FilterParseCtx = struct {
+    allocator: std.mem.Allocator,
+    table_metadata: *const schema_mod.Table,
+    predicate: *query_ast.FilterPredicate,
+    order_by: *SortDescriptor,
+    limit: *?u32,
+    after_token: *?[]u8,
+
+    fn handleFilterKey(self: *FilterParseCtx, key: []const u8, value: msgpack.Payload) ParserError!void {
+        if (std.mem.eql(u8, key, "conditions") and value == .arr) {
+            try self.replaceConditions(self.predicate.conditions, value, &self.predicate.conditions);
+        } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
+            try self.replaceConditions(self.predicate.or_conditions, value, &self.predicate.or_conditions);
+        } else if (std.mem.eql(u8, key, "orderBy")) {
+            self.order_by.* = try parseSortDescriptor(self.table_metadata, value);
+        } else if (std.mem.eql(u8, key, "limit")) {
+            try self.parseLimit(value);
+        } else if (std.mem.eql(u8, key, "after")) {
+            if (value != .str) return error.InvalidMessageFormat;
+            if (self.after_token.*) |old| self.allocator.free(old);
+            self.after_token.* = try self.allocator.dupe(u8, value.str.value());
+        }
+    }
+
+    fn replaceConditions(
+        self: *FilterParseCtx,
+        old: ?[]Condition,
+        value: msgpack.Payload,
+        dest: *?[]Condition,
+    ) ParserError!void {
+        const new_conds = try parseConditions(self.allocator, self.table_metadata, value);
+        if (old) |old_conds| {
+            for (old_conds) |*c| c.deinit(self.allocator);
+            self.allocator.free(old_conds);
+        }
+        dest.* = new_conds;
+    }
+
+    fn parseLimit(self: *FilterParseCtx, value: msgpack.Payload) ParserError!void {
+        if (value == .uint) {
+            self.limit.* = @intCast(value.uint);
+        } else if (value == .int and value.int >= 0) {
+            self.limit.* = @intCast(value.int);
+        }
+        if (self.limit.* != null and self.limit.*.? == 0) return error.InvalidMessageFormat;
+    }
+};
 
 pub const ResolvedField = struct {
     field_index: usize,
