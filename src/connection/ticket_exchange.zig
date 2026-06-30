@@ -5,6 +5,7 @@ const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
 const typed = @import("../typed.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
+const json_skip = @import("json_skip.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,
@@ -569,11 +570,11 @@ fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
             found_jti = true;
         } else if (std.mem.eql(u8, key, "session")) {
             const session_start = pos;
-            skipJsonValue(json, &pos) orelse return null;
+            json_skip.skipValue(json, &pos) orelse return null;
             const session_json = json[session_start..pos];
             extractSessionFields(session_json, &result);
         } else {
-            skipJsonValue(json, &pos) orelse return null;
+            json_skip.skipValue(json, &pos) orelse return null;
         }
     }
 
@@ -615,13 +616,13 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
             }
         } else if (std.mem.eql(u8, key, "claims")) {
             const claims_start = pos;
-            if (skipJsonValue(session_json, &pos) == null) return;
+            if (json_skip.skipValue(session_json, &pos) == null) return;
             const claims_json = session_json[claims_start..pos];
             if (claims_json.len > 2 and claims_json[0] == '{' and claims_json[1] != '}') {
                 result.claims_json = claims_json;
             }
         } else {
-            if (skipJsonValue(session_json, &pos) == null) return;
+            if (json_skip.skipValue(session_json, &pos) == null) return;
         }
     }
 }
@@ -676,69 +677,4 @@ fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
         pos.* += 1;
     }
     return value;
-}
-
-fn skipJsonValue(json: []const u8, pos: *usize) ?void {
-    if (pos.* >= json.len) return null;
-    switch (json[pos.*]) {
-        '"' => {
-            _ = extractJsonString(json, pos) orelse return null;
-        },
-        '{' => {
-            var depth: usize = 1;
-            pos.* += 1;
-            while (pos.* < json.len and depth > 0) {
-                if (json[pos.*] == '{') {
-                    depth += 1;
-                } else if (json[pos.*] == '}') {
-                    depth -= 1;
-                } else if (json[pos.*] == '"') {
-                    pos.* += 1;
-                    while (pos.* < json.len and json[pos.*] != '"') {
-                        if (json[pos.*] == '\\') pos.* += 1;
-                        pos.* += 1;
-                    }
-                }
-                pos.* += 1;
-            }
-            if (depth != 0) return null;
-        },
-        '[' => {
-            var depth: usize = 1;
-            pos.* += 1;
-            while (pos.* < json.len and depth > 0) {
-                if (json[pos.*] == '[') {
-                    depth += 1;
-                } else if (json[pos.*] == ']') {
-                    depth -= 1;
-                } else if (json[pos.*] == '"') {
-                    pos.* += 1;
-                    while (pos.* < json.len and json[pos.*] != '"') {
-                        if (json[pos.*] == '\\') pos.* += 1;
-                        pos.* += 1;
-                    }
-                }
-                pos.* += 1;
-            }
-            if (depth != 0) return null;
-        },
-        't' => {
-            if (pos.* + 4 > json.len or !std.mem.eql(u8, json[pos.*..][0..4], "true")) return null;
-            pos.* += 4;
-        },
-        'f' => {
-            if (pos.* + 5 > json.len or !std.mem.eql(u8, json[pos.*..][0..5], "false")) return null;
-            pos.* += 5;
-        },
-        'n' => {
-            if (pos.* + 4 > json.len or !std.mem.eql(u8, json[pos.*..][0..4], "null")) return null;
-            pos.* += 4;
-        },
-        '-', '0'...'9' => {
-            while (pos.* < json.len and (json[pos.*] >= '0' and json[pos.*] <= '9' or json[pos.*] == '.' or json[pos.*] == '-' or json[pos.*] == '+' or json[pos.*] == 'e' or json[pos.*] == 'E')) {
-                pos.* += 1;
-            }
-        },
-        else => return null,
-    }
 }
