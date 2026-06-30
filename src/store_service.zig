@@ -316,7 +316,7 @@ pub const StoreService = struct {
         ctx: WriteContext,
         value: msgpack.Payload,
     ) !void {
-        if (value != .map) return error.InvalidPayload;
+        if (value != .arr) return error.InvalidPayload;
 
         var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
         defer {
@@ -324,19 +324,22 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        var it = value.map.iterator();
-        while (it.next()) |entry| {
-            const f_idx = blk: {
-                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
-                if (entry.key_ptr.* == .str) {
-                    const key_str = entry.key_ptr.*.str.value();
-                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
-                }
-                return StorageError.UnknownField;
-            };
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        // Iterate backward, skip already-seen indices to build deduplicated columns.
+        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
+        var pair_i: usize = value.arr.len;
+        while (pair_i > 0) {
+            pair_i -= 1;
+            const pair_payload = value.arr[pair_i];
+            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            if (f_idx < schema_mod.max_store_fields) {
+                if (seen.isSet(f_idx)) continue;
+                seen.set(f_idx);
+            }
 
-            const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+            const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
 
             try columns.append(self.allocator, .{
                 .index = f_idx,
@@ -378,7 +381,7 @@ pub const StoreService = struct {
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload);
 
-        if (value != .map) return error.InvalidPayload;
+        if (value != .arr) return error.InvalidPayload;
 
         var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
         defer {
@@ -386,19 +389,22 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        var it = value.map.iterator();
-        while (it.next()) |entry| {
-            const f_idx = blk: {
-                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
-                if (entry.key_ptr.* == .str) {
-                    const key_str = entry.key_ptr.*.str.value();
-                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
-                }
-                return StorageError.UnknownField;
-            };
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        // Iterate backward, skip already-seen indices to build deduplicated columns.
+        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
+        var pair_i: usize = value.arr.len;
+        while (pair_i > 0) {
+            pair_i -= 1;
+            const pair_payload = value.arr[pair_i];
+            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            if (f_idx < schema_mod.max_store_fields) {
+                if (seen.isSet(f_idx)) continue;
+                seen.set(f_idx);
+            }
 
-            const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+            const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
 
             try columns.append(self.allocator, .{
                 .index = f_idx,

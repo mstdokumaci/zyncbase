@@ -53,7 +53,7 @@ pub const PresenceRecord = struct {
         fields: []const schema_mod.PresenceField,
         patch: msgpack.Payload,
     ) !void {
-        if (patch != .map) return error.InvalidPayload;
+        if (patch != .arr) return error.InvalidPayload;
 
         const TempUpdate = struct {
             idx: usize,
@@ -65,21 +65,14 @@ pub const PresenceRecord = struct {
             temp_updates.deinit(allocator);
         }
 
-        var it = patch.map.iterator();
-        while (it.next()) |entry| {
-            const f_idx: usize = blk: {
-                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
-                if (entry.key_ptr.* == .str) {
-                    const key_str = entry.key_ptr.*.str.value();
-                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return error.InvalidFieldIndex;
-                }
-                return error.InvalidFieldIndex;
-            };
+        for (patch.arr) |pair_payload| {
+            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
             if (f_idx >= fields.len) return error.InvalidFieldIndex;
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
-            const new_value = typed.valueFromPayload(allocator, field.declared_type, null, entry.value_ptr.*) catch |err| switch (err) {
+            const new_value = typed.valueFromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,
             };
@@ -88,7 +81,6 @@ pub const PresenceRecord = struct {
             try temp_updates.append(allocator, .{ .idx = f_idx, .value = new_value });
         }
 
-        // All decoded successfully — apply atomically
         for (temp_updates.items) |update| {
             if (self.values[update.idx]) |*old| old.deinit(allocator);
             self.values[update.idx] = update.value;

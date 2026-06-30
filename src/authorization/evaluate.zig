@@ -1,5 +1,5 @@
 const std = @import("std");
-const msgpack = @import("msgpack");
+const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed.zig");
@@ -316,31 +316,24 @@ pub fn resolveOperand(value: types.Operand, ctx: EvalContext) ?ResolvedAuthValue
 fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthValue {
     const payload = ctx.value_payload orelse return null;
 
-    if (payload.* != .map) return null;
-    const map = payload.map;
+    if (payload.* != .arr) return null;
+    const pairs = payload.arr;
 
-    // Presence fields: look up by name in the presence_fields array
     if (ctx.presence_fields) |fields| {
         const field_index = for (fields, 0..) |f, idx| {
             if (std.mem.eql(u8, f.name, field)) break idx;
         } else return null;
         const field_type = fields[field_index].declared_type;
 
-        var it = map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const matched = switch (key) {
-                .uint => key.uint == field_index,
-                .int => key.int == field_index,
-                .str => blk: {
-                    if (std.mem.eql(u8, key.str.value(), field)) break :blk true;
-                    const parsed = std.fmt.parseUnsigned(usize, key.str.value(), 10) catch break :blk false; // zwanzig-disable-line: swallowed-error
-                    break :blk parsed == field_index;
-                },
-                else => false,
-            };
-            if (matched) {
-                const value = typed.valueFromPayload(ctx.allocator, field_type, null, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        var i: usize = pairs.len;
+        while (i > 0) {
+            i -= 1;
+            const pair_payload = pairs[i];
+            if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
+            const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
+            if (idx == field_index) {
+                const value = typed.valueFromPayload(ctx.allocator, field_type, null, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
                 return ResolvedAuthValue.fromOwned(value);
             }
         }
@@ -348,23 +341,20 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         return ResolvedAuthValue.fromBorrowed(.nil);
     }
 
-    // Store fields: look up by name in the value_table
     const table = ctx.value_table orelse return null;
 
     const field_index = table.fieldIndex(field) orelse return null;
     const field_meta = table.fields[field_index];
 
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        const matched = switch (key) {
-            .uint => key.uint == field_index,
-            .int => key.int == field_index,
-            .str => std.mem.eql(u8, key.str.value(), field),
-            else => false,
-        };
-        if (matched) {
-            const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+    // Wire protocol: duplicate field index in one pair-array → last-wins.
+    var i: usize = pairs.len;
+    while (i > 0) {
+        i -= 1;
+        const pair_payload = pairs[i];
+        if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
+        const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
+        if (idx == field_index) {
+            const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
             return ResolvedAuthValue.fromOwned(value);
         }
     }

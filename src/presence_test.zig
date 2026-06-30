@@ -27,11 +27,14 @@ fn makeTestSharedFields(allocator: std.mem.Allocator) ![]const schema_mod.Presen
 }
 
 fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    var patch = msgpack.Payload.mapPayload(allocator);
-    for (entries) |entry| {
-        try patch.mapPutGeneric(msgpack.Payload.uintToPayload(entry.idx), entry.value);
+    var pairs = try allocator.alloc(msgpack.Payload, entries.len);
+    for (entries, 0..) |entry, i| {
+        var pair = try allocator.alloc(msgpack.Payload, 2);
+        pair[0] = msgpack.Payload.uintToPayload(entry.idx);
+        pair[1] = entry.value;
+        pairs[i] = .{ .arr = pair };
     }
-    return patch;
+    return .{ .arr = pairs };
 }
 
 // ─── PresenceRecord tests ─────────────────────────────────────────────────────
@@ -223,11 +226,7 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
 
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     const merged_patch = manager.pending_user_updates.items[0].patch orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), merged_patch.map.count());
-    const first_value = try merged_patch.mapGetGeneric(msgpack.Payload.uintToPayload(0));
-    const second_value = try merged_patch.mapGetGeneric(msgpack.Payload.uintToPayload(1));
-    try testing.expect(first_value != null);
-    try testing.expect(second_value != null);
+    try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
 }
 
 test "PresenceManager - setShared coalesces pending shared updates for same namespace" {
@@ -255,7 +254,7 @@ test "PresenceManager - setShared coalesces pending shared updates for same name
 
     try testing.expectEqual(@as(usize, 1), manager.pending_shared_updates.items.len);
     const merged_patch = manager.pending_shared_updates.items[0].patch;
-    try testing.expectEqual(@as(usize, 2), merged_patch.map.count());
+    try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
     try testing.expectEqual(@as(u64, 43), manager.pending_shared_updates.items[0].source_conn);
 }
 

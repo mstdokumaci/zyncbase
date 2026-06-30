@@ -208,13 +208,13 @@ export interface PresenceSetNamespace {
 export interface PresenceSet {
 	type: "PresenceSet";
 	id: number;
-	data: Record<number, unknown>; // Integer-keyed field map
+	data: Record<string, unknown>; // User-facing string-keyed data
 }
 
 export interface PresenceSetShared {
 	type: "PresenceSetShared";
 	id: number;
-	data: Record<number, unknown>; // Integer-keyed field map
+	data: Record<string, unknown>; // User-facing string-keyed data
 }
 
 export interface PresenceSubscribe {
@@ -280,13 +280,13 @@ export interface OkResponse {
 	// PresenceSubscribe response fields:
 	users?: PresenceUserSnapshot[];
 	// PresenceSubscribeShared response fields:
-	shared?: Record<number, unknown> | null;
+	shared?: Record<string, unknown> | null;
 }
 
 /** User entry in PresenceSubscribe snapshot. */
 export interface PresenceUserSnapshot {
 	userId: Uint8Array; // bin16 on wire
-	data: Record<number, unknown>; // Integer-keyed field map
+	data: Record<string, unknown>; // Decoded string-keyed field map
 	joinedAt: number; // Unix timestamp ms
 }
 
@@ -361,7 +361,7 @@ export interface PresenceBroadcastEntry {
 export interface SharedStateBroadcast {
 	type: "SharedStateBroadcast";
 	subId: number;
-	data: Record<string, unknown> | Record<string, unknown>[]; // Single decoded patch or array of patches
+	data: Record<string, unknown>[]; // Array of decoded patches
 }
 
 /** Decoded presence entry exposed to SDK consumers. */

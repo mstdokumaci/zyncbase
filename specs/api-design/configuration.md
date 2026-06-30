@@ -635,12 +635,12 @@ const users = await zyncbase.query('users', {
 
 **Benefits:**
 - Efficient querying (standard SQLite indexes work on flattened columns)
-- Unlimited nesting depth for `store` fields (up to SQLite's column limit of ~2000)
+- Unlimited nesting depth for `store` fields (up to 1024 fields per table)
 - Clean client-side experience (no manual flattening required)
 
 **Limitations:**
 - Nested objects cannot contain arrays of objects (arrays must be at the leaf level)
-- Total recursion depth is limited by the maximum number of SQLite columns (typically 2000)
+- Total recursion depth is limited by the maximum number of fields per table (1024)
 - Field names must not contain `__` — that sequence is reserved for the flattening separator
 - `presence` fields support **arbitrary nesting depth** (bounded to 500 flat fields total per tier)
 

@@ -297,28 +297,30 @@ export class SchemaDictionary {
 	encodeValue(
 		tableIndex: number,
 		value: Record<string, unknown>,
-	): Record<number, unknown> {
-		const result: Record<number, unknown> = {};
+	): Array<[number, unknown]> {
+		const result: Array<[number, unknown]> = [];
 		for (const [key, val] of Object.entries(value)) {
 			const fieldIndex = this.getFieldIndex(tableIndex, key);
-			result[fieldIndex] = this.encodeFieldValue(tableIndex, fieldIndex, val);
+			result.push([
+				fieldIndex,
+				this.encodeFieldValue(tableIndex, fieldIndex, val),
+			]);
 		}
 		return result;
 	}
 
 	/**
-	 * Decode an integer-keyed wire map into a string-keyed value map.
+	 * Decode a pair-array wire format into a string-keyed value map.
 	 *
 	 * Example:
-	 *   { 1: 100, 2: 200 } → { "x": 100, "y": 200 }
+	 *   [ [1, 100], [2, 200] ] → { "x": 100, "y": 200 }
 	 */
 	decodeValue(
 		tableIndex: number,
-		wireValue: Record<number, unknown>,
+		wireValue: Array<[number, unknown]>,
 	): Record<string, unknown> {
 		const result: Record<string, unknown> = {};
-		for (const [key, val] of Object.entries(wireValue)) {
-			const fieldIndex = Number(key);
+		for (const [fieldIndex, val] of wireValue) {
 			const fieldName = this.getFieldName(tableIndex, fieldIndex);
 			result[fieldName] = this.decodeFieldValue(tableIndex, fieldIndex, val);
 		}
@@ -397,9 +399,9 @@ export class SchemaDictionary {
 	 */
 	encodePresenceUserValue(
 		data: Record<string, JsonValue>,
-	): Record<number, unknown> {
+	): Array<[number, unknown]> {
 		const flat = flatten(data);
-		const result: Record<number, unknown> = {};
+		const result: Array<[number, unknown]> = [];
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceUserFieldToIndex.get(key);
 			if (index === undefined) {
@@ -408,19 +410,19 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			result[index] = value;
+			result.push([index, value]);
 		}
 		return result;
 	}
 
 	/**
-	 * Encode a nested presence data object into an integer-keyed wire map for shared state.
+	 * Encode a nested presence data object into a pair-array for shared state.
 	 */
 	encodePresenceSharedValue(
 		data: Record<string, JsonValue>,
-	): Record<number, unknown> {
+	): Array<[number, unknown]> {
 		const flat = flatten(data);
-		const result: Record<number, unknown> = {};
+		const result: Array<[number, unknown]> = [];
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceSharedFieldToIndex.get(key);
 			if (index === undefined) {
@@ -429,20 +431,19 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			result[index] = value;
+			result.push([index, value]);
 		}
 		return result;
 	}
 
 	/**
-	 * Decode an integer-keyed wire map into a nested string-keyed object for user presence.
+	 * Decode a pair-array into a nested string-keyed object for user presence.
 	 */
 	decodePresenceUserValue(
-		wireData: Record<number, unknown>,
+		wireData: Array<[number, unknown]>,
 	): Record<string, JsonValue> {
 		const flat: Record<string, JsonValue> = {};
-		for (const [key, value] of Object.entries(wireData)) {
-			const index = Number(key);
+		for (const [index, value] of wireData) {
 			const fieldName = this.presenceUserFields[index];
 			if (fieldName === undefined) {
 				throw new SchemaError(
@@ -456,14 +457,13 @@ export class SchemaDictionary {
 	}
 
 	/**
-	 * Decode an integer-keyed wire map into a nested string-keyed object for shared state.
+	 * Decode a pair-array into a nested string-keyed object for shared state.
 	 */
 	decodePresenceSharedValue(
-		wireData: Record<number, unknown>,
+		wireData: Array<[number, unknown]>,
 	): Record<string, JsonValue> {
 		const flat: Record<string, JsonValue> = {};
-		for (const [key, value] of Object.entries(wireData)) {
-			const index = Number(key);
+		for (const [index, value] of wireData) {
 			const fieldName = this.presenceSharedFields[index];
 			if (fieldName === undefined) {
 				throw new SchemaError(

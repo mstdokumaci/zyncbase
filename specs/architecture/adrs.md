@@ -260,7 +260,7 @@ Immediately after connection, the server pushes a `SchemaSync` message containin
 From this point, all store operations over the wire use:
 - Collection names → integer table indices
 - Field names → integer field indices
-- Operation values → integer-keyed maps (e.g., `{ 2: "Alice" }` to update field index 2)
+- Operation values → pair-arrays of `[field_index, value]` (e.g., `[[2, "Alice"]]` to update field index 2)
 
 The SDK hashes the `SchemaSync` payload to detect schema changes across reconnects, guarding against catastrophic index shifting for any locally queued offline operations.
 
@@ -763,7 +763,7 @@ Nested presence fields are flattened using the `__` separator convention, consis
 - `presenceUserFields: string[]` — flattened user field names in index order
 - `presenceSharedFields: string[]` — flattened shared field names in index order
 
-`PresenceSet` and `PresenceSetShared` send integer-keyed maps. `PresenceBroadcast` and `SharedStateBroadcast` deliver integer-keyed data. A hard limit of 500 flat fields per presence tier is enforced at server startup.
+`PresenceSet` and `PresenceSetShared` send pair-arrays of `[field_index, value]`. `PresenceBroadcast` and `SharedStateBroadcast` deliver pair-array data. `SharedStateBroadcast.data` is always an array of pair-array patches. A hard limit of 500 flat fields per presence tier is enforced at server startup.
 
 Payload savings are substantial at high frequency: a cursor update with status shrinks from ~50 bytes to ~22 bytes. At 60fps from many users fan-outing to many subscribers, this difference compounds dramatically across the broadcast path.
 
@@ -798,11 +798,11 @@ Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presen
 | Message | Description |
 | :--- | :--- |
 | `SchemaSync` | Includes `presenceUserFields: string[]` and `presenceSharedFields: string[]` |
-| `PresenceSet` | C→S; `data` is integer-keyed merge delta for user fields |
-| `PresenceSetShared` | C→S; integer-keyed merge delta for shared fields |
+| `PresenceSet` | C→S; `data` is pair-array merge delta for user fields |
+| `PresenceSetShared` | C→S; pair-array merge delta for shared fields |
 | `PresenceSubscribe` ok | Returns current user presence snapshot for the namespace |
-| `PresenceBroadcast` | S→C; `data` is integer-keyed map; `userId` encoded as `bin16` |
-| `SharedStateBroadcast` | S→C; integer-keyed shared state delta |
+| `PresenceBroadcast` | S→C; `data` is pair-array; `userId` encoded as `bin16` |
+| `SharedStateBroadcast` | S→C; always array of pair-array patches |
 
 **Consequences**:
 - Full integer wire compression for all presence messages — same performance profile as store operations.

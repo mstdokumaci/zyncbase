@@ -348,12 +348,8 @@ export class PresenceImpl implements Presence {
 	private handleSharedStateBroadcast(msg: SharedStateBroadcast): void {
 		if (msg.subId !== this.sharedSubId) return;
 
-		if (Array.isArray(msg.data)) {
-			for (const patch of msg.data) {
-				this.sharedCache = { ...(this.sharedCache ?? {}), ...patch };
-			}
-		} else {
-			this.sharedCache = { ...(this.sharedCache ?? {}), ...msg.data };
+		for (const patch of msg.data) {
+			this.sharedCache = { ...(this.sharedCache ?? {}), ...patch };
 		}
 
 		this.fireSharedCallbacks();
