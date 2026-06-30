@@ -922,34 +922,29 @@ const MsgType = enum {
     presence_remove,
 };
 
+const msg_type_map = std.StaticStringMap(MsgType).initComptime(.{
+    .{ "StoreSetNamespace", .store_set_namespace },
+    .{ "StoreSet", .store_set },
+    .{ "StoreSubscribe", .store_subscribe },
+    .{ "StoreUnsubscribe", .store_unsubscribe },
+    .{ "StoreQuery", .store_query },
+    .{ "StoreLoadMore", .store_load_more },
+    .{ "StoreRemove", .store_remove },
+    .{ "StoreBatch", .store_batch },
+    .{ "AuthRefresh", .auth_refresh },
+    .{ "PresenceSetNamespace", .presence_set_namespace },
+    .{ "PresenceSet", .presence_set },
+    .{ "PresenceSetShared", .presence_set_shared },
+    .{ "PresenceSubscribe", .presence_subscribe },
+    .{ "PresenceUnsubscribe", .presence_unsubscribe },
+    .{ "PresenceSubscribeShared", .presence_subscribe_shared },
+    .{ "PresenceUnsubscribeShared", .presence_unsubscribe_shared },
+    .{ "PresenceRemove", .presence_remove },
+});
+
 fn classifyMsgType(t: []const u8) ?MsgType {
     if (t.len < 8) return null;
-    return switch (t[5]) {
-        'S' => {
-            if (std.mem.eql(u8, t, "StoreSetNamespace")) return .store_set_namespace;
-            if (std.mem.eql(u8, t, "StoreSubscribe")) return .store_subscribe;
-            if (std.mem.eql(u8, t, "StoreSet")) return .store_set;
-            return null;
-        },
-        'R' => if (std.mem.eql(u8, t, "StoreRemove")) return .store_remove else null,
-        'B' => if (std.mem.eql(u8, t, "StoreBatch")) return .store_batch else null,
-        'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
-        'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
-        'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
-        'n' => {
-            // Presence messages: "Presence..." has 'n' at index 5
-            if (std.mem.eql(u8, t, "PresenceSetNamespace")) return .presence_set_namespace;
-            if (std.mem.eql(u8, t, "PresenceSetShared")) return .presence_set_shared;
-            if (std.mem.eql(u8, t, "PresenceSet")) return .presence_set;
-            if (std.mem.eql(u8, t, "PresenceSubscribeShared")) return .presence_subscribe_shared;
-            if (std.mem.eql(u8, t, "PresenceSubscribe")) return .presence_subscribe;
-            if (std.mem.eql(u8, t, "PresenceUnsubscribeShared")) return .presence_unsubscribe_shared;
-            if (std.mem.eql(u8, t, "PresenceUnsubscribe")) return .presence_unsubscribe;
-            if (std.mem.eql(u8, t, "PresenceRemove")) return .presence_remove;
-            return null;
-        },
-        else => if (std.mem.eql(u8, t, "AuthRefresh")) return .auth_refresh else null,
-    };
+    return msg_type_map.get(t);
 }
 
 fn isSecurityError(err: anyerror) bool {

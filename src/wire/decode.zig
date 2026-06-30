@@ -2,6 +2,7 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const comptimeKeyPayload = @import("comptime.zig").comptimeKeyPayload;
+const msgpack_skip = @import("msgpack_skip.zig");
 
 pub const Envelope = struct {
     type: []const u8,
@@ -135,128 +136,6 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
-fn skipValue(bytes: []const u8, pos: *usize) !void {
-    try skipValueDepth(bytes, pos, 0);
-}
-
-fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
-    if (depth > 32) return error.MaxDepthExceeded;
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
-
-    switch (m) {
-        0xc0, 0xc2, 0xc3 => {},
-        0x00...0x7f => {},
-        0xe0...0xff => {},
-        0xcc => pos.* += 1,
-        0xcd => pos.* += 2,
-        0xce => pos.* += 4,
-        0xcf => pos.* += 8,
-        0xd0 => pos.* += 1,
-        0xd1 => pos.* += 2,
-        0xd2 => pos.* += 4,
-        0xd3 => pos.* += 8,
-        0xca => pos.* += 4,
-        0xcb => pos.* += 8,
-        0xa0...0xbf => pos.* += @intCast(m & 0x1f),
-        0xd9 => {
-            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
-            const len: usize = bytes[pos.*];
-            pos.* += 1;
-            pos.* += len;
-        },
-        0xda => {
-            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
-            pos.* += 2;
-            pos.* += @intCast(len);
-        },
-        0xdb => {
-            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
-            pos.* += 4;
-            pos.* += len;
-        },
-        0xc4 => {
-            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
-            const len: usize = bytes[pos.*];
-            pos.* += 1;
-            pos.* += len;
-        },
-        0xc5 => {
-            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
-            pos.* += 2;
-            pos.* += @intCast(len);
-        },
-        0xc6 => {
-            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
-            pos.* += 4;
-            pos.* += len;
-        },
-        0x90...0x9f => {
-            const len: usize = @intCast(m & 0x0f);
-            for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0xdc => {
-            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
-            pos.* += 2;
-            for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0xdd => {
-            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
-            pos.* += 4;
-            for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0x80...0x8f => {
-            const len: usize = @intCast(m & 0x0f);
-            for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0xde => {
-            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
-            pos.* += 2;
-            for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0xdf => {
-            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
-            pos.* += 4;
-            for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
-        },
-        0xd4 => pos.* += 2,
-        0xd5 => pos.* += 3,
-        0xd6 => pos.* += 5,
-        0xd7 => pos.* += 9,
-        0xd8 => pos.* += 17,
-        0xc7 => {
-            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
-            const len: usize = bytes[pos.*];
-            pos.* += 1;
-            pos.* += len + 1;
-        },
-        0xc8 => {
-            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
-            pos.* += 2;
-            pos.* += len + 1;
-        },
-        0xc9 => {
-            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
-            const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
-            pos.* += 4;
-            pos.* += len + 1;
-        },
-        else => return error.InvalidMessageFormat,
-    }
-
-    if (pos.* > bytes.len) return error.InvalidMessageFormat;
-}
-
 // === Fast Envelope Extractor ===
 
 pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
@@ -277,7 +156,7 @@ pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
             result.id = try readU64(bytes, &pos);
             found_id = true;
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -298,7 +177,7 @@ pub fn extractStoreSetNamespaceFast(bytes: []const u8) !StoreSetNamespaceRequest
         if (std.mem.eql(u8, key, Key.namespace)) {
             namespace = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -316,7 +195,7 @@ pub fn extractStoreUnsubscribeFast(bytes: []const u8) !StoreUnsubscribeRequest {
         if (std.mem.eql(u8, key, Key.sub_id)) {
             sub_id = try readU64(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -337,7 +216,7 @@ pub fn extractStoreLoadMoreFast(bytes: []const u8) !StoreLoadMoreRequest {
         } else if (std.mem.eql(u8, key, Key.next_cursor)) {
             next_cursor = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -358,7 +237,7 @@ pub fn extractStoreTableIndexFast(bytes: []const u8) !u64 {
         if (std.mem.eql(u8, key, Key.table_index)) {
             table_index = try readU64(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -400,7 +279,7 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
         } else if (std.mem.eql(u8, key, Key.write_id)) {
             write_id = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -440,7 +319,7 @@ pub fn extractStoreBatchPayloads(
         } else if (std.mem.eql(u8, key, Key.write_id)) {
             write_id = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -462,7 +341,7 @@ pub fn extractAuthRefreshFast(bytes: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, Key.token)) {
             token = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -471,7 +350,7 @@ pub fn extractAuthRefreshFast(bytes: []const u8) ![]const u8 {
 
 fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
     const start = pos.*;
-    try skipValue(bytes, pos);
+    try msgpack_skip.skipValue(bytes, pos);
     const slice = bytes[start..pos.*];
     var reader: std.Io.Reader = .fixed(slice);
     return msgpack.decode(allocator, &reader);
@@ -492,7 +371,7 @@ pub fn extractPresenceSetNamespaceFast(bytes: []const u8) !PresenceSetNamespaceR
         if (std.mem.eql(u8, key, Key.namespace)) {
             namespace = try readStr(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -518,7 +397,7 @@ pub fn extractPresenceSetFast(bytes: []const u8, allocator: std.mem.Allocator) !
             if (data) |d| d.free(allocator);
             data = try readSubtree(bytes, &pos, allocator);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -542,7 +421,7 @@ pub fn extractPresenceUnsubscribeFast(bytes: []const u8) !PresenceUnsubscribeReq
         if (std.mem.eql(u8, key, Key.sub_id)) {
             sub_id = try readU64(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -568,7 +447,7 @@ pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Alloca
             if (data) |d| d.free(allocator);
             data = try readSubtree(bytes, &pos, allocator);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -586,7 +465,7 @@ pub fn extractPresenceSubscribeFast(bytes: []const u8) !PresenceSubscribeRequest
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         _ = key;
-        try skipValue(bytes, &pos);
+        try msgpack_skip.skipValue(bytes, &pos);
     }
 
     return .{};
@@ -601,7 +480,7 @@ pub fn extractPresenceSubscribeSharedFast(bytes: []const u8) !PresenceSubscribeS
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         _ = key;
-        try skipValue(bytes, &pos);
+        try msgpack_skip.skipValue(bytes, &pos);
     }
 
     return .{};
@@ -622,7 +501,7 @@ pub fn extractPresenceUnsubscribeSharedFast(bytes: []const u8) !PresenceUnsubscr
         if (std.mem.eql(u8, key, Key.sub_id)) {
             sub_id = try readU64(bytes, &pos);
         } else {
-            try skipValue(bytes, &pos);
+            try msgpack_skip.skipValue(bytes, &pos);
         }
     }
 
@@ -640,7 +519,7 @@ pub fn extractPresenceRemoveFast(bytes: []const u8) !PresenceRemoveRequest {
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         _ = key;
-        try skipValue(bytes, &pos);
+        try msgpack_skip.skipValue(bytes, &pos);
     }
 
     return .{};
