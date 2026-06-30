@@ -398,8 +398,8 @@ pub const ZyncBaseServer = struct {
                 }
                 return err;
             };
+            defer self.memory_strategy.generalAllocator().free(auth_json);
             self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
-            self.memory_strategy.generalAllocator().free(auth_json);
         } else {
             self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
         }

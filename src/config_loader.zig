@@ -336,9 +336,17 @@ pub const ConfigLoader = struct {
 
         if (json_access.getArray(security_obj, "allowedOrigins")) |origins| {
             var origin_list: std.ArrayListUnmanaged([]const u8) = .empty;
+            errdefer {
+                for (origin_list.items) |origin| {
+                    allocator.free(origin);
+                }
+                origin_list.deinit(allocator);
+            }
             for (origins.items) |origin| {
                 if (origin == .string) {
-                    try origin_list.append(allocator, try allocator.dupe(u8, origin.string));
+                    const duped = try allocator.dupe(u8, origin.string);
+                    errdefer allocator.free(duped);
+                    try origin_list.append(allocator, duped);
                 }
             }
             config.security.allowed_origins = try origin_list.toOwnedSlice(allocator);

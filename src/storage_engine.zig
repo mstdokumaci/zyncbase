@@ -279,6 +279,7 @@ pub const StorageEngine = struct {
                 },
                 .shared_cache = options.in_memory,
             });
+            errdefer node.conn.deinit();
             try connection.configureDatabase(&node.conn, false);
             node.stmt_cache.init(allocator, performance_config.statement_cache_size);
             node.mutex = .{};
