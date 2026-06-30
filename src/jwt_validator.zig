@@ -344,23 +344,17 @@ fn verifyHmacSignature(alg: []const u8, secret: []const u8, msg: []const u8, sig
         if (sig_bytes.len != 32) return false;
         var computed: [32]u8 = undefined;
         std.crypto.auth.hmac.sha2.HmacSha256.create(&computed, msg, secret);
-        var sig_copy: [32]u8 = undefined;
-        @memcpy(&sig_copy, sig_bytes);
-        return std.crypto.timing_safe.eql([32]u8, computed, sig_copy);
+        return std.crypto.timing_safe.eql([32]u8, computed, sig_bytes[0..32].*);
     } else if (std.mem.eql(u8, alg, "HS384")) {
         if (sig_bytes.len != 48) return false;
         var computed: [48]u8 = undefined;
         std.crypto.auth.hmac.sha2.HmacSha384.create(&computed, msg, secret);
-        var sig_copy: [48]u8 = undefined;
-        @memcpy(&sig_copy, sig_bytes);
-        return std.crypto.timing_safe.eql([48]u8, computed, sig_copy);
+        return std.crypto.timing_safe.eql([48]u8, computed, sig_bytes[0..48].*);
     } else if (std.mem.eql(u8, alg, "HS512")) {
         if (sig_bytes.len != 64) return false;
         var computed: [64]u8 = undefined;
         std.crypto.auth.hmac.sha2.HmacSha512.create(&computed, msg, secret);
-        var sig_copy: [64]u8 = undefined;
-        @memcpy(&sig_copy, sig_bytes);
-        return std.crypto.timing_safe.eql([64]u8, computed, sig_copy);
+        return std.crypto.timing_safe.eql([64]u8, computed, sig_bytes[0..64].*);
     } else return error.UnsupportedAlgorithm;
 }
 

@@ -165,7 +165,7 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
     }
 }
 
-fn parseLogicalOpArray(allocator: Allocator, val: std.json.Value) anyerror![]types.Condition {
+fn parseLogicalOpArray(allocator: Allocator, val: std.json.Value) ![]types.Condition {
     if (val != .array) return error.InvalidCondition;
     const arr = val.array.items;
     if (arr.len == 0) return error.InvalidCondition;

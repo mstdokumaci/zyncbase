@@ -3,7 +3,6 @@ const types = @import("types.zig");
 const system = @import("system.zig");
 const json = @import("json.zig");
 const index = @import("index.zig");
-const json_access = @import("../json_access.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -222,8 +221,9 @@ const StoreFieldContext = struct {
 
         var items_type: ?types.FieldType = null;
         if (declared_type == .array) {
-            const items_str = json_access.getString(field_def.object, "items") orelse return error.MissingArrayItems;
-            items_type = try mapPrimitiveType(items_str);
+            const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
+            if (items_val != .string) return error.InvalidArrayItems;
+            items_type = try mapPrimitiveType(items_val.string);
         }
 
         const indexed = if (field_def.object.get("indexed")) |val| blk: {
