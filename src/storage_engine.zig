@@ -120,29 +120,7 @@ pub const StorageEngine = struct {
     ) !void {
         if (data_dir.len == 0 and !options.in_memory) return error.InvalidDataDir;
 
-        const db_path: [:0]const u8 = if (options.in_memory) uri: {
-            // Use shared-cache in-memory database with a unique name to avoid crosstalk
-            // file:zync_mem_{id}?mode=memory&cache=shared
-            const id = unique_id_counter.fetchAdd(1, .seq_cst);
-            const ts = std.time.nanoTimestamp();
-            const uri_fmt = try std.fmt.allocPrint(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id });
-            defer allocator.free(uri_fmt);
-            break :uri try allocator.dupeZ(u8, uri_fmt);
-        } else blk: {
-            // Ensure data directory exists
-            if (std.fs.cwd().openDir(data_dir, .{})) |_| {
-                // Already exists and is a directory
-            } else |err| switch (err) {
-                error.FileNotFound => {
-                    try std.fs.cwd().makePath(data_dir);
-                },
-                error.NotDir => return error.NotDir,
-                else => return err,
-            }
-            const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
-            defer allocator.free(db_path_buf);
-            break :blk try allocator.dupeZ(u8, db_path_buf);
-        };
+        const db_path: [:0]const u8 = try resolveDbPath(allocator, data_dir, options.in_memory);
         errdefer allocator.free(db_path); // zwanzig-disable-line: deinit-lifecycle
 
         var writer_conn = try sqlite.Db.init(.{
@@ -163,31 +141,8 @@ pub const StorageEngine = struct {
         if (options.reader_pool_size == 0) {
             return error.InvalidReaderPoolSize;
         }
-        const num_readers = options.reader_pool_size;
-        const reader_nodes = try allocator.alloc(ReaderNode, num_readers);
-        errdefer allocator.free(reader_nodes);
-
-        var initialized_readers: usize = 0;
-        errdefer {
-            for (reader_nodes[0..initialized_readers]) |*node| {
-                node.stmt_cache.deinit(allocator);
-                node.conn.deinit();
-            }
-        }
-
-        for (reader_nodes) |*node| {
-            node.conn = try sqlite.Db.init(.{
-                .mode = sqlite.Db.Mode{ .File = db_path },
-                .open_flags = .{
-                    .write = false,
-                },
-                .shared_cache = options.in_memory,
-            });
-            try connection.configureDatabase(&node.conn, false);
-            node.stmt_cache.init(allocator, performance_config.statement_cache_size);
-            node.mutex = .{};
-            initialized_readers += 1;
-        }
+        const reader_nodes = try createReaderPool(allocator, db_path, options, performance_config);
+        errdefer destroyReaderPool(allocator, reader_nodes);
 
         const buffers = try Buffers.init(allocator);
 
@@ -272,6 +227,70 @@ pub const StorageEngine = struct {
         }
 
         self.write_worker.pk_sets = self.pk_sets;
+    }
+
+    fn resolveDbPath(allocator: Allocator, data_dir: []const u8, in_memory: bool) ![:0]const u8 {
+        if (in_memory) {
+            // Use shared-cache in-memory database with a unique name to avoid crosstalk
+            // file:zync_mem_{id}?mode=memory&cache=shared
+            const id = unique_id_counter.fetchAdd(1, .seq_cst);
+            const ts = std.time.nanoTimestamp();
+            return try std.fmt.allocPrintSentinel(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id }, 0);
+        }
+        // Ensure data directory exists
+        if (std.fs.cwd().openDir(data_dir, .{})) |_| {
+            // Already exists and is a directory
+        } else |err| switch (err) {
+            error.FileNotFound => {
+                try std.fs.cwd().makePath(data_dir);
+            },
+            error.NotDir => return error.NotDir,
+            else => return err,
+        }
+        return try std.fmt.allocPrintSentinel(allocator, "{s}/zyncbase.db", .{data_dir}, 0);
+    }
+
+    fn createReaderPool(
+        allocator: Allocator,
+        db_path: [:0]const u8,
+        options: Options,
+        performance_config: PerformanceConfig,
+    ) ![]ReaderNode {
+        const num_readers = options.reader_pool_size;
+        const reader_nodes = try allocator.alloc(ReaderNode, num_readers);
+        var initialized: usize = 0;
+        errdefer {
+            for (reader_nodes[0..initialized]) |*node| {
+                node.stmt_cache.deinit(allocator);
+                node.conn.deinit();
+            }
+            allocator.free(reader_nodes);
+        }
+
+        for (reader_nodes) |*node| {
+            node.conn = try sqlite.Db.init(.{
+                .mode = sqlite.Db.Mode{ .File = db_path },
+                .open_flags = .{
+                    .write = false,
+                },
+                .shared_cache = options.in_memory,
+            });
+            errdefer node.conn.deinit();
+            try connection.configureDatabase(&node.conn, false);
+            node.stmt_cache.init(allocator, performance_config.statement_cache_size);
+            node.mutex = .{};
+            initialized += 1;
+        }
+
+        return reader_nodes;
+    }
+
+    fn destroyReaderPool(allocator: Allocator, reader_nodes: []ReaderNode) void {
+        for (reader_nodes) |*node| {
+            node.stmt_cache.deinit(allocator);
+            node.conn.deinit();
+        }
+        allocator.free(reader_nodes);
     }
 
     pub fn deinit(self: *StorageEngine) void {

@@ -96,24 +96,14 @@ pub const ZyncBaseServer = struct {
         errdefer self.memory_strategy.deinit();
 
         // Load configuration or use provided one
-        var config = if (custom_config) |c| c else blk: {
-            const path = custom_config_path orelse "zyncbase-config.json";
-            break :blk ConfigLoader.load(self.memory_strategy.generalAllocator(), path) catch |err| {
-                std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
-                break :blk try ConfigLoader.loadDefaults(self.memory_strategy.generalAllocator());
-            };
-        };
-        errdefer {
-            config.deinit();
-        }
+        var config = try loadOrCreateConfig(&self.memory_strategy, custom_config, custom_config_path);
+        errdefer config.deinit();
 
-        // Override data_dir if provided
+        // Override data_dir / schema_file if provided
         if (custom_data_dir) |dir| {
             self.memory_strategy.generalAllocator().free(config.data_dir);
             config.data_dir = try self.memory_strategy.generalAllocator().dupe(u8, dir);
         }
-
-        // Override schema_file if provided
         if (custom_schema_file) |file| {
             self.memory_strategy.generalAllocator().free(config.schema_file);
             config.schema_file = try self.memory_strategy.generalAllocator().dupe(u8, file);
@@ -141,77 +131,25 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
         );
 
-        {
-            // Determine schema source and track ownership explicitly.
-            const SchemaSource = enum { borrowed_config, borrowed_builtin, owned_file_read };
-            const json_text: []const u8 = blk: {
-                if (config.schema_content) |content| break :blk content;
-                const schema_path = config.schema_file;
-                std.log.info("Loading schema from: {s}", .{schema_path});
-                const loaded = std.fs.cwd().readFileAlloc(
-                    self.memory_strategy.generalAllocator(),
-                    schema_path,
-                    10 * 1024 * 1024,
-                ) catch |err| {
-                    if (err == error.FileNotFound) {
-                        std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
-                        break :blk schema_mod.implicit_users_schema_json;
-                    }
-                    std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
-                    return err;
-                };
-                break :blk loaded;
-            };
-            const schema_source: SchemaSource = if (config.schema_content != null)
-                .borrowed_config
-            else if (json_text.ptr == schema_mod.implicit_users_schema_json.ptr)
-                .borrowed_builtin
-            else
-                .owned_file_read;
-            defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
+        // Load schema from config content, schema file, or implicit builtin
+        try self.loadSchema(&config);
+        errdefer self.schema.deinit();
 
-            self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
-            errdefer self.schema.deinit();
-        }
+        // Load authorization config from file or implicit defaults
+        try self.loadAuthConfig(&config);
+        errdefer self.auth_config.deinit();
 
-        auth_init: {
-            if (config.authorization_file) |file| {
-                const auth_json = std.fs.cwd().readFileAlloc(
-                    self.memory_strategy.generalAllocator(),
-                    file,
-                    1 * 1024 * 1024,
-                ) catch |err| {
-                    if (err == error.FileNotFound) {
-                        std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
-                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
-                        break :auth_init;
-                    }
-                    return err;
-                };
-                self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
-                self.memory_strategy.generalAllocator().free(auth_json);
-            } else {
-                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
-            }
-            errdefer self.auth_config.deinit();
-        }
-
-        // Initialize send queue for cross-thread message delivery.
-        // Must be initialized before storage_engine.start() — reader threads receive a
-        // pointer to it and begin pushing encoded responses immediately.
+        // Initialize send queue and change queue (before storage_engine.start)
         self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
         errdefer self.send_queue.deinit();
 
-        // Initialize change queue for sharded notification work distribution.
-        // Must be initialized before storage_engine.start() — the writer thread receives
-        // a pointer to it and begins pushing committed changes immediately.
         self.change_queue = try ChangeQueue.init(
             self.memory_strategy.generalAllocator(),
             self.thread_budget.notification,
         );
         errdefer self.change_queue.deinit();
 
-        // Initialize storage engine, which now requires a schema and notification callbacks
+        // Initialize storage engine
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
             self.memory_strategy.generalAllocator(),
@@ -225,42 +163,9 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.storage_engine.deinit();
 
-        // Run migrations and DDL
-        {
-            const schema_ptr = &self.schema;
-            // Apply DDL for each table
-            var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
-            for (schema_ptr.tables) |table| {
-                const ddl = try gen.generateDDL(table);
-                defer self.memory_strategy.generalAllocator().free(ddl);
-                const ddl_z = try self.memory_strategy.generalAllocator().dupeZ(u8, ddl);
-                defer self.memory_strategy.generalAllocator().free(ddl_z);
-                try self.storage_engine.execSetupSQL(ddl_z);
-            }
-
-            // Detect and execute migrations
-            const setup_conn = try self.storage_engine.getSetupConn();
-            var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn, schema_ptr);
-            const plan = try detector.detectChanges(schema_ptr);
-            defer detector.deinit(plan);
-
-            if (plan.changes.len > 0) {
-                std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
-                var executor = MigrationExecutor.init(
-                    self.memory_strategy.generalAllocator(),
-                    setup_conn,
-                    &gen,
-                    .{},
-                );
-                executor.execute(plan, schema_ptr.version) catch |err| {
-                    std.log.err("Schema migration failed: {}", .{err});
-                    return err;
-                };
-            }
-
-            // Lock the engine and start the runtime thread
-            try self.storage_engine.start(&self.send_queue, &self.change_queue);
-        }
+        // Apply DDL + migrations, then start the runtime thread
+        try self.runMigrationsAndStartEngine();
+        errdefer self.storage_engine.deinit();
 
         // Initialize checkpoint manager
         std.log.debug("Initializing checkpoint manager", .{});
@@ -310,6 +215,7 @@ pub const ZyncBaseServer = struct {
         try presence_worker.spawn();
         self.presence_worker = presence_worker;
 
+        // Set up JWT validation and JWKS cache
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
@@ -432,6 +338,107 @@ pub const ZyncBaseServer = struct {
         self.last_token_sweep_ms = 0;
 
         return self;
+    }
+
+    fn loadOrCreateConfig(
+        memory_strategy: *MemoryStrategy,
+        custom_config: ?Config,
+        custom_config_path: ?[]const u8,
+    ) !Config {
+        if (custom_config) |c| return c;
+        const path = custom_config_path orelse "zyncbase-config.json";
+        return ConfigLoader.load(memory_strategy.generalAllocator(), path) catch |err| {
+            std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
+            return ConfigLoader.loadDefaults(memory_strategy.generalAllocator());
+        };
+    }
+
+    fn loadSchema(self: *ZyncBaseServer, config: *const Config) !void {
+        const SchemaSource = enum { borrowed_config, borrowed_builtin, owned_file_read };
+        const json_text: []const u8 = blk: {
+            if (config.schema_content) |content| break :blk content;
+            const schema_path = config.schema_file;
+            std.log.info("Loading schema from: {s}", .{schema_path});
+            const loaded = std.fs.cwd().readFileAlloc(
+                self.memory_strategy.generalAllocator(),
+                schema_path,
+                10 * 1024 * 1024,
+            ) catch |err| {
+                if (err == error.FileNotFound) {
+                    std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
+                    break :blk schema_mod.implicit_users_schema_json;
+                }
+                std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
+                return err;
+            };
+            break :blk loaded;
+        };
+        const schema_source: SchemaSource = if (config.schema_content != null)
+            .borrowed_config
+        else if (json_text.ptr == schema_mod.implicit_users_schema_json.ptr)
+            .borrowed_builtin
+        else
+            .owned_file_read;
+        defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
+
+        self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
+    }
+
+    fn loadAuthConfig(self: *ZyncBaseServer, config: *const Config) !void {
+        if (config.authorization_file) |file| {
+            const auth_json = std.fs.cwd().readFileAlloc(
+                self.memory_strategy.generalAllocator(),
+                file,
+                1 * 1024 * 1024,
+            ) catch |err| {
+                if (err == error.FileNotFound) {
+                    std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
+                    self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+                    return;
+                }
+                return err;
+            };
+            defer self.memory_strategy.generalAllocator().free(auth_json);
+            self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
+        } else {
+            self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+        }
+    }
+
+    fn runMigrationsAndStartEngine(self: *ZyncBaseServer) !void {
+        const schema_ptr = &self.schema;
+        // Apply DDL for each table
+        var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
+        for (schema_ptr.tables) |table| {
+            const ddl = try gen.generateDDL(table);
+            defer self.memory_strategy.generalAllocator().free(ddl);
+            const ddl_z = try self.memory_strategy.generalAllocator().dupeZ(u8, ddl);
+            defer self.memory_strategy.generalAllocator().free(ddl_z);
+            try self.storage_engine.execSetupSQL(ddl_z);
+        }
+
+        // Detect and execute migrations
+        const setup_conn = try self.storage_engine.getSetupConn();
+        var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn, schema_ptr);
+        const plan = try detector.detectChanges(schema_ptr);
+        defer detector.deinit(plan);
+
+        if (plan.changes.len > 0) {
+            std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
+            var executor = MigrationExecutor.init(
+                self.memory_strategy.generalAllocator(),
+                setup_conn,
+                &gen,
+                .{},
+            );
+            executor.execute(plan, schema_ptr.version) catch |err| {
+                std.log.err("Schema migration failed: {}", .{err});
+                return err;
+            };
+        }
+
+        // Lock the engine and start the runtime thread
+        try self.storage_engine.start(&self.send_queue, &self.change_queue);
     }
 
     /// Start the server and run the event loop

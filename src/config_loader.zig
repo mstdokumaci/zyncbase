@@ -215,6 +215,8 @@ pub const ConfigLoader = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    const json_access = @import("json_access.zig");
+
     fn buildConfig(allocator: Allocator, json: std.json.Value) !Config {
         var config = Config{
             .server = .{
@@ -235,299 +237,182 @@ pub const ConfigLoader = struct {
         };
         errdefer config.deinit();
 
-        if (json != .object) {
-            return error.InvalidConfigFormat;
-        }
-
+        if (json != .object) return error.InvalidConfigFormat;
         const obj = json.object;
 
-        // Parse server config
-        if (obj.get("server")) |server_json| {
-            if (server_json == .object) {
-                const server_obj = server_json.object;
-
-                if (server_obj.get("port")) |port| {
-                    if (port == .integer) {
-                        if (port.integer < 0 or port.integer > 65535) {
-                            return error.InvalidPort;
-                        }
-                        config.server.port = @intCast(port.integer);
-                    }
-                }
-
-                if (server_obj.get("host")) |host| {
-                    if (host == .string) {
-                        const new_host = try allocator.dupe(u8, host.string);
-                        allocator.free(config.server.host);
-                        config.server.host = new_host;
-                    }
-                }
-            }
-        }
-
-        // Parse authentication config
-        if (obj.get("authentication")) |auth_json| {
-            if (auth_json == .object) {
-                const auth_obj = auth_json.object;
-
-                if (auth_obj.get("jwt")) |jwt_json| {
-                    if (jwt_json == .object) {
-                        const jwt_obj = jwt_json.object;
-
-                        if (jwt_obj.get("secret")) |secret| {
-                            if (secret == .string) {
-                                config.authentication.jwt_secret = try allocator.dupe(u8, secret.string);
-                            }
-                        }
-
-                        if (jwt_obj.get("algorithm")) |algo| {
-                            if (algo == .string) {
-                                const new_algo = try allocator.dupe(u8, algo.string);
-                                allocator.free(config.authentication.jwt_algorithm);
-                                config.authentication.jwt_algorithm = new_algo;
-                            }
-                        }
-
-                        if (jwt_obj.get("issuer")) |issuer| {
-                            if (issuer == .string) {
-                                config.authentication.jwt_issuer = try allocator.dupe(u8, issuer.string);
-                            }
-                        }
-
-                        if (jwt_obj.get("audience")) |audience| {
-                            if (audience == .string) {
-                                config.authentication.jwt_audience = try allocator.dupe(u8, audience.string);
-                            }
-                        }
-
-                        if (jwt_obj.get("jwksUrl")) |jwks| {
-                            if (jwks == .string) {
-                                config.authentication.jwt_jwks_url = try allocator.dupe(u8, jwks.string);
-                            }
-                        }
-
-                        if (jwt_obj.get("subjectClaim")) |sub| {
-                            if (sub == .string) {
-                                const new_sub = try allocator.dupe(u8, sub.string);
-                                allocator.free(config.authentication.jwt_subject_claim);
-                                config.authentication.jwt_subject_claim = new_sub;
-                            }
-                        }
-                    }
-                }
-
-                if (auth_obj.get("ticket")) |ticket_json| {
-                    if (ticket_json == .object) {
-                        const ticket_obj = ticket_json.object;
-
-                        if (ticket_obj.get("secret")) |secret| {
-                            if (secret == .string) {
-                                config.authentication.ticket_secret = try allocator.dupe(u8, secret.string);
-                            }
-                        }
-
-                        if (ticket_obj.get("ttlSeconds")) |ttl| {
-                            if (ttl == .integer) {
-                                config.authentication.ticket_ttl_seconds = @intCast(ttl.integer);
-                            }
-                        }
-
-                        if (ticket_obj.get("singleUse")) |su| {
-                            if (su == .bool) {
-                                config.authentication.ticket_single_use = su.bool;
-                            }
-                        }
-                    }
-                }
-
-                if (auth_obj.get("anonymous")) |anon_json| {
-                    if (anon_json == .object) {
-                        const anon_obj = anon_json.object;
-
-                        if (anon_obj.get("enabled")) |enabled| {
-                            if (enabled == .bool) {
-                                config.authentication.anonymous_enabled = enabled.bool;
-                            }
-                        }
-
-                        if (anon_obj.get("subjectPrefix")) |prefix| {
-                            if (prefix == .string) {
-                                const new_prefix = try allocator.dupe(u8, prefix.string);
-                                allocator.free(config.authentication.anonymous_subject_prefix);
-                                config.authentication.anonymous_subject_prefix = new_prefix;
-                            }
-                        }
-                    }
-                }
-
-                if (auth_obj.get("session")) |session_json| {
-                    if (session_json == .object) {
-                        const session_obj = session_json.object;
-
-                        if (session_obj.get("claims")) |claims_json| {
-                            if (claims_json == .object) {
-                                const claims_obj = claims_json.object;
-                                var it = claims_obj.iterator();
-                                while (it.next()) |entry| {
-                                    if (entry.value_ptr.* == .string) {
-                                        const jwt_claim = try allocator.dupe(u8, entry.key_ptr.*);
-                                        errdefer allocator.free(jwt_claim);
-                                        const session_var = try allocator.dupe(u8, entry.value_ptr.*.string);
-                                        errdefer allocator.free(session_var);
-                                        try config.authentication.session.claims.put(allocator, jwt_claim, session_var);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Parse data directory
-        if (obj.get("dataDir")) |data_dir| {
-            if (data_dir == .string) {
-                const new_data_dir = try allocator.dupe(u8, data_dir.string);
-                allocator.free(config.data_dir);
-                config.data_dir = new_data_dir;
-            }
-        }
-
-        // Parse schema file
-        if (obj.get("schema")) |schema| {
-            if (schema == .string) {
-                const new_schema_file = try allocator.dupe(u8, schema.string);
-                allocator.free(config.schema_file);
-                config.schema_file = new_schema_file;
-            } else if (schema == .object) {
-                config.schema_content = try std.json.Stringify.valueAlloc(allocator, schema, .{});
-            }
-        }
-
-        // Parse authorization rules file
-        if (obj.get("authorization")) |auth_rules| {
-            if (auth_rules == .string) {
-                config.authorization_file = try allocator.dupe(u8, auth_rules.string);
-            }
-        }
-
-        // Parse security config
-        if (obj.get("security")) |security_json| {
-            if (security_json == .object) {
-                const security_obj = security_json.object;
-
-                if (security_obj.get("allowedOrigins")) |origins| {
-                    if (origins == .array) {
-                        var origin_list: std.ArrayListUnmanaged([]const u8) = .empty;
-                        for (origins.array.items) |origin| {
-                            if (origin == .string) {
-                                try origin_list.append(allocator, try allocator.dupe(u8, origin.string));
-                            }
-                        }
-                        config.security.allowed_origins = try origin_list.toOwnedSlice(allocator);
-                    }
-                }
-
-                if (security_obj.get("allowLocalhost")) |allow_localhost| {
-                    if (allow_localhost == .bool) {
-                        config.security.allow_localhost = allow_localhost.bool;
-                    }
-                }
-
-                if (security_obj.get("maxMessagesPerSecond")) |limit| {
-                    if (limit == .integer) {
-                        config.security.max_messages_per_second = @intCast(limit.integer);
-                    }
-                }
-
-                if (security_obj.get("maxConnections")) |limit| {
-                    if (limit == .integer) {
-                        config.security.max_connections = @intCast(limit.integer);
-                    }
-                }
-
-                if (security_obj.get("maxMessageSize")) |size| {
-                    if (size == .integer) {
-                        config.security.max_message_size = @intCast(size.integer);
-                    }
-                }
-
-                if (security_obj.get("violationThreshold")) |threshold| {
-                    if (threshold == .integer) {
-                        config.security.violation_threshold = @intCast(threshold.integer);
-                    }
-                }
-            }
-        }
-
-        // Parse logging config
-        if (obj.get("logging")) |logging_json| {
-            if (logging_json == .object) {
-                const logging_obj = logging_json.object;
-
-                if (logging_obj.get("level")) |level| {
-                    if (level == .string) {
-                        if (std.mem.eql(u8, level.string, "debug")) {
-                            config.logging.level = .debug;
-                        } else if (std.mem.eql(u8, level.string, "info")) {
-                            config.logging.level = .info;
-                        } else if (std.mem.eql(u8, level.string, "warn")) {
-                            config.logging.level = .warn;
-                        } else if (std.mem.eql(u8, level.string, "error")) {
-                            config.logging.level = .@"error";
-                        }
-                    }
-                }
-
-                if (logging_obj.get("format")) |format| {
-                    if (format == .string) {
-                        if (std.mem.eql(u8, format.string, "json")) {
-                            config.logging.format = .json;
-                        } else if (std.mem.eql(u8, format.string, "text")) {
-                            config.logging.format = .text;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Parse performance config
-        if (obj.get("performance")) |performance_json| {
-            if (performance_json == .object) {
-                const performance_obj = performance_json.object;
-
-                if (performance_obj.get("messageBufferSize")) |buffer_size| {
-                    if (buffer_size == .integer) {
-                        config.performance.message_buffer_size = @intCast(buffer_size.integer);
-                    }
-                }
-
-                if (performance_obj.get("batchWrites")) |batch_writes| {
-                    if (batch_writes == .bool) {
-                        config.performance.batch_writes = batch_writes.bool;
-                    }
-                }
-
-                if (performance_obj.get("batchSize")) |batch_size| {
-                    if (batch_size == .integer) {
-                        config.performance.batch_size = @intCast(batch_size.integer);
-                    }
-                }
-
-                if (performance_obj.get("batchTimeout")) |batch_timeout| {
-                    if (batch_timeout == .integer) {
-                        config.performance.batch_timeout = @intCast(batch_timeout.integer);
-                    }
-                }
-                if (performance_obj.get("statementCacheSize")) |cache_size| {
-                    if (cache_size == .integer) {
-                        config.performance.statement_cache_size = @intCast(cache_size.integer);
-                    }
-                }
-            }
-        }
+        try parseServer(allocator, &config, obj);
+        try parseAuthentication(allocator, &config, obj);
+        try parseDataAndSchema(allocator, &config, obj);
+        try parseSecurity(allocator, &config, obj);
+        try parseLogging(allocator, &config, obj);
+        try parsePerformance(allocator, &config, obj);
 
         return config;
+    }
+
+    fn parseServer(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        const server_obj = json_access.getObject(obj, "server") orelse return;
+        if (json_access.getInt(server_obj, "port")) |port| {
+            if (port < 0 or port > 65535) return error.InvalidPort;
+            config.server.port = @intCast(port);
+        }
+        try json_access.replaceString(allocator, &config.server.host, server_obj, "host");
+    }
+
+    fn parseAuthentication(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        const auth_obj = json_access.getObject(obj, "authentication") orelse return;
+        try parseAuthJwt(allocator, &config.authentication, auth_obj);
+        try parseAuthTicket(allocator, &config.authentication, auth_obj);
+        try parseAuthAnonymous(allocator, &config.authentication, auth_obj);
+        try parseAuthSession(allocator, &config.authentication, auth_obj);
+    }
+
+    fn parseAuthJwt(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
+        const jwt_obj = json_access.getObject(auth_obj, "jwt") orelse return;
+        try json_access.setString(allocator, &auth.jwt_secret, jwt_obj, "secret");
+        try json_access.replaceString(allocator, &auth.jwt_algorithm, jwt_obj, "algorithm");
+        try json_access.setString(allocator, &auth.jwt_issuer, jwt_obj, "issuer");
+        try json_access.setString(allocator, &auth.jwt_audience, jwt_obj, "audience");
+        try json_access.setString(allocator, &auth.jwt_jwks_url, jwt_obj, "jwksUrl");
+        try json_access.replaceString(allocator, &auth.jwt_subject_claim, jwt_obj, "subjectClaim");
+    }
+
+    fn parseAuthTicket(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
+        const ticket_obj = json_access.getObject(auth_obj, "ticket") orelse return;
+        try json_access.setString(allocator, &auth.ticket_secret, ticket_obj, "secret");
+        if (json_access.getInt(ticket_obj, "ttlSeconds")) |ttl| {
+            auth.ticket_ttl_seconds = @intCast(ttl);
+        }
+        if (json_access.getBool(ticket_obj, "singleUse")) |su| {
+            auth.ticket_single_use = su;
+        }
+    }
+
+    fn parseAuthAnonymous(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
+        const anon_obj = json_access.getObject(auth_obj, "anonymous") orelse return;
+        if (json_access.getBool(anon_obj, "enabled")) |enabled| {
+            auth.anonymous_enabled = enabled;
+        }
+        try json_access.replaceString(allocator, &auth.anonymous_subject_prefix, anon_obj, "subjectPrefix");
+    }
+
+    fn parseAuthSession(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
+        const session_obj = json_access.getObject(auth_obj, "session") orelse return;
+        const claims_obj = json_access.getObject(session_obj, "claims") orelse return;
+        var it = claims_obj.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* != .string) continue;
+            const jwt_claim = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(jwt_claim);
+            const session_var = try allocator.dupe(u8, entry.value_ptr.*.string);
+            errdefer allocator.free(session_var);
+            try auth.session.claims.put(allocator, jwt_claim, session_var);
+        }
+    }
+
+    fn parseDataAndSchema(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        try json_access.replaceString(allocator, &config.data_dir, obj, "dataDir");
+
+        if (obj.get("schema")) |schema_val| {
+            switch (schema_val) {
+                .string => |s| {
+                    const new_schema_file = try allocator.dupe(u8, s);
+                    allocator.free(config.schema_file);
+                    config.schema_file = new_schema_file;
+                },
+                .object => |schema_obj| {
+                    _ = schema_obj;
+                    config.schema_content = try std.json.Stringify.valueAlloc(allocator, schema_val, .{});
+                },
+                else => {},
+            }
+        }
+
+        try json_access.setString(allocator, &config.authorization_file, obj, "authorization");
+    }
+
+    fn parseSecurity(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        const security_obj = json_access.getObject(obj, "security") orelse return;
+
+        if (json_access.getArray(security_obj, "allowedOrigins")) |origins| {
+            var origin_list: std.ArrayListUnmanaged([]const u8) = .empty;
+            errdefer {
+                for (origin_list.items) |origin| {
+                    allocator.free(origin);
+                }
+                origin_list.deinit(allocator);
+            }
+            for (origins.items) |origin| {
+                if (origin == .string) {
+                    const duped = try allocator.dupe(u8, origin.string);
+                    errdefer allocator.free(duped);
+                    try origin_list.append(allocator, duped);
+                }
+            }
+            config.security.allowed_origins = try origin_list.toOwnedSlice(allocator);
+        }
+
+        if (json_access.getBool(security_obj, "allowLocalhost")) |v| {
+            config.security.allow_localhost = v;
+        }
+        if (json_access.getInt(security_obj, "maxMessagesPerSecond")) |v| {
+            config.security.max_messages_per_second = @intCast(v);
+        }
+        if (json_access.getInt(security_obj, "maxConnections")) |v| {
+            config.security.max_connections = @intCast(v);
+        }
+        if (json_access.getInt(security_obj, "maxMessageSize")) |v| {
+            config.security.max_message_size = @intCast(v);
+        }
+        if (json_access.getInt(security_obj, "violationThreshold")) |v| {
+            config.security.violation_threshold = @intCast(v);
+        }
+    }
+
+    fn parseLogging(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        _ = allocator;
+        const logging_obj = json_access.getObject(obj, "logging") orelse return;
+
+        if (json_access.getString(logging_obj, "level")) |level| {
+            if (std.mem.eql(u8, level, "debug")) {
+                config.logging.level = .debug;
+            } else if (std.mem.eql(u8, level, "info")) {
+                config.logging.level = .info;
+            } else if (std.mem.eql(u8, level, "warn")) {
+                config.logging.level = .warn;
+            } else if (std.mem.eql(u8, level, "error")) {
+                config.logging.level = .@"error";
+            }
+        }
+
+        if (json_access.getString(logging_obj, "format")) |format| {
+            if (std.mem.eql(u8, format, "json")) {
+                config.logging.format = .json;
+            } else if (std.mem.eql(u8, format, "text")) {
+                config.logging.format = .text;
+            }
+        }
+    }
+
+    fn parsePerformance(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        _ = allocator;
+        const perf_obj = json_access.getObject(obj, "performance") orelse return;
+
+        if (json_access.getInt(perf_obj, "messageBufferSize")) |v| {
+            config.performance.message_buffer_size = @intCast(v);
+        }
+        if (json_access.getBool(perf_obj, "batchWrites")) |v| {
+            config.performance.batch_writes = v;
+        }
+        if (json_access.getInt(perf_obj, "batchSize")) |v| {
+            config.performance.batch_size = @intCast(v);
+        }
+        if (json_access.getInt(perf_obj, "batchTimeout")) |v| {
+            config.performance.batch_timeout = @intCast(v);
+        }
+        if (json_access.getInt(perf_obj, "statementCacheSize")) |v| {
+            config.performance.statement_cache_size = @intCast(v);
+        }
     }
 
     fn validateConfig(config: *Config) !void {
