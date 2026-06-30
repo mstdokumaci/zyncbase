@@ -91,6 +91,7 @@ The `users` collection is a special, hybrid system table:
 - **Flat Mapping**: Nested objects are flattened into database columns using double-underscore `__` separator bounds (e.g., `profile__userId`).
 - **Reserved Prefixes**: Namespaces starting with `_zync_` are reserved for internal database systems. Identifier keys must not contain `__`.
 - **Built-in Columns**: Every table implicitly includes `id` (`BLOB(16)`), `namespace_id` (`INTEGER`), `owner_id` (`BLOB(16)`), `created_at` (`INTEGER`), and `updated_at` (`INTEGER`).
+- **Field Limit**: Each table supports a maximum of 1024 fields (including flattened nested fields, excluding system columns).
 
 ---
 

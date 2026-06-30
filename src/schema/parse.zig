@@ -138,6 +138,7 @@ fn collectPresenceFields(
 }
 
 const max_presence_fields: usize = 500;
+pub const max_store_fields: usize = 1024;
 
 fn parsePresenceTier(
     allocator: Allocator,
@@ -212,6 +213,7 @@ const StoreFieldContext = struct {
     }
 
     fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, field_def: std.json.Value) !void {
+        if (ctx.fields.items.len >= max_store_fields) return error.TooManyFields;
         var storage_type = declared_type;
         var required = false;
         if (ctx.required_set.getPtr(full_name)) |seen| {

@@ -326,14 +326,14 @@ pub const StoreService = struct {
 
         // Wire protocol: duplicate field index in one pair-array → last-wins.
         // Iterate backward, skip already-seen indices to build deduplicated columns.
-        var seen = std.StaticBitSet(512).initEmpty();
+        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
         var pair_i: usize = value.arr.len;
         while (pair_i > 0) {
             pair_i -= 1;
             const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
             const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
-            if (f_idx < 512) {
+            if (f_idx < schema_mod.max_store_fields) {
                 if (seen.isSet(f_idx)) continue;
                 seen.set(f_idx);
             }
@@ -391,14 +391,14 @@ pub const StoreService = struct {
 
         // Wire protocol: duplicate field index in one pair-array → last-wins.
         // Iterate backward, skip already-seen indices to build deduplicated columns.
-        var seen = std.StaticBitSet(512).initEmpty();
+        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
         var pair_i: usize = value.arr.len;
         while (pair_i > 0) {
             pair_i -= 1;
             const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
             const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
-            if (f_idx < 512) {
+            if (f_idx < schema_mod.max_store_fields) {
                 if (seen.isSet(f_idx)) continue;
                 seen.set(f_idx);
             }

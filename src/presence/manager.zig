@@ -389,6 +389,12 @@ pub const PresenceManager = struct {
     ) !void {
         if (target.* != .arr or source != .arr) return;
 
+        var new_pairs = std.ArrayListUnmanaged(msgpack.Payload).empty;
+        defer {
+            for (new_pairs.items) |pair| pair.free(self.allocator);
+            new_pairs.deinit(self.allocator);
+        }
+
         for (source.arr) |source_pair| {
             if (source_pair != .arr or source_pair.arr.len != 2) continue;
             const source_idx = source_pair.arr[0];
@@ -408,12 +414,16 @@ pub const PresenceManager = struct {
 
             if (!found) {
                 const cloned_pair = try source_pair.deepClone(self.allocator);
-                errdefer cloned_pair.free(self.allocator);
-                const old_len = target.*.arr.len;
-                const new_slice = try self.allocator.realloc(target.*.arr, old_len + 1);
-                new_slice[old_len] = cloned_pair;
-                target.*.arr = new_slice;
+                try new_pairs.append(self.allocator, cloned_pair);
             }
+        }
+
+        if (new_pairs.items.len > 0) {
+            const old_len = target.*.arr.len;
+            const new_slice = try self.allocator.realloc(target.*.arr, old_len + new_pairs.items.len);
+            @memcpy(new_slice[old_len..], new_pairs.items);
+            target.*.arr = new_slice;
+            new_pairs.clearRetainingCapacity();
         }
     }
 
