@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const ChangeJob = @import("change_queue.zig").ChangeJob;
+const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RecordChange = @import("subscription_engine.zig").RecordChange;
 const MatchOp = SubscriptionEngine.MatchOp;
@@ -9,6 +10,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
+const typed = @import("typed.zig");
 const wire = @import("wire.zig");
 const schema_mod = @import("schema.zig");
 const managedThread = @import("threading/managed_thread.zig").managedThread;
@@ -178,37 +180,18 @@ const NotificationWorker = struct {
 
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
+        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix)) return;
 
-        for (matches) |match| {
-            if (set_suffix == null and match.op == MatchOp.set_op) {
-                const new_record = change.new_record orelse {
-                    std.log.err("NotificationWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
-                    return;
-                };
-                set_suffix = wire.encodeSetDeltaSuffix(
-                    alloc,
-                    table_metadata.index,
-                    id_val_actual,
-                    new_record,
-                    table_metadata,
-                ) catch |err| {
-                    std.log.err("NotificationWorker failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
-                    return;
-                };
-            }
-            if (remove_suffix == null and match.op == MatchOp.remove) {
-                remove_suffix = wire.encodeDeleteDeltaSuffix(
-                    alloc,
-                    table_metadata.index,
-                    id_val_actual,
-                ) catch |err| {
-                    std.log.err("NotificationWorker failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
-                    return;
-                };
-            }
-            if (set_suffix != null and remove_suffix != null) break;
-        }
+        dispatchDeltasToMatches(self, matches, set_suffix, remove_suffix, alloc);
+    }
 
+    fn dispatchDeltasToMatches(
+        self: *NotificationWorker,
+        matches: []const SubscriptionEngine.Match,
+        set_suffix: ?[]const u8,
+        remove_suffix: ?[]const u8,
+        alloc: std.mem.Allocator,
+    ) void {
         var out = std.ArrayListUnmanaged(u8).empty;
         var pushed_any = false;
 
@@ -254,3 +237,44 @@ const NotificationWorker = struct {
         }
     }
 };
+
+fn encodeDeltaSuffixes(
+    matches: []const SubscriptionEngine.Match,
+    change: OwnedRecordChange,
+    table_metadata: *const schema_mod.Table,
+    id_val_actual: typed.Value,
+    alloc: std.mem.Allocator,
+    set_suffix: *?[]const u8,
+    remove_suffix: *?[]const u8,
+) bool {
+    for (matches) |match| {
+        if (set_suffix.* == null and match.op == MatchOp.set_op) {
+            const new_record = change.new_record orelse {
+                std.log.err("NotificationWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
+                return false;
+            };
+            set_suffix.* = wire.encodeSetDeltaSuffix(
+                alloc,
+                table_metadata.index,
+                id_val_actual,
+                new_record,
+                table_metadata,
+            ) catch |err| {
+                std.log.err("NotificationWorker failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
+                return false;
+            };
+        }
+        if (remove_suffix.* == null and match.op == MatchOp.remove) {
+            remove_suffix.* = wire.encodeDeleteDeltaSuffix(
+                alloc,
+                table_metadata.index,
+                id_val_actual,
+            ) catch |err| {
+                std.log.err("NotificationWorker failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
+                return false;
+            };
+        }
+        if (set_suffix.* != null and remove_suffix.* != null) break;
+    }
+    return true;
+}
