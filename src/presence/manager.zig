@@ -535,31 +535,8 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        // Discard items left over from a previous partial drain
-        // (patches already transferred to a batch that was never delivered).
-        // Preserve legitimate leave events (is_leave=true).
-        {
-            var write: usize = 0;
-            for (self.pending_user_updates.items, 0..) |_, read_idx| {
-                const u = &self.pending_user_updates.items[read_idx];
-                if (u.patch == null and !u.is_leave) continue;
-                if (write != read_idx)
-                    self.pending_user_updates.items[write] = self.pending_user_updates.items[read_idx];
-                write += 1;
-            }
-            self.pending_user_updates.shrinkRetainingCapacity(write);
-        }
-        {
-            var write: usize = 0;
-            for (self.pending_shared_updates.items, 0..) |_, read_idx| {
-                const u = &self.pending_shared_updates.items[read_idx];
-                if (u.patch == .nil) continue;
-                if (write != read_idx)
-                    self.pending_shared_updates.items[write] = self.pending_shared_updates.items[read_idx];
-                write += 1;
-            }
-            self.pending_shared_updates.shrinkRetainingCapacity(write);
-        }
+        compactPendingUserUpdates(self);
+        compactPendingSharedUpdates(self);
 
         var success = false;
         defer {
@@ -590,6 +567,40 @@ pub const PresenceManager = struct {
         std.mem.sort(PendingUserUpdate, self.pending_user_updates.items, {}, SortHelpers.compareUser);
         std.mem.sort(PendingSharedUpdate, self.pending_shared_updates.items, {}, SortHelpers.compareShared);
 
+        try groupUserUpdatesIntoBatches(self, user_batches);
+        try groupSharedUpdatesIntoBatches(self, shared_batches);
+
+        success = true;
+    }
+
+    fn compactPendingUserUpdates(self: *PresenceManager) void {
+        var write: usize = 0;
+        for (self.pending_user_updates.items, 0..) |_, read_idx| {
+            const u = &self.pending_user_updates.items[read_idx];
+            if (u.patch == null and !u.is_leave) continue;
+            if (write != read_idx)
+                self.pending_user_updates.items[write] = self.pending_user_updates.items[read_idx];
+            write += 1;
+        }
+        self.pending_user_updates.shrinkRetainingCapacity(write);
+    }
+
+    fn compactPendingSharedUpdates(self: *PresenceManager) void {
+        var write: usize = 0;
+        for (self.pending_shared_updates.items, 0..) |_, read_idx| {
+            const u = &self.pending_shared_updates.items[read_idx];
+            if (u.patch == .nil) continue;
+            if (write != read_idx)
+                self.pending_shared_updates.items[write] = self.pending_shared_updates.items[read_idx];
+            write += 1;
+        }
+        self.pending_shared_updates.shrinkRetainingCapacity(write);
+    }
+
+    fn groupUserUpdatesIntoBatches(
+        self: *PresenceManager,
+        user_batches: *std.ArrayListUnmanaged(UserUpdateBatch),
+    ) !void {
         var i: usize = 0;
         while (i < self.pending_user_updates.items.len) {
             const namespace_id = self.pending_user_updates.items[i].namespace_id;
@@ -617,8 +628,13 @@ pub const PresenceManager = struct {
             // Transfer ownership: batch now owns the patches.
             for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
         }
+    }
 
-        i = 0;
+    fn groupSharedUpdatesIntoBatches(
+        self: *PresenceManager,
+        shared_batches: *std.ArrayListUnmanaged(SharedUpdateBatch),
+    ) !void {
+        var i: usize = 0;
         while (i < self.pending_shared_updates.items.len) {
             const namespace_id = self.pending_shared_updates.items[i].namespace_id;
             const range_start = i;
@@ -645,8 +661,6 @@ pub const PresenceManager = struct {
             // Transfer ownership: batch now owns the patches.
             for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
         }
-
-        success = true;
     }
 
     pub fn evictExpiredGracePeriods(self: *PresenceManager) void {
