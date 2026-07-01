@@ -165,32 +165,19 @@ pub fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) SkipError!void
     if (depth > 32) return error.MaxDepthExceeded;
     if (pos.* >= bytes.len) return error.InvalidMessageFormat;
     const m = bytes[pos.*];
-    pos.* += 1;
 
     switch (marker_table[m]) {
         .invalid => return error.InvalidMessageFormat,
-        .immediate => {},
-        .fixed => |len| try skipPayload(bytes, pos, len),
-        .str => {
-            pos.* -= 1;
-            try skipStr(bytes, pos);
+        .immediate => pos.* += 1,
+        .fixed => |len| {
+            pos.* += 1;
+            try skipPayload(bytes, pos, len);
         },
-        .bin => {
-            pos.* -= 1;
-            try skipBin(bytes, pos);
-        },
-        .array => {
-            pos.* -= 1;
-            try skipArray(bytes, pos, depth);
-        },
-        .map => {
-            pos.* -= 1;
-            try skipMap(bytes, pos, depth);
-        },
-        .ext => {
-            pos.* -= 1;
-            try skipExt(bytes, pos);
-        },
+        .str => try skipStr(bytes, pos),
+        .bin => try skipBin(bytes, pos),
+        .array => try skipArray(bytes, pos, depth),
+        .map => try skipMap(bytes, pos, depth),
+        .ext => try skipExt(bytes, pos),
     }
 }
 

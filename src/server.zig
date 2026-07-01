@@ -122,7 +122,6 @@ pub const ZyncBaseServer = struct {
 
         try self.initStorageAndMigrations(&config);
         errdefer self.storage_engine.deinit();
-        errdefer self.storage_engine.deinit();
 
         try self.initCheckpoint();
         errdefer self.checkpoint_manager.deinit();
