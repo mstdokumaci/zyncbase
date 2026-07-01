@@ -42,7 +42,7 @@ const TestContext = struct {
         self.send_queue.deinit();
         self.subscription_engine.deinit();
         self.change_queue.deinit();
-        self.memory_strategy.deinit();
+        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
     }
 
     fn notifierFn(ctx: ?*anyopaque) void {

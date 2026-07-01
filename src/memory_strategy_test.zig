@@ -6,7 +6,7 @@ test "MemoryStrategy: init and deinit" {
     const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
     try strategy.init(allocator);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     // Verify allocators are available
     const gpa = strategy.generalAllocator();
@@ -28,7 +28,7 @@ test "MemoryStrategy: arena allocator pool usage" {
     const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
     try strategy.init(allocator);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     const arena1 = try strategy.acquireArena();
     const arena2 = try strategy.acquireArena();
@@ -53,7 +53,7 @@ test "MemoryStrategy: arena pool thread safety stress test" {
     };
     var strategy: MemoryStrategy = undefined;
     try strategy.initWithConfig(allocator, config);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     const num_threads = 8;
     const items_per_thread = 200; // Total 1600 acquisitions (exceeds pool size of 1024)

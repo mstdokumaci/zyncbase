@@ -25,7 +25,7 @@ pub const Context = struct {
         errdefer self.schema.deinit();
 
         try self.memory_strategy.init(allocator);
-        errdefer self.memory_strategy.deinit();
+        errdefer _ = self.memory_strategy.deinit();
 
         self.test_context = try schema_helpers.TestContext.initInMemory(allocator);
         errdefer self.test_context.deinit();
@@ -49,6 +49,6 @@ pub const Context = struct {
         self.storage_engine.deinit();
         self.test_context.deinit();
         self.schema.deinit();
-        self.memory_strategy.deinit();
+        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
     }
 };

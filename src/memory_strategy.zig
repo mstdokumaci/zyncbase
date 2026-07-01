@@ -91,13 +91,13 @@ pub const MemoryStrategy = struct {
     }
 
     /// Deinitialize the memory strategy and free all resources
-    pub fn deinit(self: *MemoryStrategy) void {
-        // Deinit pools (this frees the Nodes and cleans up contents via deinitData callbacks)
+    pub fn deinit(self: *MemoryStrategy) std.heap.Check {
         self.arena_pool.deinit();
         self.connection_pool.deinit();
 
-        _ = self.gpa.deinit();
+        const status = self.gpa.deinit();
         self.parent_allocator.destroy(self.gpa);
+        return status;
     }
 
     fn initArena(arena: *std.heap.ArenaAllocator, allocator: Allocator) void {

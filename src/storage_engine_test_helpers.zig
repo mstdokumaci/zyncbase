@@ -185,7 +185,7 @@ pub const EngineTestContext = struct {
         errdefer self.test_context.deinit();
 
         try self.memory_strategy.init(allocator);
-        errdefer self.memory_strategy.deinit();
+        errdefer _ = self.memory_strategy.deinit();
 
         self.schema = try createSchema(allocator, tables);
         errdefer self.schema.deinit();
@@ -265,7 +265,7 @@ pub const EngineTestContext = struct {
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
         self.engine.deinit();
         self.schema.deinit();
-        self.memory_strategy.deinit();
+        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
         if (cleanup) {
             self.test_context.deinit();
         } else {
@@ -382,7 +382,7 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     errdefer ctx.test_context.deinit();
 
     try ctx.memory_strategy.init(allocator);
-    errdefer ctx.memory_strategy.deinit();
+    errdefer _ = ctx.memory_strategy.deinit();
 
     ctx.schema = try createSchema(allocator, tables);
     errdefer ctx.schema.deinit();

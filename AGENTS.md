@@ -50,8 +50,8 @@ Important: Project is still in early development stage. Give no consideration to
 - **Build Typescript SDK:** `bun run --filter @zyncbase/client build`
 
 ## Testing
-- **Run All Tests:** `zig build test`
-- **Filter Tests:** `zig build test -Doptimize=Debug -Dtest-filter="test_name"`
+- **Run All Tests:** `zig build test -Doptimize=Debug --summary all`
+- **Filter Tests:** `zig build test -Doptimize=Debug -Dtest-filter="test_name" --summary all`
 - **E2E Tests:** `bun run test:e2e` (Run after every set of zig code changes to ensure that the server-client communication is not broken)
 - **Thread Safety:** `bun run test:tsan` (Run after every set of zig code changes to ensure thread safety is still ensured)
 - **Safe Mode:** `bun run test:safe` (Run after every set of zig code changes to ensure memory safety is still ensured)

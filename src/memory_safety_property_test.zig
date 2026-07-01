@@ -9,12 +9,12 @@ test "memory: safety and pool invariants" {
     // Test 1: GeneralPurposeAllocator for long-lived allocations
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         const gpa_alloc = strategy.generalAllocator();
 
@@ -30,12 +30,12 @@ test "memory: safety and pool invariants" {
     // Test 2: ArenaAllocator for per-request temporary allocations
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         // Simulate multiple requests
         var request_num: usize = 0;
@@ -56,12 +56,12 @@ test "memory: safety and pool invariants" {
     // Test 3: Object pools for high-churn objects
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         var connections: [20]*Connection = undefined;
         for (&connections, 0..) |*conn, i| {
@@ -106,12 +106,12 @@ test "memory: safety and pool invariants" {
     // Test 4: Mixed allocator usage
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         const gpa_alloc = strategy.generalAllocator();
         const arena_ptr = try strategy.acquireArena();
@@ -136,12 +136,12 @@ test "memory: safety and pool invariants" {
     // Test 5: Stress test with many allocations
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         var iteration: usize = 0;
         while (iteration < 1000) : (iteration += 1) {
@@ -161,12 +161,12 @@ test "memory: safety and pool invariants" {
     // Test 6: Verify no use-after-free with arena
     {
         var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
+        defer std.testing.expect(test_gpa.deinit() == .ok) catch @panic("leak");
         const alloc = test_gpa.allocator();
 
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
-        defer strategy.deinit();
+        defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
         const arena_ptr = try strategy.acquireArena();
         const arena = arena_ptr.allocator();
@@ -198,7 +198,7 @@ test "memory: concurrent pool access" {
 
     var strategy: MemoryStrategy = undefined;
     try strategy.init(alloc);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     const ThreadContext = struct {
         strategy: *MemoryStrategy,
@@ -240,7 +240,7 @@ test "memory: arena isolation between requests" {
 
     var strategy: MemoryStrategy = undefined;
     try strategy.init(alloc);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     const arena_ptr = try strategy.acquireArena();
     const arena = arena_ptr.allocator();
@@ -269,7 +269,7 @@ test "memory: GPA allocation tracking" {
 
     var strategy: MemoryStrategy = undefined;
     try strategy.init(alloc);
-    defer strategy.deinit();
+    defer std.testing.expect(strategy.deinit() == .ok) catch @panic("leak");
 
     const gpa = strategy.generalAllocator();
 
