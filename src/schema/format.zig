@@ -6,7 +6,7 @@ const writeJsonString = json_write.writeJsonString;
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
-    const w = json_write.Writer{ .buf = &buf, .allocator = allocator };
+    var w = json_write.Writer{ .buf = &buf, .allocator = allocator };
 
     try w.beginObject();
     try w.field("version", schema.version);
