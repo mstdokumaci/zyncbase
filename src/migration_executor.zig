@@ -160,44 +160,12 @@ pub const MigrationExecutor = struct {
         }
 
         // 5. Build common columns (intersection of backup cols and new table cols)
-        var common: std.ArrayListUnmanaged([]const u8) = .empty;
+        var common = try buildCommonColumns(self.allocator, table, backup_cols);
         defer common.deinit(self.allocator);
 
-        for (backup_cols) |bc| {
-            var in_new = schema.isSystemColumn(bc);
-            if (!in_new) {
-                for (table.userFields()) |f| {
-                    if (std.mem.eql(u8, bc, f.name)) {
-                        in_new = true;
-                        break;
-                    }
-                }
-            }
-            if (in_new) {
-                try common.append(self.allocator, bc);
-            }
-        }
-
+        // 6. Copy data for common columns
         if (common.items.len > 0) {
-            var col_list: std.ArrayListUnmanaged(u8) = .empty;
-            defer col_list.deinit(self.allocator);
-            for (common.items, 0..) |col, i| {
-                if (i > 0) try col_list.appendSlice(self.allocator, ", ");
-                try appendQuotedIdentifier(self.allocator, &col_list, col);
-            }
-            const cols_str = col_list.items;
-
-            var insert_sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-            defer insert_sql_buf.deinit(self.allocator);
-            try insert_sql_buf.appendSlice(self.allocator, "INSERT INTO ");
-            try insert_sql_buf.appendSlice(self.allocator, name_quoted);
-            try insert_sql_buf.appendSlice(self.allocator, " (");
-            try insert_sql_buf.appendSlice(self.allocator, cols_str);
-            try insert_sql_buf.appendSlice(self.allocator, ") SELECT ");
-            try insert_sql_buf.appendSlice(self.allocator, cols_str);
-            try insert_sql_buf.appendSlice(self.allocator, " FROM ");
-            try insert_sql_buf.appendSlice(self.allocator, backup_name_quoted);
-            const insert_sql = try insert_sql_buf.toOwnedSlice(self.allocator);
+            const insert_sql = try buildInsertSql(self.allocator, name_quoted, backup_name_quoted, common.items);
             defer self.allocator.free(insert_sql);
             try self.db.execDynamic(insert_sql, .{}, .{});
         }
@@ -303,4 +271,55 @@ fn appendQuotedIdentifier(
     try buf.append(allocator, '"');
     try buf.appendSlice(allocator, identifier);
     try buf.append(allocator, '"');
+}
+
+fn buildCommonColumns(
+    allocator: std.mem.Allocator,
+    table: schema.Table,
+    backup_cols: []const []const u8,
+) !std.ArrayListUnmanaged([]const u8) {
+    var common: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer common.deinit(allocator);
+    for (backup_cols) |bc| {
+        var in_new = schema.isSystemColumn(bc);
+        if (!in_new) {
+            for (table.userFields()) |f| {
+                if (std.mem.eql(u8, bc, f.name)) {
+                    in_new = true;
+                    break;
+                }
+            }
+        }
+        if (in_new) {
+            try common.append(allocator, bc);
+        }
+    }
+    return common;
+}
+
+fn buildInsertSql(
+    allocator: std.mem.Allocator,
+    name_quoted: []const u8,
+    backup_name_quoted: []const u8,
+    common: []const []const u8,
+) ![]const u8 {
+    var col_list: std.ArrayListUnmanaged(u8) = .empty;
+    defer col_list.deinit(allocator);
+    for (common, 0..) |col, i| {
+        if (i > 0) try col_list.appendSlice(allocator, ", ");
+        try appendQuotedIdentifier(allocator, &col_list, col);
+    }
+    const cols_str = col_list.items;
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "INSERT INTO ");
+    try buf.appendSlice(allocator, name_quoted);
+    try buf.appendSlice(allocator, " (");
+    try buf.appendSlice(allocator, cols_str);
+    try buf.appendSlice(allocator, ") SELECT ");
+    try buf.appendSlice(allocator, cols_str);
+    try buf.appendSlice(allocator, " FROM ");
+    try buf.appendSlice(allocator, backup_name_quoted);
+    return try buf.toOwnedSlice(allocator);
 }

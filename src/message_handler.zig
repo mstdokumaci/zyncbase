@@ -198,25 +198,7 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const msg_type = classifyMsgType(envelope.type) orelse return error.UnknownMessageType;
-        return switch (msg_type) {
-            .store_set_namespace => try self.handleStoreSetNamespace(arena_allocator, conn, envelope.id, message),
-            .store_set => try self.handleStoreSet(arena_allocator, conn, envelope.id, message),
-            .store_subscribe => try self.handleStoreSubscribe(arena_allocator, conn, envelope.id, message),
-            .store_unsubscribe => try self.handleStoreUnsubscribe(arena_allocator, conn, envelope.id, message),
-            .store_query => try self.handleStoreQuery(arena_allocator, conn, envelope.id, message),
-            .store_load_more => try self.handleStoreLoadMore(arena_allocator, conn, envelope.id, message),
-            .store_remove => try self.handleStoreRemove(arena_allocator, conn, envelope.id, message),
-            .store_batch => try self.handleStoreBatch(arena_allocator, conn, envelope.id, message),
-            .auth_refresh => try self.handleAuthRefresh(arena_allocator, conn, envelope.id, message),
-            .presence_set_namespace => try self.handlePresenceSetNamespace(arena_allocator, conn, envelope.id, message),
-            .presence_set => try self.handlePresenceSet(arena_allocator, conn, envelope.id, message),
-            .presence_set_shared => try self.handlePresenceSetShared(arena_allocator, conn, envelope.id, message),
-            .presence_subscribe => try self.handlePresenceSubscribe(arena_allocator, conn, envelope.id, message),
-            .presence_unsubscribe => try self.handlePresenceUnsubscribe(arena_allocator, conn, envelope.id, message),
-            .presence_subscribe_shared => try self.handlePresenceSubscribeShared(arena_allocator, conn, envelope.id, message),
-            .presence_unsubscribe_shared => try self.handlePresenceUnsubscribeShared(arena_allocator, conn, envelope.id, message),
-            .presence_remove => try self.handlePresenceRemove(arena_allocator, conn, envelope.id, message),
-        };
+        return handler_table[@intFromEnum(msg_type)](self, arena_allocator, conn, envelope.id, message);
     }
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
@@ -945,6 +927,39 @@ const msg_type_map = std.StaticStringMap(MsgType).initComptime(.{
 fn classifyMsgType(t: []const u8) ?MsgType {
     if (t.len < 8) return null;
     return msg_type_map.get(t);
+}
+
+const HandlerFn = *const fn (*MessageHandler, std.mem.Allocator, *Connection, u64, []const u8) anyerror!?[]const u8;
+
+fn wrap(comptime f: anytype) HandlerFn { // zwanzig-disable-line: unused-parameter
+    return struct {
+        fn call(self: *MessageHandler, arena: std.mem.Allocator, conn: *Connection, id: u64, msg: []const u8) anyerror!?[]const u8 {
+            return try f(self, arena, conn, id, msg);
+        }
+    }.call;
+}
+
+const handler_table = [_]HandlerFn{
+    wrap(&MessageHandler.handleStoreSetNamespace),
+    wrap(&MessageHandler.handleStoreSet),
+    wrap(&MessageHandler.handleStoreSubscribe),
+    wrap(&MessageHandler.handleStoreUnsubscribe),
+    wrap(&MessageHandler.handleStoreQuery),
+    wrap(&MessageHandler.handleStoreLoadMore),
+    wrap(&MessageHandler.handleStoreRemove),
+    wrap(&MessageHandler.handleStoreBatch),
+    wrap(&MessageHandler.handleAuthRefresh),
+    wrap(&MessageHandler.handlePresenceSetNamespace),
+    wrap(&MessageHandler.handlePresenceSet),
+    wrap(&MessageHandler.handlePresenceSetShared),
+    wrap(&MessageHandler.handlePresenceSubscribe),
+    wrap(&MessageHandler.handlePresenceUnsubscribe),
+    wrap(&MessageHandler.handlePresenceSubscribeShared),
+    wrap(&MessageHandler.handlePresenceUnsubscribeShared),
+    wrap(&MessageHandler.handlePresenceRemove),
+};
+comptime {
+    std.debug.assert(handler_table.len == @typeInfo(MsgType).@"enum".fields.len);
 }
 
 fn isSecurityError(err: anyerror) bool {

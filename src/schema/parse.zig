@@ -321,93 +321,38 @@ pub fn initFromTables(
     var metadata_owned_by_schema = false;
     errdefer if (!metadata_owned_by_schema) if (metadata_owned) |metadata| metadata.deinit(allocator);
 
-    const has_users = blk: {
-        for (declared_tables) |table| {
-            if (std.mem.eql(u8, table.name, "users")) break :blk true;
-        }
-        break :blk false;
-    };
-
-    const table_count = declared_tables.len + @intFromBool(!has_users);
-    var tables = try allocator.alloc(types.Table, table_count);
-    var built_count: usize = 0;
+    const owned_tables = try buildTablesSlice(allocator, declared_tables);
     var tables_owned_by_schema = false;
     errdefer if (!tables_owned_by_schema) {
-        for (tables[0..built_count]) |*table| table.deinit(allocator);
-        allocator.free(tables);
+        for (owned_tables.tables[0..owned_tables.built_count]) |*table| table.deinit(allocator);
+        allocator.free(owned_tables.tables);
     };
 
-    if (has_users) {
-        for (declared_tables) |table| {
-            if (std.mem.eql(u8, table.name, "users")) {
-                tables[built_count] = try buildRuntimeTable(allocator, table, built_count);
-                built_count += 1;
-                break;
-            }
-        }
-    } else {
-        const users = try implicitUsersTable(allocator);
-        defer {
-            var owned = users;
-            owned.deinit(allocator);
-        }
-        tables[built_count] = try buildRuntimeTable(allocator, users, built_count);
-        built_count += 1;
-    }
-
-    for (declared_tables) |table| {
-        if (std.mem.eql(u8, table.name, "users")) continue;
-        tables[built_count] = try buildRuntimeTable(allocator, table, built_count);
-        built_count += 1;
-    }
-
-    // Clone presence fields (same pattern as store tables - caller keeps ownership)
-    const cloned_user_fields = try clonePresenceFields(allocator, presence_user_fields);
-    var user_fields_owned = false;
-    errdefer if (!user_fields_owned) {
-        for (cloned_user_fields) |f| f.deinit(allocator);
-        allocator.free(cloned_user_fields);
-    };
-
-    const cloned_shared_fields = try clonePresenceFields(allocator, presence_shared_fields);
-    var shared_fields_owned = false;
-    errdefer if (!shared_fields_owned) {
-        for (cloned_shared_fields) |f| f.deinit(allocator);
-        allocator.free(cloned_shared_fields);
-    };
-
-    const cloned_user_names = try cloneStringSlice(allocator, presence_user_fields_names);
-    var user_names_owned = false;
-    errdefer if (!user_names_owned) {
-        for (cloned_user_names) |name| allocator.free(name);
-        allocator.free(cloned_user_names);
-    };
-
-    const cloned_shared_names = try cloneStringSlice(allocator, presence_shared_fields_names);
-    var shared_names_owned = false;
-    errdefer if (!shared_names_owned) {
-        for (cloned_shared_names) |name| allocator.free(name);
-        allocator.free(cloned_shared_names);
-    };
+    var presence_state = try clonePresenceState(
+        allocator,
+        presence_user_fields,
+        presence_shared_fields,
+        presence_user_fields_names,
+        presence_shared_fields_names,
+    );
+    var presence_owned_by_schema = false;
+    errdefer if (!presence_owned_by_schema) presence_state.deinit(allocator);
 
     var schema = types.Schema{
         .allocator = allocator,
         .version = version_owned,
-        .tables = tables,
+        .tables = owned_tables.tables,
         .has_index = false,
         .metadata = metadata_owned,
-        .presence_user_fields = cloned_user_fields,
-        .presence_shared_fields = cloned_shared_fields,
-        .presence_user_fields_names = cloned_user_names,
-        .presence_shared_fields_names = cloned_shared_names,
+        .presence_user_fields = presence_state.user_fields,
+        .presence_shared_fields = presence_state.shared_fields,
+        .presence_user_fields_names = presence_state.user_fields_names,
+        .presence_shared_fields_names = presence_state.shared_fields_names,
     };
     version_owned_by_schema = true;
     metadata_owned_by_schema = true;
     tables_owned_by_schema = true;
-    user_fields_owned = true;
-    shared_fields_owned = true;
-    user_names_owned = true;
-    shared_names_owned = true;
+    presence_owned_by_schema = true;
     errdefer schema.deinit();
 
     try index.buildTableIndex(allocator, &schema);
@@ -441,6 +386,111 @@ fn cloneStringSlice(allocator: Allocator, strings: []const []const u8) ![]const 
         built += 1;
     }
     return cloned;
+}
+
+const OwnedTables = struct {
+    tables: []types.Table,
+    built_count: usize,
+};
+
+fn buildTablesSlice(allocator: Allocator, declared_tables: []const types.Table) !OwnedTables {
+    const has_users = blk: {
+        for (declared_tables) |table| {
+            if (std.mem.eql(u8, table.name, "users")) break :blk true;
+        }
+        break :blk false;
+    };
+
+    const table_count = declared_tables.len + @intFromBool(!has_users);
+    var tables = try allocator.alloc(types.Table, table_count);
+    var built_count: usize = 0;
+    errdefer {
+        for (tables[0..built_count]) |*table| table.deinit(allocator);
+        allocator.free(tables);
+    }
+
+    if (has_users) {
+        for (declared_tables) |table| {
+            if (std.mem.eql(u8, table.name, "users")) {
+                tables[built_count] = try buildRuntimeTable(allocator, table, built_count);
+                built_count += 1;
+                break;
+            }
+        }
+    } else {
+        const users = try implicitUsersTable(allocator);
+        defer {
+            var owned = users;
+            owned.deinit(allocator);
+        }
+        tables[built_count] = try buildRuntimeTable(allocator, users, built_count);
+        built_count += 1;
+    }
+
+    for (declared_tables) |table| {
+        if (std.mem.eql(u8, table.name, "users")) continue;
+        tables[built_count] = try buildRuntimeTable(allocator, table, built_count);
+        built_count += 1;
+    }
+
+    return .{ .tables = tables, .built_count = built_count };
+}
+
+const PresenceState = struct {
+    user_fields: []const types.PresenceField,
+    shared_fields: []const types.PresenceField,
+    user_fields_names: []const []const u8,
+    shared_fields_names: []const []const u8,
+
+    fn deinit(self: *PresenceState, allocator: Allocator) void {
+        for (self.user_fields) |f| f.deinit(allocator);
+        allocator.free(self.user_fields);
+        for (self.shared_fields) |f| f.deinit(allocator);
+        allocator.free(self.shared_fields);
+        for (self.user_fields_names) |name| allocator.free(name);
+        allocator.free(self.user_fields_names);
+        for (self.shared_fields_names) |name| allocator.free(name);
+        allocator.free(self.shared_fields_names);
+    }
+};
+
+fn clonePresenceState(
+    allocator: Allocator,
+    presence_user_fields: []const types.PresenceField,
+    presence_shared_fields: []const types.PresenceField,
+    presence_user_fields_names: []const []const u8,
+    presence_shared_fields_names: []const []const u8,
+) !PresenceState {
+    const user_fields = try clonePresenceFields(allocator, presence_user_fields);
+    errdefer {
+        for (user_fields) |f| f.deinit(allocator);
+        allocator.free(user_fields);
+    }
+
+    const shared_fields = try clonePresenceFields(allocator, presence_shared_fields);
+    errdefer {
+        for (shared_fields) |f| f.deinit(allocator);
+        allocator.free(shared_fields);
+    }
+
+    const user_fields_names = try cloneStringSlice(allocator, presence_user_fields_names);
+    errdefer {
+        for (user_fields_names) |name| allocator.free(name);
+        allocator.free(user_fields_names);
+    }
+
+    const shared_fields_names = try cloneStringSlice(allocator, presence_shared_fields_names);
+    errdefer {
+        for (shared_fields_names) |name| allocator.free(name);
+        allocator.free(shared_fields_names);
+    }
+
+    return .{
+        .user_fields = user_fields,
+        .shared_fields = shared_fields,
+        .user_fields_names = user_fields_names,
+        .shared_fields_names = shared_fields_names,
+    };
 }
 
 fn implicitUsersTable(allocator: Allocator) !types.Table {
