@@ -272,6 +272,46 @@ pub fn encodeQuery(
     return list.toOwnedSlice(arena_allocator);
 }
 
+fn encodeTablesArray(writer: anytype, tables: []const schema_mod.Table) !void {
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        try msgpack.writeMsgPackStr(writer, table.name);
+    }
+}
+
+fn encodeFieldsArray(writer: anytype, schema: *const schema_mod.Schema, tables: []const schema_mod.Table) !void {
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
+        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
+        for (tbl_md.fields) |field| {
+            try msgpack.writeMsgPackStr(writer, field.name);
+        }
+    }
+}
+
+fn encodeFieldFlagsArray(writer: anytype, schema: *const schema_mod.Schema, tables: []const schema_mod.Table) !void {
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
+        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
+        for (tbl_md.fields) |field| {
+            var flags: u8 = 0;
+            if (field.isSystem()) flags |= 0b01;
+            if (field.storage_type == .doc_id) flags |= 0b10;
+            if (field.required) flags |= 0b100;
+            try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
+        }
+    }
+}
+
+fn encodePresenceFieldNames(writer: anytype, names: []const []const u8) !void {
+    try msgpack.encodeArrayHeader(writer, names.len);
+    for (names) |name| {
+        try msgpack.writeMsgPackStr(writer, name);
+    }
+}
+
 pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -285,46 +325,19 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
     const tables = schema.tables;
 
     try writer.writeAll(Keys.tables);
-    try msgpack.encodeArrayHeader(writer, tables.len);
-    for (tables) |table| {
-        try msgpack.writeMsgPackStr(writer, table.name);
-    }
+    try encodeTablesArray(writer, tables);
 
     try writer.writeAll(Keys.fields);
-    try msgpack.encodeArrayHeader(writer, tables.len);
-    for (tables) |table| {
-        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
-        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
-        for (tbl_md.fields) |field| {
-            try msgpack.writeMsgPackStr(writer, field.name);
-        }
-    }
+    try encodeFieldsArray(writer, schema, tables);
 
     try writer.writeAll(Keys.field_flags);
-    try msgpack.encodeArrayHeader(writer, tables.len);
-    for (tables) |table| {
-        const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
-        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
-        for (tbl_md.fields) |field| {
-            var flags: u8 = 0;
-            if (field.isSystem()) flags |= 0b01;
-            if (field.storage_type == .doc_id) flags |= 0b10;
-            if (field.required) flags |= 0b100;
-            try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
-        }
-    }
+    try encodeFieldFlagsArray(writer, schema, tables);
 
     try writer.writeAll(Keys.presence_user_fields);
-    try msgpack.encodeArrayHeader(writer, schema.presence_user_fields_names.len);
-    for (schema.presence_user_fields_names) |name| {
-        try msgpack.writeMsgPackStr(writer, name);
-    }
+    try encodePresenceFieldNames(writer, schema.presence_user_fields_names);
 
     try writer.writeAll(Keys.presence_shared_fields);
-    try msgpack.encodeArrayHeader(writer, schema.presence_shared_fields_names.len);
-    for (schema.presence_shared_fields_names) |name| {
-        try msgpack.writeMsgPackStr(writer, name);
-    }
+    try encodePresenceFieldNames(writer, schema.presence_shared_fields_names);
 
     return list.toOwnedSlice(allocator);
 }
@@ -476,6 +489,43 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 const PresenceManager = @import("../presence.zig").PresenceManager;
 const PresenceRecord = @import("../presence.zig").PresenceRecord;
 
+fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
+    const is_leave = update.is_leave;
+    const is_join = update.is_new_user and update.patch != null;
+    const map_size: usize = blk: {
+        var size: usize = 2;
+        if (update.patch != null) {
+            size += 1;
+            if (is_join) size += 1;
+        }
+        break :blk size;
+    };
+    try msgpack.encodeMapHeader(writer, map_size);
+
+    try writer.writeAll(Keys.user_id);
+    const id_bytes = typed.docIdToBytes(update.user_id);
+    try msgpack.writeMsgPackBin(writer, &id_bytes);
+
+    try writer.writeAll(Keys.event);
+    if (is_leave) {
+        try writer.writeAll(Values.event_leave);
+    } else if (is_join) {
+        try writer.writeAll(Values.event_join);
+    } else {
+        try writer.writeAll(Values.event_update);
+    }
+
+    if (update.patch) |patch| {
+        try writer.writeAll(Keys.data);
+        try msgpack.encode(patch, writer);
+
+        if (is_join) {
+            try writer.writeAll(Keys.joined_at);
+            try msgpack.encode(msgpack.Payload{ .int = update.joined_at }, writer);
+        }
+    }
+}
+
 /// Encode a PresenceBroadcast message with multiple user updates.
 pub fn encodePresenceBroadcast(
     allocator: Allocator,
@@ -498,42 +548,7 @@ pub fn encodePresenceBroadcast(
     try msgpack.encodeArrayHeader(writer, updates.len);
 
     for (updates) |update| {
-        // Each user entry: { userId: bin16, event: "join"|"update"|"leave", data: {...}, joinedAt: int }
-        // join events have data + joinedAt, update events have data only, leave events have neither
-        const is_leave = update.is_leave;
-        const is_join = update.is_new_user and update.patch != null;
-        const map_size: usize = blk: {
-            var size: usize = 2;
-            if (update.patch != null) {
-                size += 1;
-                if (is_join) size += 1;
-            }
-            break :blk size;
-        };
-        try msgpack.encodeMapHeader(writer, map_size);
-
-        try writer.writeAll(Keys.user_id);
-        const id_bytes = typed.docIdToBytes(update.user_id);
-        try msgpack.writeMsgPackBin(writer, &id_bytes);
-
-        try writer.writeAll(Keys.event);
-        if (is_leave) {
-            try writer.writeAll(Values.event_leave);
-        } else if (is_join) {
-            try writer.writeAll(Values.event_join);
-        } else {
-            try writer.writeAll(Values.event_update);
-        }
-
-        if (update.patch) |patch| {
-            try writer.writeAll(Keys.data);
-            try msgpack.encode(patch, writer);
-
-            if (is_join) {
-                try writer.writeAll(Keys.joined_at);
-                try msgpack.encode(msgpack.Payload{ .int = update.joined_at }, writer);
-            }
-        }
+        try encodeUserUpdate(writer, update);
     }
 
     return list.toOwnedSlice(allocator);

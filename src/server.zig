@@ -89,33 +89,12 @@ pub const ZyncBaseServer = struct {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
         self.allocator = allocator;
-        // schema will be initialized later
 
-        // Initialize memory strategy
         try self.memory_strategy.init(allocator);
         errdefer _ = self.memory_strategy.deinit();
 
-        // Load configuration or use provided one
-        var config = try loadOrCreateConfig(&self.memory_strategy, custom_config, custom_config_path);
+        var config = try self.initConfigAndBudget(custom_config, custom_data_dir, custom_schema_file, custom_config_path);
         errdefer config.deinit();
-
-        // Override data_dir / schema_file if provided
-        if (custom_data_dir) |dir| {
-            self.memory_strategy.generalAllocator().free(config.data_dir);
-            config.data_dir = try self.memory_strategy.generalAllocator().dupe(u8, dir);
-        }
-        if (custom_schema_file) |file| {
-            self.memory_strategy.generalAllocator().free(config.schema_file);
-            config.schema_file = try self.memory_strategy.generalAllocator().dupe(u8, file);
-        }
-
-        const cpu_count = std.Thread.getCpuCount() catch {
-            return error.CpuCountDetectionFailed;
-        };
-        self.thread_budget = ThreadBudget.init(cpu_count) catch {
-            return error.InsufficientCpuCores;
-        };
-        self.thread_budget.logSummary();
 
         // Initialize violation tracker
         std.log.debug("Initializing violation tracker", .{});
@@ -131,61 +110,24 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
         );
 
-        // Load schema from config content, schema file, or implicit builtin
         try self.loadSchema(&config);
         errdefer self.schema.deinit();
 
-        // Load authorization config from file or implicit defaults
         try self.loadAuthConfig(&config);
         errdefer self.auth_config.deinit();
 
-        // Initialize send queue and change queue (before storage_engine.start)
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        try self.initQueues();
         errdefer self.send_queue.deinit();
-
-        self.change_queue = try ChangeQueue.init(
-            self.memory_strategy.generalAllocator(),
-            self.thread_budget.notification,
-        );
         errdefer self.change_queue.deinit();
 
-        // Initialize storage engine
-        std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
-        try self.storage_engine.init(
-            self.memory_strategy.generalAllocator(),
-            &self.memory_strategy,
-            config.data_dir,
-            &self.schema,
-            config.performance,
-            .{ .reader_pool_size = self.thread_budget.readers },
-            storageEngineWakeup,
-            self,
-        );
+        try self.initStorageAndMigrations(&config);
+        errdefer self.storage_engine.deinit();
         errdefer self.storage_engine.deinit();
 
-        // Apply DDL + migrations, then start the runtime thread
-        try self.runMigrationsAndStartEngine();
-        errdefer self.storage_engine.deinit();
-
-        // Initialize checkpoint manager
-        std.log.debug("Initializing checkpoint manager", .{});
-        try self.checkpoint_manager.init(
-            self.memory_strategy.generalAllocator(),
-            &self.storage_engine,
-            .{}, // Use default config
-        );
+        try self.initCheckpoint();
         errdefer self.checkpoint_manager.deinit();
 
-        // Initialize WebSocket server
-        std.log.debug("Initializing WebSocket server", .{});
-        try self.websocket_server.init(
-            self.memory_strategy.generalAllocator(),
-            .{
-                .port = config.server.port,
-                .host = config.server.host,
-                .max_payload_length = config.security.max_message_size,
-            },
-        );
+        try self.initWebSocketServer(&config);
         errdefer self.websocket_server.deinit();
 
         self.store_service = StoreService.init(
@@ -201,93 +143,26 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
-        const presence_worker = try self.memory_strategy.generalAllocator().create(PresenceWorker);
+        const presence_worker = try self.initPresenceWorkerInternal();
         errdefer self.memory_strategy.generalAllocator().destroy(presence_worker);
-        try presence_worker.init(
-            self.memory_strategy.generalAllocator(),
-            &self.presence_manager,
-            &self.send_queue,
-            storageEngineWakeup,
-            self,
-        );
         errdefer presence_worker.deinit();
         errdefer presence_worker.stop();
-        try presence_worker.spawn();
         self.presence_worker = presence_worker;
 
-        // Set up JWT validation and JWKS cache
-        const auth_cfg = &config.authentication;
-        var jwks_cache_ptr: ?*JwksCache = null;
-        if (auth_cfg.jwt_jwks_url) |jwks_url| {
-            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
-            errdefer self.memory_strategy.generalAllocator().destroy(jc);
-            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
-            jwks_cache_ptr = jc;
-        }
-        self.jwks_cache = jwks_cache_ptr;
+        const jwt_config = try self.initJWT(&config);
         errdefer if (self.jwks_cache) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
             self.jwks_cache = null;
         };
 
-        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
-            JwtValidationConfig{
-                .secret = auth_cfg.jwt_secret,
-                .algorithm = auth_cfg.jwt_algorithm,
-                .issuer = auth_cfg.jwt_issuer,
-                .audience = auth_cfg.jwt_audience,
-                .subject_claim = auth_cfg.jwt_subject_claim,
-                .jwks_cache = jwks_cache_ptr,
-            }
-        else
-            null;
-
-        if (jwt_config) |cfg| {
-            self.jwt_validator = JwtValidator.init(cfg);
-        }
-
-        self.message_handler.init(
-            self.memory_strategy.generalAllocator(),
-            &self.memory_strategy,
-            &self.violation_tracker,
-            &self.store_service,
-            &self.presence_manager,
-            &self.subscription_engine,
-            config.security,
-            &self.auth_config,
-            &self.schema,
-            if (self.jwt_validator) |*jv| jv else null,
-            &auth_cfg.session.claims,
-        );
+        self.initMessageHandlerWired(&config, presence_worker);
         errdefer self.message_handler.deinit();
 
-        // Set presence dispatcher for queue-based work distribution
-        self.message_handler.setPresenceWorker(self.presence_worker.?);
-
-        // Initialize connection manager
-        std.log.debug("Initializing connection manager", .{});
-        try self.connection_manager.init(
-            self.memory_strategy.generalAllocator(),
-            &self.memory_strategy,
-            &self.message_handler,
-            &self.schema,
-            config.security.max_connections,
-        );
+        try self.initConnectionManagerInternal(&config);
         errdefer self.connection_manager.deinit();
 
-        // Initialize Notification Worker Pool
-        var pool = try NotificationWorkerPool.init(
-            self.memory_strategy.generalAllocator(),
-            self.thread_budget.notification,
-            &self.change_queue,
-            &self.subscription_engine,
-            &self.memory_strategy,
-            &self.schema,
-            &self.send_queue,
-            storageEngineWakeup,
-            self,
-        );
+        var pool = try self.initNotificationPoolInternal();
         errdefer {
             pool.stop();
             pool.deinit();
@@ -308,18 +183,7 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.drain_handler = drainHandler;
         self.websocket_server.drain_handler_ctx = self;
 
-        // Initialize TicketExchange for POST /auth/ticket
-        self.ticket_exchange = try TicketExchange.init(
-            self.memory_strategy.generalAllocator(),
-            auth_cfg.ticket_secret,
-            auth_cfg.ticket_ttl_seconds,
-            auth_cfg.ticket_single_use,
-            jwt_config,
-            auth_cfg.anonymous_enabled,
-            auth_cfg.anonymous_subject_prefix,
-            self.websocket_server.ssl,
-            auth_cfg.session.claims,
-        );
+        try self.initTicketExchangeInternal(&config, jwt_config);
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
             self.ticket_exchange = null;
@@ -338,6 +202,176 @@ pub const ZyncBaseServer = struct {
         self.last_token_sweep_ms = 0;
 
         return self;
+    }
+
+    fn initConfigAndBudget(
+        self: *ZyncBaseServer,
+        custom_config: ?Config,
+        custom_data_dir: ?[]const u8,
+        custom_schema_file: ?[]const u8,
+        custom_config_path: ?[]const u8,
+    ) !Config {
+        var config = try loadOrCreateConfig(&self.memory_strategy, custom_config, custom_config_path);
+        if (custom_data_dir) |dir| {
+            self.memory_strategy.generalAllocator().free(config.data_dir);
+            config.data_dir = try self.memory_strategy.generalAllocator().dupe(u8, dir);
+        }
+        if (custom_schema_file) |file| {
+            self.memory_strategy.generalAllocator().free(config.schema_file);
+            config.schema_file = try self.memory_strategy.generalAllocator().dupe(u8, file);
+        }
+        const cpu_count = std.Thread.getCpuCount() catch {
+            return error.CpuCountDetectionFailed;
+        };
+        self.thread_budget = ThreadBudget.init(cpu_count) catch {
+            return error.InsufficientCpuCores;
+        };
+        self.thread_budget.logSummary();
+        return config;
+    }
+
+    fn initQueues(self: *ZyncBaseServer) !void {
+        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        self.change_queue = try ChangeQueue.init(
+            self.memory_strategy.generalAllocator(),
+            self.thread_budget.notification,
+        );
+    }
+
+    fn initStorageAndMigrations(self: *ZyncBaseServer, config: *const Config) !void {
+        std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
+        try self.storage_engine.init(
+            self.memory_strategy.generalAllocator(),
+            &self.memory_strategy,
+            config.data_dir,
+            &self.schema,
+            config.performance,
+            .{ .reader_pool_size = self.thread_budget.readers },
+            storageEngineWakeup,
+            self,
+        );
+        try self.runMigrationsAndStartEngine();
+    }
+
+    fn initCheckpoint(self: *ZyncBaseServer) !void {
+        std.log.debug("Initializing checkpoint manager", .{});
+        try self.checkpoint_manager.init(
+            self.memory_strategy.generalAllocator(),
+            &self.storage_engine,
+            .{},
+        );
+    }
+
+    fn initWebSocketServer(self: *ZyncBaseServer, config: *const Config) !void {
+        std.log.debug("Initializing WebSocket server", .{});
+        try self.websocket_server.init(
+            self.memory_strategy.generalAllocator(),
+            .{
+                .port = config.server.port,
+                .host = config.server.host,
+                .max_payload_length = config.security.max_message_size,
+            },
+        );
+    }
+
+    fn initPresenceWorkerInternal(self: *ZyncBaseServer) !*PresenceWorker {
+        const pw = try self.memory_strategy.generalAllocator().create(PresenceWorker);
+        errdefer self.memory_strategy.generalAllocator().destroy(pw);
+        try pw.init(
+            self.memory_strategy.generalAllocator(),
+            &self.presence_manager,
+            &self.send_queue,
+            storageEngineWakeup,
+            self,
+        );
+        errdefer pw.deinit();
+        errdefer pw.stop();
+        try pw.spawn();
+        return pw;
+    }
+
+    fn initJWT(self: *ZyncBaseServer, config: *const Config) !?JwtValidationConfig {
+        const auth_cfg = &config.authentication;
+        var jwks_cache_ptr: ?*JwksCache = null;
+        if (auth_cfg.jwt_jwks_url) |jwks_url| {
+            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
+            errdefer self.memory_strategy.generalAllocator().destroy(jc);
+            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jwks_cache_ptr = jc;
+        }
+        self.jwks_cache = jwks_cache_ptr;
+        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
+            JwtValidationConfig{
+                .secret = auth_cfg.jwt_secret,
+                .algorithm = auth_cfg.jwt_algorithm,
+                .issuer = auth_cfg.jwt_issuer,
+                .audience = auth_cfg.jwt_audience,
+                .subject_claim = auth_cfg.jwt_subject_claim,
+                .jwks_cache = jwks_cache_ptr,
+            }
+        else
+            null;
+        if (jwt_config) |cfg| {
+            self.jwt_validator = JwtValidator.init(cfg);
+        }
+        return jwt_config;
+    }
+
+    fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config, presence_worker: *PresenceWorker) void {
+        self.message_handler.init(
+            self.memory_strategy.generalAllocator(),
+            &self.memory_strategy,
+            &self.violation_tracker,
+            &self.store_service,
+            &self.presence_manager,
+            &self.subscription_engine,
+            config.security,
+            &self.auth_config,
+            &self.schema,
+            if (self.jwt_validator) |*jv| jv else null,
+            &config.authentication.session.claims,
+        );
+        self.message_handler.setPresenceWorker(presence_worker);
+    }
+
+    fn initConnectionManagerInternal(self: *ZyncBaseServer, config: *const Config) !void {
+        std.log.debug("Initializing connection manager", .{});
+        try self.connection_manager.init(
+            self.memory_strategy.generalAllocator(),
+            &self.memory_strategy,
+            &self.message_handler,
+            &self.schema,
+            config.security.max_connections,
+        );
+    }
+
+    fn initNotificationPoolInternal(self: *ZyncBaseServer) !NotificationWorkerPool {
+        return try NotificationWorkerPool.init(
+            self.memory_strategy.generalAllocator(),
+            self.thread_budget.notification,
+            &self.change_queue,
+            &self.subscription_engine,
+            &self.memory_strategy,
+            &self.schema,
+            &self.send_queue,
+            storageEngineWakeup,
+            self,
+        );
+    }
+
+    fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config, jwt_config: ?JwtValidationConfig) !void {
+        const auth_cfg = &config.authentication;
+        self.ticket_exchange = try TicketExchange.init(
+            self.memory_strategy.generalAllocator(),
+            auth_cfg.ticket_secret,
+            auth_cfg.ticket_ttl_seconds,
+            auth_cfg.ticket_single_use,
+            jwt_config,
+            auth_cfg.anonymous_enabled,
+            auth_cfg.anonymous_subject_prefix,
+            self.websocket_server.ssl,
+            auth_cfg.session.claims,
+        );
     }
 
     fn loadOrCreateConfig(

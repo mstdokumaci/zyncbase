@@ -141,8 +141,7 @@ pub const PresenceManager = struct {
         const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
         const is_new_user = !user_result.found_existing;
 
-        // Function-level rollback for late failures (after the if-block's scoped errdefers exit).
-        // Block-scoped errdefers inside `if (is_new_user)` handle early failures within that block.
+        // Function-level rollback for late failures (after initNewUserRecord's scoped errdefers exit).
         var user_cleanup = false;
         errdefer if (user_cleanup) {
             user_result.value_ptr.deinit(self.allocator);
@@ -163,36 +162,7 @@ pub const PresenceManager = struct {
         const now = std.time.milliTimestamp();
 
         if (is_new_user) {
-            // getOrPut inserted user_id with undefined value — register cleanup
-            // before any try that might fail.
-            errdefer {
-                _ = ns_result.value_ptr.fetchRemove(user_id);
-                if (ns_created and ns_result.value_ptr.count() == 0) {
-                    ns_result.value_ptr.deinit(self.allocator);
-                    _ = self.user_state.remove(namespace_id);
-                }
-            }
-
-            user_result.value_ptr.* = try PresenceRecord.init(self.allocator, self.user_fields.len);
-            // Record is initialized — register deinit (fires before fetchRemove, LIFO)
-            errdefer {
-                user_result.value_ptr.deinit(self.allocator);
-            }
-
-            // Record join timestamp
-            const joined_ns_result = try self.user_joined_at.getOrPut(self.allocator, namespace_id);
-            const joined_ns_created = !joined_ns_result.found_existing;
-            if (joined_ns_created) {
-                joined_ns_result.value_ptr.* = .{};
-            }
-            errdefer {
-                if (joined_ns_created) {
-                    joined_ns_result.value_ptr.deinit(self.allocator);
-                    _ = self.user_joined_at.remove(namespace_id);
-                }
-            }
-            try joined_ns_result.value_ptr.put(self.allocator, user_id, now);
-
+            try self.initNewUserRecord(ns_result, user_result, namespace_id, user_id, ns_created, now);
             user_cleanup = true;
         }
 
@@ -203,21 +173,8 @@ pub const PresenceManager = struct {
         _ = self.namespace_empty_at.fetchRemove(namespace_id);
 
         // Coalesce with any pending update for this user in the current batch.
-        const maybe_existing = self.findPendingUserUpdate(namespace_id, user_id);
-        if (maybe_existing) |existing| {
-            if (existing.patch != null) {
-                try self.mergePayloadArrays(&existing.patch.?, patch);
-            } else {
-                const cloned_patch = try patch.deepClone(self.allocator);
-                existing.patch = cloned_patch;
-            }
-            existing.is_leave = false;
-            if (!existing.is_new_user) {
-                existing.is_new_user = is_new_user;
-                if (is_new_user) {
-                    existing.joined_at = now;
-                }
-            }
+        if (self.findPendingUserUpdate(namespace_id, user_id)) |existing| {
+            try self.coalescePendingUpdate(existing, patch, is_new_user, now);
             return;
         }
 
@@ -231,6 +188,65 @@ pub const PresenceManager = struct {
             .is_new_user = is_new_user,
             .joined_at = if (is_new_user) now else 0,
         });
+    }
+
+    fn initNewUserRecord(
+        self: *PresenceManager,
+        ns_result: anytype,
+        user_result: anytype,
+        namespace_id: i64,
+        user_id: typed.DocId,
+        ns_created: bool,
+        now: i64,
+    ) !void {
+        errdefer {
+            _ = ns_result.value_ptr.fetchRemove(user_id);
+            if (ns_created and ns_result.value_ptr.count() == 0) {
+                ns_result.value_ptr.deinit(self.allocator);
+                _ = self.user_state.remove(namespace_id);
+            }
+        }
+
+        user_result.value_ptr.* = try PresenceRecord.init(self.allocator, self.user_fields.len);
+        errdefer {
+            user_result.value_ptr.deinit(self.allocator);
+        }
+
+        // Record join timestamp
+        const joined_ns_result = try self.user_joined_at.getOrPut(self.allocator, namespace_id);
+        const joined_ns_created = !joined_ns_result.found_existing;
+        if (joined_ns_created) {
+            joined_ns_result.value_ptr.* = .{};
+        }
+        errdefer {
+            if (joined_ns_created) {
+                joined_ns_result.value_ptr.deinit(self.allocator);
+                _ = self.user_joined_at.remove(namespace_id);
+            }
+        }
+        try joined_ns_result.value_ptr.put(self.allocator, user_id, now);
+    }
+
+    fn coalescePendingUpdate(
+        self: *PresenceManager,
+        existing: *PendingUserUpdate,
+        patch: msgpack.Payload,
+        is_new_user: bool,
+        now: i64,
+    ) !void {
+        if (existing.patch != null) {
+            try self.mergePayloadArrays(&existing.patch.?, patch);
+        } else {
+            const cloned_patch = try patch.deepClone(self.allocator);
+            existing.patch = cloned_patch;
+        }
+        existing.is_leave = false;
+        if (!existing.is_new_user) {
+            existing.is_new_user = is_new_user;
+            if (is_new_user) {
+                existing.joined_at = now;
+            }
+        }
     }
 
     /// Set shared presence data. Merges the patch into the namespace record.

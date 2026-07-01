@@ -24,6 +24,7 @@ const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
+const BatchEntry = write_queue.BatchEntry;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
@@ -686,6 +687,103 @@ pub const WriteWorker = struct {
         is_confirmed: bool,
     };
 
+    fn buildEvictionKeys(
+        self: *WriteWorker,
+        entries: []const BatchEntry,
+        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
+    ) !void {
+        eviction_keys.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
+            const classified_err = errors.classifyError(err);
+            std.log.err("Failed to allocate eviction keys for batch op: {}", .{classified_err});
+            return classified_err;
+        };
+        for (entries) |entry| {
+            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse continue;
+            const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
+            eviction_keys.appendAssumeCapacity(key);
+        }
+    }
+
+    fn runBatchTransaction(
+        self: *WriteWorker,
+        bop: anytype,
+        entries: []const BatchEntry,
+        tx_started: *bool,
+        final_err: *?anyerror,
+        failed_batch_index: *?usize,
+        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
+    ) void {
+        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
+        defer {
+            for (pending_changes.items) |*c| c.deinit(self.allocator);
+            pending_changes.deinit(self.allocator);
+        }
+
+        execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
+            const classified_err = errors.classifyError(err);
+            errors.logDatabaseError("executeBatchOp BEGIN", classified_err, "");
+            final_err.* = classified_err;
+            return;
+        };
+        tx_started.* = true;
+
+        const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
+            bop.conn_id != null and bop.write_id != null
+        else
+            false;
+
+        var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
+        defer {
+            var it = sql_cache.valueIterator();
+            while (it.next()) |sql_str| self.allocator.free(sql_str.*);
+            sql_cache.deinit();
+        }
+
+        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
+        defer pk_inserts.deinit(self.allocator);
+        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
+        defer pk_deletes.deinit(self.allocator);
+
+        var ctx = BatchCtx{
+            .self = self,
+            .sql_cache = &sql_cache,
+            .pending_changes = &pending_changes,
+            .pk_inserts = &pk_inserts,
+            .pk_deletes = &pk_deletes,
+            .is_confirmed = is_confirmed,
+        };
+
+        for (entries, 0..) |entry, entry_idx| {
+            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse {
+                final_err.* = StorageError.UnknownTable;
+                std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
+                failed_batch_index.* = entry_idx;
+                break;
+            };
+            const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
+
+            const result: ?anyerror = switch (entry.kind) {
+                .upsert => handleUpsertEntry(&ctx, entry, namespace_id, table_metadata),
+                .update => handleUpdateEntry(&ctx, entry, namespace_id, table_metadata),
+                .delete => handleDeleteEntry(&ctx, entry, namespace_id, table_metadata),
+            };
+
+            if (result) |err| {
+                final_err.* = err;
+                failed_batch_index.* = entry_idx;
+                break;
+            }
+        }
+
+        if (final_err.* == null) {
+            if (commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes)) |_| {
+                // success
+            } else |err| {
+                final_err.* = err;
+            }
+        }
+    }
+
     pub fn executeBatchOp(
         self: *WriteWorker,
         bop: anytype,
@@ -727,88 +825,13 @@ pub const WriteWorker = struct {
         // 1. Build eviction keys from all entries
         var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
         defer eviction_keys.deinit(self.allocator);
-        eviction_keys.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
-            const classified_err = errors.classifyError(err);
-            std.log.err("Failed to allocate eviction keys for batch op: {}", .{classified_err});
-            final_err = classified_err;
+        self.buildEvictionKeys(entries, &eviction_keys) catch |err| {
+            final_err = err;
             return;
         };
-        for (entries) |entry| {
-            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse continue;
-            const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
-            eviction_keys.appendAssumeCapacity(key);
-        }
 
         // 2. Execute all entries in a single transaction
-        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
-        defer {
-            for (pending_changes.items) |*c| c.deinit(self.allocator);
-            pending_changes.deinit(self.allocator);
-        }
-
-        execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp BEGIN", classified_err, "");
-            final_err = classified_err;
-            return;
-        };
-        tx_started = true;
-
-        const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
-            bop.conn_id != null and bop.write_id != null
-        else
-            false;
-
-        var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
-        defer {
-            var it = sql_cache.valueIterator();
-            while (it.next()) |sql_str| self.allocator.free(sql_str.*);
-            sql_cache.deinit();
-        }
-
-        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_inserts.deinit(self.allocator);
-        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_deletes.deinit(self.allocator);
-
-        var ctx = BatchCtx{
-            .self = self,
-            .sql_cache = &sql_cache,
-            .pending_changes = &pending_changes,
-            .pk_inserts = &pk_inserts,
-            .pk_deletes = &pk_deletes,
-            .is_confirmed = is_confirmed,
-        };
-
-        for (entries, 0..) |entry, entry_idx| {
-            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse {
-                final_err = StorageError.UnknownTable;
-                std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
-                failed_batch_index = entry_idx;
-                break;
-            };
-            const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
-
-            const result: ?anyerror = switch (entry.kind) {
-                .upsert => handleUpsertEntry(&ctx, entry, namespace_id, table_metadata),
-                .update => handleUpdateEntry(&ctx, entry, namespace_id, table_metadata),
-                .delete => handleDeleteEntry(&ctx, entry, namespace_id, table_metadata),
-            };
-
-            if (result) |err| {
-                final_err = err;
-                failed_batch_index = entry_idx;
-                break;
-            }
-        }
-
-        if (final_err == null) {
-            if (commitBatchAndApply(self, &tx_started, &eviction_keys, &pk_inserts, &pk_deletes, &pending_changes)) |_| {
-                // success
-            } else |err| {
-                final_err = err;
-            }
-        }
+        self.runBatchTransaction(bop, entries, &tx_started, &final_err, &failed_batch_index, &eviction_keys);
     }
 
     fn commitBatchAndApply(

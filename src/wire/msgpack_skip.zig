@@ -2,33 +2,59 @@ const std = @import("std");
 
 pub const SkipError = error{ InvalidMessageFormat, MaxDepthExceeded };
 
-/// Fixed-length MsgPack marker bytes: marker → payload byte count (not counting
-/// the marker itself). Used for ints, floats, fixext, and fixstr/fixbin-style
-/// cases whose length is encoded in the marker.
-fn fixedLenFor(marker: u8) ?usize {
-    return switch (marker) {
-        // unsigned ints
-        0xcc => 1,
-        0xcd => 2,
-        0xce => 4,
-        0xcf => 8,
-        // signed ints
-        0xd0 => 1,
-        0xd1 => 2,
-        0xd2 => 4,
-        0xd3 => 8,
-        // floats
-        0xca => 4,
-        0xcb => 8,
-        // fixext
-        0xd4 => 2,
-        0xd5 => 3,
-        0xd6 => 5,
-        0xd7 => 9,
-        0xd8 => 17,
-        else => null,
-    };
-}
+const Action = union(enum) {
+    invalid,
+    immediate,
+    fixed: usize,
+    str,
+    bin,
+    array,
+    map,
+    ext,
+};
+
+/// Comptime [256]Action lookup table mapping every MsgPack marker byte to its
+/// skip strategy. Replaces the per-marker if-chain and `fixedLenFor` switch.
+const marker_table = blk: {
+    var t: [256]Action = [_]Action{.invalid} ** 256;
+    for (0x00..0x80) |i| t[i] = .immediate; // positive fixint
+    for (0x80..0x90) |i| t[i] = .map; // fixmap
+    for (0x90..0xa0) |i| t[i] = .array; // fixarray
+    for (0xa0..0xc0) |i| t[i] = .str; // fixstr
+    t[0xc0] = .immediate; // nil
+    t[0xc2] = .immediate; // false
+    t[0xc3] = .immediate; // true
+    t[0xc4] = .bin;
+    t[0xc5] = .bin;
+    t[0xc6] = .bin;
+    t[0xc7] = .ext;
+    t[0xc8] = .ext;
+    t[0xc9] = .ext;
+    t[0xca] = .{ .fixed = 4 };
+    t[0xcb] = .{ .fixed = 8 };
+    t[0xcc] = .{ .fixed = 1 };
+    t[0xcd] = .{ .fixed = 2 };
+    t[0xce] = .{ .fixed = 4 };
+    t[0xcf] = .{ .fixed = 8 };
+    t[0xd0] = .{ .fixed = 1 };
+    t[0xd1] = .{ .fixed = 2 };
+    t[0xd2] = .{ .fixed = 4 };
+    t[0xd3] = .{ .fixed = 8 };
+    t[0xd4] = .{ .fixed = 2 };
+    t[0xd5] = .{ .fixed = 3 };
+    t[0xd6] = .{ .fixed = 5 };
+    t[0xd7] = .{ .fixed = 9 };
+    t[0xd8] = .{ .fixed = 17 };
+    t[0xd9] = .str;
+    t[0xda] = .str;
+    t[0xdb] = .str;
+    t[0xdc] = .array;
+    t[0xdd] = .array;
+    t[0xde] = .map;
+    t[0xdf] = .map;
+    for (0xe0..0x100) |i| t[i] = .immediate; // negative fixint
+    break :blk t;
+};
 
 /// Reads a big-endian length of `n_bytes` bytes from `bytes[*pos..]`, advancing
 /// `pos`. Returns the decoded length. Bounds-checks the header read only; the
@@ -117,7 +143,7 @@ pub fn skipMap(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
 }
 
 /// Skips a MsgPack ext value (type byte + payload). Handles ext8, ext16, ext32
-/// (fixext is handled by the fixed-length table in `skipValueDepth`).
+/// (fixext is handled by the fixed-length entries in `marker_table`).
 pub fn skipExt(bytes: []const u8, pos: *usize) SkipError!void {
     if (pos.* >= bytes.len) return error.InvalidMessageFormat;
     const m = bytes[pos.*];
@@ -141,59 +167,31 @@ pub fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) SkipError!void
     const m = bytes[pos.*];
     pos.* += 1;
 
-    // nil, bool, positive/negative fixint — no payload.
-    if (m == 0xc0 or m == 0xc2 or m == 0xc3 or (m <= 0x7f) or (m >= 0xe0)) {
-        return;
+    switch (marker_table[m]) {
+        .invalid => return error.InvalidMessageFormat,
+        .immediate => {},
+        .fixed => |len| try skipPayload(bytes, pos, len),
+        .str => {
+            pos.* -= 1;
+            try skipStr(bytes, pos);
+        },
+        .bin => {
+            pos.* -= 1;
+            try skipBin(bytes, pos);
+        },
+        .array => {
+            pos.* -= 1;
+            try skipArray(bytes, pos, depth);
+        },
+        .map => {
+            pos.* -= 1;
+            try skipMap(bytes, pos, depth);
+        },
+        .ext => {
+            pos.* -= 1;
+            try skipExt(bytes, pos);
+        },
     }
-
-    // Fixed-length int/float/fixext cases.
-    if (fixedLenFor(m)) |len| {
-        try skipPayload(bytes, pos, len);
-        return;
-    }
-
-    // fixstr
-    if (m >= 0xa0 and m <= 0xbf) {
-        try skipPayload(bytes, pos, @intCast(m & 0x1f));
-        return;
-    }
-
-    // str8/16/32
-    if (m == 0xd9 or m == 0xda or m == 0xdb) {
-        pos.* -= 1;
-        try skipStr(bytes, pos);
-        return;
-    }
-
-    // bin8/16/32
-    if (m == 0xc4 or m == 0xc5 or m == 0xc6) {
-        pos.* -= 1;
-        try skipBin(bytes, pos);
-        return;
-    }
-
-    // array
-    if ((m >= 0x90 and m <= 0x9f) or m == 0xdc or m == 0xdd) {
-        pos.* -= 1;
-        try skipArray(bytes, pos, depth);
-        return;
-    }
-
-    // map
-    if ((m >= 0x80 and m <= 0x8f) or m == 0xde or m == 0xdf) {
-        pos.* -= 1;
-        try skipMap(bytes, pos, depth);
-        return;
-    }
-
-    // ext8/16/32
-    if (m == 0xc7 or m == 0xc8 or m == 0xc9) {
-        pos.* -= 1;
-        try skipExt(bytes, pos);
-        return;
-    }
-
-    return error.InvalidMessageFormat;
 }
 
 /// Convenience wrapper starting at depth 0.

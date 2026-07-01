@@ -108,29 +108,11 @@ pub const TicketExchange = struct {
 
     /// Verifies a ticket string. Returns the subject name allocated with `allocator` if valid.
     pub fn verifyTicket(self: *TicketExchange, allocator: Allocator, ticket: []const u8) !Session {
-        if (!std.mem.startsWith(u8, ticket, "zyc_tk_")) return error.InvalidTicket;
-        const raw_ticket = ticket["zyc_tk_".len..];
+        const parts = try parseTicketParts(ticket);
 
-        var parts_it = std.mem.splitScalar(u8, raw_ticket, '.');
-        const payload_b64 = parts_it.next() orelse return error.InvalidTicket;
-        const sig_b64 = parts_it.next() orelse return error.InvalidTicket;
-        if (parts_it.next() != null) return error.InvalidTicket;
+        try verifyTicketHmac(self.ticket_secret[0..], parts.payload_b64, parts.sig_b64);
 
-        var computed_sig: [32]u8 = undefined;
-        std.crypto.auth.hmac.sha2.HmacSha256.create(&computed_sig, payload_b64, &self.ticket_secret);
-
-        var sig_bytes_stack: [48]u8 = undefined;
-        const sig_stripped = stripBase64Padding(sig_b64);
-        const sig_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(sig_stripped) catch return error.InvalidBase64;
-        if (sig_len != 32) return error.InvalidBase64;
-        const sig_bytes = sig_bytes_stack[0..sig_len];
-        std.base64.url_safe_no_pad.Decoder.decode(sig_bytes, sig_stripped) catch return error.InvalidBase64;
-
-        if (!std.crypto.timing_safe.eql([32]u8, computed_sig, sig_bytes_stack[0..32].*)) {
-            return error.AuthFailed;
-        }
-
-        const payload_json = try decodeBase64Url(allocator, payload_b64);
+        const payload_json = try decodeBase64Url(allocator, parts.payload_b64);
         defer allocator.free(payload_json);
 
         const extracted = extractTicketPayloadFast(payload_json) orelse return error.InvalidTicket;
@@ -140,26 +122,7 @@ pub const TicketExchange = struct {
             return error.TokenExpired;
         }
 
-        if (self.single_use) {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            self.verifications_since_cleanup += 1;
-            if (self.verifications_since_cleanup >= self.cleanup_interval) {
-                self.cleanupExpiredTicketsLocked(now);
-                self.verifications_since_cleanup = 0;
-            }
-
-            if (self.redeemed_tickets.contains(extracted.jti)) {
-                return error.AuthFailed;
-            }
-
-            const jti_owned = try self.allocator.dupe(u8, extracted.jti);
-            var jti_owned_transferred = false;
-            errdefer if (!jti_owned_transferred) self.allocator.free(jti_owned);
-            try self.redeemed_tickets.put(jti_owned, extracted.exp);
-            jti_owned_transferred = true;
-        }
+        try self.redeemIfSingleUse(extracted.jti, extracted.exp, now);
 
         const external_id_slice = extracted.external_id orelse extracted.sub;
         const external_id = try allocator.dupe(u8, external_id_slice);
@@ -176,28 +139,7 @@ pub const TicketExchange = struct {
         }
 
         if (extracted.claims_json) |claims_json| {
-            const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.InvalidTicket,
-            };
-            defer parsed_claims.deinit();
-
-            if (parsed_claims.value == .object) {
-                var claims_it = parsed_claims.value.object.iterator();
-                while (claims_it.next()) |entry| {
-                    const key = try allocator.dupe(u8, entry.key_ptr.*);
-                    errdefer allocator.free(key);
-                    const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
-                    errdefer val.deinit(allocator);
-
-                    const gop = try claims.getOrPut(allocator, key);
-                    if (gop.found_existing) {
-                        allocator.free(key);
-                        gop.value_ptr.deinit(allocator);
-                    }
-                    gop.value_ptr.* = val;
-                }
-            }
+            claims = try extractClaims(allocator, claims_json);
         }
 
         return Session{
@@ -206,6 +148,29 @@ pub const TicketExchange = struct {
             .token_expires_at = extracted.exp,
             .claims = claims,
         };
+    }
+
+    fn redeemIfSingleUse(self: *TicketExchange, jti: []const u8, exp: i64, now: i64) !void {
+        if (!self.single_use) return;
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.verifications_since_cleanup += 1;
+        if (self.verifications_since_cleanup >= self.cleanup_interval) {
+            self.cleanupExpiredTicketsLocked(now);
+            self.verifications_since_cleanup = 0;
+        }
+
+        if (self.redeemed_tickets.contains(jti)) {
+            return error.AuthFailed;
+        }
+
+        const jti_owned = try self.allocator.dupe(u8, jti);
+        var jti_owned_transferred = false;
+        errdefer if (!jti_owned_transferred) self.allocator.free(jti_owned);
+        try self.redeemed_tickets.put(jti_owned, exp);
+        jti_owned_transferred = true;
     }
 
     /// Generates a signed ticket string.
@@ -677,4 +642,71 @@ fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
         pos.* += 1;
     }
     return value;
+}
+
+const TicketParts = struct { payload_b64: []const u8, sig_b64: []const u8 };
+
+fn parseTicketParts(ticket: []const u8) !TicketParts {
+    if (!std.mem.startsWith(u8, ticket, "zyc_tk_")) return error.InvalidTicket;
+    const raw_ticket = ticket["zyc_tk_".len..];
+
+    var parts_it = std.mem.splitScalar(u8, raw_ticket, '.');
+    const payload_b64 = parts_it.next() orelse return error.InvalidTicket;
+    const sig_b64 = parts_it.next() orelse return error.InvalidTicket;
+    if (parts_it.next() != null) return error.InvalidTicket;
+
+    return .{ .payload_b64 = payload_b64, .sig_b64 = sig_b64 };
+}
+
+fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64: []const u8) !void {
+    var computed_sig: [32]u8 = undefined;
+    std.crypto.auth.hmac.sha2.HmacSha256.create(&computed_sig, payload_b64, ticket_secret);
+
+    var sig_bytes_stack: [48]u8 = undefined;
+    const sig_stripped = stripBase64Padding(sig_b64);
+    const sig_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(sig_stripped) catch return error.InvalidBase64;
+    if (sig_len != 32) return error.InvalidBase64;
+    const sig_bytes = sig_bytes_stack[0..sig_len];
+    std.base64.url_safe_no_pad.Decoder.decode(sig_bytes, sig_stripped) catch return error.InvalidBase64;
+
+    if (!std.crypto.timing_safe.eql([32]u8, computed_sig, sig_bytes_stack[0..32].*)) {
+        return error.AuthFailed;
+    }
+}
+
+fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed.Value) {
+    var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+    errdefer {
+        var it = claims.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
+        }
+        claims.deinit(allocator);
+    }
+
+    const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidTicket,
+    };
+    defer parsed_claims.deinit();
+
+    if (parsed_claims.value == .object) {
+        var claims_it = parsed_claims.value.object.iterator();
+        while (claims_it.next()) |entry| {
+            const key = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(key);
+            const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
+            errdefer val.deinit(allocator);
+
+            const gop = try claims.getOrPut(allocator, key);
+            if (gop.found_existing) {
+                allocator.free(key);
+                gop.value_ptr.deinit(allocator);
+            }
+            gop.value_ptr.* = val;
+        }
+    }
+
+    return claims;
 }
