@@ -5,7 +5,7 @@ const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
 const typed = @import("../typed.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
-const json_skip = @import("json_skip.zig");
+const json_read = @import("../json/read.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,
@@ -535,11 +535,11 @@ fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
             found_jti = true;
         } else if (std.mem.eql(u8, key, "session")) {
             const session_start = pos;
-            json_skip.skipValue(json, &pos) orelse return null;
+            json_read.skipValue(json, &pos) orelse return null;
             const session_json = json[session_start..pos];
             extractSessionFields(session_json, &result);
         } else {
-            json_skip.skipValue(json, &pos) orelse return null;
+            json_read.skipValue(json, &pos) orelse return null;
         }
     }
 
@@ -581,13 +581,13 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
             }
         } else if (std.mem.eql(u8, key, "claims")) {
             const claims_start = pos;
-            if (json_skip.skipValue(session_json, &pos) == null) return;
+            if (json_read.skipValue(session_json, &pos) == null) return;
             const claims_json = session_json[claims_start..pos];
             if (claims_json.len > 2 and claims_json[0] == '{' and claims_json[1] != '}') {
                 result.claims_json = claims_json;
             }
         } else {
-            if (json_skip.skipValue(session_json, &pos) == null) return;
+            if (json_read.skipValue(session_json, &pos) == null) return;
         }
     }
 }

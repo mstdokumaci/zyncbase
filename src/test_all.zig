@@ -5,10 +5,12 @@ pub const std_options: std.Options = .{
 
 test {
     // Import all test files to ensure they are picked up by the build system
-    _ = @import("json_access_test.zig");
+    _ = @import("json/read_test.zig");
+    _ = @import("json/write_test.zig");
+    _ = @import("json/iterate_test.zig");
     _ = @import("sql_buf_test.zig");
     _ = @import("wire/msgpack_skip_test.zig");
-    _ = @import("connection/json_skip_test.zig");
+    // json_skip_test.zig merged into json/read_test.zig
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_value_codec_test.zig");

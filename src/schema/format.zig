@@ -1,5 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
+const json_write = @import("../json/write.zig");
+const writeJsonString = json_write.writeJsonString;
 
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
@@ -129,19 +131,4 @@ fn segmentSeen(fields: []const types.Field, prefix: []const u8, current_index: u
 
 fn replaceAll(allocator: std.mem.Allocator, input: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {
     return std.mem.replaceOwned(u8, allocator, input, needle, replacement);
-}
-
-fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: []const u8) !void {
-    try buf.append(allocator, '"');
-    for (value) |char| {
-        switch (char) {
-            '"' => try buf.appendSlice(allocator, "\\\""),
-            '\\' => try buf.appendSlice(allocator, "\\\\"),
-            '\n' => try buf.appendSlice(allocator, "\\n"),
-            '\r' => try buf.appendSlice(allocator, "\\r"),
-            '\t' => try buf.appendSlice(allocator, "\\t"),
-            else => try buf.append(allocator, char),
-        }
-    }
-    try buf.append(allocator, '"');
 }

@@ -215,7 +215,7 @@ pub const ConfigLoader = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    const json_access = @import("json_access.zig");
+    const json_read = @import("json/read.zig");
 
     fn buildConfig(allocator: Allocator, json: std.json.Value) !Config {
         var config = Config{
@@ -251,16 +251,17 @@ pub const ConfigLoader = struct {
     }
 
     fn parseServer(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
-        const server_obj = json_access.getObject(obj, "server") orelse return;
-        if (json_access.getInt(server_obj, "port")) |port| {
+        const server_obj = (try json_read.getObject(obj, "server")) orelse return;
+        const port_opt = try json_read.getInt(server_obj, "port");
+        if (port_opt) |port| {
             if (port < 0 or port > 65535) return error.InvalidPort;
             config.server.port = @intCast(port);
         }
-        try json_access.replaceString(allocator, &config.server.host, server_obj, "host");
+        try json_read.replaceString(allocator, &config.server.host, server_obj, "host");
     }
 
     fn parseAuthentication(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
-        const auth_obj = json_access.getObject(obj, "authentication") orelse return;
+        const auth_obj = (try json_read.getObject(obj, "authentication")) orelse return;
         try parseAuthJwt(allocator, &config.authentication, auth_obj);
         try parseAuthTicket(allocator, &config.authentication, auth_obj);
         try parseAuthAnonymous(allocator, &config.authentication, auth_obj);
@@ -268,37 +269,40 @@ pub const ConfigLoader = struct {
     }
 
     fn parseAuthJwt(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
-        const jwt_obj = json_access.getObject(auth_obj, "jwt") orelse return;
-        try json_access.setString(allocator, &auth.jwt_secret, jwt_obj, "secret");
-        try json_access.replaceString(allocator, &auth.jwt_algorithm, jwt_obj, "algorithm");
-        try json_access.setString(allocator, &auth.jwt_issuer, jwt_obj, "issuer");
-        try json_access.setString(allocator, &auth.jwt_audience, jwt_obj, "audience");
-        try json_access.setString(allocator, &auth.jwt_jwks_url, jwt_obj, "jwksUrl");
-        try json_access.replaceString(allocator, &auth.jwt_subject_claim, jwt_obj, "subjectClaim");
+        const jwt_obj = (try json_read.getObject(auth_obj, "jwt")) orelse return;
+        try json_read.setString(allocator, &auth.jwt_secret, jwt_obj, "secret");
+        try json_read.replaceString(allocator, &auth.jwt_algorithm, jwt_obj, "algorithm");
+        try json_read.setString(allocator, &auth.jwt_issuer, jwt_obj, "issuer");
+        try json_read.setString(allocator, &auth.jwt_audience, jwt_obj, "audience");
+        try json_read.setString(allocator, &auth.jwt_jwks_url, jwt_obj, "jwksUrl");
+        try json_read.replaceString(allocator, &auth.jwt_subject_claim, jwt_obj, "subjectClaim");
     }
 
     fn parseAuthTicket(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
-        const ticket_obj = json_access.getObject(auth_obj, "ticket") orelse return;
-        try json_access.setString(allocator, &auth.ticket_secret, ticket_obj, "secret");
-        if (json_access.getInt(ticket_obj, "ttlSeconds")) |ttl| {
+        const ticket_obj = (try json_read.getObject(auth_obj, "ticket")) orelse return;
+        try json_read.setString(allocator, &auth.ticket_secret, ticket_obj, "secret");
+        const ttl_opt = try json_read.getInt(ticket_obj, "ttlSeconds");
+        if (ttl_opt) |ttl| {
             auth.ticket_ttl_seconds = @intCast(ttl);
         }
-        if (json_access.getBool(ticket_obj, "singleUse")) |su| {
+        const su_opt = try json_read.getBool(ticket_obj, "singleUse");
+        if (su_opt) |su| {
             auth.ticket_single_use = su;
         }
     }
 
     fn parseAuthAnonymous(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
-        const anon_obj = json_access.getObject(auth_obj, "anonymous") orelse return;
-        if (json_access.getBool(anon_obj, "enabled")) |enabled| {
+        const anon_obj = (try json_read.getObject(auth_obj, "anonymous")) orelse return;
+        const enabled_opt = try json_read.getBool(anon_obj, "enabled");
+        if (enabled_opt) |enabled| {
             auth.anonymous_enabled = enabled;
         }
-        try json_access.replaceString(allocator, &auth.anonymous_subject_prefix, anon_obj, "subjectPrefix");
+        try json_read.replaceString(allocator, &auth.anonymous_subject_prefix, anon_obj, "subjectPrefix");
     }
 
     fn parseAuthSession(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
-        const session_obj = json_access.getObject(auth_obj, "session") orelse return;
-        const claims_obj = json_access.getObject(session_obj, "claims") orelse return;
+        const session_obj = (try json_read.getObject(auth_obj, "session")) orelse return;
+        const claims_obj = (try json_read.getObject(session_obj, "claims")) orelse return;
         var it = claims_obj.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.* != .string) continue;
@@ -311,7 +315,7 @@ pub const ConfigLoader = struct {
     }
 
     fn parseDataAndSchema(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
-        try json_access.replaceString(allocator, &config.data_dir, obj, "dataDir");
+        try json_read.replaceString(allocator, &config.data_dir, obj, "dataDir");
 
         if (obj.get("schema")) |schema_val| {
             switch (schema_val) {
@@ -328,13 +332,14 @@ pub const ConfigLoader = struct {
             }
         }
 
-        try json_access.setString(allocator, &config.authorization_file, obj, "authorization");
+        try json_read.setString(allocator, &config.authorization_file, obj, "authorization");
     }
 
     fn parseSecurity(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
-        const security_obj = json_access.getObject(obj, "security") orelse return;
+        const security_obj = (try json_read.getObject(obj, "security")) orelse return;
 
-        if (json_access.getArray(security_obj, "allowedOrigins")) |origins| {
+        const origins_opt = try json_read.getArray(security_obj, "allowedOrigins");
+        if (origins_opt) |origins| {
             var origin_list: std.ArrayListUnmanaged([]const u8) = .empty;
             errdefer {
                 for (origin_list.items) |origin| {
@@ -352,28 +357,34 @@ pub const ConfigLoader = struct {
             config.security.allowed_origins = try origin_list.toOwnedSlice(allocator);
         }
 
-        if (json_access.getBool(security_obj, "allowLocalhost")) |v| {
+        const allow_localhost_opt = try json_read.getBool(security_obj, "allowLocalhost");
+        if (allow_localhost_opt) |v| {
             config.security.allow_localhost = v;
         }
-        if (json_access.getInt(security_obj, "maxMessagesPerSecond")) |v| {
+        const max_mps_opt = try json_read.getInt(security_obj, "maxMessagesPerSecond");
+        if (max_mps_opt) |v| {
             config.security.max_messages_per_second = @intCast(v);
         }
-        if (json_access.getInt(security_obj, "maxConnections")) |v| {
+        const max_conn_opt = try json_read.getInt(security_obj, "maxConnections");
+        if (max_conn_opt) |v| {
             config.security.max_connections = @intCast(v);
         }
-        if (json_access.getInt(security_obj, "maxMessageSize")) |v| {
+        const max_msg_opt = try json_read.getInt(security_obj, "maxMessageSize");
+        if (max_msg_opt) |v| {
             config.security.max_message_size = @intCast(v);
         }
-        if (json_access.getInt(security_obj, "violationThreshold")) |v| {
+        const violation_opt = try json_read.getInt(security_obj, "violationThreshold");
+        if (violation_opt) |v| {
             config.security.violation_threshold = @intCast(v);
         }
     }
 
     fn parseLogging(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
         _ = allocator;
-        const logging_obj = json_access.getObject(obj, "logging") orelse return;
+        const logging_obj = (try json_read.getObject(obj, "logging")) orelse return;
 
-        if (json_access.getString(logging_obj, "level")) |level| {
+        const level_opt = try json_read.getString(logging_obj, "level");
+        if (level_opt) |level| {
             if (std.mem.eql(u8, level, "debug")) {
                 config.logging.level = .debug;
             } else if (std.mem.eql(u8, level, "info")) {
@@ -385,7 +396,8 @@ pub const ConfigLoader = struct {
             }
         }
 
-        if (json_access.getString(logging_obj, "format")) |format| {
+        const format_opt = try json_read.getString(logging_obj, "format");
+        if (format_opt) |format| {
             if (std.mem.eql(u8, format, "json")) {
                 config.logging.format = .json;
             } else if (std.mem.eql(u8, format, "text")) {
@@ -396,21 +408,26 @@ pub const ConfigLoader = struct {
 
     fn parsePerformance(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
         _ = allocator;
-        const perf_obj = json_access.getObject(obj, "performance") orelse return;
+        const perf_obj = (try json_read.getObject(obj, "performance")) orelse return;
 
-        if (json_access.getInt(perf_obj, "messageBufferSize")) |v| {
+        const buf_size_opt = try json_read.getInt(perf_obj, "messageBufferSize");
+        if (buf_size_opt) |v| {
             config.performance.message_buffer_size = @intCast(v);
         }
-        if (json_access.getBool(perf_obj, "batchWrites")) |v| {
+        const batch_writes_opt = try json_read.getBool(perf_obj, "batchWrites");
+        if (batch_writes_opt) |v| {
             config.performance.batch_writes = v;
         }
-        if (json_access.getInt(perf_obj, "batchSize")) |v| {
+        const batch_size_opt = try json_read.getInt(perf_obj, "batchSize");
+        if (batch_size_opt) |v| {
             config.performance.batch_size = @intCast(v);
         }
-        if (json_access.getInt(perf_obj, "batchTimeout")) |v| {
+        const batch_timeout_opt = try json_read.getInt(perf_obj, "batchTimeout");
+        if (batch_timeout_opt) |v| {
             config.performance.batch_timeout = @intCast(v);
         }
-        if (json_access.getInt(perf_obj, "statementCacheSize")) |v| {
+        const cache_size_opt = try json_read.getInt(perf_obj, "statementCacheSize");
+        if (cache_size_opt) |v| {
             config.performance.statement_cache_size = @intCast(v);
         }
     }
