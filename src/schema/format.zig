@@ -6,56 +6,56 @@ const writeJsonString = json_write.writeJsonString;
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
+    const w = json_write.Writer{ .buf = &buf, .allocator = allocator };
 
-    try buf.appendSlice(allocator, "{\"version\":");
-    try writeJsonString(&buf, allocator, schema.version);
+    try w.beginObject();
+    try w.field("version", schema.version);
     if (schema.metadata) |metadata| {
-        try buf.appendSlice(allocator, ",\"metadata\":");
-        try buf.appendSlice(allocator, metadata.json);
+        try w.rawField("metadata", metadata.json);
     }
-    try buf.appendSlice(allocator, ",\"store\":{");
+    try w.beginObjectField("store");
 
     for (schema.tables, 0..) |table, table_index| {
-        if (table_index > 0) try buf.append(allocator, ',');
-        try writeJsonString(&buf, allocator, table.name);
-        try buf.appendSlice(allocator, ":{\"namespaced\":");
-        try buf.appendSlice(allocator, if (table.namespaced) "true" else "false");
+        if (table_index > 0) try w.separator();
+        try w.beginObjectField(table.name);
+        try w.boolField("namespaced", table.namespaced);
         if (table.metadata) |metadata| {
-            try buf.appendSlice(allocator, ",\"metadata\":");
-            try buf.appendSlice(allocator, metadata.json);
+            try w.rawField("metadata", metadata.json);
         }
-        try writeRequiredFields(&buf, allocator, table.userFields());
-        try buf.appendSlice(allocator, ",\"fields\":{");
-        try writeFieldsForPrefix(&buf, allocator, table.userFields(), "");
-        try buf.appendSlice(allocator, "}}");
+        try writeRequiredFields(&w, allocator, table.userFields());
+        try w.beginObjectField("fields");
+        try writeFieldsForPrefix(&w, allocator, table.userFields(), "");
+        try w.endObject();
+        try w.endObject();
     }
 
-    try buf.appendSlice(allocator, "}}");
+    try w.endObject();
+    try w.endObject();
     return buf.toOwnedSlice(allocator);
 }
 
-fn writeRequiredFields(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, fields: []const types.Field) !void {
+fn writeRequiredFields(w: *json_write.Writer, allocator: std.mem.Allocator, fields: []const types.Field) !void {
     var count: usize = 0;
     for (fields) |field| {
         if (field.required) count += 1;
     }
     if (count == 0) return;
 
-    try buf.appendSlice(allocator, ",\"required\":[");
+    try w.beginArrayField("required");
     var emitted: usize = 0;
     for (fields) |field| {
         if (!field.required) continue;
-        if (emitted > 0) try buf.append(allocator, ',');
+        if (emitted > 0) try w.separator();
         const dotted = try replaceAll(allocator, field.name, "__", ".");
         defer allocator.free(dotted);
-        try writeJsonString(buf, allocator, dotted);
+        try writeJsonString(w.buf, allocator, dotted);
         emitted += 1;
     }
-    try buf.append(allocator, ']');
+    try w.endArray();
 }
 
 fn writeFieldsForPrefix(
-    buf: *std.ArrayListUnmanaged(u8),
+    w: *json_write.Writer,
     allocator: std.mem.Allocator,
     fields: []const types.Field,
     prefix: []const u8,
@@ -67,9 +67,9 @@ fn writeFieldsForPrefix(
         const segment = remainder[0..segment_end];
         if (segmentSeen(fields, prefix, field_index, segment)) continue;
 
-        if (emitted > 0) try buf.append(allocator, ',');
-        try writeJsonString(buf, allocator, segment);
-        try buf.append(allocator, ':');
+        if (emitted > 0) try w.separator();
+        try writeJsonString(w.buf, allocator, segment);
+        try w.buf.append(allocator, ':');
 
         if (segment_end < remainder.len) {
             const child_prefix = if (prefix.len == 0)
@@ -78,38 +78,37 @@ fn writeFieldsForPrefix(
                 try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, segment });
             defer allocator.free(child_prefix);
 
-            try buf.appendSlice(allocator, "{\"type\":\"object\",\"fields\":{");
-            try writeFieldsForPrefix(buf, allocator, fields, child_prefix);
-            try buf.appendSlice(allocator, "}}");
+            try w.beginObject();
+            try w.field("type", "object");
+            try w.beginObjectField("fields");
+            try writeFieldsForPrefix(w, allocator, fields, child_prefix);
+            try w.endObject();
+            try w.endObject();
         } else {
-            try writeFieldDefinition(buf, allocator, field);
+            try writeFieldDefinition(w, field);
         }
 
         emitted += 1;
     }
 }
 
-fn writeFieldDefinition(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, field: types.Field) !void {
-    try buf.appendSlice(allocator, "{\"type\":");
-    try writeJsonString(buf, allocator, field.declared_type.schemaName());
+fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
+    try w.beginObject();
+    try w.field("type", field.declared_type.schemaName());
     if (field.declared_type == .array) {
-        try buf.appendSlice(allocator, ",\"items\":");
-        try writeJsonString(buf, allocator, (field.items_type orelse types.FieldType.text).schemaName());
+        try w.field("items", (field.items_type orelse types.FieldType.text).schemaName());
     }
-    if (field.indexed) try buf.appendSlice(allocator, ",\"indexed\":true");
+    if (field.indexed) try w.boolField("indexed", true);
     if (field.references) |ref| {
-        try buf.appendSlice(allocator, ",\"references\":");
-        try writeJsonString(buf, allocator, ref);
+        try w.field("references", ref);
     }
     if (field.on_delete) |on_delete| {
-        try buf.appendSlice(allocator, ",\"onDelete\":");
-        try writeJsonString(buf, allocator, on_delete.schemaName());
+        try w.field("onDelete", on_delete.schemaName());
     }
     if (field.metadata) |metadata| {
-        try buf.appendSlice(allocator, ",\"metadata\":");
-        try buf.appendSlice(allocator, metadata.json);
+        try w.rawField("metadata", metadata.json);
     }
-    try buf.append(allocator, '}');
+    try w.endObject();
 }
 
 fn fieldRemainder(field_name: []const u8, prefix: []const u8) ?[]const u8 {

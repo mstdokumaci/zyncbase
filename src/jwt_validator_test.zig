@@ -5,6 +5,7 @@ const jwt_validator = @import("jwt_validator.zig");
 const JwtValidator = jwt_validator.JwtValidator;
 const JwksCache = jwt_validator.JwksCache;
 const Jwk = jwt_validator.Jwk;
+const json_write = @import("json/write.zig");
 
 fn encodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
     const len = std.base64.url_safe_no_pad.Encoder.calcSize(input.len);
@@ -29,15 +30,17 @@ fn createHmacJwt(
     // 2. Payload
     var payload_buf = std.ArrayListUnmanaged(u8).empty;
     defer payload_buf.deinit(allocator);
-    var writer = payload_buf.writer(allocator);
-    try writer.print("{{\"sub\":\"{s}\",\"exp\":{d}", .{ sub, exp });
+    const w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
+    try w.beginObject();
+    try w.field("sub", sub);
+    try w.intField("exp", exp);
     if (iss) |i| {
-        try writer.print(",\"iss\":\"{s}\"", .{i});
+        try w.field("iss", i);
     }
     if (aud) |a| {
-        try writer.print(",\"aud\":\"{s}\"", .{a});
+        try w.field("aud", a);
     }
-    try writer.writeAll("}");
+    try w.endObject();
     const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
     defer allocator.free(payload_b64);
 

@@ -6,6 +6,7 @@ const Session = @import("session.zig").Session;
 const typed = @import("../typed.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
+const json_write = @import("../json/write.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,
@@ -188,37 +189,28 @@ pub const TicketExchange = struct {
 
         var payload_buf = std.ArrayListUnmanaged(u8).empty;
         defer payload_buf.deinit(allocator);
-        const writer = payload_buf.writer(allocator);
+        const w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
 
-        try writer.writeAll("{\"sub\":");
-        const subject_json = try std.json.Stringify.valueAlloc(allocator, subject, .{});
-        defer allocator.free(subject_json);
-        try writer.writeAll(subject_json);
-        try writer.print(",\"exp\":{d},\"jti\":\"{s}\",\"session\":{{\"externalId\":", .{ exp, jti_hex });
-        try writer.writeAll(subject_json);
-        try writer.print(",\"isAnonymous\":{s},\"claims\":", .{if (is_anonymous) "true" else "false"});
-
-        if (claims.count() == 0) {
-            try writer.writeAll("{}");
-        } else {
-            try writer.writeByte('{');
-            var first = true;
-            var claims_it = claims.iterator();
-            while (claims_it.next()) |entry| {
-                if (!first) try writer.writeByte(',');
-                first = false;
-                const key_json = try std.json.Stringify.valueAlloc(allocator, entry.key_ptr.*, .{});
-                defer allocator.free(key_json);
-                try writer.writeAll(key_json);
-                try writer.writeByte(':');
-                const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
-                defer allocator.free(value_json);
-                try writer.writeAll(value_json);
-            }
-            try writer.writeByte('}');
+        try w.beginObject();
+        try w.field("sub", subject);
+        try w.intField("exp", exp);
+        try w.field("jti", &jti_hex);
+        try w.beginObjectField("session");
+        try w.field("externalId", subject);
+        try w.boolField("isAnonymous", is_anonymous);
+        try w.beginObjectField("claims");
+        var first = true;
+        var claims_it = claims.iterator();
+        while (claims_it.next()) |entry| {
+            if (!first) try w.separator();
+            first = false;
+            const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
+            defer allocator.free(value_json);
+            try w.rawField(entry.key_ptr.*, value_json);
         }
-
-        try writer.writeAll("}}");
+        try w.endObject();
+        try w.endObject();
+        try w.endObject();
 
         const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
         defer allocator.free(payload_b64);
@@ -463,23 +455,12 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
 fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
     const key = "\"anonymousSubject\"";
     const key_pos = std.mem.indexOf(u8, json_body, key) orelse return null;
-    const after_key = json_body[key_pos + key.len ..];
-
-    var i: usize = 0;
-    while (i < after_key.len and (after_key[i] == ' ' or after_key[i] == ':' or after_key[i] == '\t' or after_key[i] == '\n' or after_key[i] == '\r')) {
-        i += 1;
-    }
-    if (i >= after_key.len or after_key[i] != '"') return null;
-    i += 1;
-
-    const value_start = i;
-    while (i < after_key.len and after_key[i] != '"') {
-        if (after_key[i] == '\\') i += 1;
-        i += 1;
-    }
-    if (i >= after_key.len) return null;
-
-    return after_key[value_start..i];
+    var pos = key_pos + key.len;
+    json_read.skipWhitespace(json_body, &pos);
+    if (pos >= json_body.len or json_body[pos] != ':') return null;
+    pos += 1;
+    json_read.skipWhitespace(json_body, &pos);
+    return json_read.extractJsonString(json_body, &pos);
 }
 
 const TicketPayload = struct {
@@ -510,7 +491,7 @@ fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
     pos += 1;
 
     while (pos < json.len) {
-        skipWhitespace(json, &pos);
+        json_read.skipWhitespace(json, &pos);
         if (pos >= json.len) return null;
         if (json[pos] == '}') break;
         if (json[pos] == ',') {
@@ -518,20 +499,20 @@ fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
             continue;
         }
 
-        const key = extractJsonKey(json, &pos) orelse return null;
-        skipWhitespace(json, &pos);
+        const key = json_read.extractJsonKey(json, &pos) orelse return null;
+        json_read.skipWhitespace(json, &pos);
         if (pos >= json.len or json[pos] != ':') return null;
         pos += 1;
-        skipWhitespace(json, &pos);
+        json_read.skipWhitespace(json, &pos);
 
         if (std.mem.eql(u8, key, "sub")) {
-            result.sub = extractJsonString(json, &pos) orelse return null;
+            result.sub = json_read.extractJsonString(json, &pos) orelse return null;
             found_sub = true;
         } else if (std.mem.eql(u8, key, "exp")) {
-            result.exp = extractJsonInt(json, &pos) orelse return null;
+            result.exp = json_read.extractJsonInt(json, &pos) orelse return null;
             found_exp = true;
         } else if (std.mem.eql(u8, key, "jti")) {
-            result.jti = extractJsonString(json, &pos) orelse return null;
+            result.jti = json_read.extractJsonString(json, &pos) orelse return null;
             found_jti = true;
         } else if (std.mem.eql(u8, key, "session")) {
             const session_start = pos;
@@ -553,7 +534,7 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
     pos += 1;
 
     while (pos < session_json.len) {
-        skipWhitespace(session_json, &pos);
+        json_read.skipWhitespace(session_json, &pos);
         if (pos >= session_json.len) return;
         if (session_json[pos] == '}') break;
         if (session_json[pos] == ',') {
@@ -561,14 +542,14 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
             continue;
         }
 
-        const key = extractJsonKey(session_json, &pos) orelse return;
-        skipWhitespace(session_json, &pos);
+        const key = json_read.extractJsonKey(session_json, &pos) orelse return;
+        json_read.skipWhitespace(session_json, &pos);
         if (pos >= session_json.len or session_json[pos] != ':') return;
         pos += 1;
-        skipWhitespace(session_json, &pos);
+        json_read.skipWhitespace(session_json, &pos);
 
         if (std.mem.eql(u8, key, "externalId")) {
-            result.external_id = extractJsonString(session_json, &pos);
+            result.external_id = json_read.extractJsonString(session_json, &pos);
         } else if (std.mem.eql(u8, key, "isAnonymous")) {
             if (pos + 4 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..4], "true")) {
                 result.is_anonymous = true;
@@ -590,58 +571,6 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
             if (json_read.skipValue(session_json, &pos) == null) return;
         }
     }
-}
-
-fn skipWhitespace(json: []const u8, pos: *usize) void {
-    while (pos.* < json.len) {
-        switch (json[pos.*]) {
-            ' ', '\t', '\n', '\r' => pos.* += 1,
-            else => break,
-        }
-    }
-}
-
-fn extractJsonKey(json: []const u8, pos: *usize) ?[]const u8 {
-    return extractJsonString(json, pos);
-}
-
-fn extractJsonString(json: []const u8, pos: *usize) ?[]const u8 {
-    if (pos.* >= json.len or json[pos.*] != '"') return null;
-    pos.* += 1;
-    const start = pos.*;
-    while (pos.* < json.len) {
-        if (json[pos.*] == '"') {
-            const result = json[start..pos.*];
-            pos.* += 1;
-            return result;
-        }
-        if (json[pos.*] == '\\') {
-            pos.* += 1;
-        }
-        pos.* += 1;
-    }
-    return null;
-}
-
-fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
-    var negative = false;
-    if (pos.* < json.len and json[pos.*] == '-') {
-        negative = true;
-        pos.* += 1;
-    }
-    if (pos.* >= json.len or json[pos.*] < '0' or json[pos.*] > '9') return null;
-    var value: i64 = 0;
-    while (pos.* < json.len and json[pos.*] >= '0' and json[pos.*] <= '9') {
-        const digit: i64 = json[pos.*] - '0';
-        const mul_result = @mulWithOverflow(value, 10);
-        if (mul_result[1] != 0) return null;
-        value = mul_result[0];
-        const add_result = @addWithOverflow(value, if (negative) -digit else digit);
-        if (add_result[1] != 0) return null;
-        value = add_result[0];
-        pos.* += 1;
-    }
-    return value;
 }
 
 const TicketParts = struct { payload_b64: []const u8, sig_b64: []const u8 };
