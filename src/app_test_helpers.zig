@@ -153,7 +153,7 @@ pub const AppTestContext = struct {
 
         // 1. Initialize Memory Strategy
         try self.memory_strategy.init(allocator);
-        errdefer self.memory_strategy.deinit();
+        errdefer _ = self.memory_strategy.deinit();
 
         const gpa = self.memory_strategy.generalAllocator();
 
@@ -219,7 +219,7 @@ pub const AppTestContext = struct {
         self.schema.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
-        self.memory_strategy.deinit();
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
     }
 
     pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {

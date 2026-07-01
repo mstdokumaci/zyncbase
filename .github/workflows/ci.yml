@@ -70,6 +70,28 @@ jobs:
       - name: Run TypeScript E2E tests
         run: bun run test:e2e
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Install zlint
+        run: |
+          curl -fsSL -o /tmp/zlint \
+            "https://github.com/DonIsaac/zlint/releases/download/v0.8.1/zlint-linux-x86_64"
+          chmod +x /tmp/zlint
+          sudo mv /tmp/zlint /usr/local/bin/zlint
+
+      - name: Run lint
+        run: bun run lint
+
   build:
     name: Build (${{ matrix.optimize }})
     runs-on: ubuntu-latest

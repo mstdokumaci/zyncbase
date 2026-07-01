@@ -93,7 +93,7 @@ pub const ZyncBaseServer = struct {
 
         // Initialize memory strategy
         try self.memory_strategy.init(allocator);
-        errdefer self.memory_strategy.deinit();
+        errdefer _ = self.memory_strategy.deinit();
 
         // Load configuration or use provided one
         var config = try loadOrCreateConfig(&self.memory_strategy, custom_config, custom_config_path);
@@ -670,7 +670,7 @@ pub const ZyncBaseServer = struct {
         self.schema.deinit();
 
         std.log.debug("Deinitializing memory_strategy", .{});
-        self.memory_strategy.deinit();
+        _ = self.memory_strategy.deinit();
 
         std.log.debug("About to destroy self", .{});
         self.allocator.destroy(self);

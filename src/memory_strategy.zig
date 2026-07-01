@@ -91,17 +91,13 @@ pub const MemoryStrategy = struct {
     }
 
     /// Deinitialize the memory strategy and free all resources
-    pub fn deinit(self: *MemoryStrategy) void {
-        // Deinit pools (this frees the Nodes and cleans up contents via deinitData callbacks)
+    pub fn deinit(self: *MemoryStrategy) std.heap.Check {
         self.arena_pool.deinit();
         self.connection_pool.deinit();
 
         const status = self.gpa.deinit();
-        if (builtin.is_test and status == .leak) {
-            // In tests, we want to know if the strategy itself leaked
-            std.debug.print("MemoryStrategy internal leak detected!\n", .{});
-        }
         self.parent_allocator.destroy(self.gpa);
+        return status;
     }
 
     fn initArena(arena: *std.heap.ArenaAllocator, allocator: Allocator) void {

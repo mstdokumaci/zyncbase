@@ -25,7 +25,7 @@ const DirectWriterContext = struct {
         errdefer self.test_context.deinit();
 
         try self.memory_strategy.init(allocator);
-        errdefer self.memory_strategy.deinit();
+        errdefer _ = self.memory_strategy.deinit();
 
         const users_fields = [_]sth.Field{};
         const users_table = sth.makeTable("users", &users_fields);
@@ -57,7 +57,7 @@ const DirectWriterContext = struct {
     fn deinit(self: *DirectWriterContext) void {
         self.engine.deinit();
         self.schema.deinit();
-        self.memory_strategy.deinit();
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
         self.test_context.deinit();
     }
 };

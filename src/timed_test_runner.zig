@@ -1,3 +1,5 @@
+// zlint-disable
+
 const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
