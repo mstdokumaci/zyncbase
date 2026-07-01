@@ -189,7 +189,7 @@ pub const TicketExchange = struct {
 
         var payload_buf = std.ArrayListUnmanaged(u8).empty;
         defer payload_buf.deinit(allocator);
-        const w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
+        var w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
 
         try w.beginObject();
         try w.field("sub", subject);
@@ -199,11 +199,8 @@ pub const TicketExchange = struct {
         try w.field("externalId", subject);
         try w.boolField("isAnonymous", is_anonymous);
         try w.beginObjectField("claims");
-        var first = true;
         var claims_it = claims.iterator();
         while (claims_it.next()) |entry| {
-            if (!first) try w.separator();
-            first = false;
             const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
             defer allocator.free(value_json);
             try w.rawField(entry.key_ptr.*, value_json);

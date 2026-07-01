@@ -30,7 +30,7 @@ fn createHmacJwt(
     // 2. Payload
     var payload_buf = std.ArrayListUnmanaged(u8).empty;
     defer payload_buf.deinit(allocator);
-    const w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
+    var w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
     try w.beginObject();
     try w.field("sub", sub);
     try w.intField("exp", exp);

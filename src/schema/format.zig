@@ -15,8 +15,7 @@ pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]cons
     }
     try w.beginObjectField("store");
 
-    for (schema.tables, 0..) |table, table_index| {
-        if (table_index > 0) try w.separator();
+    for (schema.tables) |table| {
         try w.beginObjectField(table.name);
         try w.boolField("namespaced", table.namespaced);
         if (table.metadata) |metadata| {

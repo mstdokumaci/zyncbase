@@ -15,38 +15,10 @@ test "writeJsonString escapes backslash and newline" {
     try std.testing.expectEqualStrings("\"a\\\\b\\nc\"", buf.items);
 }
 
-test "Writer builds simple object" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    const w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
-
-    try w.beginObject();
-    try w.field("name", "alice");
-    try w.separator();
-    try w.boolField("active", true);
-    try w.endObject();
-
-    try std.testing.expectEqualStrings("{\"name\":\"alice\",\"active\":true}", buf.items);
-}
-
-test "Writer builds nested object" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    const w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
-
-    try w.beginObject();
-    try w.beginObjectField("session");
-    try w.field("id", "123");
-    try w.endObject();
-    try w.endObject();
-
-    try std.testing.expectEqualStrings("{\"session\":{\"id\":\"123\"}}", buf.items);
-}
-
 test "Writer builds array field" {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);
-    const w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
 
     try w.beginObject();
     try w.beginArrayField("items");
@@ -62,11 +34,10 @@ test "Writer builds array field" {
 test "Writer rawField and nullField" {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);
-    const w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
 
     try w.beginObject();
     try w.rawField("data", "{\"x\":1}");
-    try w.separator();
     try w.nullField("nothing");
     try w.endObject();
 
@@ -76,11 +47,85 @@ test "Writer rawField and nullField" {
 test "Writer intField" {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);
-    const w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
 
     try w.beginObject();
     try w.intField("count", @as(i64, 42));
     try w.endObject();
 
     try std.testing.expectEqualStrings("{\"count\":42}", buf.items);
+}
+
+test "Writer complex nested JSON has correct commas" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(std.testing.allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+
+    try w.beginObject();
+    try w.field("version", "1.0.0");
+    try w.beginObjectField("store");
+    try w.beginObjectField("posts");
+    try w.boolField("namespaced", false);
+    try w.beginArrayField("required");
+    try w.writeRaw("\"profile.name\"");
+    try w.separator();
+    try w.writeRaw("\"title\"");
+    try w.endArray();
+    try w.beginObjectField("fields");
+    try w.beginObjectField("profile");
+    try w.field("type", "object");
+    try w.beginObjectField("fields");
+    try w.field("name", "string");
+    try w.field("age", "integer");
+    try w.endObject();
+    try w.endObject();
+    try w.field("title", "string");
+    try w.endObject();
+    try w.endObject();
+    try w.endObject();
+    try w.endObject();
+
+    const expected =
+        \\{"version":"1.0.0","store":{"posts":{"namespaced":false,"required":["profile.name","title"],"fields":{"profile":{"type":"object","fields":{"name":"string","age":"integer"}},"title":"string"}}}}
+    ;
+    try std.testing.expectEqualStrings(expected, buf.items);
+}
+
+test "Writer conditional fields produce correct commas" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(std.testing.allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+
+    try w.beginObject();
+    try w.field("sub", "user_1");
+    try w.intField("exp", @as(i64, 1234));
+    const iss: ?[]const u8 = "issuer";
+    if (iss) |i| {
+        try w.field("iss", i);
+    }
+    const aud: ?[]const u8 = null;
+    if (aud) |a| {
+        try w.field("aud", a);
+    }
+    try w.nullField("jti");
+    try w.endObject();
+
+    try std.testing.expectEqualStrings(
+        \\{"sub":"user_1","exp":1234,"iss":"issuer","jti":null}
+    , buf.items);
+}
+
+test "Writer empty object and array" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(std.testing.allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+
+    try w.beginObject();
+    try w.beginObjectField("empty_obj");
+    try w.endObject();
+    try w.beginArrayField("empty_arr");
+    try w.endArray();
+    try w.endObject();
+
+    try std.testing.expectEqualStrings("{\"empty_obj\":{},\"empty_arr\":[]}", buf.items);
 }

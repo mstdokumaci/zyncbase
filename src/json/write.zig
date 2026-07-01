@@ -19,66 +19,88 @@ pub fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, v
 pub const Writer = struct {
     buf: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
+    is_first: bool = true,
 
-    pub fn separator(self: Writer) !void {
+    fn maybeSeparator(self: *Writer) !void {
+        if (!self.is_first) {
+            try self.buf.append(self.allocator, ',');
+        }
+        self.is_first = false;
+    }
+
+    pub fn separator(self: *Writer) !void {
         try self.buf.append(self.allocator, ',');
+        self.is_first = false;
     }
 
     pub fn writeRaw(self: Writer, bytes: []const u8) !void {
         try self.buf.appendSlice(self.allocator, bytes);
     }
 
-    pub fn field(self: Writer, key: []const u8, value: []const u8) !void {
+    pub fn field(self: *Writer, key: []const u8, value: []const u8) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.append(self.allocator, ':');
         try writeJsonString(self.buf, self.allocator, value);
     }
 
-    pub fn boolField(self: Writer, key: []const u8, value: bool) !void {
+    pub fn boolField(self: *Writer, key: []const u8, value: bool) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.appendSlice(self.allocator, if (value) ":true" else ":false");
     }
 
-    pub fn intField(self: Writer, key: []const u8, value: anytype) !void {
+    pub fn intField(self: *Writer, key: []const u8, value: anytype) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.append(self.allocator, ':');
         try self.buf.writer(self.allocator).print("{d}", .{value});
     }
 
-    pub fn nullField(self: Writer, key: []const u8) !void {
+    pub fn nullField(self: *Writer, key: []const u8) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.appendSlice(self.allocator, ":null");
     }
 
-    pub fn rawField(self: Writer, key: []const u8, json_bytes: []const u8) !void {
+    pub fn rawField(self: *Writer, key: []const u8, json_bytes: []const u8) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.append(self.allocator, ':');
         try self.buf.appendSlice(self.allocator, json_bytes);
     }
 
-    pub fn beginObject(self: Writer) !void {
+    pub fn beginObject(self: *Writer) !void {
         try self.buf.append(self.allocator, '{');
+        self.is_first = true;
     }
 
-    pub fn endObject(self: Writer) !void {
+    pub fn endObject(self: *Writer) !void {
         try self.buf.append(self.allocator, '}');
+        self.is_first = false;
     }
 
-    pub fn beginObjectField(self: Writer, key: []const u8) !void {
+    pub fn beginObjectField(self: *Writer, key: []const u8) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.appendSlice(self.allocator, ":{");
+        self.is_first = true;
     }
 
-    pub fn beginArray(self: Writer) !void {
+    pub fn beginArray(self: *Writer) !void {
         try self.buf.append(self.allocator, '[');
+        self.is_first = true;
     }
 
-    pub fn endArray(self: Writer) !void {
+    pub fn endArray(self: *Writer) !void {
         try self.buf.append(self.allocator, ']');
+        self.is_first = false;
     }
 
-    pub fn beginArrayField(self: Writer, key: []const u8) !void {
+    pub fn beginArrayField(self: *Writer, key: []const u8) !void {
+        try self.maybeSeparator();
         try writeJsonString(self.buf, self.allocator, key);
         try self.buf.appendSlice(self.allocator, ":[");
+        self.is_first = true;
     }
 };
