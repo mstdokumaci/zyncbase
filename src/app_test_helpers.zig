@@ -219,7 +219,7 @@ pub const AppTestContext = struct {
         self.schema.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
-        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
     }
 
     pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {

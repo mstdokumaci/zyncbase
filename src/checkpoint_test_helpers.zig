@@ -49,6 +49,6 @@ pub const Context = struct {
         self.storage_engine.deinit();
         self.test_context.deinit();
         self.schema.deinit();
-        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
     }
 };

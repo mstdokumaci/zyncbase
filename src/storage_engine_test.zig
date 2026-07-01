@@ -57,7 +57,7 @@ const DirectWriterContext = struct {
     fn deinit(self: *DirectWriterContext) void {
         self.engine.deinit();
         self.schema.deinit();
-        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
         self.test_context.deinit();
     }
 };

@@ -9,7 +9,7 @@ test "storage: engine initialization errors" {
     const allocator = testing.allocator;
     var ms: sth.MemoryStrategy = undefined;
     try ms.init(allocator);
-    defer std.testing.expect(ms.deinit() == .ok) catch @panic("leak");
+    defer std.debug.assert(ms.deinit() == .ok);
 
     // Test 1: Invalid directory path
     const invalid_dir = "";

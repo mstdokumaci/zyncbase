@@ -20,7 +20,7 @@ test "storage: error handling invalid database path" {
 
     var ms: sth.MemoryStrategy = undefined;
     try ms.init(allocator);
-    defer std.testing.expect(ms.deinit() == .ok) catch @panic("leak");
+    defer std.debug.assert(ms.deinit() == .ok);
 
     var storage: StorageEngine = undefined;
     const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &schema, .{}, .{ .in_memory = false }, null, null);

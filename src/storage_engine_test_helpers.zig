@@ -265,7 +265,7 @@ pub const EngineTestContext = struct {
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
         self.engine.deinit();
         self.schema.deinit();
-        std.testing.expect(self.memory_strategy.deinit() == .ok) catch @panic("leak");
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
         if (cleanup) {
             self.test_context.deinit();
         } else {

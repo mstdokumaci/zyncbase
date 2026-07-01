@@ -318,7 +318,7 @@ test "logging: level filtering" {
     {
         var memory_strategy: MemoryStrategy = undefined;
         try memory_strategy.init(testing.allocator);
-        defer std.testing.expect(memory_strategy.deinit() == .ok) catch @panic("leak");
+        defer std.debug.assert(memory_strategy.deinit() == .ok);
 
         var tracker: ViolationTracker = undefined;
         tracker.init(allocator, 10);
@@ -413,7 +413,7 @@ test "logging: message formatting" {
     {
         var memory_strategy: MemoryStrategy = undefined;
         try memory_strategy.init(testing.allocator);
-        defer std.testing.expect(memory_strategy.deinit() == .ok) catch @panic("leak");
+        defer std.debug.assert(memory_strategy.deinit() == .ok);
 
         var tracker: ViolationTracker = undefined;
         tracker.init(allocator, 10);
@@ -492,7 +492,7 @@ test "logging: message formatting" {
     {
         var memory_strategy: MemoryStrategy = undefined;
         try memory_strategy.init(allocator);
-        defer std.testing.expect(memory_strategy.deinit() == .ok) catch @panic("leak");
+        defer std.debug.assert(memory_strategy.deinit() == .ok);
 
         var tracker: ViolationTracker = undefined;
         tracker.init(allocator, 10);
