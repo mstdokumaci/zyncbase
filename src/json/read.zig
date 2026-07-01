@@ -2,23 +2,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ObjectMap = std.json.ObjectMap;
 
-const types = @import("../schema/types.zig");
-
 // ---------------------------------------------------------------------------
 // High-level parsing helpers
 // ---------------------------------------------------------------------------
 
 pub fn parseValue(allocator: Allocator, json_text: []const u8) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
-}
-
-pub fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
-    if (value != .object) return error.InvalidMetadata;
-
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    try std.json.Stringify.value(value, .{}, &out.writer);
-    return .{ .json = try out.toOwnedSlice() };
 }
 
 // ---------------------------------------------------------------------------

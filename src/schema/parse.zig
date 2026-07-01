@@ -16,6 +16,15 @@ const planned_constraint_keys = [_][]const u8{
     "maximum",
 };
 
+fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
+    if (value != .object) return error.InvalidMetadata;
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try std.json.Stringify.value(value, .{}, &out.writer);
+    return .{ .json = try out.toOwnedSlice() };
+}
+
 pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     var parsed = try json_read.parseValue(allocator, json_text);
     defer parsed.deinit();
@@ -32,7 +41,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     if (store_val != .object) return error.InvalidStore;
 
     const root_metadata = if (root.object.get("metadata")) |metadata|
-        try json_read.cloneMetadata(allocator, metadata)
+        try cloneMetadata(allocator, metadata)
     else
         null;
     defer if (root_metadata) |metadata| metadata.deinit(allocator);
@@ -234,7 +243,7 @@ const StoreFieldContext = struct {
         const on_delete = try extractOnDelete(field_def.object, references != null, required);
 
         const metadata = if (field_def.object.get("metadata")) |value|
-            try json_read.cloneMetadata(allocator, value)
+            try cloneMetadata(allocator, value)
         else
             null;
         errdefer if (metadata) |md| md.deinit(allocator);
@@ -498,7 +507,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
     errdefer allocator.free(table_name_quoted);
 
     const table_metadata = if (table_def.object.get("metadata")) |metadata|
-        try json_read.cloneMetadata(allocator, metadata)
+        try cloneMetadata(allocator, metadata)
     else
         null;
     errdefer if (table_metadata) |metadata| metadata.deinit(allocator);
