@@ -5,15 +5,21 @@ pub const std_options: std.Options = .{
 
 test {
     // Import all test files to ensure they are picked up by the build system
+    _ = @import("typed/codec_test.zig");
+    _ = @import("typed/doc_id_test.zig");
+    _ = @import("typed/types_test.zig");
+    _ = @import("threading/managed_thread_test.zig");
+    _ = @import("threading/worker_pool_test.zig");
+    _ = @import("threading/notifier_test.zig");
+    _ = @import("threading/wait_group_test.zig");
+    _ = @import("threading/latch_test.zig");
     _ = @import("json/read_test.zig");
     _ = @import("json/write_test.zig");
     _ = @import("json/iterate_test.zig");
     _ = @import("sql_buf_test.zig");
     _ = @import("wire/msgpack_skip_test.zig");
-    // json_skip_test.zig merged into json/read_test.zig
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
-    _ = @import("storage_engine_value_codec_test.zig");
     _ = @import("storage_engine_sql_test.zig");
     _ = @import("violation_tracker_test.zig");
     _ = @import("lock_free_cache_test.zig");
@@ -80,11 +86,4 @@ test {
     // Integration tests
     _ = @import("integration_wiring_test.zig");
     _ = @import("message_handler_verification_test.zig");
-
-    // Threading primitives
-    _ = @import("threading/managed_thread_test.zig");
-    _ = @import("threading/worker_pool_test.zig");
-    _ = @import("threading/notifier_test.zig");
-    _ = @import("threading/wait_group_test.zig");
-    _ = @import("threading/latch_test.zig");
 }
