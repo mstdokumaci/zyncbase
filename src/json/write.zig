@@ -1,24 +1,36 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const escape_table = blk: {
+    var table: [256]?[]const u8 = undefined;
+    for (&table, 0..) |*entry, i| {
+        const char: u8 = @intCast(i);
+        entry.* = switch (char) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            0x08 => "\\b",
+            0x0c => "\\f",
+            else => null,
+        };
+    }
+    break :blk table;
+};
+
 pub fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, value: []const u8) !void {
     try buf.append(allocator, '"');
     for (value) |char| {
-        switch (char) {
-            '"' => try buf.appendSlice(allocator, "\\\""),
-            '\\' => try buf.appendSlice(allocator, "\\\\"),
-            '\n' => try buf.appendSlice(allocator, "\\n"),
-            '\r' => try buf.appendSlice(allocator, "\\r"),
-            '\t' => try buf.appendSlice(allocator, "\\t"),
-            0x08 => try buf.appendSlice(allocator, "\\b"),
-            0x0c => try buf.appendSlice(allocator, "\\f"),
-            0x00...0x07, 0x0b, 0x0e...0x1f => {
-                try buf.appendSlice(allocator, "\\u00");
-                const hex = "0123456789abcdef";
-                try buf.append(allocator, hex[char >> 4]);
-                try buf.append(allocator, hex[char & 0xf]);
-            },
-            else => try buf.append(allocator, char),
+        if (escape_table[char]) |esc| {
+            try buf.appendSlice(allocator, esc);
+        } else if (char < 0x20) {
+            try buf.appendSlice(allocator, "\\u00");
+            const hex = "0123456789abcdef";
+            try buf.append(allocator, hex[char >> 4]);
+            try buf.append(allocator, hex[char & 0xf]);
+        } else {
+            try buf.append(allocator, char);
         }
     }
     try buf.append(allocator, '"');
