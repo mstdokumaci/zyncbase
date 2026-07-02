@@ -25,16 +25,56 @@ test "appendIndexName builds idx_table_field form" {
     try std.testing.expectEqualStrings("\"idx_users_email\"", b.items());
 }
 
-test "appendSep skips on empty buffer and emits on non-empty" {
+test "list mode emits separator between items, not before first" {
     var b = SqlBuf.init();
     defer b.deinit(std.testing.allocator);
-    try b.appendSep(std.testing.allocator, ", ");
-    try std.testing.expectEqualStrings("", b.items());
 
+    b.beginList(", ");
+    try b.maybeSep(std.testing.allocator);
     try b.appendSlice(std.testing.allocator, "a");
-    try b.appendSep(std.testing.allocator, ", ");
+    try b.maybeSep(std.testing.allocator);
     try b.appendSlice(std.testing.allocator, "b");
-    try std.testing.expectEqualStrings("a, b", b.items());
+    try b.maybeSep(std.testing.allocator);
+    try b.appendSlice(std.testing.allocator, "c");
+    b.endList();
+
+    try std.testing.expectEqualStrings("a, b, c", b.items());
+}
+
+test "appendQuoted uses list separator in list mode" {
+    var b = SqlBuf.init();
+    defer b.deinit(std.testing.allocator);
+
+    b.beginList(", ");
+    try b.appendQuoted(std.testing.allocator, "foo");
+    try b.appendQuoted(std.testing.allocator, "bar");
+    try b.appendQuoted(std.testing.allocator, "baz");
+    b.endList();
+
+    try std.testing.expectEqualStrings("\"foo\", \"bar\", \"baz\"", b.items());
+}
+
+test "maybeSep is no-op outside list mode" {
+    var b = SqlBuf.init();
+    defer b.deinit(std.testing.allocator);
+    try b.maybeSep(std.testing.allocator);
+    try b.appendSlice(std.testing.allocator, "x");
+    try b.maybeSep(std.testing.allocator);
+    try std.testing.expectEqualStrings("x", b.items());
+}
+
+test "endList stops separator emission" {
+    var b = SqlBuf.init();
+    defer b.deinit(std.testing.allocator);
+
+    b.beginList(", ");
+    try b.maybeSep(std.testing.allocator);
+    try b.appendSlice(std.testing.allocator, "a");
+    b.endList();
+    // structural suffix, no separator
+    try b.appendSlice(std.testing.allocator, ")");
+
+    try std.testing.expectEqualStrings("a)", b.items());
 }
 
 test "toOwnedSlice transfers ownership" {

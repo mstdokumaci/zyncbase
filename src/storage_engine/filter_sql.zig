@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
+const SqlBuf = @import("../sql_buf.zig").SqlBuf;
 
 const Value = typed.Value;
 
@@ -69,19 +70,19 @@ pub fn renderAndClause(
     const pred = predicate orelse return null;
     if (pred.isAlwaysTrue()) return null;
 
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer sql_buf.deinit(allocator);
+    var buf = SqlBuf.init();
+    errdefer buf.deinit(allocator);
     var values: std.ArrayListUnmanaged(Value) = .empty;
     errdefer {
         for (values.items) |value| value.deinit(allocator);
         values.deinit(allocator);
     }
 
-    try sql_buf.appendSlice(allocator, " AND (");
-    try appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, pred);
-    try sql_buf.append(allocator, ')');
+    try buf.appendSlice(allocator, " AND (");
+    try appendFilterPredicateSql(allocator, &buf, &values, table_metadata, pred);
+    try buf.append(allocator, ')');
 
-    const sql_owned = try sql_buf.toOwnedSlice(allocator);
+    const sql_owned = try buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql_owned);
 
     const values_owned = try values.toOwnedSlice(allocator);
@@ -93,82 +94,85 @@ pub fn renderAndClause(
 
 pub fn appendFilterPredicateSql(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     predicate: *const query_ast.FilterPredicate,
 ) !void {
     if (predicate.isAlwaysTrue()) {
-        try sql_buf.append(allocator, '1');
+        try buf.append(allocator, '1');
         return;
     }
     if (predicate.isAlwaysFalse()) {
-        try sql_buf.append(allocator, '0');
+        try buf.append(allocator, '0');
         return;
     }
 
     var emitted = false;
 
     const conds = predicate.conditions orelse @as([]const query_ast.Condition, &.{});
-    for (conds, 0..) |*cond, i| {
-        if (emitted or i > 0) try sql_buf.appendSlice(allocator, " AND ");
-        try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
+    buf.beginList(" AND ");
+    for (conds) |*cond| {
+        try appendConditionSql(allocator, buf, values, table_metadata, cond);
         emitted = true;
     }
+    buf.endList();
 
     const or_conds = predicate.or_conditions orelse @as([]const query_ast.Condition, &.{});
     if (or_conds.len > 0) {
-        if (emitted) try sql_buf.appendSlice(allocator, " AND ");
-        try sql_buf.append(allocator, '(');
-        for (or_conds, 0..) |*cond, i| {
-            if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-            try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
+        if (emitted) try buf.appendSlice(allocator, " AND ");
+        try buf.append(allocator, '(');
+        buf.beginList(" OR ");
+        for (or_conds) |*cond| {
+            try appendConditionSql(allocator, buf, values, table_metadata, cond);
         }
-        try sql_buf.append(allocator, ')');
+        buf.endList();
+        try buf.append(allocator, ')');
     }
 }
 
 pub fn appendConditionSql(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     cond: *const query_ast.Condition,
 ) !void {
+    try buf.maybeSep(allocator);
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
     const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
-    try sql_buf.appendSlice(allocator, sql_field_quoted);
+    try buf.appendSlice(allocator, sql_field_quoted);
 
     switch (cond.op) {
         .eq, .ne, .gt, .lt, .gte, .lte => {
             const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, cmpOpSql(cond.op));
+            try buf.appendSlice(allocator, cmpOpSql(cond.op));
             try appendClonedValue(allocator, values, val);
         },
         .contains => {
             const val = cond.value orelse return error.MissingConditionValue;
             if (cond.field_type == .array) {
-                try appendArrayContainsSql(allocator, sql_buf, values, sql_field_quoted, val);
+                try appendArrayContainsSql(allocator, buf, values, sql_field_quoted, val);
                 return;
             }
-            try appendLikePredicate(allocator, sql_buf, values, val, "'%' || ? || '%'");
+            try appendLikePredicate(allocator, buf, values, val, "'%' || ? || '%'");
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
-            try appendLikePredicate(allocator, sql_buf, values, val, "? || '%'");
+            try appendLikePredicate(allocator, buf, values, val, "? || '%'");
         },
         .endsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
-            try appendLikePredicate(allocator, sql_buf, values, val, "'%' || ?");
+            try appendLikePredicate(allocator, buf, values, val, "'%' || ?");
         },
         .in, .notIn => {
-            try appendInPredicate(allocator, sql_buf, values, cond);
+            try appendInPredicate(allocator, buf, values, cond);
         },
         .isNull => {
-            try sql_buf.appendSlice(allocator, " IS NULL");
+            try buf.appendSlice(allocator, " IS NULL");
         },
         .isNotNull => {
-            try sql_buf.appendSlice(allocator, " IS NOT NULL");
+            try buf.appendSlice(allocator, " IS NOT NULL");
         },
     }
 }
@@ -187,7 +191,7 @@ fn cmpOpSql(op: query_ast.Operator) []const u8 {
 
 fn appendLikePredicate(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     val: Value,
     pattern: []const u8,
@@ -195,47 +199,49 @@ fn appendLikePredicate(
     if (val != .scalar or val.scalar != .text) {
         return error.InvalidConditionValue;
     }
-    try sql_buf.appendSlice(allocator, " LIKE ");
-    try sql_buf.appendSlice(allocator, pattern);
-    try sql_buf.appendSlice(allocator, " ESCAPE '\\'");
+    try buf.appendSlice(allocator, " LIKE ");
+    try buf.appendSlice(allocator, pattern);
+    try buf.appendSlice(allocator, " ESCAPE '\\'");
     const escaped = try escapeLikePattern(allocator, val.scalar.text);
     try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
 }
 
 fn appendArrayContainsSql(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     sql_field_quoted: []const u8,
     val: Value,
 ) !void {
-    try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
-    try sql_buf.appendSlice(allocator, sql_field_quoted);
-    try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
+    try buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
+    try buf.appendSlice(allocator, sql_field_quoted);
+    try buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
     try appendClonedValue(allocator, values, val);
 }
 
 fn appendInPredicate(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     cond: *const query_ast.Condition,
 ) !void {
     const is_not = cond.op == .notIn;
-    try sql_buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
+    try buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
     if (cond.value) |val| {
         if (val == .array) {
-            for (val.array, 0..) |v, i| {
-                if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-                try sql_buf.append(allocator, '?');
+            buf.beginList(", ");
+            for (val.array) |v| {
+                try buf.maybeSep(allocator);
+                try buf.append(allocator, '?');
                 try appendOwnedValue(allocator, values, Value{ .scalar = try v.clone(allocator) });
             }
+            buf.endList();
         } else {
-            try sql_buf.append(allocator, '?');
+            try buf.append(allocator, '?');
             try appendClonedValue(allocator, values, val);
         }
     }
-    try sql_buf.append(allocator, ')');
+    try buf.append(allocator, ')');
 }
 
 fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
