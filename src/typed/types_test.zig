@@ -26,8 +26,8 @@ test "Value: clone preserves eql and ownership" {
         for (cases) |v| {
             const cloned = try v.clone(allocator);
             try testing.expect(v.eql(cloned));
-            // Ownership independence: deinit original, clone still valid
             v.deinit(allocator);
+            cloned.deinit(allocator);
         }
     }
 
@@ -51,6 +51,8 @@ test "Value: clone preserves eql and ownership" {
         const v = Value{ .nil = {} };
         const cloned = try v.clone(allocator);
         try testing.expect(v.eql(cloned));
+        v.deinit(allocator);
+        cloned.deinit(allocator);
     }
 
     // Record clone roundtrip
@@ -64,17 +66,21 @@ test "Value: clone preserves eql and ownership" {
         try testing.expectEqual(@as(usize, 2), cloned.values.len);
         try testing.expect(rec.values[0].eql(cloned.values[0]));
         try testing.expect(rec.values[1].eql(cloned.values[1]));
+        rec.deinit(allocator);
+        cloned.deinit(allocator);
     }
 
     // Cursor clone roundtrip
     {
-        const cur = Cursor{
+        var cur = Cursor{
             .sort_value = .{ .scalar = .{ .integer = 99 } },
             .id = 0xaaa,
         };
-        const cloned = try cur.clone(allocator);
+        var cloned = try cur.clone(allocator);
         try testing.expect(cur.sort_value.eql(cloned.sort_value));
         try testing.expectEqual(cur.id, cloned.id);
+        cur.deinit(allocator);
+        cloned.deinit(allocator);
     }
 }
 

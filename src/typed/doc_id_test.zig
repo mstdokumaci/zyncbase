@@ -54,11 +54,12 @@ test "doc_id: generateUuidV7 invariants" {
         try testing.expect(first & family_tag != 0);
     }
 
-    // Timestamp (bits 121..74) is within ~100s of now
+    // Timestamp (bits 121..74) is within ~10s of now
     {
         const ts: u64 = @intCast((first >> 74) & 0xffffffffffff);
         const now_ms: u64 = @intCast(@max(std.time.milliTimestamp(), 0));
-        try testing.expect(ts <= now_ms + 100_000);
+        try testing.expect(ts <= now_ms + 10_000);
+        try testing.expect(ts >= now_ms - 10_000);
     }
 
     // Uniqueness: two calls produce different values
