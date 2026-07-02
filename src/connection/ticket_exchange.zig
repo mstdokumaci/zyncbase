@@ -5,7 +5,9 @@ const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
 const typed = @import("../typed.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
-const json_skip = @import("json_skip.zig");
+const json_read = @import("../json/read.zig");
+const json_iterate = @import("../json/iterate.zig");
+const json_write = @import("../json/write.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,
@@ -188,37 +190,25 @@ pub const TicketExchange = struct {
 
         var payload_buf = std.ArrayListUnmanaged(u8).empty;
         defer payload_buf.deinit(allocator);
-        const writer = payload_buf.writer(allocator);
+        var w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
 
-        try writer.writeAll("{\"sub\":");
-        const subject_json = try std.json.Stringify.valueAlloc(allocator, subject, .{});
-        defer allocator.free(subject_json);
-        try writer.writeAll(subject_json);
-        try writer.print(",\"exp\":{d},\"jti\":\"{s}\",\"session\":{{\"externalId\":", .{ exp, jti_hex });
-        try writer.writeAll(subject_json);
-        try writer.print(",\"isAnonymous\":{s},\"claims\":", .{if (is_anonymous) "true" else "false"});
-
-        if (claims.count() == 0) {
-            try writer.writeAll("{}");
-        } else {
-            try writer.writeByte('{');
-            var first = true;
-            var claims_it = claims.iterator();
-            while (claims_it.next()) |entry| {
-                if (!first) try writer.writeByte(',');
-                first = false;
-                const key_json = try std.json.Stringify.valueAlloc(allocator, entry.key_ptr.*, .{});
-                defer allocator.free(key_json);
-                try writer.writeAll(key_json);
-                try writer.writeByte(':');
-                const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
-                defer allocator.free(value_json);
-                try writer.writeAll(value_json);
-            }
-            try writer.writeByte('}');
+        try w.beginObject();
+        try w.field("sub", subject);
+        try w.intField("exp", exp);
+        try w.field("jti", &jti_hex);
+        try w.beginObjectField("session");
+        try w.field("externalId", subject);
+        try w.boolField("isAnonymous", is_anonymous);
+        try w.beginObjectField("claims");
+        var claims_it = claims.iterator();
+        while (claims_it.next()) |entry| {
+            const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
+            defer allocator.free(value_json);
+            try w.rawField(entry.key_ptr.*, value_json);
         }
-
-        try writer.writeAll("}}");
+        try w.endObject();
+        try w.endObject();
+        try w.endObject();
 
         const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
         defer allocator.free(payload_b64);
@@ -461,25 +451,20 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
 }
 
 fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
-    const key = "\"anonymousSubject\"";
-    const key_pos = std.mem.indexOf(u8, json_body, key) orelse return null;
-    const after_key = json_body[key_pos + key.len ..];
-
-    var i: usize = 0;
-    while (i < after_key.len and (after_key[i] == ' ' or after_key[i] == ':' or after_key[i] == '\t' or after_key[i] == '\n' or after_key[i] == '\r')) {
-        i += 1;
-    }
-    if (i >= after_key.len or after_key[i] != '"') return null;
-    i += 1;
-
-    const value_start = i;
-    while (i < after_key.len and after_key[i] != '"') {
-        if (after_key[i] == '\\') i += 1;
-        i += 1;
-    }
-    if (i >= after_key.len) return null;
-
-    return after_key[value_start..i];
+    const AnonCtx = struct {
+        subject: ?[]const u8 = null,
+    };
+    const S = struct {
+        fn anonHandler(ctx: *AnonCtx, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "anonymousSubject")) {
+                var pos: usize = 0;
+                ctx.subject = json_read.extractJsonString(value, &pos);
+            }
+        }
+    };
+    var ctx = AnonCtx{};
+    json_iterate.forEachJsonFieldExtract(json_body, AnonCtx, &ctx, S.anonHandler);
+    return ctx.subject;
 }
 
 const TicketPayload = struct {
@@ -492,156 +477,60 @@ const TicketPayload = struct {
 };
 
 fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
-    var result: TicketPayload = .{
-        .sub = "",
-        .exp = 0,
-        .jti = "",
-        .external_id = null,
-        .is_anonymous = false,
-        .claims_json = null,
+    const Ctx = struct {
+        result: TicketPayload = .{
+            .sub = "",
+            .exp = 0,
+            .jti = "",
+            .external_id = null,
+            .is_anonymous = false,
+            .claims_json = null,
+        },
+        found_sub: bool = false,
+        found_exp: bool = false,
+        found_jti: bool = false,
     };
-
-    var found_sub = false;
-    var found_exp = false;
-    var found_jti = false;
-
-    var pos: usize = 0;
-    if (pos >= json.len or json[pos] != '{') return null;
-    pos += 1;
-
-    while (pos < json.len) {
-        skipWhitespace(json, &pos);
-        if (pos >= json.len) return null;
-        if (json[pos] == '}') break;
-        if (json[pos] == ',') {
-            pos += 1;
-            continue;
+    const S = struct {
+        fn handler(ctx: *Ctx, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "sub")) {
+                var pos: usize = 0;
+                ctx.result.sub = json_read.extractJsonString(value, &pos) orelse return;
+                ctx.found_sub = true;
+            } else if (std.mem.eql(u8, key, "exp")) {
+                var pos: usize = 0;
+                ctx.result.exp = json_read.extractJsonInt(value, &pos) orelse return;
+                ctx.found_exp = true;
+            } else if (std.mem.eql(u8, key, "jti")) {
+                var pos: usize = 0;
+                ctx.result.jti = json_read.extractJsonString(value, &pos) orelse return;
+                ctx.found_jti = true;
+            } else if (std.mem.eql(u8, key, "session")) {
+                extractSessionFields(value, &ctx.result);
+            }
         }
-
-        const key = extractJsonKey(json, &pos) orelse return null;
-        skipWhitespace(json, &pos);
-        if (pos >= json.len or json[pos] != ':') return null;
-        pos += 1;
-        skipWhitespace(json, &pos);
-
-        if (std.mem.eql(u8, key, "sub")) {
-            result.sub = extractJsonString(json, &pos) orelse return null;
-            found_sub = true;
-        } else if (std.mem.eql(u8, key, "exp")) {
-            result.exp = extractJsonInt(json, &pos) orelse return null;
-            found_exp = true;
-        } else if (std.mem.eql(u8, key, "jti")) {
-            result.jti = extractJsonString(json, &pos) orelse return null;
-            found_jti = true;
-        } else if (std.mem.eql(u8, key, "session")) {
-            const session_start = pos;
-            json_skip.skipValue(json, &pos) orelse return null;
-            const session_json = json[session_start..pos];
-            extractSessionFields(session_json, &result);
-        } else {
-            json_skip.skipValue(json, &pos) orelse return null;
-        }
-    }
-
-    if (!found_sub or !found_exp or !found_jti) return null;
-    return result;
+    };
+    var ctx = Ctx{};
+    json_iterate.forEachJsonFieldExtract(json, Ctx, &ctx, S.handler);
+    if (!ctx.found_sub or !ctx.found_exp or !ctx.found_jti) return null;
+    return ctx.result;
 }
 
 fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
-    var pos: usize = 0;
-    if (pos >= session_json.len or session_json[pos] != '{') return;
-    pos += 1;
-
-    while (pos < session_json.len) {
-        skipWhitespace(session_json, &pos);
-        if (pos >= session_json.len) return;
-        if (session_json[pos] == '}') break;
-        if (session_json[pos] == ',') {
-            pos += 1;
-            continue;
-        }
-
-        const key = extractJsonKey(session_json, &pos) orelse return;
-        skipWhitespace(session_json, &pos);
-        if (pos >= session_json.len or session_json[pos] != ':') return;
-        pos += 1;
-        skipWhitespace(session_json, &pos);
-
-        if (std.mem.eql(u8, key, "externalId")) {
-            result.external_id = extractJsonString(session_json, &pos);
-        } else if (std.mem.eql(u8, key, "isAnonymous")) {
-            if (pos + 4 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..4], "true")) {
-                result.is_anonymous = true;
-                pos += 4;
-            } else if (pos + 5 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..5], "false")) {
-                result.is_anonymous = false;
-                pos += 5;
-            } else {
-                return;
+    const S = struct {
+        fn handler(ctx: *TicketPayload, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "externalId")) {
+                var pos: usize = 0;
+                ctx.external_id = json_read.extractJsonString(value, &pos);
+            } else if (std.mem.eql(u8, key, "isAnonymous")) {
+                ctx.is_anonymous = std.mem.eql(u8, value, "true");
+            } else if (std.mem.eql(u8, key, "claims")) {
+                if (value.len > 2 and value[0] == '{' and value[1] != '}') {
+                    ctx.claims_json = value;
+                }
             }
-        } else if (std.mem.eql(u8, key, "claims")) {
-            const claims_start = pos;
-            if (json_skip.skipValue(session_json, &pos) == null) return;
-            const claims_json = session_json[claims_start..pos];
-            if (claims_json.len > 2 and claims_json[0] == '{' and claims_json[1] != '}') {
-                result.claims_json = claims_json;
-            }
-        } else {
-            if (json_skip.skipValue(session_json, &pos) == null) return;
         }
-    }
-}
-
-fn skipWhitespace(json: []const u8, pos: *usize) void {
-    while (pos.* < json.len) {
-        switch (json[pos.*]) {
-            ' ', '\t', '\n', '\r' => pos.* += 1,
-            else => break,
-        }
-    }
-}
-
-fn extractJsonKey(json: []const u8, pos: *usize) ?[]const u8 {
-    return extractJsonString(json, pos);
-}
-
-fn extractJsonString(json: []const u8, pos: *usize) ?[]const u8 {
-    if (pos.* >= json.len or json[pos.*] != '"') return null;
-    pos.* += 1;
-    const start = pos.*;
-    while (pos.* < json.len) {
-        if (json[pos.*] == '"') {
-            const result = json[start..pos.*];
-            pos.* += 1;
-            return result;
-        }
-        if (json[pos.*] == '\\') {
-            pos.* += 1;
-        }
-        pos.* += 1;
-    }
-    return null;
-}
-
-fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
-    var negative = false;
-    if (pos.* < json.len and json[pos.*] == '-') {
-        negative = true;
-        pos.* += 1;
-    }
-    if (pos.* >= json.len or json[pos.*] < '0' or json[pos.*] > '9') return null;
-    var value: i64 = 0;
-    while (pos.* < json.len and json[pos.*] >= '0' and json[pos.*] <= '9') {
-        const digit: i64 = json[pos.*] - '0';
-        const mul_result = @mulWithOverflow(value, 10);
-        if (mul_result[1] != 0) return null;
-        value = mul_result[0];
-        const add_result = @addWithOverflow(value, if (negative) -digit else digit);
-        if (add_result[1] != 0) return null;
-        value = add_result[0];
-        pos.* += 1;
-    }
-    return value;
+    };
+    json_iterate.forEachJsonFieldExtract(session_json, TicketPayload, result, S.handler);
 }
 
 const TicketParts = struct { payload_b64: []const u8, sig_b64: []const u8 };

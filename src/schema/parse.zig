@@ -1,7 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const system = @import("system.zig");
-const json = @import("json.zig");
+const json_read = @import("../json/read.zig");
 const index = @import("index.zig");
 
 const Allocator = std.mem.Allocator;
@@ -16,8 +16,13 @@ const planned_constraint_keys = [_][]const u8{
     "maximum",
 };
 
+fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
+    if (value != .object) return error.InvalidMetadata;
+    return .{ .json = try std.json.Stringify.valueAlloc(allocator, value, .{}) };
+}
+
 pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
-    var parsed = try json.parseValue(allocator, json_text);
+    var parsed = try json_read.parseValue(allocator, json_text);
     defer parsed.deinit();
 
     const root = parsed.value;
@@ -32,7 +37,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     if (store_val != .object) return error.InvalidStore;
 
     const root_metadata = if (root.object.get("metadata")) |metadata|
-        try json.cloneMetadata(allocator, metadata)
+        try cloneMetadata(allocator, metadata)
     else
         null;
     defer if (root_metadata) |metadata| metadata.deinit(allocator);
@@ -221,23 +226,13 @@ const StoreFieldContext = struct {
             required = true;
         }
 
-        var items_type: ?types.FieldType = null;
-        if (declared_type == .array) {
-            const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
-            if (items_val != .string) return error.InvalidArrayItems;
-            items_type = try mapPrimitiveType(items_val.string);
-        }
-
-        const indexed = if (field_def.object.get("indexed")) |val| blk: {
-            if (val != .bool) return error.InvalidFieldDefinition;
-            break :blk val.bool;
+        const items_type = try extractArrayItemsType(declared_type, field_def);
+        const indexed_val = field_def.object.get("indexed");
+        const indexed = if (indexed_val) |v| switch (v) {
+            .bool => |b| b,
+            else => return error.InvalidFieldDefinition,
         } else false;
-
-        const references = if (field_def.object.get("references")) |val| blk: {
-            if (val != .string) return error.InvalidReference;
-            if (!isValidTableIdentifier(val.string)) return error.InvalidTableName;
-            break :blk try allocator.dupe(u8, val.string);
-        } else null;
+        const references = try extractReferences(allocator, field_def.object);
         errdefer if (references) |ref| allocator.free(ref);
 
         if (references != null) {
@@ -245,17 +240,10 @@ const StoreFieldContext = struct {
             storage_type = .doc_id;
         }
 
-        const on_delete: ?types.OnDelete = if (field_def.object.get("onDelete")) |val| blk: {
-            if (val != .string) return error.InvalidOnDelete;
-            break :blk try parseOnDelete(val.string);
-        } else if (references != null) .restrict else null;
-
-        if (on_delete) |on_del| {
-            if (on_del == .set_null and required) return error.InvalidOnDelete;
-        }
+        const on_delete = try extractOnDelete(field_def.object, references != null, required);
 
         const metadata = if (field_def.object.get("metadata")) |value|
-            try json.cloneMetadata(allocator, value)
+            try cloneMetadata(allocator, value)
         else
             null;
         errdefer if (metadata) |md| md.deinit(allocator);
@@ -519,7 +507,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
     errdefer allocator.free(table_name_quoted);
 
     const table_metadata = if (table_def.object.get("metadata")) |metadata|
-        try json.cloneMetadata(allocator, metadata)
+        try cloneMetadata(allocator, metadata)
     else
         null;
     errdefer if (table_metadata) |metadata| metadata.deinit(allocator);
@@ -745,6 +733,28 @@ fn isPlannedConstraintKey(key: []const u8) bool {
         if (std.mem.eql(u8, key, planned)) return true;
     }
     return false;
+}
+
+fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
+    if (declared_type != .array) return null;
+    const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
+    if (items_val != .string) return error.InvalidArrayItems;
+    return try mapPrimitiveType(items_val.string);
+}
+
+fn extractReferences(allocator: Allocator, field_def: std.json.ObjectMap) !?[]const u8 {
+    const val = field_def.get("references") orelse return null;
+    if (val != .string) return error.InvalidReference;
+    if (!isValidTableIdentifier(val.string)) return error.InvalidTableName;
+    return try allocator.dupe(u8, val.string);
+}
+
+fn extractOnDelete(field_def: std.json.ObjectMap, has_references: bool, required: bool) !?types.OnDelete {
+    const val = field_def.get("onDelete") orelse return if (has_references) .restrict else null;
+    if (val != .string) return error.InvalidOnDelete;
+    const parsed = try parseOnDelete(val.string);
+    if (parsed == .set_null and required) return error.InvalidOnDelete;
+    return parsed;
 }
 
 fn isValidTableIdentifier(name: []const u8) bool {

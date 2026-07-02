@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const c = @import("uwebsockets_wrapper.zig").c;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const typed = @import("typed.zig");
-const json_access = @import("json_access.zig");
+const json_read = @import("json/read.zig");
 
 pub const Jwk = struct {
     kty: []const u8,
@@ -199,7 +199,7 @@ pub const JwtValidator = struct {
 
         try verifyTokenSignature(self.config, allocator, decoded);
         try validateStandardClaims(self.config, decoded.payload);
-        return try allocator.dupe(u8, json_access.getString(decoded.payload.object, self.config.subject_claim) orelse return error.SubjectClaimMissing);
+        return try allocator.dupe(u8, (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing);
     }
 
     pub const ValidatedToken = struct {
@@ -230,7 +230,7 @@ pub const JwtValidator = struct {
         try verifyTokenSignature(self.config, allocator, decoded);
         try validateStandardClaims(self.config, decoded.payload);
 
-        const sub = json_access.getString(decoded.payload.object, self.config.subject_claim) orelse return error.SubjectClaimMissing;
+        const sub = (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing;
         var claims = try extractClaimsFromPayload(allocator, decoded.payload, claims_mapping);
         errdefer {
             var it = claims.iterator();
@@ -366,7 +366,7 @@ fn validateStandardClaims(config: JwtValidationConfig, payload: std.json.Value) 
     }
 
     if (config.issuer) |expected_iss| {
-        const iss = json_access.getString(payload.object, "iss") orelse return error.IssuerMismatch;
+        const iss = (try json_read.getString(payload.object, "iss")) orelse return error.IssuerMismatch;
         if (!std.mem.eql(u8, iss, expected_iss)) return error.IssuerMismatch;
     }
 
