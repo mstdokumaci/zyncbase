@@ -852,6 +852,7 @@ pub const StorageEngine = struct {
             error.NotFound => return null,
             else => return err,
         };
+        errdefer handle.release();
         const typed_record_ptr = handle.data();
         // Cast *Record to *[1]Record for a zero-copy single-element slice (cache handle keeps memory alive).
         const slice: []Record = typed_record_ptr[0..1];
@@ -887,6 +888,7 @@ pub const StorageEngine = struct {
         defer mstmt.release();
         const result = try reader.execSelectDocument(allocator, &node.conn, mstmt.stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
         if (result) |record| {
+            errdefer record.deinit(allocator);
             if (self.write_worker.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
                 const cache_record = try record.clone(self.allocator);
