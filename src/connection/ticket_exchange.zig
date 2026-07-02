@@ -6,6 +6,7 @@ const Session = @import("session.zig").Session;
 const typed = @import("../typed.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
+const json_iterate = @import("../json/iterate.zig");
 const json_write = @import("../json/write.zig");
 
 pub const TicketExchange = struct {
@@ -450,14 +451,20 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
 }
 
 fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
-    const key = "\"anonymousSubject\"";
-    const key_pos = std.mem.indexOf(u8, json_body, key) orelse return null;
-    var pos = key_pos + key.len;
-    json_read.skipWhitespace(json_body, &pos);
-    if (pos >= json_body.len or json_body[pos] != ':') return null;
-    pos += 1;
-    json_read.skipWhitespace(json_body, &pos);
-    return json_read.extractJsonString(json_body, &pos);
+    const AnonCtx = struct {
+        subject: ?[]const u8 = null,
+    };
+    const S = struct {
+        fn anonHandler(ctx: *AnonCtx, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "anonymousSubject")) {
+                var pos: usize = 0;
+                ctx.subject = json_read.extractJsonString(value, &pos);
+            }
+        }
+    };
+    var ctx = AnonCtx{};
+    json_iterate.forEachJsonFieldExtract(json_body, AnonCtx, &ctx, S.anonHandler);
+    return ctx.subject;
 }
 
 const TicketPayload = struct {
@@ -470,104 +477,60 @@ const TicketPayload = struct {
 };
 
 fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
-    var result: TicketPayload = .{
-        .sub = "",
-        .exp = 0,
-        .jti = "",
-        .external_id = null,
-        .is_anonymous = false,
-        .claims_json = null,
+    const Ctx = struct {
+        result: TicketPayload = .{
+            .sub = "",
+            .exp = 0,
+            .jti = "",
+            .external_id = null,
+            .is_anonymous = false,
+            .claims_json = null,
+        },
+        found_sub: bool = false,
+        found_exp: bool = false,
+        found_jti: bool = false,
     };
-
-    var found_sub = false;
-    var found_exp = false;
-    var found_jti = false;
-
-    var pos: usize = 0;
-    if (pos >= json.len or json[pos] != '{') return null;
-    pos += 1;
-
-    while (pos < json.len) {
-        json_read.skipWhitespace(json, &pos);
-        if (pos >= json.len) return null;
-        if (json[pos] == '}') break;
-        if (json[pos] == ',') {
-            pos += 1;
-            continue;
+    const S = struct {
+        fn handler(ctx: *Ctx, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "sub")) {
+                var pos: usize = 0;
+                ctx.result.sub = json_read.extractJsonString(value, &pos) orelse return;
+                ctx.found_sub = true;
+            } else if (std.mem.eql(u8, key, "exp")) {
+                var pos: usize = 0;
+                ctx.result.exp = json_read.extractJsonInt(value, &pos) orelse return;
+                ctx.found_exp = true;
+            } else if (std.mem.eql(u8, key, "jti")) {
+                var pos: usize = 0;
+                ctx.result.jti = json_read.extractJsonString(value, &pos) orelse return;
+                ctx.found_jti = true;
+            } else if (std.mem.eql(u8, key, "session")) {
+                extractSessionFields(value, &ctx.result);
+            }
         }
-
-        const key = json_read.extractJsonKey(json, &pos) orelse return null;
-        json_read.skipWhitespace(json, &pos);
-        if (pos >= json.len or json[pos] != ':') return null;
-        pos += 1;
-        json_read.skipWhitespace(json, &pos);
-
-        if (std.mem.eql(u8, key, "sub")) {
-            result.sub = json_read.extractJsonString(json, &pos) orelse return null;
-            found_sub = true;
-        } else if (std.mem.eql(u8, key, "exp")) {
-            result.exp = json_read.extractJsonInt(json, &pos) orelse return null;
-            found_exp = true;
-        } else if (std.mem.eql(u8, key, "jti")) {
-            result.jti = json_read.extractJsonString(json, &pos) orelse return null;
-            found_jti = true;
-        } else if (std.mem.eql(u8, key, "session")) {
-            const session_start = pos;
-            json_read.skipValue(json, &pos) orelse return null;
-            const session_json = json[session_start..pos];
-            extractSessionFields(session_json, &result);
-        } else {
-            json_read.skipValue(json, &pos) orelse return null;
-        }
-    }
-
-    if (!found_sub or !found_exp or !found_jti) return null;
-    return result;
+    };
+    var ctx = Ctx{};
+    json_iterate.forEachJsonFieldExtract(json, Ctx, &ctx, S.handler);
+    if (!ctx.found_sub or !ctx.found_exp or !ctx.found_jti) return null;
+    return ctx.result;
 }
 
 fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
-    var pos: usize = 0;
-    if (pos >= session_json.len or session_json[pos] != '{') return;
-    pos += 1;
-
-    while (pos < session_json.len) {
-        json_read.skipWhitespace(session_json, &pos);
-        if (pos >= session_json.len) return;
-        if (session_json[pos] == '}') break;
-        if (session_json[pos] == ',') {
-            pos += 1;
-            continue;
-        }
-
-        const key = json_read.extractJsonKey(session_json, &pos) orelse return;
-        json_read.skipWhitespace(session_json, &pos);
-        if (pos >= session_json.len or session_json[pos] != ':') return;
-        pos += 1;
-        json_read.skipWhitespace(session_json, &pos);
-
-        if (std.mem.eql(u8, key, "externalId")) {
-            result.external_id = json_read.extractJsonString(session_json, &pos);
-        } else if (std.mem.eql(u8, key, "isAnonymous")) {
-            if (pos + 4 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..4], "true")) {
-                result.is_anonymous = true;
-                pos += 4;
-            } else if (pos + 5 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..5], "false")) {
-                result.is_anonymous = false;
-                pos += 5;
-            } else {
-                return;
+    const S = struct {
+        fn handler(ctx: *TicketPayload, key: []const u8, value: []const u8) void {
+            if (std.mem.eql(u8, key, "externalId")) {
+                var pos: usize = 0;
+                ctx.external_id = json_read.extractJsonString(value, &pos);
+            } else if (std.mem.eql(u8, key, "isAnonymous")) {
+                ctx.is_anonymous = std.mem.eql(u8, value, "true");
+            } else if (std.mem.eql(u8, key, "claims")) {
+                if (value.len > 2 and value[0] == '{' and value[1] != '}') {
+                    ctx.claims_json = value;
+                }
             }
-        } else if (std.mem.eql(u8, key, "claims")) {
-            const claims_start = pos;
-            if (json_read.skipValue(session_json, &pos) == null) return;
-            const claims_json = session_json[claims_start..pos];
-            if (claims_json.len > 2 and claims_json[0] == '{' and claims_json[1] != '}') {
-                result.claims_json = claims_json;
-            }
-        } else {
-            if (json_read.skipValue(session_json, &pos) == null) return;
         }
-    }
+    };
+    json_iterate.forEachJsonFieldExtract(session_json, TicketPayload, result, S.handler);
 }
 
 const TicketParts = struct { payload_b64: []const u8, sig_b64: []const u8 };

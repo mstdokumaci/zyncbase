@@ -96,13 +96,13 @@ test "setString sets optional field only when string present" {
     try std.testing.expectEqualStrings("xyz", field.?);
 
     var untouched: ?[]const u8 = null;
-    try read.setString(std.testing.allocator, &untouched, obj, "noop");
+    try std.testing.expectError(error.TypeMismatch, read.setString(std.testing.allocator, &untouched, obj, "noop"));
     try std.testing.expect(untouched == null);
 }
 
 test "replaceString frees old and dups new" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"host":"1.2.3.4"}
+        \\{"host":"1.2.3.4","noop":42}
     );
     defer p.deinit();
     const obj = p.value.object;
@@ -115,6 +115,11 @@ test "replaceString frees old and dups new" {
     defer std.testing.allocator.free(untouched);
     try read.replaceString(std.testing.allocator, &untouched, obj, "missing");
     try std.testing.expectEqualStrings("orig", untouched);
+
+    var type_mismatch: []const u8 = try std.testing.allocator.dupe(u8, "keep");
+    defer std.testing.allocator.free(type_mismatch);
+    try std.testing.expectError(error.TypeMismatch, read.replaceString(std.testing.allocator, &type_mismatch, obj, "noop"));
+    try std.testing.expectEqualStrings("keep", type_mismatch);
 }
 
 test "getEnum resolves string to enum tag" {

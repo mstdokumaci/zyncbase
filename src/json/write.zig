@@ -10,6 +10,14 @@ pub fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, v
             '\n' => try buf.appendSlice(allocator, "\\n"),
             '\r' => try buf.appendSlice(allocator, "\\r"),
             '\t' => try buf.appendSlice(allocator, "\\t"),
+            0x08 => try buf.appendSlice(allocator, "\\b"),
+            0x0c => try buf.appendSlice(allocator, "\\f"),
+            0x00...0x07, 0x0b, 0x0e...0x1f => {
+                try buf.appendSlice(allocator, "\\u00");
+                const hex = "0123456789abcdef";
+                try buf.append(allocator, hex[char >> 4]);
+                try buf.append(allocator, hex[char & 0xf]);
+            },
             else => try buf.append(allocator, char),
         }
     }

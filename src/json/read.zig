@@ -60,7 +60,7 @@ pub fn setString(
     obj: ObjectMap,
     key: []const u8,
 ) !void {
-    const s = getString(obj, key) catch return;
+    const s = try getString(obj, key);
     const val = s orelse return;
     const new = try allocator.dupe(u8, val);
     if (field.*) |old| allocator.free(old);
@@ -73,7 +73,7 @@ pub fn replaceString(
     obj: ObjectMap,
     key: []const u8,
 ) !void {
-    const s = getString(obj, key) catch return;
+    const s = try getString(obj, key);
     const val = s orelse return;
     const new = try allocator.dupe(u8, val);
     allocator.free(field.*);

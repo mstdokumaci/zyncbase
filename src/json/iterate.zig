@@ -10,6 +10,7 @@ pub fn forEachJsonField(
     comptime callback: fn (*Ctx, []const u8, usize, usize) void,
 ) void {
     var pos: usize = 0;
+    read.skipWhitespace(json, &pos);
     if (pos >= json.len or json[pos] != '{') return;
     pos += 1;
 

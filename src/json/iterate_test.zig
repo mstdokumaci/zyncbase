@@ -51,6 +51,30 @@ test "forEachJsonField handles nested values" {
     try std.testing.expect(ctx.found_nested);
 }
 
+test "forEachJsonField skips leading spaces" {
+    var ctx = CountCtx{};
+    iterate.forEachJsonField("  {\"a\":1,\"b\":2}", CountCtx, &ctx, countCallback);
+    try std.testing.expectEqual(@as(usize, 2), ctx.count);
+}
+
+test "forEachJsonField skips leading newline" {
+    var ctx = CountCtx{};
+    iterate.forEachJsonField("\n{\"a\":1}", CountCtx, &ctx, countCallback);
+    try std.testing.expectEqual(@as(usize, 1), ctx.count);
+}
+
+test "forEachJsonField skips mixed leading whitespace" {
+    var ctx = CountCtx{};
+    iterate.forEachJsonField(" \t\n{\"a\":1}", CountCtx, &ctx, countCallback);
+    try std.testing.expectEqual(@as(usize, 1), ctx.count);
+}
+
+test "forEachJsonField with only whitespace returns early" {
+    var ctx = CountCtx{};
+    iterate.forEachJsonField("   ", CountCtx, &ctx, countCallback);
+    try std.testing.expectEqual(@as(usize, 0), ctx.count);
+}
+
 fn extractHandler(ctx: *ExtractCtx, key: []const u8, value: []const u8) void {
     if (std.mem.eql(u8, key, "sub")) {
         ctx.sub = value;
