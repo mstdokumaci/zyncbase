@@ -41,7 +41,7 @@ pub const Writer = struct {
         self.is_first = false;
     }
 
-    pub fn writeRaw(self: Writer, bytes: []const u8) !void {
+    pub fn writeRaw(self: *Writer, bytes: []const u8) !void {
         try self.buf.appendSlice(self.allocator, bytes);
     }
 
