@@ -841,6 +841,67 @@ pub const StorageEngine = struct {
         return values;
     }
 
+    /// Attempt a cache hit for a single-document select.
+    /// Returns a ManagedResult if found (and guard passes), null on miss, or an error.
+    fn tryCacheHit(
+        self: *StorageEngine,
+        cache_key: storage_cache.MetadataCacheKey,
+        guard_predicate: ?*const query_ast.FilterPredicate,
+    ) !?ManagedResult {
+        const handle = self.metadata_cache.get(cache_key) catch |err| switch (err) {
+            error.NotFound => return null,
+            else => return err,
+        };
+        errdefer handle.release();
+        const typed_record_ptr = handle.data();
+        // Cast *Record to *[1]Record for a zero-copy single-element slice (cache handle keeps memory alive).
+        const slice: []Record = typed_record_ptr[0..1];
+        if (guard_predicate) |predicate| {
+            if (!try filter_eval.evaluatePredicate(predicate, &slice[0])) {
+                handle.release();
+                return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+            }
+        }
+        return ManagedResult{
+            .records = slice,
+            .handle = handle,
+        };
+    }
+
+    /// Execute a single-document SELECT against SQLite and populate the cache if the
+    /// read is still consistent with the current write version.
+    fn executeAndCacheResult(
+        self: *StorageEngine,
+        allocator: Allocator,
+        node: *ReaderNode,
+        sql_query: []const u8,
+        id: DocId,
+        effective_namespace_id: i64,
+        table_metadata: *const schema_mod.Table,
+        rendered_guard: ?filter_sql.RenderedPredicate,
+        cache_key: storage_cache.MetadataCacheKey,
+    ) !ManagedResult {
+        // Snapshot write_seq before the DB read.
+        const seq_before = self.write_worker.snapshotVersion();
+
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
+        defer mstmt.release();
+        const result = try reader.execSelectDocument(allocator, &node.conn, mstmt.stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
+        if (result) |record| {
+            errdefer record.deinit(allocator);
+            if (self.write_worker.snapshotVersion() == seq_before) {
+                // Populate cache with a persistent copy (cloned into GPA)
+                const cache_record = try record.clone(self.allocator);
+                errdefer cache_record.deinit(self.allocator);
+                try self.metadata_cache.update(cache_key, cache_record);
+            }
+            const items = try allocator.alloc(Record, 1);
+            items[0] = record;
+            return ManagedResult{ .records = items, .allocator = allocator };
+        }
+        return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+    }
+
     /// Select a single document by ID.
     pub fn selectDocument(
         self: *StorageEngine,
@@ -859,25 +920,7 @@ pub const StorageEngine = struct {
         }
 
         const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
-
-        if (self.metadata_cache.get(cache_key)) |handle| {
-            const typed_record_ptr = handle.data();
-            // Cast *Record to *[1]Record for a zero-copy single-element slice (cache handle keeps memory alive).
-            const slice: []Record = typed_record_ptr[0..1];
-            if (guard_predicate) |predicate| {
-                if (!try filter_eval.evaluatePredicate(predicate, &slice[0])) {
-                    handle.release();
-                    return ManagedResult{ .records = &[_]Record{}, .allocator = null };
-                }
-            }
-            return ManagedResult{
-                .records = slice,
-                .handle = handle,
-            };
-        } else |err| switch (err) {
-            error.NotFound => {},
-            else => return err,
-        }
+        if (try self.tryCacheHit(cache_key, guard_predicate)) |result| return result;
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
         const node = &self.reader_nodes[reader_idx];
@@ -890,25 +933,7 @@ pub const StorageEngine = struct {
         const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
         defer allocator.free(sql_query);
 
-        // Snapshot write_seq before the DB read.
-        const seq_before = self.write_worker.snapshotVersion();
-
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
-        defer mstmt.release();
-        const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocument(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
-        if (result) |record| {
-            if (self.write_worker.snapshotVersion() == seq_before) {
-                // Populate cache with a persistent copy (cloned into GPA)
-                const cache_record = try record.clone(self.allocator);
-                errdefer cache_record.deinit(self.allocator);
-                try self.metadata_cache.update(cache_key, cache_record);
-            }
-            const items = try allocator.alloc(Record, 1);
-            items[0] = record;
-            return ManagedResult{ .records = items, .allocator = allocator };
-        }
-        return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+        return self.executeAndCacheResult(allocator, node, sql_query, id, effective_namespace_id, table_metadata, rendered_guard, cache_key);
     }
 
     /// SELECT for a query filter.

@@ -112,6 +112,32 @@ pub const store_delta_header = blk: {
 
 // === Response builders ===
 
+inline fn writeOptional(
+    writer: anytype,
+    key: []const u8,
+    value: anytype,
+    comptime encoder: anytype,
+    write_nil: bool,
+) !void {
+    if (value != null) {
+        try writer.writeAll(key);
+        try encoder(writer, value.?);
+    } else if (write_nil) {
+        try writer.writeAll(key);
+        try msgpack.encode(.nil, writer);
+    }
+}
+
+/// Specialized encoder for uint64 payloads to avoid repeated Payload wrapping.
+fn encodeUint64(writer: anytype, v: u64) !void {
+    try msgpack.encode(msgpack.Payload.uintToPayload(v), writer);
+}
+
+/// Specialized encoder for strings.
+fn encodeStr(writer: anytype, v: []const u8) !void {
+    try msgpack.writeMsgPackStr(writer, v);
+}
+
 pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
@@ -186,6 +212,7 @@ pub fn encodeError(
     const writer = list.writer(msgpack_allocator);
 
     if (wire_err.retry_after_ms) |retry_after| {
+        // Slow Path: Dynamic Map
         const map_size: usize = if (msg_id != null) 5 else 4;
         try msgpack.encodeMapHeader(writer, map_size);
 
@@ -195,11 +222,7 @@ pub fn encodeError(
         try writer.writeAll(Keys.code);
         try writer.writeAll(wire_err.code);
 
-        if (msg_id) |id| {
-            try writer.writeAll(Keys.id);
-            try writer.writeByte(0xcf);
-            try writer.writeInt(u64, id, .big);
-        }
+        try writeOptional(writer, Keys.id, msg_id, encodeUint64, false);
 
         try writer.writeAll(Keys.message);
         try writer.writeAll(wire_err.message);
@@ -207,14 +230,11 @@ pub fn encodeError(
         try writer.writeAll(Keys.retry_after);
         try msgpack.encode(msgpack.Payload.uintToPayload(retry_after), writer);
     } else {
+        // Fast Path: Precomputed Header
         try writer.writeAll(if (msg_id != null) &error_header_with_id else &error_header_without_id);
         try writer.writeAll(wire_err.code);
 
-        if (msg_id) |id| {
-            try writer.writeAll(Keys.id);
-            try writer.writeByte(0xcf);
-            try writer.writeInt(u64, id, .big);
-        }
+        try writeOptional(writer, Keys.id, msg_id, encodeUint64, false);
 
         try writer.writeAll(Keys.message);
         try writer.writeAll(wire_err.message);
@@ -245,10 +265,7 @@ pub fn encodeQuery(
     try writer.writeAll(&ok_id_header);
     try msgpack.encode(msgpack.Payload.uintToPayload(response.msg_id), writer);
 
-    if (response.sub_id) |sid| {
-        try writer.writeAll(Keys.sub_id);
-        try msgpack.encode(msgpack.Payload.uintToPayload(sid), writer);
-    }
+    try writeOptional(writer, Keys.sub_id, response.sub_id, encodeUint64, false);
 
     try writer.writeAll(Keys.value);
     try msgpack.encodeArrayHeader(writer, response.records.len);
@@ -262,12 +279,7 @@ pub fn encodeQuery(
         try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
     }
 
-    try writer.writeAll(Keys.next_cursor);
-    if (response.next_cursor) |cursor_str| {
-        try msgpack.writeMsgPackStr(writer, cursor_str);
-    } else {
-        try msgpack.encode(.nil, writer);
-    }
+    try writeOptional(writer, Keys.next_cursor, response.next_cursor, encodeStr, true);
 
     return list.toOwnedSlice(arena_allocator);
 }
@@ -507,13 +519,7 @@ fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) 
     try msgpack.writeMsgPackBin(writer, &id_bytes);
 
     try writer.writeAll(Keys.event);
-    if (is_leave) {
-        try writer.writeAll(Values.event_leave);
-    } else if (is_join) {
-        try writer.writeAll(Values.event_join);
-    } else {
-        try writer.writeAll(Values.event_update);
-    }
+    try writer.writeAll(if (is_leave) Values.event_leave else if (is_join) Values.event_join else Values.event_update);
 
     if (update.patch) |patch| {
         try writer.writeAll(Keys.data);
@@ -646,12 +652,11 @@ pub fn encodePresenceSharedSnapshot(
     try writer.writeAll(Keys.sub_id);
     try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
 
-    try writer.writeAll(Keys.shared);
-    if (shared) |record| {
-        try encodePresenceRecord(writer, record.*);
-    } else {
-        try msgpack.encode(.nil, writer);
-    }
+    try writeOptional(writer, Keys.shared, shared, struct {
+        fn encode(w: anytype, record: *const PresenceRecord) !void {
+            try encodePresenceRecord(w, record.*);
+        }
+    }.encode, true);
 
     return list.toOwnedSlice(allocator);
 }
