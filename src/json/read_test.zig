@@ -3,61 +3,67 @@ const read = @import("read.zig");
 
 test "getString returns string and rejects non-string" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"name":"alice","age":30,"flag":true}
+        \\{"name":"alice","age":30,"flag":true,"nothing":null}
     );
     defer p.deinit();
     const obj = p.value.object;
     try std.testing.expectEqualStrings("alice", (try read.getString(obj, "name")).?);
-    try std.testing.expectError(error.InvalidType, read.getString(obj, "age"));
+    try std.testing.expectError(error.TypeMismatch, read.getString(obj, "age"));
     try std.testing.expect((try read.getString(obj, "missing")) == null);
+    try std.testing.expect((try read.getString(obj, "nothing")) == null);
 }
 
 test "getInt returns integer and rejects non-integer" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"age":30,"name":"x","big":9999999999}
+        \\{"age":30,"name":"x","big":9999999999,"nothing":null}
     );
     defer p.deinit();
     const obj = p.value.object;
     try std.testing.expectEqual(@as(i64, 30), (try read.getInt(obj, "age")).?);
     try std.testing.expectEqual(@as(i64, 9999999999), (try read.getInt(obj, "big")).?);
-    try std.testing.expectError(error.InvalidType, read.getInt(obj, "name"));
+    try std.testing.expectError(error.TypeMismatch, read.getInt(obj, "name"));
     try std.testing.expect((try read.getInt(obj, "missing")) == null);
+    try std.testing.expect((try read.getInt(obj, "nothing")) == null);
 }
 
 test "getBool returns bool and rejects non-bool" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"flag":true,"name":"x"}
+        \\{"flag":true,"name":"x","nothing":null}
     );
     defer p.deinit();
     const obj = p.value.object;
     try std.testing.expectEqual(true, (try read.getBool(obj, "flag")).?);
-    try std.testing.expectError(error.InvalidType, read.getBool(obj, "name"));
+    try std.testing.expectError(error.TypeMismatch, read.getBool(obj, "name"));
     try std.testing.expect((try read.getBool(obj, "missing")) == null);
+    try std.testing.expect((try read.getBool(obj, "nothing")) == null);
 }
 
 test "getObject returns object map" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"nested":{"a":1},"name":"x"}
+        \\{"nested":{"a":1},"name":"x","nothing":null}
     );
     defer p.deinit();
     const obj = p.value.object;
     const nested = try read.getObject(obj, "nested");
     try std.testing.expect(nested != null);
     try std.testing.expectEqual(@as(i64, 1), (try read.getInt(nested.?, "a")).?);
-    try std.testing.expectError(error.InvalidType, read.getObject(obj, "name"));
+    try std.testing.expectError(error.TypeMismatch, read.getObject(obj, "name"));
     try std.testing.expect((try read.getObject(obj, "missing")) == null);
+    try std.testing.expect((try read.getObject(obj, "nothing")) == null);
 }
 
 test "getArray returns array" {
     var p = try read.parseValue(std.testing.allocator,
-        \\{"items":[1,2,3],"name":"x"}
+        \\{"items":[1,2,3],"name":"x","nothing":null}
     );
     defer p.deinit();
     const obj = p.value.object;
     const arr = try read.getArray(obj, "items");
     try std.testing.expect(arr != null);
     try std.testing.expectEqual(@as(usize, 3), arr.?.items.len);
-    try std.testing.expectError(error.InvalidType, read.getArray(obj, "name"));
+    try std.testing.expectError(error.TypeMismatch, read.getArray(obj, "name"));
+    try std.testing.expect((try read.getArray(obj, "missing")) == null);
+    try std.testing.expect((try read.getArray(obj, "nothing")) == null);
 }
 
 test "dupString dups and returns null for absent" {
@@ -127,6 +133,28 @@ test "getEnum resolves string to enum tag" {
     try std.testing.expectEqual(Level.warn, (try read.getEnum(Level, obj, "level", map)).?);
     try std.testing.expect((try read.getEnum(Level, obj, "other", map)) == null);
     try std.testing.expect((try read.getEnum(Level, obj, "missing", map)) == null);
+}
+
+test "null value treated same as absent in setString and replaceString" {
+    var p = try read.parseValue(std.testing.allocator,
+        \\{"key":"value","empty":null}
+    );
+    defer p.deinit();
+    const obj = p.value.object;
+
+    var opt_field: ?[]const u8 = null;
+    try read.setString(std.testing.allocator, &opt_field, obj, "key");
+    defer if (opt_field) |f| std.testing.allocator.free(f);
+    try std.testing.expectEqualStrings("value", opt_field.?);
+
+    var opt_field2: ?[]const u8 = null;
+    try read.setString(std.testing.allocator, &opt_field2, obj, "empty");
+    try std.testing.expect(opt_field2 == null);
+
+    var field: []const u8 = try std.testing.allocator.dupe(u8, "original");
+    defer std.testing.allocator.free(field);
+    try read.replaceString(std.testing.allocator, &field, obj, "empty");
+    try std.testing.expectEqualStrings("original", field);
 }
 
 test "skipString simple" {

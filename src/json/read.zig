@@ -16,31 +16,36 @@ pub fn parseValue(allocator: Allocator, json_text: []const u8) !std.json.Parsed(
 
 pub fn getString(obj: ObjectMap, key: []const u8) !?[]const u8 {
     const v = obj.get(key) orelse return null;
-    if (v != .string) return error.InvalidType;
+    if (v == .null) return null;
+    if (v != .string) return error.TypeMismatch;
     return v.string;
 }
 
 pub fn getInt(obj: ObjectMap, key: []const u8) !?i64 {
     const v = obj.get(key) orelse return null;
-    if (v != .integer) return error.InvalidType;
+    if (v == .null) return null;
+    if (v != .integer) return error.TypeMismatch;
     return v.integer;
 }
 
 pub fn getBool(obj: ObjectMap, key: []const u8) !?bool {
     const v = obj.get(key) orelse return null;
-    if (v != .bool) return error.InvalidType;
+    if (v == .null) return null;
+    if (v != .bool) return error.TypeMismatch;
     return v.bool;
 }
 
 pub fn getObject(obj: ObjectMap, key: []const u8) !?ObjectMap {
     const v = obj.get(key) orelse return null;
-    if (v != .object) return error.InvalidType;
+    if (v == .null) return null;
+    if (v != .object) return error.TypeMismatch;
     return v.object;
 }
 
 pub fn getArray(obj: ObjectMap, key: []const u8) !?std.json.Array {
     const v = obj.get(key) orelse return null;
-    if (v != .array) return error.InvalidType;
+    if (v == .null) return null;
+    if (v != .array) return error.TypeMismatch;
     return v.array;
 }
 

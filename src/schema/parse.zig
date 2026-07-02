@@ -18,11 +18,7 @@ const planned_constraint_keys = [_][]const u8{
 
 fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
     if (value != .object) return error.InvalidMetadata;
-
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    try std.json.Stringify.value(value, .{}, &out.writer);
-    return .{ .json = try out.toOwnedSlice() };
+    return .{ .json = try std.json.Stringify.valueAlloc(allocator, value, .{}) };
 }
 
 pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
@@ -231,7 +227,11 @@ const StoreFieldContext = struct {
         }
 
         const items_type = try extractArrayItemsType(declared_type, field_def);
-        const indexed = try extractBoolOrDefault(field_def.object, "indexed", false);
+        const indexed_val = field_def.object.get("indexed");
+        const indexed = if (indexed_val) |v| switch (v) {
+            .bool => |b| b,
+            else => return error.InvalidFieldDefinition,
+        } else false;
         const references = try extractReferences(allocator, field_def.object);
         errdefer if (references) |ref| allocator.free(ref);
 
@@ -740,12 +740,6 @@ fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Val
     const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
     if (items_val != .string) return error.InvalidArrayItems;
     return try mapPrimitiveType(items_val.string);
-}
-
-fn extractBoolOrDefault(field_def: std.json.ObjectMap, key: []const u8, default: bool) !bool {
-    const val = field_def.get(key) orelse return default;
-    if (val != .bool) return error.InvalidFieldDefinition;
-    return val.bool;
 }
 
 fn extractReferences(allocator: Allocator, field_def: std.json.ObjectMap) !?[]const u8 {
