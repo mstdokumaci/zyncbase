@@ -9,6 +9,7 @@ const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
 const storage_cache = @import("cache.zig");
+const SqlBuf = @import("../sql_buf.zig").SqlBuf;
 
 const StorageError = errors.StorageError;
 const DocId = typed.DocId;
@@ -35,8 +36,8 @@ pub fn buildSelectQuery(
     filter: *const query_ast.QueryFilter,
     guard_predicate: ?*const query_ast.FilterPredicate,
 ) !QueryResult {
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer sql_buf.deinit(allocator);
+    var buf = SqlBuf.init();
+    defer buf.deinit(allocator);
     var values: std.ArrayListUnmanaged(Value) = .empty;
     errdefer {
         for (values.items) |v| v.deinit(allocator);
@@ -46,27 +47,27 @@ pub fn buildSelectQuery(
     const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
 
     // 1.. SELECT clause
-    try sql.appendSelectFromTableSql(allocator, &sql_buf, table_metadata);
+    try sql.appendSelectFromTableSql(allocator, &buf, table_metadata);
 
     // 2.. WHERE clause
-    try sql_buf.appendSlice(allocator, " WHERE ");
-    try sql.appendNamespaceFilterSql(allocator, &sql_buf);
+    try buf.appendSlice(allocator, " WHERE ");
+    try sql.appendNamespaceFilterSql(allocator, &buf);
     try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
-    try appendWhereConditions(allocator, &sql_buf, &values, table_metadata, filter, sort_field_name_quoted);
-    try appendGuardPredicate(allocator, &sql_buf, &values, table_metadata, guard_predicate);
+    try appendWhereConditions(allocator, &buf, &values, table_metadata, filter, sort_field_name_quoted);
+    try appendGuardPredicate(allocator, &buf, &values, table_metadata, guard_predicate);
 
     // 3.. ORDER BY
-    try sql.appendOrderBySql(allocator, &sql_buf, sort_field_name_quoted, filter.order_by.desc);
+    try sql.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
         const effective_limit: u32 = if (l == std.math.maxInt(u32)) l else l + 1;
-        try sql_buf.appendSlice(allocator, " LIMIT ");
-        try std.fmt.format(sql_buf.writer(allocator), "{}", .{effective_limit});
+        try buf.appendSlice(allocator, " LIMIT ");
+        try std.fmt.format(buf.writer(allocator), "{}", .{effective_limit});
     }
 
-    const sql_owned = try sql_buf.toOwnedSlice(allocator);
+    const sql_owned = try buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql_owned);
 
     const values_owned = try values.toOwnedSlice(allocator);
@@ -78,7 +79,7 @@ pub fn buildSelectQuery(
 
 fn appendWhereConditions(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     filter: *const query_ast.QueryFilter,
@@ -87,22 +88,22 @@ fn appendWhereConditions(
     const has_conditions = !filter.predicate.isEmpty();
     if (!has_conditions and filter.after == null) return;
 
-    try sql_buf.appendSlice(allocator, " AND (");
+    try buf.appendSlice(allocator, " AND (");
 
     var added_where = false;
 
     if (has_conditions) {
-        try filter_sql.appendFilterPredicateSql(allocator, sql_buf, values, table_metadata, &filter.predicate);
+        try filter_sql.appendFilterPredicateSql(allocator, buf, values, table_metadata, &filter.predicate);
         added_where = true;
     }
 
     // cursor-based pagination (after)
     if (filter.after) |cursor| {
-        if (added_where) try sql_buf.appendSlice(allocator, " AND ");
+        if (added_where) try buf.appendSlice(allocator, " AND ");
 
         try sql.appendCursorPredicateSql(
             allocator,
-            sql_buf,
+            buf,
             sort_field_name_quoted,
             filter.order_by.field_index == schema.id_field_index,
             filter.order_by.desc,
@@ -120,21 +121,21 @@ fn appendWhereConditions(
         }
     }
 
-    try sql_buf.appendSlice(allocator, ")");
+    try buf.appendSlice(allocator, ")");
 }
 
 fn appendGuardPredicate(
     allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
+    buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     guard_predicate: ?*const query_ast.FilterPredicate,
 ) !void {
     const predicate = guard_predicate orelse return;
     if (predicate.isEmpty()) return;
-    try sql_buf.appendSlice(allocator, " AND (");
-    try filter_sql.appendFilterPredicateSql(allocator, sql_buf, values, table_metadata, predicate);
-    try sql_buf.append(allocator, ')');
+    try buf.appendSlice(allocator, " AND (");
+    try filter_sql.appendFilterPredicateSql(allocator, buf, values, table_metadata, predicate);
+    try buf.append(allocator, ')');
 }
 
 pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: DocId) MetadataCacheKey {

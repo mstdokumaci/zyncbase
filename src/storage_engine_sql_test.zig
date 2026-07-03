@@ -53,7 +53,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
         select_document_sql,
     );
 
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var sql_buf = @import("sql_buf.zig").SqlBuf.init();
     defer sql_buf.deinit(allocator);
     try sql.appendSelectFromTableSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " WHERE ");
@@ -64,7 +64,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
 
     try std.testing.expectEqualStrings(
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",
-        sql_buf.items,
+        sql_buf.items(),
     );
 }
 
