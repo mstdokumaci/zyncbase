@@ -297,10 +297,8 @@ pub const WriteWorker = struct {
 
     /// Handles post-execute bookkeeping shared by all three write paths:
     /// PK tracking, change log push, and guard-conflict detection.
-    ///
     /// `old_record` / `new_record` ownership is consumed here — caller must
     /// not deinit them afterwards regardless of the return value.
-    ///
     /// Returns true on success (row was affected or no guard conflict),
     /// false when a guard conflict was detected (caller tracks as rejected).
     fn applyWriteResult(
@@ -346,7 +344,7 @@ pub const WriteWorker = struct {
             // Row was not affected — check for guard conflict.
             if (old_record) |r| r.deinit(self.allocator);
             if (new_record) |r| r.deinit(self.allocator);
-            const guard_conflict = has_guard and has_write_ack;
+            const guard_conflict = old_record != null and has_guard and has_write_ack;
             return !guard_conflict;
         }
     }
@@ -363,10 +361,11 @@ pub const WriteWorker = struct {
         const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
         const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
 
-        // Only fetch old state when the change queue is active — it is only
-        // needed to determine insert-vs-update for change log entries.
+        // Fetch old state when the change queue is active (for insert-vs-update
+        // classification) or when a guard is present (to distinguish non-existent
+        // rows from guard conflicts in applyWriteResult).
         var old_record: ?Record = null;
-        if (self.change_queue != null) {
+        if (self.change_queue != null or iop.guard_values != null) {
             if (getDocumentHelper(self, iop.table_index, namespace_id, iop.id, ctx.sql_cache)) |record| {
                 old_record = record;
             } else |err| {
@@ -393,9 +392,10 @@ pub const WriteWorker = struct {
         const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
         const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
 
-        // Only fetch old state when the change queue is active.
+        // Fetch old state when the change queue is active or when a guard is
+        // present (to distinguish non-existent rows from guard conflicts).
         var old_record: ?Record = null;
-        if (self.change_queue != null) {
+        if (self.change_queue != null or uop.guard_values != null) {
             if (getDocumentHelper(self, uop.table_index, namespace_id, uop.id, ctx.sql_cache)) |record| {
                 old_record = record;
             } else |err| {
@@ -884,10 +884,11 @@ pub const WriteWorker = struct {
         const self = ctx.self;
         const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
-        // Only fetch old state when the change queue is active — it is only
-        // needed to determine insert-vs-update for change log entries.
+        // Fetch old state when the change queue is active (for insert-vs-update
+        // classification) or when a guard is present (to distinguish non-existent
+        // rows from guard conflicts in applyWriteResult).
         var old_record: ?Record = null;
-        if (self.change_queue != null) {
+        if (self.change_queue != null or entry.guard_values != null) {
             if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache)) |record| {
                 old_record = record;
             } else |err| {
@@ -914,9 +915,10 @@ pub const WriteWorker = struct {
     ) !void {
         const self = ctx.self;
 
-        // Only fetch old state when the change queue is active.
+        // Fetch old state when the change queue is active or when a guard is
+        // present (to distinguish non-existent rows from guard conflicts).
         var old_record: ?Record = null;
-        if (self.change_queue != null) {
+        if (self.change_queue != null or entry.guard_values != null) {
             if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache)) |record| {
                 old_record = record;
             } else |err| {
