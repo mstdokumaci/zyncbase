@@ -171,9 +171,9 @@ fn scalarFromPayload(allocator: Allocator, ft: schema.FieldType, value: msgpack.
             .str => |s| ScalarValue{ .text = try allocator.dupe(u8, s.value()) },
             else => error.TypeMismatch,
         },
-        .integer => ScalarValue{ .integer = try payloadAsInt(value) },
-        .real => ScalarValue{ .real = try payloadAsFloat(value) },
-        .boolean => ScalarValue{ .boolean = try payloadAsBool(value) },
+        .integer => ScalarValue{ .integer = try msgpack.payloadToInt(value) },
+        .real => ScalarValue{ .real = try msgpack.payloadToFloat(value) },
+        .boolean => ScalarValue{ .boolean = try msgpack.payloadToBool(value) },
         else => error.InvalidArrayElement,
     };
 }
@@ -211,34 +211,10 @@ const JsonValue = struct {
     }
 };
 
-fn payloadAsInt(payload: msgpack.Payload) !i64 {
-    return switch (payload) {
-        .int => |v| v,
-        .uint => |v| @intCast(v),
-        else => error.TypeMismatch,
-    };
-}
-
-fn payloadAsFloat(payload: msgpack.Payload) !f64 {
-    return switch (payload) {
-        .float => |v| v,
-        .int => |v| @floatFromInt(v),
-        .uint => |v| @floatFromInt(v),
-        else => error.TypeMismatch,
-    };
-}
-
-fn payloadAsBool(payload: msgpack.Payload) !bool {
-    return switch (payload) {
-        .bool => |v| v,
-        else => error.TypeMismatch,
-    };
-}
-
 fn jsonAsInt(value: std.json.Value) !i64 {
     return switch (value) {
         .integer => |v| v,
-        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch error.TypeMismatch, // zwanzig-disable-line: swallowed-error
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch return error.TypeMismatch,
         else => error.TypeMismatch,
     };
 }
@@ -247,7 +223,7 @@ fn jsonAsFloat(value: std.json.Value) !f64 {
     return switch (value) {
         .float => |v| v,
         .integer => |v| @floatFromInt(v),
-        .number_string => |s| std.fmt.parseFloat(f64, s) catch error.TypeMismatch, // zwanzig-disable-line: swallowed-error
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch return error.TypeMismatch,
         else => error.TypeMismatch,
     };
 }

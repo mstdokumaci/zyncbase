@@ -331,7 +331,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
             i -= 1;
             const pair_payload = pairs[i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
-            const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
+            const idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse continue;
             if (idx == field_index) {
                 const value = typed.valueFromPayload(ctx.allocator, field_type, null, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
                 return ResolvedAuthValue.fromOwned(value);
@@ -352,7 +352,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         i -= 1;
         const pair_payload = pairs[i];
         if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
-        const idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse continue;
+        const idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse continue;
         if (idx == field_index) {
             const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
             return ResolvedAuthValue.fromOwned(value);
