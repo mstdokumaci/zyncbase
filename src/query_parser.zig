@@ -235,22 +235,13 @@ pub fn resolveFieldMetadata(
 }
 
 fn parseOperator(payload: msgpack.Payload) ParserError!Operator {
-    if (payload != .uint and payload != .int) return error.InvalidOperatorCode;
-    const op_code = if (payload == .uint) payload.uint else blk: {
-        if (payload.int < 0) return error.InvalidOperatorCode;
-        break :blk @as(u64, @intCast(payload.int));
-    };
+    const op_code = msgpack.extractPayloadUsize(payload) orelse return error.InvalidOperatorCode;
     if (op_code > @intFromEnum(Operator.isNotNull)) return error.InvalidOperatorCode;
     return @enumFromInt(@as(u8, @intCast(op_code)));
 }
 
 fn parseSortDirection(payload: msgpack.Payload) ParserError!bool {
-    if (payload != .uint and payload != .int) return error.InvalidSortFormat;
-    const raw = if (payload == .uint) payload.uint else blk: {
-        if (payload.int < 0) return error.InvalidSortFormat;
-        break :blk @as(u64, @intCast(payload.int));
-    };
-    return switch (raw) {
+    return switch (msgpack.extractPayloadUsize(payload) orelse return error.InvalidSortFormat) {
         0 => false,
         1 => true,
         else => error.InvalidSortFormat,
@@ -397,7 +388,7 @@ fn parseCondition(
     if (arr.len < 2 or arr.len > 3) return error.InvalidConditionFormat;
 
     // Field is now an integer index
-    const field_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidFieldName;
+    const field_index = msgpack.extractPayloadUsize(arr[0]) orelse return error.InvalidFieldName;
     const resolved = try resolveFieldMetadata(table_metadata, field_index);
 
     const op = try parseOperator(arr[1]);
@@ -423,7 +414,7 @@ fn parseSortDescriptor(
     if (arr.len != 2) return error.InvalidSortFormat;
 
     // Field is now an integer index
-    const field_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidFieldName;
+    const field_index = msgpack.extractPayloadUsize(arr[0]) orelse return error.InvalidFieldName;
     const resolved = try resolveFieldMetadata(table_metadata, field_index);
     const desc = try parseSortDirection(arr[1]);
 

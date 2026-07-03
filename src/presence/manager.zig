@@ -444,8 +444,8 @@ pub const PresenceManager = struct {
     }
 
     fn payloadUintEqual(a: msgpack.Payload, b: msgpack.Payload) bool {
-        const a_uint = msgpack.extractPayloadUint(a) orelse return false;
-        const b_uint = msgpack.extractPayloadUint(b) orelse return false;
+        const a_uint = msgpack.extractPayloadUsize(a) orelse return false;
+        const b_uint = msgpack.extractPayloadUsize(b) orelse return false;
         return a_uint == b_uint;
     }
 

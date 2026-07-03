@@ -1,6 +1,9 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 
+pub const Payload = msgpack.Payload;
+pub const Map = msgpack.Map;
+
 /// Security-appropriate parse limits for WebSocket message handling.
 /// These align with the ZyncBase Wire Protocol Specification.
 pub const wire_limits: msgpack.ParseLimits = .{
@@ -54,7 +57,7 @@ fn tightPacker(comptime W: type, comptime R: type, comptime limits: msgpack.Pars
 /// Standard wrapper for decoding MsgPack payloads with wire security limits.
 /// Rejects payloads that exceed wire_limits (depth, array/map size, string/bin/ext length).
 /// The returned Payload must be freed using `payload.free(allocator)`.
-pub fn decode(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
+pub fn decode(allocator: std.mem.Allocator, reader: anytype) !Payload {
     const tp = tightPacker(void, @TypeOf(reader), wire_limits);
     var packer = tp.init(
         // SAFETY: reader Context is provided, writer is not used for decoding
@@ -65,7 +68,7 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
 }
 
 /// Decode with standard msgpack limits (used for internal cloning and db reads)
-pub fn decodeTrusted(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
+pub fn decodeTrusted(allocator: std.mem.Allocator, reader: anytype) !Payload {
     const tp = tightPacker(void, @TypeOf(reader), msgpack.DEFAULT_LIMITS);
     var packer = tp.init(
         // SAFETY: reader Context is provided, writer is not used for decoding
@@ -77,7 +80,7 @@ pub fn decodeTrusted(allocator: std.mem.Allocator, reader: anytype) !msgpack.Pay
 
 /// Standard wrapper for encoding MsgPack payloads for wire transmission.
 /// Enforces wire_limits to ensure clients can parse the response.
-pub fn encode(payload: msgpack.Payload, writer: anytype) !void {
+pub fn encode(payload: Payload, writer: anytype) !void {
     const tp = tightPacker(@TypeOf(writer), void, wire_limits);
     var packer = tp.init(
         .{ .writer = writer },
@@ -143,14 +146,35 @@ pub fn encodeMapHeader(writer: anytype, len: usize) !void {
     }
 }
 
-pub const Payload = msgpack.Payload;
-pub const Map = msgpack.Map;
-
 /// Safely extract a usize from an integer Payload. Returns null on type mismatch.
-pub fn extractPayloadUint(p: Payload) ?usize {
+pub fn extractPayloadUsize(p: Payload) ?usize {
     return switch (p) {
         .uint => |v| std.math.cast(usize, v),
         .int => |v| std.math.cast(usize, v),
         else => null,
+    };
+}
+
+pub fn payloadToInt(p: Payload) !i64 {
+    return switch (p) {
+        .int => |v| v,
+        .uint => |v| @intCast(v),
+        else => error.TypeMismatch,
+    };
+}
+
+pub fn payloadToFloat(p: Payload) !f64 {
+    return switch (p) {
+        .float => |v| v,
+        .int => |v| @floatFromInt(v),
+        .uint => |v| @floatFromInt(v),
+        else => error.TypeMismatch,
+    };
+}
+
+pub fn payloadToBool(p: Payload) !bool {
+    return switch (p) {
+        .bool => |v| v,
+        else => error.TypeMismatch,
     };
 }

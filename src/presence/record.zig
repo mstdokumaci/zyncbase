@@ -67,7 +67,7 @@ pub const PresenceRecord = struct {
 
         for (patch.arr) |pair_payload| {
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
             if (f_idx >= fields.len) return error.InvalidFieldIndex;
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 

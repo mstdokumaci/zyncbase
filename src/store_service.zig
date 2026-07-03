@@ -229,7 +229,7 @@ pub const StoreService = struct {
         payload: msgpack.Payload,
         auth_predicate: ?*const query_ast.FilterPredicate,
     ) !QueryResult {
-        const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
+        const table_index = msgpack.extractPayloadUsize(table_index_payload) orelse return error.InvalidMessageFormat;
         const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         var filter = try query_parser.parseQueryFilter(allocator, self.schema, table_index, payload);
@@ -297,7 +297,7 @@ pub const StoreService = struct {
         const path = payload.arr;
         if (path.len != 2) return StorageError.InvalidPath;
 
-        const table_index = msgpack.extractPayloadUint(path[0]) orelse return error.InvalidMessageFormat;
+        const table_index = msgpack.extractPayloadUsize(path[0]) orelse return error.InvalidMessageFormat;
         const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (path[1] != .bin) return error.InvalidMessageFormat;
@@ -332,7 +332,7 @@ pub const StoreService = struct {
             pair_i -= 1;
             const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
             if (f_idx < schema_mod.max_store_fields) {
                 if (seen.isSet(f_idx)) continue;
                 seen.set(f_idx);
@@ -397,7 +397,7 @@ pub const StoreService = struct {
             pair_i -= 1;
             const pair_payload = value.arr[pair_i];
             if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUint(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
             if (f_idx < schema_mod.max_store_fields) {
                 if (seen.isSet(f_idx)) continue;
                 seen.set(f_idx);
