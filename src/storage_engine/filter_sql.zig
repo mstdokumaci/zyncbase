@@ -4,6 +4,7 @@ const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 const SqlBuf = @import("../sql_buf.zig").SqlBuf;
+const SqlList = @import("../sql_buf.zig").SqlList;
 
 const Value = typed.Value;
 
@@ -108,37 +109,33 @@ pub fn appendFilterPredicateSql(
         return;
     }
 
-    var emitted = false;
-
     const conds = predicate.conditions orelse @as([]const query_ast.Condition, &.{});
-    buf.beginList(" AND ");
+    var and_list = SqlList.init(buf, " AND ");
     for (conds) |*cond| {
-        try appendConditionSql(allocator, buf, values, table_metadata, cond);
-        emitted = true;
+        try appendConditionSql(allocator, &and_list, values, table_metadata, cond);
     }
-    buf.endList();
 
     const or_conds = predicate.or_conditions orelse @as([]const query_ast.Condition, &.{});
     if (or_conds.len > 0) {
-        if (emitted) try buf.appendSlice(allocator, " AND ");
+        try and_list.maybeSep(allocator);
         try buf.append(allocator, '(');
-        buf.beginList(" OR ");
+        var or_list = SqlList.init(buf, " OR ");
         for (or_conds) |*cond| {
-            try appendConditionSql(allocator, buf, values, table_metadata, cond);
+            try appendConditionSql(allocator, &or_list, values, table_metadata, cond);
         }
-        buf.endList();
         try buf.append(allocator, ')');
     }
 }
 
 pub fn appendConditionSql(
     allocator: Allocator,
-    buf: *SqlBuf,
+    list: *SqlList,
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     cond: *const query_ast.Condition,
 ) !void {
-    try buf.maybeSep(allocator);
+    try list.maybeSep(allocator);
+    const buf = list.buf;
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
     const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
     try buf.appendSlice(allocator, sql_field_quoted);
@@ -229,13 +226,12 @@ fn appendInPredicate(
     try buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
     if (cond.value) |val| {
         if (val == .array) {
-            buf.beginList(", ");
+            var in_list = SqlList.init(buf, ", ");
             for (val.array) |v| {
-                try buf.maybeSep(allocator);
+                try in_list.maybeSep(allocator);
                 try buf.append(allocator, '?');
                 try appendOwnedValue(allocator, values, Value{ .scalar = try v.clone(allocator) });
             }
-            buf.endList();
         } else {
             try buf.append(allocator, '?');
             try appendClonedValue(allocator, values, val);

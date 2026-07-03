@@ -5,6 +5,7 @@ const schema = @import("../schema.zig");
 const errors = @import("errors.zig");
 const typed = @import("../typed.zig");
 const SqlBuf = @import("../sql_buf.zig").SqlBuf;
+const SqlList = @import("../sql_buf.zig").SqlList;
 
 /// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
@@ -146,19 +147,18 @@ pub fn appendProjectedColumnsSql(
     buf: *SqlBuf,
     table_metadata: *const schema.Table,
 ) !void {
-    buf.beginList(", ");
+    var list = SqlList.init(buf, ", ");
     for (table_metadata.fields) |f| {
         if (f.storage_type == .array) {
-            try buf.maybeSep(allocator);
+            try list.maybeSep(allocator);
             try buf.appendSlice(allocator, "json(");
             try buf.appendSlice(allocator, f.name_quoted);
             try buf.appendSlice(allocator, ") AS ");
             try buf.appendSlice(allocator, f.name_quoted);
         } else {
-            try buf.appendItemSlice(allocator, f.name_quoted);
+            try list.appendItemSlice(allocator, f.name_quoted);
         }
     }
-    buf.endList();
 }
 
 pub fn appendSelectFromTableSql(
@@ -420,20 +420,19 @@ fn appendInsertColumnList(
     try buf.appendSlice(allocator, "INSERT INTO ");
     try buf.appendSlice(allocator, table_metadata.name_quoted);
     try buf.appendSlice(allocator, " (");
-    buf.beginList(", ");
-    try buf.appendItemSlice(allocator, schema.quoted_id);
-    try buf.appendItemSlice(allocator, schema.quoted_namespace_id);
-    try buf.appendItemSlice(allocator, schema.quoted_owner_id);
+    var list = SqlList.init(buf, ", ");
+    try list.appendItemSlice(allocator, schema.quoted_id);
+    try list.appendItemSlice(allocator, schema.quoted_namespace_id);
+    try list.appendItemSlice(allocator, schema.quoted_owner_id);
     if (table_metadata.is_users_table) {
-        try buf.appendItemSlice(allocator, schema.quoted_external_id);
+        try list.appendItemSlice(allocator, schema.quoted_external_id);
     }
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
-        try buf.appendItemSlice(allocator, field.name_quoted);
+        try list.appendItemSlice(allocator, field.name_quoted);
     }
-    try buf.appendItemSlice(allocator, schema.quoted_created_at);
-    try buf.appendItemSlice(allocator, schema.quoted_updated_at);
-    buf.endList();
+    try list.appendItemSlice(allocator, schema.quoted_created_at);
+    try list.appendItemSlice(allocator, schema.quoted_updated_at);
 }
 
 fn appendValuePlaceholders(
@@ -469,20 +468,19 @@ fn appendOnConflictUpdateSet(
     try buf.appendSlice(allocator, schema.quoted_id);
     try buf.appendSlice(allocator, ") DO UPDATE SET ");
 
-    buf.beginList(", ");
+    var list = SqlList.init(buf, ", ");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
-        try buf.maybeSep(allocator);
+        try list.maybeSep(allocator);
         try buf.appendSlice(allocator, field.name_quoted);
         try buf.appendSlice(allocator, " = excluded.");
         try buf.appendSlice(allocator, field.name_quoted);
     }
     // Always update updated_at
-    try buf.maybeSep(allocator);
+    try list.maybeSep(allocator);
     try buf.appendSlice(allocator, schema.quoted_updated_at);
     try buf.appendSlice(allocator, " = excluded.");
     try buf.appendSlice(allocator, schema.quoted_updated_at);
-    buf.endList();
 }
 
 fn appendUpsertWhereClause(
@@ -552,10 +550,10 @@ fn appendUpdateColumnSet(
     table_metadata: *const schema.Table,
     columns: []const ColumnValue,
 ) !void {
-    buf.beginList(", ");
+    var list = SqlList.init(buf, ", ");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
-        try buf.maybeSep(allocator);
+        try list.maybeSep(allocator);
         try buf.appendSlice(allocator, field.name_quoted);
         try buf.appendSlice(allocator, " = ");
         if (field.storage_type == .array) {
@@ -564,10 +562,9 @@ fn appendUpdateColumnSet(
             try buf.appendSlice(allocator, "?");
         }
     }
-    try buf.maybeSep(allocator);
+    try list.maybeSep(allocator);
     try buf.appendSlice(allocator, schema.quoted_updated_at);
     try buf.appendSlice(allocator, " = ?");
-    buf.endList();
 }
 
 fn appendDocIdNamespaceWhere(
