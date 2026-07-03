@@ -158,7 +158,7 @@ pub fn extractPayloadUsize(p: Payload) ?usize {
 pub fn payloadToInt(p: Payload) !i64 {
     return switch (p) {
         .int => |v| v,
-        .uint => |v| @intCast(v),
+        .uint => |v| std.math.cast(i64, v) orelse return error.Overflow,
         else => error.TypeMismatch,
     };
 }
