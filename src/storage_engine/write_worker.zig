@@ -317,14 +317,10 @@ pub const WriteWorker = struct {
         if (new_record != null or (pk_delete and old_record != null)) {
             // Row was affected — track PK and push change.
             if (pk_insert and old_record == null) {
-                ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id }) catch |err| {
-                    std.log.warn("Failed to track pk_insert for table {d}: {}", .{ table_index, err });
-                };
+                try ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
             }
             if (pk_delete) {
-                ctx.pk_deletes.append(self.allocator, .{ .table_index = table_index, .id = doc_id }) catch |err| {
-                    std.log.warn("Failed to track pk_delete for table {d}: {}", .{ table_index, err });
-                };
+                try ctx.pk_deletes.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
             }
             const op_type: OwnedRecordChange.Operation = if (pk_delete)
                 .delete
@@ -342,9 +338,9 @@ pub const WriteWorker = struct {
             return true;
         } else {
             // Row was not affected — check for guard conflict.
+            const guard_conflict = old_record != null and has_guard and has_write_ack;
             if (old_record) |r| r.deinit(self.allocator);
             if (new_record) |r| r.deinit(self.allocator);
-            const guard_conflict = old_record != null and has_guard and has_write_ack;
             return !guard_conflict;
         }
     }
