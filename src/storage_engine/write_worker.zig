@@ -316,6 +316,10 @@ pub const WriteWorker = struct {
     ) !bool {
         if (new_record != null or (pk_delete and old_record != null)) {
             // Row was affected — track PK and push change.
+            errdefer {
+                if (old_record) |r| r.deinit(self.allocator);
+                if (new_record) |r| r.deinit(self.allocator);
+            }
             if (pk_insert and old_record == null) {
                 try ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
             }
@@ -331,8 +335,6 @@ pub const WriteWorker = struct {
             pushOwnedChange(self.allocator, ctx.pending_changes, namespace_id, table_index, doc_id, op_type, old_record, new_record) catch |err| {
                 const classified_err = errors.classifyError(err);
                 std.log.err("Failed to capture row change: {}", .{classified_err});
-                if (old_record) |r| r.deinit(self.allocator);
-                if (new_record) |r| r.deinit(self.allocator);
                 return classified_err;
             };
             return true;
