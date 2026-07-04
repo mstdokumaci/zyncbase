@@ -70,7 +70,7 @@ pub const ReadWorker = struct {
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) ReadWorker {
+    ) !ReadWorker {
         return .{
             .thread = managedThread(ReadWorker).init(),
             .node = node,
@@ -82,7 +82,7 @@ pub const ReadWorker = struct {
             .allocator = allocator,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
             .memory_strategy = memory_strategy,
-            .read_arena = memory_strategy.acquireArena() catch @panic("ReadWorker: failed to acquire arena"),
+            .read_arena = try memory_strategy.acquireArena(),
         };
     }
 
@@ -229,7 +229,7 @@ pub const ReadWorker = struct {
                 }
             }
             defer handle.release();
-            const cloned = slice[0].clone(self.allocator) catch {
+            const cloned = slice[0].clone(self.read_arena.allocator()) catch {
                 return .{ .record = null };
             };
             return .{ .record = cloned };
@@ -424,10 +424,16 @@ pub const ReadWorkerPool = struct {
         notifier_ctx: ?*anyopaque,
     ) !ReadWorkerPool {
         var pool = try workerPool(ReadWorker).init(allocator, reader_nodes.len);
-        errdefer pool.deinit();
+        var initialized: usize = 0;
+        errdefer {
+            for (pool.workers[0..initialized]) |*w| {
+                w.memory_strategy.releaseArena(w.read_arena);
+            }
+            pool.deinit();
+        }
 
         for (reader_nodes, 0..) |*node, i| {
-            pool.workers[i] = ReadWorker.init(
+            pool.workers[i] = try ReadWorker.init(
                 allocator,
                 memory_strategy,
                 node,
@@ -439,6 +445,7 @@ pub const ReadWorkerPool = struct {
                 notifier_fn,
                 notifier_ctx,
             );
+            initialized += 1;
         }
 
         return .{
