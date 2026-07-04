@@ -253,24 +253,40 @@ pub const Connection = struct {
         self.store_ready = true;
     }
 
-    pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId) bool {
-        if (self.scope_seq != expected_scope_seq) return false;
-        if (self.store_namespace) |ns| self.allocator.free(ns);
-        self.store_namespace = self.pending_store_namespace;
-        self.pending_store_namespace = null;
-        self.namespace_id = namespace_id;
-        self.user_doc_id = user_doc_id;
-        self.store_ready = true;
+    pub fn setScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId, is_presence: bool) bool {
+        if (is_presence) {
+            if (self.presence_scope_seq != expected_scope_seq) return false;
+            if (self.presence_namespace) |ns| self.allocator.free(ns);
+            self.presence_namespace = self.pending_presence_namespace;
+            self.pending_presence_namespace = null;
+            self.presence_namespace_id = namespace_id;
+            self.user_doc_id = user_doc_id;
+            self.presence_ready = true;
+        } else {
+            if (self.scope_seq != expected_scope_seq) return false;
+            if (self.store_namespace) |ns| self.allocator.free(ns);
+            self.store_namespace = self.pending_store_namespace;
+            self.pending_store_namespace = null;
+            self.namespace_id = namespace_id;
+            self.user_doc_id = user_doc_id;
+            self.store_ready = true;
+        }
         return true;
     }
 
-    pub fn resetStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64) bool {
-        if (self.scope_seq != expected_scope_seq) return false;
-        self.resetStoreScopeLocked();
+    pub fn resetScopeIfSeq(self: *Connection, expected_scope_seq: u64, is_presence: bool) bool {
+        if (is_presence) {
+            if (self.presence_scope_seq != expected_scope_seq) return false;
+            self.resetPresenceScopeLocked();
+        } else {
+            if (self.scope_seq != expected_scope_seq) return false;
+            self.resetStoreScopeLocked();
+        }
         return true;
     }
 
-    pub fn isScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
+    pub fn isScopeSeqCurrentFor(self: *Connection, expected_scope_seq: u64, is_presence: bool) bool {
+        if (is_presence) return self.presence_scope_seq == expected_scope_seq;
         return self.scope_seq == expected_scope_seq;
     }
 
@@ -283,10 +299,16 @@ pub const Connection = struct {
         return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 
-    pub fn dupePendingStoreNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64) !?[]const u8 {
-        if (self.scope_seq != expected_scope_seq) return null;
-        const namespace = self.pending_store_namespace orelse return null;
-        return @as(?[]const u8, try allocator.dupe(u8, namespace));
+    pub fn dupePendingNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64, is_presence: bool) !?[]const u8 {
+        if (is_presence) {
+            if (self.presence_scope_seq != expected_scope_seq) return null;
+            const namespace = self.pending_presence_namespace orelse return null;
+            return @as(?[]const u8, try allocator.dupe(u8, namespace));
+        } else {
+            if (self.scope_seq != expected_scope_seq) return null;
+            const namespace = self.pending_store_namespace orelse return null;
+            return @as(?[]const u8, try allocator.dupe(u8, namespace));
+        }
     }
 
     pub fn getStoreSession(self: *Connection) StoreSession {
@@ -301,39 +323,12 @@ pub const Connection = struct {
         self.resetPresenceScopeLocked();
     }
 
-    pub fn setPresenceScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId) bool {
-        if (self.presence_scope_seq != expected_scope_seq) return false;
-        if (self.presence_namespace) |ns| self.allocator.free(ns);
-        self.presence_namespace = self.pending_presence_namespace;
-        self.pending_presence_namespace = null;
-        self.presence_namespace_id = namespace_id;
-        self.user_doc_id = user_doc_id;
-        self.presence_ready = true;
-        return true;
-    }
-
-    pub fn resetPresenceScopeIfSeq(self: *Connection, expected_scope_seq: u64) bool {
-        if (self.presence_scope_seq != expected_scope_seq) return false;
-        self.resetPresenceScopeLocked();
-        return true;
-    }
-
-    pub fn isPresenceScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
-        return self.presence_scope_seq == expected_scope_seq;
-    }
-
     pub fn getPresenceNamespace(self: *Connection) ?[]const u8 {
         return self.presence_namespace;
     }
 
     pub fn dupePresenceNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
         const namespace = self.presence_namespace orelse return null;
-        return @as(?[]const u8, try allocator.dupe(u8, namespace));
-    }
-
-    pub fn dupePendingPresenceNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64) !?[]const u8 {
-        if (self.presence_scope_seq != expected_scope_seq) return null;
-        const namespace = self.pending_presence_namespace orelse return null;
         return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 

@@ -306,7 +306,7 @@ test "namespaceRuleFor returns null when no match" {
     try testing.expect(match == null);
 }
 
-test "authorizeStoreNamespace enforces storeFilter" {
+test "authorizeNamespace enforces storeFilter" {
     const allocator = testing.allocator;
     const json =
         \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$namespace.tenant_id":{"eq":"acme"}},"presenceRead":true,"presenceWrite":true}],"store":[]}
@@ -315,12 +315,12 @@ test "authorizeStoreNamespace enforces storeFilter" {
     defer config.deinit();
 
     const user_id = typed.generateUuidV7();
-    try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null));
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1", null));
+    try authorization.authorizeNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null, false);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null, false));
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "public", user_id, "external-1", null, false));
 }
 
-test "authorizePresenceNamespace enforces presenceRead" {
+test "authorizeNamespace enforces presenceRead" {
     const allocator = testing.allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
@@ -329,11 +329,11 @@ test "authorizePresenceNamespace enforces presenceRead" {
     defer config.deinit();
 
     const user_id = typed.generateUuidV7();
-    try authorization.authorizePresenceNamespace(allocator, &config, "room:lobby", user_id, "external-1", null);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null));
+    try authorization.authorizeNamespace(allocator, &config, "room:lobby", user_id, "external-1", null, true);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null, true));
 }
 
-test "authorizePresenceNamespace denies when presenceRead is false" {
+test "authorizeNamespace denies when presenceRead is false" {
     const allocator = testing.allocator;
     const json =
         \\{"namespaces":[{"pattern":"private:{id}","storeFilter":true,"presenceRead":false,"presenceWrite":true}],"store":[]}
@@ -342,7 +342,7 @@ test "authorizePresenceNamespace denies when presenceRead is false" {
     defer config.deinit();
 
     const user_id = typed.generateUuidV7();
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceNamespace(allocator, &config, "private:secret", user_id, "external-1", null));
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "private:secret", user_id, "external-1", null, true));
 }
 
 test "authorizePresenceWrite enforces presenceWrite condition" {

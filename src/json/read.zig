@@ -80,6 +80,14 @@ pub fn replaceString(
     field.* = new;
 }
 
+pub fn setBool(field: *bool, obj: ObjectMap, key: []const u8) !void {
+    if (try getBool(obj, key)) |v| field.* = v;
+}
+
+pub fn setInt(comptime T: type, field: *T, obj: ObjectMap, key: []const u8) !void {
+    if (try getInt(obj, key)) |v| field.* = @intCast(v);
+}
+
 pub fn getEnum(
     comptime Enum: type,
     obj: ObjectMap,

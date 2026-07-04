@@ -146,13 +146,14 @@ fn resolveDocOperand(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthV
     return resolveIncomingValueField(var_ctx.field, ctx);
 }
 
-pub fn authorizeStoreNamespace(
+pub fn authorizeNamespace(
     allocator: Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
     session_user_id: typed.DocId,
     session_external_id: []const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    is_presence: bool,
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
     defer match.deinit(allocator);
@@ -164,28 +165,8 @@ pub fn authorizeStoreNamespace(
         .session_claims = session_claims,
         .namespace_captures = &match.captures.captures,
     };
-    if (!evaluateConditionStrict(match.rule.store_filter, ctx)) return error.NamespaceUnauthorized;
-}
-
-pub fn authorizePresenceNamespace(
-    allocator: Allocator,
-    config: *const types.AuthConfig,
-    namespace: []const u8,
-    session_user_id: typed.DocId,
-    session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
-) !void {
-    var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
-    defer match.deinit(allocator);
-
-    const ctx: EvalContext = .{
-        .allocator = allocator,
-        .session_user_id = session_user_id,
-        .session_external_id = session_external_id,
-        .session_claims = session_claims,
-        .namespace_captures = &match.captures.captures,
-    };
-    if (!evaluateConditionStrict(match.rule.presence_read, ctx)) return error.NamespaceUnauthorized;
+    const filter = if (is_presence) match.rule.presence_read else match.rule.store_filter;
+    if (!evaluateConditionStrict(filter, ctx)) return error.NamespaceUnauthorized;
 }
 
 pub fn authorizePresenceWrite(
@@ -326,19 +307,9 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         const field_type = fields[field_index].declared_type;
 
         // Wire protocol: duplicate field index in one pair-array → last-wins.
-        var i: usize = pairs.len;
-        while (i > 0) {
-            i -= 1;
-            const pair_payload = pairs[i];
-            if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
-            const idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse continue;
-            if (idx == field_index) {
-                const value = typed.valueFromPayload(ctx.allocator, field_type, null, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
-                return ResolvedAuthValue.fromOwned(value);
-            }
-        }
-
-        return ResolvedAuthValue.fromBorrowed(.nil);
+        const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
+        const value = typed.valueFromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+        return ResolvedAuthValue.fromOwned(value);
     }
 
     const table = ctx.value_table orelse return null;
@@ -347,19 +318,27 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
     const field_meta = table.fields[field_index];
 
     // Wire protocol: duplicate field index in one pair-array → last-wins.
+    const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
+    const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+    return ResolvedAuthValue.fromOwned(value);
+}
+
+/// Scan a pair-array payload in reverse and return the last pair whose
+/// first element matches `field_index`.  Returns null if no match is found.
+///
+/// Wire protocol rule: when a pair-array contains duplicate field indices,
+/// the last occurrence wins.  Reverse scanning satisfies this with O(n)
+/// worst-case but early exit on the first match.
+fn findLastValuePair(pairs: []const msgpack.Payload, field_index: usize) ?msgpack.Payload {
     var i: usize = pairs.len;
     while (i > 0) {
         i -= 1;
         const pair_payload = pairs[i];
         if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
         const idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse continue;
-        if (idx == field_index) {
-            const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair_payload.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
-            return ResolvedAuthValue.fromOwned(value);
-        }
+        if (idx == field_index) return pair_payload;
     }
-
-    return ResolvedAuthValue.fromBorrowed(.nil);
+    return null;
 }
 
 fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {

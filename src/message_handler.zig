@@ -288,10 +288,10 @@ pub const MessageHandler = struct {
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
-        errdefer _ = conn.resetStoreScopeIfSeq(scope_seq);
+        errdefer _ = conn.resetScopeIfSeq(scope_seq, false);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeStoreNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr());
-            if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
+            try authorization.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
+            if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }
             return error.RequestSuperseded;
@@ -641,18 +641,19 @@ pub const MessageHandler = struct {
 
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
-        errdefer _ = conn.resetPresenceScopeIfSeq(scope_seq);
+        errdefer _ = conn.resetScopeIfSeq(scope_seq, true);
 
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizePresenceNamespace(
+            try authorization.authorizeNamespace(
                 arena_allocator,
                 self.auth_config,
                 req.namespace,
                 scope.user_doc_id,
                 external_user_id,
                 conn.getSessionClaimsPtr(),
+                true,
             );
-            if (conn.setPresenceScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
+            if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, true)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }
             return error.RequestSuperseded;

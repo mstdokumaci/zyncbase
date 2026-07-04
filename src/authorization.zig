@@ -34,8 +34,7 @@ pub const EvalResult = evaluate_mod.EvalResult;
 pub const evaluateCondition = evaluate_mod.evaluateCondition;
 pub const evaluateConditionStrict = evaluate_mod.evaluateConditionStrict;
 pub const evaluateConditionWithDoc = evaluate_mod.evaluateConditionWithDoc;
-pub const authorizeStoreNamespace = evaluate_mod.authorizeStoreNamespace;
-pub const authorizePresenceNamespace = evaluate_mod.authorizePresenceNamespace;
+pub const authorizeNamespace = evaluate_mod.authorizeNamespace;
 pub const authorizePresenceWrite = evaluate_mod.authorizePresenceWrite;
 pub const authorizePresenceSharedWrite = evaluate_mod.authorizePresenceSharedWrite;
 

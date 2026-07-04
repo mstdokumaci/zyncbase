@@ -29,6 +29,39 @@ fn isIdEqualsFilter(filter: *const query_ast.QueryFilter, id_index: usize) ?DocI
     return val.scalar.doc_id;
 }
 
+/// Decode a pair-array payload into a deduplicated list of column values.
+/// Wire protocol: duplicate field index → last-wins (reverse scan, skip seen).
+fn decodeColumnsFromPairs(
+    allocator: Allocator,
+    table: *const schema_mod.Table,
+    value: msgpack.Payload,
+) !std.ArrayListUnmanaged(storage_mod.ColumnValue) {
+    var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+
+    var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
+    var pair_i: usize = value.arr.len;
+    while (pair_i > 0) {
+        pair_i -= 1;
+        const pair_payload = value.arr[pair_i];
+        if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
+        const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
+        if (f_idx < schema_mod.max_store_fields) {
+            if (seen.isSet(f_idx)) continue;
+            seen.set(f_idx);
+        }
+
+        const field = try validateFieldWrite(table, f_idx, pair_payload.arr[1]);
+        const typed_value = try typed.valueFromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
+
+        try columns.append(allocator, .{
+            .index = f_idx,
+            .value = typed_value,
+        });
+    }
+
+    return columns;
+}
+
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
@@ -318,33 +351,10 @@ pub const StoreService = struct {
     ) !void {
         if (value != .arr) return error.InvalidPayload;
 
-        var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+        var columns = try decodeColumnsFromPairs(self.allocator, path.table, value);
         defer {
             for (columns.items) |col| col.value.deinit(self.allocator);
             columns.deinit(self.allocator);
-        }
-
-        // Wire protocol: duplicate field index in one pair-array → last-wins.
-        // Iterate backward, skip already-seen indices to build deduplicated columns.
-        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
-        var pair_i: usize = value.arr.len;
-        while (pair_i > 0) {
-            pair_i -= 1;
-            const pair_payload = value.arr[pair_i];
-            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
-            if (f_idx < schema_mod.max_store_fields) {
-                if (seen.isSet(f_idx)) continue;
-                seen.set(f_idx);
-            }
-
-            const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
-
-            try columns.append(self.allocator, .{
-                .index = f_idx,
-                .value = typed_value,
-            });
         }
 
         const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
@@ -383,33 +393,10 @@ pub const StoreService = struct {
 
         if (value != .arr) return error.InvalidPayload;
 
-        var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+        var columns = try decodeColumnsFromPairs(self.allocator, path.table, value);
         defer {
             for (columns.items) |col| col.value.deinit(self.allocator);
             columns.deinit(self.allocator);
-        }
-
-        // Wire protocol: duplicate field index in one pair-array → last-wins.
-        // Iterate backward, skip already-seen indices to build deduplicated columns.
-        var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
-        var pair_i: usize = value.arr.len;
-        while (pair_i > 0) {
-            pair_i -= 1;
-            const pair_payload = value.arr[pair_i];
-            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
-            if (f_idx < schema_mod.max_store_fields) {
-                if (seen.isSet(f_idx)) continue;
-                seen.set(f_idx);
-            }
-
-            const field = try validateFieldWrite(path.table, f_idx, pair_payload.arr[1]);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
-
-            try columns.append(self.allocator, .{
-                .index = f_idx,
-                .value = typed_value,
-            });
         }
 
         const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
