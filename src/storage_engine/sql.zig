@@ -285,15 +285,6 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
 
 pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
-    if (field.storage_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
-        const ptr = sqlite.c.sqlite3_column_text(stmt, i);
-        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
-        const s = if (ptr != null) ptr[0..len] else "[]";
-        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
-        defer parsed.deinit();
-        return typed.valueFromJson(allocator, field.storage_type, field.items_type, parsed.value);
-    }
-
     return switch (col_type) {
         sqlite.c.SQLITE_BLOB => blk: {
             if (field.storage_type != .doc_id) break :blk .nil;
@@ -310,7 +301,14 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
             return typed.Value{ .scalar = .{ .integer = val } };
         },
         sqlite.c.SQLITE_FLOAT => typed.Value{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
-        sqlite.c.SQLITE_TEXT => blk: {
+        sqlite.c.SQLITE_TEXT => if (field.storage_type == .array) blk: {
+            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+            const s = if (ptr != null) ptr[0..len] else "[]";
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
+            defer parsed.deinit();
+            break :blk typed.valueFromJson(allocator, field.storage_type, field.items_type, parsed.value);
+        } else blk: {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const s = if (ptr != null) ptr[0..len] else "";

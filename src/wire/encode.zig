@@ -110,6 +110,16 @@ pub const store_delta_header = blk: {
     break :blk buf[0..w.end].*;
 };
 
+const write_committed_header = blk: {
+    var buf: [1 + Keys.type.len + Values.write_committed.len + Keys.write_id.len]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeByte(0x82) catch @panic("comptime: failed to write map header");
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.write_committed) catch @panic("comptime: failed to write WriteCommitted value");
+    w.writeAll(Keys.write_id) catch @panic("comptime: failed to write writeId key");
+    break :blk buf[0..w.end].*;
+};
+
 // === Response builders ===
 
 inline fn writeOptional(
@@ -430,12 +440,7 @@ pub fn encodeWriteCommitted(allocator: Allocator, write_id: [16]u8) ![]const u8 
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
 
-    try msgpack.encodeMapHeader(writer, 2);
-
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.write_committed);
-
-    try writer.writeAll(Keys.write_id);
+    try writer.writeAll(&write_committed_header);
     const hex_buf = std.fmt.bytesToHex(write_id, .lower);
     try msgpack.writeMsgPackStr(writer, &hex_buf);
 

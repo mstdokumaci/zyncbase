@@ -142,12 +142,12 @@ pub fn appendConditionSql(
 
     switch (cond.op) {
         .eq, .ne, .gt, .lt, .gte, .lte => {
-            const val = cond.value orelse return error.MissingConditionValue;
+            const val = try requireValue(cond);
             try buf.appendSlice(allocator, cmpOpSql(cond.op));
             try appendClonedValue(allocator, values, val);
         },
         .contains => {
-            const val = cond.value orelse return error.MissingConditionValue;
+            const val = try requireValue(cond);
             if (cond.field_type == .array) {
                 try appendArrayContainsSql(allocator, buf, values, sql_field_quoted, val);
                 return;
@@ -155,11 +155,11 @@ pub fn appendConditionSql(
             try appendLikePredicate(allocator, buf, values, val, "'%' || ? || '%'");
         },
         .startsWith => {
-            const val = cond.value orelse return error.MissingConditionValue;
+            const val = try requireValue(cond);
             try appendLikePredicate(allocator, buf, values, val, "? || '%'");
         },
         .endsWith => {
-            const val = cond.value orelse return error.MissingConditionValue;
+            const val = try requireValue(cond);
             try appendLikePredicate(allocator, buf, values, val, "'%' || ?");
         },
         .in, .notIn => {
@@ -172,6 +172,10 @@ pub fn appendConditionSql(
             try buf.appendSlice(allocator, " IS NOT NULL");
         },
     }
+}
+
+fn requireValue(cond: *const query_ast.Condition) !Value {
+    return cond.value orelse return error.MissingConditionValue;
 }
 
 fn cmpOpSql(op: query_ast.Operator) []const u8 {
