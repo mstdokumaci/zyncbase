@@ -37,6 +37,10 @@ fn decodeColumnsFromPairs(
     value: msgpack.Payload,
 ) !std.ArrayListUnmanaged(storage_mod.ColumnValue) {
     var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+    errdefer {
+        for (columns.items) |col| col.value.deinit(allocator);
+        columns.deinit(allocator);
+    }
 
     var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
     var pair_i: usize = value.arr.len;

@@ -697,7 +697,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         stmt: *sqlite.c.sqlite3_stmt,
         bind_idx: *c_int,
-        values: []typed.Value,
+        values: []const typed.Value,
     ) !void {
         for (values) |val| {
             try sql.bindValue(val, &self.conn, stmt, bind_idx.*, self.allocator);
