@@ -332,11 +332,16 @@ pub const WriteWorker = struct {
                 .insert
             else
                 .update;
-            pushOwnedChange(self.allocator, ctx.pending_changes, namespace_id, table_index, doc_id, op_type, old_record, new_record) catch |err| {
-                const classified_err = errors.classifyError(err);
-                std.log.err("Failed to capture row change: {}", .{classified_err});
-                return classified_err;
-            };
+            if (self.change_queue != null) {
+                pushOwnedChange(self.allocator, ctx.pending_changes, namespace_id, table_index, doc_id, op_type, old_record, new_record) catch |err| {
+                    const classified_err = errors.classifyError(err);
+                    std.log.err("Failed to capture row change: {}", .{classified_err});
+                    return classified_err;
+                };
+            } else {
+                if (old_record) |r| r.deinit(self.allocator);
+                if (new_record) |r| r.deinit(self.allocator);
+            }
             return true;
         } else {
             // Row was not affected — check for guard conflict.
@@ -433,9 +438,10 @@ pub const WriteWorker = struct {
         // present, we must distinguish between "row doesn't exist" (idempotent
         // success) and "row exists but guard condition didn't match" (conflict).
         if (maybe_old_record == null and dop.guard_values != null and has_write_ack) {
-            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id, ctx.sql_cache) catch |err| blk: {
-                std.log.err("Delete guard post-check failed: {}", .{err});
-                break :blk null;
+            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id, ctx.sql_cache) catch |err| {
+                const classified_err = errors.classifyError(err);
+                std.log.err("Delete guard post-check failed: {}", .{classified_err});
+                return classified_err;
             };
             if (exists) |r| {
                 r.deinit(self.allocator);
@@ -953,9 +959,10 @@ pub const WriteWorker = struct {
         // Guard semantics for delete: distinguish "row doesn't exist" (idempotent
         // success) from "row exists but guard didn't match" (conflict).
         if (maybe_old_record == null and entry.guard_values != null and ctx.is_confirmed) {
-            const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache) catch |err| blk: {
-                std.log.err("Delete guard post-check failed: {}", .{err});
-                break :blk null;
+            const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache) catch |err| {
+                const classified_err = errors.classifyError(err);
+                std.log.err("Delete guard post-check failed: {}", .{classified_err});
+                return classified_err;
             };
             if (exists) |r| {
                 r.deinit(self.allocator);
