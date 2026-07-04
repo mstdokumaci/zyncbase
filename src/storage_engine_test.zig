@@ -761,3 +761,141 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
 }
+
+test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-update-missing", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_b: typed.DocId = 200;
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 555;
+    const write_id: [16]u8 = .{4} ** 16;
+    try ctx.engine.updateDocument(table_meta.index, doc_id, namespace_id, update_columns, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
+
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
+}
+
+test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-upsert-missing", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_a: typed.DocId = 100;
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_a } });
+    defer guard.deinit(allocator);
+
+    const columns = &[_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new" } } },
+    };
+    const conn_id: u64 = 666;
+    const write_id: [16]u8 = .{5} ** 16;
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, columns, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
+
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
+
+    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.records.len);
+    const val = result.records[0].values[val_field_idx];
+    try testing.expectEqualStrings("new", val.scalar.text);
+}
+
+test "StorageEngine: confirmed update with rejecting guard on existing row returns PermissionDenied" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-update-reject", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_a: typed.DocId = 100;
+    const author_b: typed.DocId = 200;
+
+    const columns = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 444;
+    const write_id: [16]u8 = .{6} ** 16;
+    try ctx.engine.updateDocument(table_meta.index, doc_id, namespace_id, update_columns, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| allocator.free(e.data);
+        allocator.free(entries);
+    }
+
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
+
+    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.records.len);
+    const val = result.records[0].values[val_field_idx];
+    try testing.expectEqualStrings("original", val.scalar.text);
+}
