@@ -76,9 +76,11 @@ pub const PresenceRecord = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,
             };
-            errdefer new_value.deinit(allocator);
 
-            try temp_updates.append(allocator, .{ .idx = f_idx, .value = new_value });
+            temp_updates.append(allocator, .{ .idx = f_idx, .value = new_value }) catch |err| {
+                new_value.deinit(allocator);
+                return err;
+            };
         }
 
         for (temp_updates.items) |update| {

@@ -57,10 +57,13 @@ fn decodeColumnsFromPairs(
         const field = try validateFieldWrite(table, f_idx, pair_payload.arr[1]);
         const typed_value = try typed.valueFromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
 
-        try columns.append(allocator, .{
+        columns.append(allocator, .{
             .index = f_idx,
             .value = typed_value,
-        });
+        }) catch |err| {
+            typed_value.deinit(allocator);
+            return err;
+        };
     }
 
     return columns;
