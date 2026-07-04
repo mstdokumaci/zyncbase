@@ -475,36 +475,9 @@ pub const WriteWorker = struct {
             return;
         };
         for (batch.items) |op| {
-            // SAFETY: initialized below in the switch statement
-            var table_index: usize = undefined;
-            // SAFETY: initialized below in the switch statement
-            var id: DocId = undefined;
-            // SAFETY: initialized below in the switch statement
-            var namespace_id: i64 = undefined;
-            const has_affected = switch (op) {
-                .upsert => |o| blk: {
-                    table_index = o.table_index;
-                    id = o.id;
-                    namespace_id = o.namespace_id;
-                    break :blk true;
-                },
-                .update => |o| blk: {
-                    table_index = o.table_index;
-                    id = o.id;
-                    namespace_id = o.namespace_id;
-                    break :blk true;
-                },
-                .delete => |o| blk: {
-                    table_index = o.table_index;
-                    id = o.id;
-                    namespace_id = o.namespace_id;
-                    break :blk true;
-                },
-                else => false,
-            };
-            if (has_affected) {
-                const table_metadata = self.schema.tableByIndex(table_index) orelse continue;
-                const key = reader.getCacheKey(table_metadata, namespace_id, id);
+            if (getOpTarget(op)) |target| {
+                const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
+                const key = reader.getCacheKey(table_metadata, target.namespace_id, target.id);
                 eviction_keys.appendAssumeCapacity(key);
             }
         }
@@ -632,23 +605,7 @@ pub const WriteWorker = struct {
             // Collect operations for batch
             while (batch.items.len < batch_size) {
                 if (self.queue.pop()) |op| {
-                    switch (op) {
-                        .upsert, .update, .delete => {
-                            batch.append(self.allocator, op) catch |err| {
-                                std.log.err("Failed to append to batch: {}", .{err});
-                                if (op.getWriteAckInfo()) |info| {
-                                    self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
-                                    self.notifyChanges();
-                                }
-                                op.deinit(self.allocator);
-                                self.flush_wg.done(1);
-                                continue;
-                            };
-                        },
-                        .batch, .resolve_session, .checkpoint => {
-                            self.executeImmediateOp(op, &batch, &last_batch_time);
-                        },
-                    }
+                    if (tryEnqueueOp(self, op, &batch, &last_batch_time) == .skipped) continue;
                 } else {
                     break;
                 }
@@ -673,27 +630,41 @@ pub const WriteWorker = struct {
 
         // Drain
         while (self.queue.pop()) |op| {
-            switch (op) {
-                .upsert, .update, .delete => {
-                    batch.append(self.allocator, op) catch |err| {
-                        std.log.err("Failed to append to batch: {}", .{err});
-                        if (op.getWriteAckInfo()) |info| {
-                            self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
-                            self.notifyChanges();
-                        }
-                        op.deinit(self.allocator);
-                        self.flush_wg.done(1);
-                    };
-                },
-                .batch, .resolve_session, .checkpoint => {
-                    self.executeImmediateOp(op, &batch, &last_batch_time);
-                },
-            }
+            _ = tryEnqueueOp(self, op, &batch, &last_batch_time);
         }
 
         if (batch.items.len > 0) {
             flushBatch(self, &batch, &last_batch_time);
         }
+    }
+
+    const EnqueueResult = enum { appended, immediate, skipped };
+
+    fn tryEnqueueOp(
+        self: *WriteWorker,
+        op: WriteOp,
+        batch: *std.ArrayListUnmanaged(WriteOp),
+        last_batch_time: *i64,
+    ) EnqueueResult {
+        return switch (op) {
+            .upsert, .update, .delete => blk: {
+                batch.append(self.allocator, op) catch |err| {
+                    std.log.err("Failed to append to batch: {}", .{err});
+                    if (op.getWriteAckInfo()) |info| {
+                        self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
+                        self.notifyChanges();
+                    }
+                    op.deinit(self.allocator);
+                    self.flush_wg.done(1);
+                    break :blk .skipped;
+                };
+                break :blk .appended;
+            },
+            .batch, .resolve_session, .checkpoint => blk: {
+                self.executeImmediateOp(op, batch, last_batch_time);
+                break :blk .immediate;
+            },
+        };
     }
 
     const PkTracking = struct { table_index: usize, id: DocId };
@@ -706,6 +677,33 @@ pub const WriteWorker = struct {
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
         is_confirmed: bool,
     };
+
+    const OpTarget = struct {
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+    };
+
+    fn getOpTarget(op: WriteOp) ?OpTarget {
+        return switch (op) {
+            .upsert => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+            .update => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+            .delete => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+            else => null,
+        };
+    }
+
+    fn bindValueSlice(
+        self: *WriteWorker,
+        stmt: *sqlite.c.sqlite3_stmt,
+        bind_idx: *c_int,
+        values: []const typed.Value,
+    ) !void {
+        for (values) |val| {
+            try sql.bindValue(val, &self.conn, stmt, bind_idx.*, self.allocator);
+            bind_idx.* += 1;
+        }
+    }
 
     fn buildEvictionKeys(
         self: *WriteWorker,
@@ -1097,16 +1095,10 @@ pub const WriteWorker = struct {
 
         if (@typeInfo(@TypeOf(op.values)) == .optional) {
             if (op.values) |vals| {
-                for (vals) |val| {
-                    try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                    bind_idx += 1;
-                }
+                try self.bindValueSlice(stmt, &bind_idx, vals);
             }
         } else {
-            for (op.values) |val| {
-                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                bind_idx += 1;
-            }
+            try self.bindValueSlice(stmt, &bind_idx, op.values);
         }
 
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
@@ -1115,10 +1107,7 @@ pub const WriteWorker = struct {
         bind_idx += 1;
 
         if (op.guard_values) |guard_vals| {
-            for (guard_vals) |val| {
-                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                bind_idx += 1;
-            }
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         const rc = sqlite.c.sqlite3_step(stmt);
@@ -1144,16 +1133,10 @@ pub const WriteWorker = struct {
 
         if (@typeInfo(@TypeOf(op.values)) == .optional) {
             if (op.values) |vals| {
-                for (vals) |val| {
-                    try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                    bind_idx += 1;
-                }
+                try self.bindValueSlice(stmt, &bind_idx, vals);
             }
         } else {
-            for (op.values) |val| {
-                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                bind_idx += 1;
-            }
+            try self.bindValueSlice(stmt, &bind_idx, op.values);
         }
 
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
@@ -1167,10 +1150,7 @@ pub const WriteWorker = struct {
         bind_idx += 1;
 
         if (op.guard_values) |guard_vals| {
-            for (guard_vals) |val| {
-                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                bind_idx += 1;
-            }
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         const rc = sqlite.c.sqlite3_step(stmt);
@@ -1199,10 +1179,7 @@ pub const WriteWorker = struct {
 
         var bind_idx: c_int = 3;
         if (op.guard_values) |guard_vals| {
-            for (guard_vals) |val| {
-                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
-                bind_idx += 1;
-            }
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         const rc = sqlite.c.sqlite3_step(stmt);

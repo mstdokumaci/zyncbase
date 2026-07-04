@@ -140,6 +140,63 @@ test "getEnum resolves string to enum tag" {
     try std.testing.expect((try read.getEnum(Level, obj, "missing", map)) == null);
 }
 
+test "setBool assigns when present, no-op when missing or null" {
+    var p = try read.parseValue(std.testing.allocator,
+        \\{"on":true,"off":false,"noop":"yes","nothing":null}
+    );
+    defer p.deinit();
+    const obj = p.value.object;
+
+    var field: bool = false;
+    try read.setBool(&field, obj, "on");
+    try std.testing.expectEqual(true, field);
+
+    try read.setBool(&field, obj, "off");
+    try std.testing.expectEqual(false, field);
+
+    var untouched: bool = true;
+    try read.setBool(&untouched, obj, "missing");
+    try std.testing.expectEqual(true, untouched);
+
+    try read.setBool(&untouched, obj, "nothing");
+    try std.testing.expectEqual(true, untouched);
+
+    var type_mismatch: bool = false;
+    try std.testing.expectError(error.TypeMismatch, read.setBool(&type_mismatch, obj, "noop"));
+    try std.testing.expectEqual(false, type_mismatch);
+}
+
+test "setInt assigns with intCast, no-op when missing or null" {
+    var p = try read.parseValue(std.testing.allocator,
+        \\{"port":8080,"big":9999999999,"noop":"x","nothing":null}
+    );
+    defer p.deinit();
+    const obj = p.value.object;
+
+    var u16_field: u16 = 0;
+    try read.setInt(u16, &u16_field, obj, "port");
+    try std.testing.expectEqual(@as(u16, 8080), u16_field);
+
+    var u32_field: u32 = 0;
+    try read.setInt(u32, &u32_field, obj, "port");
+    try std.testing.expectEqual(@as(u32, 8080), u32_field);
+
+    var usize_field: usize = 0;
+    try read.setInt(usize, &usize_field, obj, "port");
+    try std.testing.expectEqual(@as(usize, 8080), usize_field);
+
+    var untouched: u32 = 42;
+    try read.setInt(u32, &untouched, obj, "missing");
+    try std.testing.expectEqual(@as(u32, 42), untouched);
+
+    try read.setInt(u32, &untouched, obj, "nothing");
+    try std.testing.expectEqual(@as(u32, 42), untouched);
+
+    var type_mismatch: u32 = 0;
+    try std.testing.expectError(error.TypeMismatch, read.setInt(u32, &type_mismatch, obj, "noop"));
+    try std.testing.expectEqual(@as(u32, 0), type_mismatch);
+}
+
 test "null value treated same as absent in setString and replaceString" {
     var p = try read.parseValue(std.testing.allocator,
         \\{"key":"value","empty":null}

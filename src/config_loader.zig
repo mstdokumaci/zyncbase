@@ -281,22 +281,13 @@ pub const ConfigLoader = struct {
     fn parseAuthTicket(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
         const ticket_obj = (try json_read.getObject(auth_obj, "ticket")) orelse return;
         try json_read.setString(allocator, &auth.ticket_secret, ticket_obj, "secret");
-        const ttl_opt = try json_read.getInt(ticket_obj, "ttlSeconds");
-        if (ttl_opt) |ttl| {
-            auth.ticket_ttl_seconds = @intCast(ttl);
-        }
-        const su_opt = try json_read.getBool(ticket_obj, "singleUse");
-        if (su_opt) |su| {
-            auth.ticket_single_use = su;
-        }
+        try json_read.setInt(u32, &auth.ticket_ttl_seconds, ticket_obj, "ttlSeconds");
+        try json_read.setBool(&auth.ticket_single_use, ticket_obj, "singleUse");
     }
 
     fn parseAuthAnonymous(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {
         const anon_obj = (try json_read.getObject(auth_obj, "anonymous")) orelse return;
-        const enabled_opt = try json_read.getBool(anon_obj, "enabled");
-        if (enabled_opt) |enabled| {
-            auth.anonymous_enabled = enabled;
-        }
+        try json_read.setBool(&auth.anonymous_enabled, anon_obj, "enabled");
         try json_read.replaceString(allocator, &auth.anonymous_subject_prefix, anon_obj, "subjectPrefix");
     }
 
@@ -357,26 +348,11 @@ pub const ConfigLoader = struct {
             config.security.allowed_origins = try origin_list.toOwnedSlice(allocator);
         }
 
-        const allow_localhost_opt = try json_read.getBool(security_obj, "allowLocalhost");
-        if (allow_localhost_opt) |v| {
-            config.security.allow_localhost = v;
-        }
-        const max_mps_opt = try json_read.getInt(security_obj, "maxMessagesPerSecond");
-        if (max_mps_opt) |v| {
-            config.security.max_messages_per_second = @intCast(v);
-        }
-        const max_conn_opt = try json_read.getInt(security_obj, "maxConnections");
-        if (max_conn_opt) |v| {
-            config.security.max_connections = @intCast(v);
-        }
-        const max_msg_opt = try json_read.getInt(security_obj, "maxMessageSize");
-        if (max_msg_opt) |v| {
-            config.security.max_message_size = @intCast(v);
-        }
-        const violation_opt = try json_read.getInt(security_obj, "violationThreshold");
-        if (violation_opt) |v| {
-            config.security.violation_threshold = @intCast(v);
-        }
+        try json_read.setBool(&config.security.allow_localhost, security_obj, "allowLocalhost");
+        try json_read.setInt(u32, &config.security.max_messages_per_second, security_obj, "maxMessagesPerSecond");
+        try json_read.setInt(u32, &config.security.max_connections, security_obj, "maxConnections");
+        try json_read.setInt(usize, &config.security.max_message_size, security_obj, "maxMessageSize");
+        try json_read.setInt(u32, &config.security.violation_threshold, security_obj, "violationThreshold");
     }
 
     fn parseLogging(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
@@ -410,26 +386,11 @@ pub const ConfigLoader = struct {
         _ = allocator;
         const perf_obj = (try json_read.getObject(obj, "performance")) orelse return;
 
-        const buf_size_opt = try json_read.getInt(perf_obj, "messageBufferSize");
-        if (buf_size_opt) |v| {
-            config.performance.message_buffer_size = @intCast(v);
-        }
-        const batch_writes_opt = try json_read.getBool(perf_obj, "batchWrites");
-        if (batch_writes_opt) |v| {
-            config.performance.batch_writes = v;
-        }
-        const batch_size_opt = try json_read.getInt(perf_obj, "batchSize");
-        if (batch_size_opt) |v| {
-            config.performance.batch_size = @intCast(v);
-        }
-        const batch_timeout_opt = try json_read.getInt(perf_obj, "batchTimeout");
-        if (batch_timeout_opt) |v| {
-            config.performance.batch_timeout = @intCast(v);
-        }
-        const cache_size_opt = try json_read.getInt(perf_obj, "statementCacheSize");
-        if (cache_size_opt) |v| {
-            config.performance.statement_cache_size = @intCast(v);
-        }
+        try json_read.setInt(usize, &config.performance.message_buffer_size, perf_obj, "messageBufferSize");
+        try json_read.setBool(&config.performance.batch_writes, perf_obj, "batchWrites");
+        try json_read.setInt(usize, &config.performance.batch_size, perf_obj, "batchSize");
+        try json_read.setInt(u32, &config.performance.batch_timeout, perf_obj, "batchTimeout");
+        try json_read.setInt(usize, &config.performance.statement_cache_size, perf_obj, "statementCacheSize");
     }
 
     fn validateConfig(config: *Config) !void {
