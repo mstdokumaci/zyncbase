@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const schema_mod = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
@@ -53,9 +54,14 @@ pub const ReadWorker = struct {
     writer_version: *std.atomic.Value(u64),
     allocator: Allocator,
     notifier: Notifier,
+    memory_strategy: *MemoryStrategy,
+    /// Per-request arena for record/value allocations. Bulk-freed via reset()
+    /// at the start of each request, replacing hundreds of individual GPA frees.
+    read_arena: *std.heap.ArenaAllocator,
 
     pub fn init(
         allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
         node: *ReaderNode,
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
@@ -75,6 +81,8 @@ pub const ReadWorker = struct {
             .writer_version = writer_version,
             .allocator = allocator,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
+            .memory_strategy = memory_strategy,
+            .read_arena = memory_strategy.acquireArena() catch @panic("ReadWorker: failed to acquire arena"),
         };
     }
 
@@ -88,8 +96,11 @@ pub const ReadWorker = struct {
 
     fn threadLoop(self: *ReadWorker) void {
         while (!self.thread.isRequested()) {
+            // Bulk-free all record/value allocations from the previous request.
+            _ = self.read_arena.reset(.retain_capacity);
+
             const request = self.request_queue.pop() orelse break;
-            var response = self.executeRead(request);
+            const response = self.executeRead(request);
 
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
@@ -98,13 +109,11 @@ pub const ReadWorker = struct {
                     .message = @errorName(err),
                 }) catch {
                     std.log.err("ReadWorker: failed to encode error", .{});
-                    response.deinit(self.allocator);
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
                     std.log.err("ReadWorker: failed to push error to send queue", .{});
                     self.allocator.free(encoded);
-                    response.deinit(self.allocator);
                     continue;
                 };
                 self.notifier.notify();
@@ -117,18 +126,15 @@ pub const ReadWorker = struct {
                     .next_cursor = response.next_cursor_str,
                 }) catch {
                     std.log.err("ReadWorker: failed to encode query", .{});
-                    response.deinit(self.allocator);
                     continue;
                 };
                 self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
                     std.log.err("ReadWorker: failed to push to send queue", .{});
                     self.allocator.free(encoded);
-                    response.deinit(self.allocator);
                     continue;
                 };
                 self.notifier.notify();
             }
-            response.deinit(self.allocator);
         }
 
         while (self.request_queue.popTimed(0)) |request| {
@@ -257,7 +263,7 @@ pub const ReadWorker = struct {
             defer mstmt.release();
 
             break :blk read_mod.execSelectDocument(
-                self.allocator,
+                self.read_arena.allocator(),
                 &self.node.conn,
                 mstmt.stmt,
                 id,
@@ -327,7 +333,7 @@ pub const ReadWorker = struct {
         const stmt = mstmt.stmt;
 
         const exec_res = read_mod.execQuery(
-            self.allocator,
+            self.read_arena.allocator(),
             &self.node.conn,
             stmt,
             query_res.values,
@@ -351,8 +357,7 @@ pub const ReadWorker = struct {
         result: SelectDocumentResult,
     ) ReadResponse {
         if (result.record) |record| {
-            const records = self.allocator.alloc(Record, 1) catch {
-                record.deinit(self.allocator);
+            const records = self.read_arena.allocator().alloc(Record, 1) catch {
                 return .{
                     .conn_id = request.conn_id,
                     .msg_id = request.msg_id,
@@ -408,6 +413,7 @@ pub const ReadWorkerPool = struct {
 
     pub fn init(
         allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
         reader_nodes: []ReaderNode,
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
@@ -423,6 +429,7 @@ pub const ReadWorkerPool = struct {
         for (reader_nodes, 0..) |*node, i| {
             pool.workers[i] = ReadWorker.init(
                 allocator,
+                memory_strategy,
                 node,
                 request_queue,
                 send_queue,
@@ -458,6 +465,9 @@ pub const ReadWorkerPool = struct {
     }
 
     pub fn deinit(self: *ReadWorkerPool) void {
+        for (self.pool.workers) |*w| {
+            w.memory_strategy.releaseArena(w.read_arena);
+        }
         self.pool.deinit();
     }
 };

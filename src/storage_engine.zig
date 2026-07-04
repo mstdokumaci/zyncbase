@@ -90,6 +90,7 @@ pub const StorageEngine = struct {
     pub const State = enum(u8) { setup, running, shutdown };
 
     allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
     reader_nodes: []ReaderNode,
     read_request_queue: read_buffer.read_request_queue,
     read_worker_pool: ?read_worker_pool_mod.ReadWorkerPool,
@@ -148,6 +149,7 @@ pub const StorageEngine = struct {
 
         self.* = .{
             .allocator = allocator,
+            .memory_strategy = memory_strategy,
             .reader_nodes = reader_nodes,
             .read_request_queue = read_buffer.read_request_queue.init(allocator),
             .read_worker_pool = null,
@@ -463,6 +465,7 @@ pub const StorageEngine = struct {
         // Initialize and start the reader thread pool
         var rp = try read_worker_pool_mod.ReadWorkerPool.init(
             self.allocator,
+            self.memory_strategy,
             self.reader_nodes,
             &self.read_request_queue,
             send_queue,
