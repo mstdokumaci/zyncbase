@@ -85,7 +85,9 @@ pub fn setBool(field: *bool, obj: ObjectMap, key: []const u8) !void {
 }
 
 pub fn setInt(comptime T: type, field: *T, obj: ObjectMap, key: []const u8) !void {
-    if (try getInt(obj, key)) |v| field.* = @intCast(v);
+    if (try getInt(obj, key)) |v| {
+        field.* = std.math.cast(T, v) orelse return error.Overflow;
+    }
 }
 
 pub fn getEnum(
