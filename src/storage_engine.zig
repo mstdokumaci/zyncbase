@@ -401,6 +401,12 @@ pub const StorageEngine = struct {
         }
     }
 
+    pub fn ensureMutationAllowed(self: *StorageEngine) !void {
+        try self.ensureRunning();
+        try self.ensureHealthy();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+    }
+
     pub fn documentExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
         if (table_index >= self.pk_sets.len) return false;
         return self.pk_sets[table_index].contains(id);
@@ -581,9 +587,7 @@ pub const StorageEngine = struct {
         conn_id: ?u64,
         write_id: ?[16]u8,
     ) !void {
-        try self.ensureRunning();
-        try self.ensureHealthy();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        try self.ensureMutationAllowed();
         const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
         var queued = false;
@@ -635,9 +639,7 @@ pub const StorageEngine = struct {
         conn_id: ?u64,
         write_id: ?[16]u8,
     ) !void {
-        try self.ensureRunning();
-        try self.ensureHealthy();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        try self.ensureMutationAllowed();
         const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
         var queued = false;
@@ -691,9 +693,7 @@ pub const StorageEngine = struct {
             self.allocator.free(entries);
         };
 
-        try self.ensureRunning();
-        try self.ensureHealthy();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        try self.ensureMutationAllowed();
 
         for (entries) |entry| {
             _ = self.schema.tableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
@@ -1005,9 +1005,7 @@ pub const StorageEngine = struct {
         conn_id: ?u64,
         write_id: ?[16]u8,
     ) !void {
-        try self.ensureRunning();
-        try self.ensureHealthy();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        try self.ensureMutationAllowed();
         const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
         if (guard_predicate) |predicate| {
             if (predicate.isAlwaysFalse()) return;

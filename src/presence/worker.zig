@@ -281,43 +281,37 @@ pub const PresenceWorker = struct {
 
         if (user_batches.items.len == 0 and shared_batches.items.len == 0) return;
 
-        const gpa = self.allocator;
         var pushed_any = false;
-
-        for (user_batches.items) |batch| {
-            if (batch.subscribers.items.len == 0) continue;
-            for (batch.subscribers.items) |subscriber| {
-                const msg = wire.encodePresenceBroadcast(gpa, subscriber.sub_id, batch.updates.items) catch |err| {
-                    std.log.err("PresenceWorker encode user broadcast failed: {}", .{err});
-                    continue;
-                };
-                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
-                    std.log.err("PresenceWorker push user broadcast failed: {}", .{err});
-                    gpa.free(msg);
-                    continue;
-                };
-                pushed_any = true;
-            }
-        }
-
-        for (shared_batches.items) |batch| {
-            if (batch.subscribers.items.len == 0) continue;
-            for (batch.subscribers.items) |subscriber| {
-                const msg = wire.encodeSharedStateBroadcast(gpa, subscriber.sub_id, batch.updates.items) catch |err| {
-                    std.log.err("PresenceWorker encode shared broadcast failed: {}", .{err});
-                    continue;
-                };
-                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
-                    std.log.err("PresenceWorker push shared broadcast failed: {}", .{err});
-                    gpa.free(msg);
-                    continue;
-                };
-                pushed_any = true;
-            }
-        }
+        pushed_any = self.dispatchBatches(user_batches.items, wire.encodePresenceBroadcast, "user");
+        pushed_any = self.dispatchBatches(shared_batches.items, wire.encodeSharedStateBroadcast, "shared") or pushed_any;
 
         if (pushed_any) {
             self.notifier.notify();
         }
+    }
+
+    fn dispatchBatches(
+        self: *PresenceWorker,
+        batches: anytype,
+        comptime encode_fn: anytype,
+        comptime log_label: []const u8,
+    ) bool {
+        var pushed_any = false;
+        for (batches) |batch| {
+            if (batch.subscribers.items.len == 0) continue;
+            for (batch.subscribers.items) |subscriber| {
+                const msg = encode_fn(self.allocator, subscriber.sub_id, batch.updates.items) catch |err| {
+                    std.log.err("PresenceWorker encode {s} broadcast failed: {}", .{ log_label, err });
+                    continue;
+                };
+                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
+                    std.log.err("PresenceWorker push {s} broadcast failed: {}", .{ log_label, err });
+                    self.allocator.free(msg);
+                    continue;
+                };
+                pushed_any = true;
+            }
+        }
+        return pushed_any;
     }
 };

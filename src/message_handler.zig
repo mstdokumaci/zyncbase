@@ -256,6 +256,16 @@ pub const MessageHandler = struct {
         return session;
     }
 
+    fn extractTableIndex(parsed: msgpack.Payload) !u64 {
+        return switch (parsed) {
+            .map => |m| if (m.getByString("table_index")) |ti| switch (ti) {
+                .uint => |v| v,
+                else => return error.InvalidMessageFormat,
+            } else return error.MissingRequiredFields,
+            else => return error.InvalidMessageFormat,
+        };
+    }
+
     fn buildWriteContext(
         session: Connection.StoreSession,
         conn: *Connection,
@@ -469,13 +479,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const table_index = try wire.extractStoreTableIndexFast(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreSubscribe message: {}", .{err});
             return err;
         };
+
+        const table_index = try extractTableIndex(parsed);
 
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const session = try requireStoreSession(conn);
@@ -528,13 +538,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const table_index = try wire.extractStoreTableIndexFast(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreQuery message: {}", .{err});
             return err;
         };
+
+        const table_index = try extractTableIndex(parsed);
 
         const session = try requireStoreSession(conn);
         const namespace_id = session.namespace_id;

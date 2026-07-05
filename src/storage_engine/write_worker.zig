@@ -120,6 +120,33 @@ pub const WriteWorker = struct {
         };
     }
 
+    fn pushBatchOutcomes(
+        self: *WriteWorker,
+        batch: []const WriteOp,
+        guard_rejected: ?[]const usize,
+        batch_err: ?anyerror,
+    ) void {
+        var pushed = false;
+        for (batch, 0..) |op, op_idx| {
+            if (op.getWriteAckInfo()) |info| {
+                const err: ?anyerror = if (batch_err) |e| e else blk: {
+                    if (guard_rejected) |rejected| {
+                        for (rejected) |idx| {
+                            if (idx == op_idx) break :blk error.PermissionDenied;
+                        }
+                    }
+                    break :blk null;
+                };
+                self.pushWriteOutcome(info.conn_id, info.write_id, err, null);
+                pushed = true;
+            }
+            op.deinit(self.allocator);
+        }
+        if (pushed) {
+            self.notifyChanges();
+        }
+    }
+
     pub fn spawn(self: *WriteWorker) !void {
         try self.thread.spawn(writeThreadLoop, self);
     }
@@ -501,39 +528,12 @@ pub const WriteWorker = struct {
                 self.metadata_cache.bulkEvict(eviction_keys.items);
             }
 
-            var pushed_outcome = false;
-            for (batch.items, 0..) |op, op_idx| {
-                if (op.getWriteAckInfo()) |info| {
-                    const is_guard_rejected = for (guard_rejected.items) |idx| {
-                        if (idx == op_idx) break true;
-                    } else false;
-
-                    const outcome_err: ?anyerror = if (is_guard_rejected) error.PermissionDenied else null;
-
-                    self.pushWriteOutcome(info.conn_id, info.write_id, outcome_err, null);
-                    pushed_outcome = true;
-                }
-                op.deinit(self.allocator);
-            }
-            if (pushed_outcome) {
-                self.notifyChanges();
-            }
-
+            self.pushBatchOutcomes(batch.items, guard_rejected.items, null);
             flushPendingChanges(self, &pending_changes);
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
-            var pushed_outcome = false;
-            for (batch.items) |op| {
-                if (op.getWriteAckInfo()) |info| {
-                    self.pushWriteOutcome(info.conn_id, info.write_id, classified_err, null);
-                    pushed_outcome = true;
-                }
-                op.deinit(self.allocator);
-            }
-            if (pushed_outcome) {
-                self.notifyChanges();
-            }
+            self.pushBatchOutcomes(batch.items, null, classified_err);
         }
         batch.clearRetainingCapacity();
         self.endOp(batch_len);
