@@ -28,6 +28,9 @@ test "SubscriptionEngine: basic subscribe and match" {
     // Subscribe
     _ = try engine.subscribe(1, (schema.table("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
+    // Duplicate subscribe must return error
+    try testing.expectError(error.AlreadySubscribed, engine.subscribe(1, (schema.table("items") orelse return error.TestExpectedValue).index, filter, 1, 100));
+
     // Create a matching record change
     var new_record = try tth.recordFromValues(allocator, &.{tth.valText("active")});
     defer new_record.deinit(allocator);
@@ -98,7 +101,74 @@ test "SubscriptionEngine: unsubscribe clean up" {
     try testing.expectEqual(@as(u32, 0), engine.groups_by_filter.count());
 }
 
-test "SubscriptionEngine: operator matching" {
+test "SubscriptionEngine: subscribe/unsubscribe state consistency across all indexes" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
+
+    var schema = try sth.createSchema(allocator, &.{
+        sth.makeTable("items", &.{}),
+    });
+    defer schema.deinit();
+
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
+    const coll_key = subscription_engine.CollectionKey{ .namespace_id = 1, .table_index = table_index };
+
+    // --- Single subscriber: full lifecycle ---
+    const first = try engine.subscribe(1, table_index, filter, 10, 100);
+    try testing.expect(first);
+
+    // After successful subscribe: all 4 indexes must be consistent
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 1), engine.groups_by_filter.count());
+    try testing.expectEqual(@as(usize, 1), engine.groups_by_collection.get(coll_key).?.items.len);
+    try testing.expect(engine.active_subs.get(.{ .connection_id = 10, .id = 100 }) != null);
+
+    engine.unsubscribe(10, 100);
+
+    // After unsubscribe: all 4 indexes must be clean
+    try testing.expectEqual(@as(u32, 0), engine.groups.count());
+    try testing.expectEqual(@as(u32, 0), engine.groups_by_filter.count());
+    try testing.expect(engine.groups_by_collection.get(coll_key) == null);
+    try testing.expect(engine.active_subs.get(.{ .connection_id = 10, .id = 100 }) == null);
+
+    // --- Multi-subscriber: partial unsubscribe preserves group ---
+    var filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
+
+    const second = try engine.subscribe(1, table_index, filter2, 20, 200);
+    try testing.expect(second); // new group
+    const third = try engine.subscribe(1, table_index, filter2, 30, 300);
+    try testing.expect(!third); // joins existing group
+
+    // Group has 2 subscribers
+    const grp = engine.groups.get(2) orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(u32, 2), grp.subscribers.count());
+
+    // Unsubscribe one: group must survive
+    engine.unsubscribe(20, 200);
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 1), engine.groups_by_filter.count());
+    try testing.expectEqual(@as(usize, 1), engine.groups_by_collection.get(coll_key).?.items.len);
+    try testing.expect(engine.active_subs.get(.{ .connection_id = 20, .id = 200 }) == null);
+    try testing.expect(engine.active_subs.get(.{ .connection_id = 30, .id = 300 }) != null);
+
+    // Unsubscribe last: group must be torn down completely
+    engine.unsubscribe(30, 300);
+    try testing.expectEqual(@as(u32, 0), engine.groups.count());
+    try testing.expectEqual(@as(u32, 0), engine.groups_by_filter.count());
+    try testing.expect(engine.groups_by_collection.get(coll_key) == null);
+    try testing.expect(engine.active_subs.get(.{ .connection_id = 30, .id = 300 }) == null);
+}
+
+test "SubscriptionEngine: evaluateFilter: startsWith operator" {
     const allocator = testing.allocator;
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -143,41 +213,89 @@ test "SubscriptionEngine: canonical filter key includes values" {
     // If they share the same key, they will be in the same group.
     // They SHOULD be in different groups because the values are different.
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
+    try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
 }
 
-test "SubscriptionEngine: canonical key distinguishes same-length array contents" {
+test "SubscriptionEngine: canonical key normalizes array contents" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
-    defer engine.deinit();
 
-    const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .text = "a" },
-    });
-    defer in_val_1.deinit(allocator);
-    const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .text = "b" },
-    });
-    defer in_val_2.deinit(allocator);
+    // Distinguishes same-length array contents
+    {
+        var engine = SubscriptionEngine.init(allocator);
+        defer engine.deinit();
 
-    var filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 3, .op = .in, .value = in_val_1, .field_type = .text, .items_type = null },
-    });
-    defer filter1.deinit(allocator);
+        const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .text = "a" },
+        });
+        defer in_val_1.deinit(allocator);
+        const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .text = "b" },
+        });
+        defer in_val_2.deinit(allocator);
 
-    var filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 3, .op = .in, .value = in_val_2, .field_type = .text, .items_type = null },
-    });
-    defer filter2.deinit(allocator);
+        var filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 3, .op = .in, .value = in_val_1, .field_type = .text, .items_type = null },
+        });
+        defer filter1.deinit(allocator);
 
-    var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("users", &.{}),
-    });
-    defer schema.deinit();
+        var filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 3, .op = .in, .value = in_val_2, .field_type = .text, .items_type = null },
+        });
+        defer filter2.deinit(allocator);
 
-    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+        var schema = try sth.createSchema(allocator, &.{
+            sth.makeTable("users", &.{}),
+        });
+        defer schema.deinit();
 
-    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+        _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+        _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+
+        try testing.expectEqual(@as(u32, 2), engine.groups.count());
+        try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
+    }
+
+    // Normalizes different-order integer arrays to same group
+    {
+        var engine = SubscriptionEngine.init(allocator);
+        defer engine.deinit();
+
+        const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .integer = 1 },
+            .{ .integer = 2 },
+            .{ .integer = 3 },
+        });
+        defer in_val_1.deinit(allocator);
+        const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .integer = 3 },
+            .{ .integer = 1 },
+            .{ .integer = 2 },
+        });
+        defer in_val_2.deinit(allocator);
+
+        var filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 0, .op = .in, .value = in_val_1, .field_type = .integer, .items_type = null },
+        });
+        defer filter1.deinit(allocator);
+
+        var filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 0, .op = .in, .value = in_val_2, .field_type = .integer, .items_type = null },
+        });
+        defer filter2.deinit(allocator);
+
+        var schema = try sth.createSchema(allocator, &.{
+            sth.makeTable("coll", &.{}),
+        });
+        defer schema.deinit();
+
+        const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+        const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+
+        try testing.expect(first);
+        try testing.expect(!second);
+        try testing.expectEqual(@as(u32, 1), engine.groups.count());
+        try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
+    }
 }
 
 test "SubscriptionEngine: canonical key keeps integer and real distinct" {
@@ -244,7 +362,7 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
     try testing.expectEqual(@as(u64, 100), matches[0].subscription_id);
 }
 
-test "SubscriptionEngine: case-insensitive string matching" {
+test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/endsWith" {
     const allocator = testing.allocator;
 
     const val = tth.valText("Al");
@@ -320,6 +438,7 @@ test "SubscriptionEngine: group sharing with different condition order" {
     try testing.expect(!second); // Should share group!
 
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
 }
 
 test "SubscriptionEngine: canonical key includes predicate state" {
@@ -347,6 +466,7 @@ test "SubscriptionEngine: canonical key includes predicate state" {
     try testing.expect(first);
     try testing.expect(second);
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
+    try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
 }
 
 test "SubscriptionEngine: match-none filter never matches changes" {
@@ -384,127 +504,308 @@ test "SubscriptionEngine: match-none filter never matches changes" {
     try testing.expectEqual(@as(usize, 0), matches.len);
 }
 
-test "SubscriptionEngine: in operator subscribe and match" {
+test "SubscriptionEngine: in/notIn operator subscribe and match" {
+    const allocator = testing.allocator;
+
+    // in operator
+    {
+        var engine = SubscriptionEngine.init(allocator);
+        defer engine.deinit();
+
+        const in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .text = "admin" },
+            .{ .text = "editor" },
+        });
+        defer in_val.deinit(allocator);
+
+        var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 3, .op = .in, .value = in_val, .field_type = .text, .items_type = null },
+        });
+        defer filter.deinit(allocator);
+
+        var schema = try sth.createSchema(allocator, &.{
+            sth.makeTable("users", &.{
+                sth.makeField("role", .text, false),
+            }),
+        });
+        defer schema.deinit();
+
+        _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+
+        var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
+        defer r.deinit(allocator);
+
+        const change = subscription_engine.RecordChange{
+            .namespace_id = 1,
+            .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
+            .operation = .insert,
+            .new_record = r,
+            .old_record = null,
+        };
+
+        const matches = try engine.handleRecordChange(change, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+    }
+
+    // notIn operator
+    {
+        var engine = SubscriptionEngine.init(allocator);
+        defer engine.deinit();
+
+        const not_in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
+            .{ .text = "guest" },
+            .{ .text = "banned" },
+        });
+        defer not_in_val.deinit(allocator);
+
+        var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+            .{ .field_index = 3, .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
+        });
+        defer filter.deinit(allocator);
+
+        var schema = try sth.createSchema(allocator, &.{
+            sth.makeTable("users", &.{
+                sth.makeField("role", .text, false),
+            }),
+        });
+        defer schema.deinit();
+
+        _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+
+        var r = try tth.recordFromValues(allocator, &.{tth.valText("member")});
+        defer r.deinit(allocator);
+
+        const change = subscription_engine.RecordChange{
+            .namespace_id = 1,
+            .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
+            .operation = .insert,
+            .new_record = r,
+            .old_record = null,
+        };
+
+        const matches = try engine.handleRecordChange(change, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+    }
+}
+
+test "SubscriptionEngine: unsubscribeMany" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .text = "admin" },
-        .{ .text = "editor" },
-    });
-    defer in_val.deinit(allocator);
-
-    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 3, .op = .in, .value = in_val, .field_type = .text, .items_type = null },
-    });
-    defer filter.deinit(allocator);
-
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("users", &.{
-            sth.makeField("role", .text, false),
+        sth.makeTable("items", &.{
+            sth.makeField("status", .text, false),
         }),
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
-
-    var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
-    defer r.deinit(allocator);
-
-    const change = subscription_engine.RecordChange{
-        .namespace_id = 1,
-        .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
-        .operation = .insert,
-        .new_record = r,
-        .old_record = null,
-    };
-
-    const matches = try engine.handleRecordChange(change, allocator);
-    defer allocator.free(matches);
-    try testing.expectEqual(@as(usize, 1), matches.len);
-}
-
-test "SubscriptionEngine: canonical key normalizes array element order" {
-    const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
-    defer engine.deinit();
-
-    const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .integer = 1 },
-        .{ .integer = 2 },
-        .{ .integer = 3 },
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
     });
-    defer in_val_1.deinit(allocator);
-    const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .integer = 3 },
-        .{ .integer = 1 },
-        .{ .integer = 2 },
-    });
-    defer in_val_2.deinit(allocator);
+    defer filter.deinit(allocator);
 
-    var filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 0, .op = .in, .value = in_val_1, .field_type = .integer, .items_type = null },
-    });
-    defer filter1.deinit(allocator);
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
+    const coll_key = subscription_engine.CollectionKey{ .namespace_id = 1, .table_index = table_index };
 
-    var filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 0, .op = .in, .value = in_val_2, .field_type = .integer, .items_type = null },
-    });
-    defer filter2.deinit(allocator);
+    // Subscribe 4 subscribers to the same group (same conn_id, different sub_ids)
+    _ = try engine.subscribe(1, table_index, filter, 1, 100);
+    _ = try engine.subscribe(1, table_index, filter, 1, 200);
+    _ = try engine.subscribe(1, table_index, filter, 1, 300);
+    _ = try engine.subscribe(1, table_index, filter, 1, 400);
 
-    var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("coll", &.{}),
-    });
-    defer schema.deinit();
-
-    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
-
-    try testing.expect(first);
-    try testing.expect(!second);
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 4), engine.active_subs.count());
+
+    // Unsubscribe 2 of 4: group must survive
+    engine.unsubscribeMany(1, &[_]u64{ 100, 200 });
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
+    try testing.expectEqual(@as(usize, 1), engine.groups_by_collection.get(coll_key).?.items.len);
+
+    // Unsubscribe remaining 2: group must be torn down completely
+    engine.unsubscribeMany(1, &[_]u64{ 300, 400 });
+    try testing.expectEqual(@as(u32, 0), engine.groups.count());
+    try testing.expectEqual(@as(u32, 0), engine.groups_by_filter.count());
+    try testing.expect(engine.groups_by_collection.get(coll_key) == null);
+    try testing.expectEqual(@as(u32, 0), engine.active_subs.count());
+
+    // Empty slice is a no-op
+    engine.unsubscribeMany(1, &[_]u64{});
+
+    // Non-existent IDs are no-ops
+    engine.unsubscribeMany(999, &[_]u64{ 9999, 8888 });
 }
 
-test "SubscriptionEngine: notIn operator subscribe and match" {
+test "SubscriptionEngine: getSubscriptionQuery" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const not_in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
-        .{ .text = "guest" },
-        .{ .text = "banned" },
-    });
-    defer not_in_val.deinit(allocator);
-
-    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-        .{ .field_index = 3, .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
-    });
-    defer filter.deinit(allocator);
-
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("users", &.{
-            sth.makeField("role", .text, false),
+        sth.makeTable("items", &.{
+            sth.makeField("status", .text, false),
         }),
     });
     defer schema.deinit();
 
-    _ = try engine.subscribe(1, (schema.table("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
-    var r = try tth.recordFromValues(allocator, &.{tth.valText("member")});
-    defer r.deinit(allocator);
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
 
-    const change = subscription_engine.RecordChange{
+    _ = try engine.subscribe(1, table_index, filter, 1, 100);
+    _ = try engine.subscribe(1, table_index, filter, 2, 200);
+
+    // Existing subscriber returns valid query
+    const query_opt = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 1, .id = 100 });
+    try testing.expect(query_opt != null);
+    var query = query_opt.?;
+    defer query.deinit(allocator);
+
+    try testing.expectEqual(@as(i64, 1), query.namespace_id);
+    try testing.expectEqual(table_index, query.table_index);
+    try testing.expect(query.filter.predicate.conditions != null);
+    try testing.expect(query.filter.predicate.conditions.?.len > 0);
+
+    // Second subscriber also returns valid query
+    const query2_opt = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 2, .id = 200 });
+    try testing.expect(query2_opt != null);
+    var query2 = query2_opt.?;
+    defer query2.deinit(allocator);
+
+    try testing.expectEqual(@as(i64, 1), query2.namespace_id);
+
+    // Non-existent subscriber returns null
+    const missing = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 99, .id = 999 });
+    try testing.expect(missing == null);
+
+    // Returned query is independent: deinit does not affect engine
+    query.deinit(allocator);
+    var still_valid = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 1, .id = 100 });
+    if (still_valid) |*q| {
+        q.deinit(allocator);
+    }
+    try testing.expect(still_valid != null);
+
+    // After unsubscribe, query is no longer available
+    engine.unsubscribe(1, 100);
+    const after_unsub = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 1, .id = 100 });
+    try testing.expect(after_unsub == null);
+
+    // Remaining subscriber still works
+    var still_there = try engine.getSubscriptionQuery(allocator, .{ .connection_id = 2, .id = 200 });
+    if (still_there) |*q| {
+        q.deinit(allocator);
+    }
+    try testing.expect(still_there != null);
+}
+
+test "SubscriptionEngine: multiple collections isolation" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var schema = try sth.createSchema(allocator, &.{
+        sth.makeTable("items", &.{
+            sth.makeField("status", .text, false),
+        }),
+        sth.makeTable("orders", &.{
+            sth.makeField("total", .integer, false),
+        }),
+    });
+    defer schema.deinit();
+
+    // Filter for collection A (items.status = "active")
+    var filter_a = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    });
+    defer filter_a.deinit(allocator);
+
+    // Filter for collection B (orders.total > 100)
+    var filter_b = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .gt, .value = tth.valInt(100), .field_type = .integer, .items_type = null },
+    });
+    defer filter_b.deinit(allocator);
+
+    const table_a = (schema.table("items") orelse return error.TestExpectedValue).index;
+    const table_b = (schema.table("orders") orelse return error.TestExpectedValue).index;
+
+    _ = try engine.subscribe(1, table_a, filter_a, 1, 100);
+    _ = try engine.subscribe(1, table_a, filter_a, 2, 200);
+    _ = try engine.subscribe(1, table_b, filter_b, 3, 300);
+
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+    try testing.expectEqual(@as(u32, 3), engine.active_subs.count());
+
+    // Change on collection A: only A's subscribers match
+    var record_active = try tth.recordFromValues(allocator, &.{tth.valText("active")});
+    defer record_active.deinit(allocator);
+
+    const change_a = subscription_engine.RecordChange{
         .namespace_id = 1,
-        .table_index = (schema.table("users") orelse return error.TestExpectedValue).index,
+        .table_index = table_a,
         .operation = .insert,
-        .new_record = r,
+        .new_record = record_active,
         .old_record = null,
     };
 
-    const matches = try engine.handleRecordChange(change, allocator);
-    defer allocator.free(matches);
-    try testing.expectEqual(@as(usize, 1), matches.len);
+    const matches_a = try engine.handleRecordChange(change_a, allocator);
+    defer allocator.free(matches_a);
+    try testing.expectEqual(@as(usize, 2), matches_a.len);
+    // Verify both collection A subscribers matched
+    var found_100 = false;
+    var found_200 = false;
+    for (matches_a) |m| {
+        if (m.connection_id == 1 and m.subscription_id == 100) found_100 = true;
+        if (m.connection_id == 2 and m.subscription_id == 200) found_200 = true;
+    }
+    try testing.expect(found_100);
+    try testing.expect(found_200);
+
+    // Change on collection B: only B's subscribers match
+    var record_high = try tth.recordFromValues(allocator, &.{tth.valInt(200)});
+    defer record_high.deinit(allocator);
+
+    const change_b = subscription_engine.RecordChange{
+        .namespace_id = 1,
+        .table_index = table_b,
+        .operation = .insert,
+        .new_record = record_high,
+        .old_record = null,
+    };
+
+    const matches_b = try engine.handleRecordChange(change_b, allocator);
+    defer allocator.free(matches_b);
+    try testing.expectEqual(@as(usize, 1), matches_b.len);
+    try testing.expectEqual(@as(u64, 3), matches_b[0].connection_id);
+    try testing.expectEqual(@as(u64, 300), matches_b[0].subscription_id);
+
+    // Change on collection B with non-matching record: no matches
+    var record_low = try tth.recordFromValues(allocator, &.{tth.valInt(50)});
+    defer record_low.deinit(allocator);
+
+    const change_b_nomatch = subscription_engine.RecordChange{
+        .namespace_id = 1,
+        .table_index = table_b,
+        .operation = .insert,
+        .new_record = record_low,
+        .old_record = null,
+    };
+
+    const matches_b_nomatch = try engine.handleRecordChange(change_b_nomatch, allocator);
+    defer allocator.free(matches_b_nomatch);
+    try testing.expectEqual(@as(usize, 0), matches_b_nomatch.len);
+
+    // Unsubscribe collection A's last subscriber: collection A indexes cleaned, B untouched
+    engine.unsubscribe(1, 100);
+    engine.unsubscribe(2, 200);
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+    try testing.expectEqual(@as(u32, 1), engine.active_subs.count());
 }
 
 test "SubscriptionEngine: filter removal notification when record leaves filter" {
