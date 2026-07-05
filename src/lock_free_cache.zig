@@ -342,6 +342,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             return self.cowMutation(Ctx, .{ .cache = self, .key = key, .data = new_data, .options = options }, struct {
                 fn transform(ctx: Ctx, new_entries: *MapType) anyerror!CowResult {
                     var result: CowResult = .{};
+                    errdefer result.deinit(ctx.cache.allocator);
 
                     if (ctx.options.max_capacity) |max| {
                         const exists = new_entries.contains(ctx.key);
