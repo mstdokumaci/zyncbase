@@ -103,41 +103,39 @@ pub const MessageHandler = struct {
         const ws = &conn.ws;
         const conn_id = conn.id;
 
-        // 1. Enforce rate limiting
+        // 1. Enforce rate limiting (integer token bucket)
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
                 const now_us = std.time.microTimestamp();
-                const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
+                const rate: u64 = self.security_config.max_messages_per_second;
+                const burst_capacity: u64 = rate * 2;
 
                 if (conn.last_request_time == null) {
-                    // First request for this connection: grant full burst
                     conn.request_tokens = burst_capacity;
                     conn.last_request_time = now_us;
                 } else {
-                    const elapsed_us = now_us - conn.last_request_time.?;
-                    // Basic token bucket / leak rate
-                    const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
-                    const elapsed_f: f64 = @floatFromInt(@max(0, elapsed_us));
-                    const tokens_to_add: f64 = elapsed_f * (rate_limit / 1_000_000.0);
-
+                    const elapsed_us: u64 = @intCast(@max(0, now_us - conn.last_request_time.?));
+                    const interval_us = 1_000_000 / rate;
+                    const tokens_to_add = @min(burst_capacity -| conn.request_tokens, elapsed_us / interval_us);
                     conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
                     conn.last_request_time = now_us;
                 }
 
-                if (conn.request_tokens < 1.0) break :blk true;
-                conn.request_tokens -= 1.0;
+                if (conn.request_tokens < 1) break :blk true;
+                conn.request_tokens -= 1;
                 break :blk false;
             };
 
             if (is_rate_limited) {
-                std.log.warn("Rate limit exceeded for connection {}: tokens={d:.2} (limit={d}/s, burst={d})", .{
+                std.log.warn("Rate limit exceeded for connection {}: tokens={d} (limit={d}/s, burst={d})", .{
                     conn_id,
                     conn.request_tokens,
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
-                const ms_until_token: u64 = @intFromFloat(@ceil((1.0 - conn.request_tokens) / rate_limit * 1000.0));
+                const rate: u64 = self.security_config.max_messages_per_second;
+                const deficit = rate -| conn.request_tokens;
+                const ms_until_token: u64 = (deficit * 1000) / rate;
                 var err = wire.getWireError(error.RateLimited);
                 err.retry_after_ms = ms_until_token;
                 try self.sendError(self.allocator, conn, null, err);
@@ -384,7 +382,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .load_more,
@@ -394,9 +392,7 @@ pub const MessageHandler = struct {
             .auth_predicate = auth_clone,
             .sub_id = req.subId,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 
@@ -515,7 +511,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .subscribe,
@@ -525,9 +521,7 @@ pub const MessageHandler = struct {
             .auth_predicate = auth_clone,
             .sub_id = sub_id,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 
@@ -567,7 +561,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .query,
@@ -575,10 +569,9 @@ pub const MessageHandler = struct {
             .namespace_id = namespace_id,
             .filter = filter,
             .auth_predicate = auth_clone,
+            .sub_id = null,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 

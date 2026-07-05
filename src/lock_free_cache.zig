@@ -176,6 +176,43 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             return new_entries;
         }
 
+        /// Perform a copy-on-write mutation with CAS retry and epoch management.
+        /// The callback receives the cloned map, mutates it, and returns a CowResult
+        /// listing replaced/evicted entries for deferred reclamation.
+        fn cowMutation(
+            self: *Self,
+            comptime Context: type,
+            ctx: Context,
+            comptime transformFn: fn (Context, *MapType) anyerror!CowResult,
+        ) anyerror!void {
+            while (true) {
+                const epoch_slot = self.epoch_manager.enter();
+                defer self.epoch_manager.exit(epoch_slot);
+
+                const old_entries = self.entries.load(.acquire);
+                const new_entries = try self.cloneEntries(old_entries);
+                errdefer {
+                    new_entries.deinit();
+                    self.allocator.destroy(new_entries);
+                }
+
+                var result = try transformFn(ctx, new_entries);
+                defer result.deinit(self.allocator);
+
+                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                    new_entries.deinit();
+                    self.allocator.destroy(new_entries);
+                    continue;
+                }
+
+                if (result.replaced) |entry| self.internalDefer(.{ .entry = entry });
+                for (result.evicted.items) |ev| self.internalDefer(.{ .entry = ev.entry });
+                self.internalDefer(.{ .map = old_entries });
+                _ = self.epoch_manager.bump();
+                return;
+            }
+        }
+
         pub fn deinit(self: *Self) void {
             self.reclaim_active.store(false, .release);
             self.reclaim_mutex.lock();
@@ -201,6 +238,15 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             OutOfMemory,
             NotFound,
             CasFailed,
+        };
+
+        pub const CowResult = struct {
+            replaced: ?*CacheEntry = null,
+            evicted: std.ArrayListUnmanaged(struct { key: KeyType, entry: *CacheEntry }) = .empty,
+
+            pub fn deinit(self: *CowResult, allocator: Allocator) void {
+                self.evicted.deinit(allocator);
+            }
         };
 
         pub const Snapshot = struct {
@@ -263,124 +309,73 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         }
 
         /// Create a new version of the namespace entry (COW)
-        pub fn update(self: *Self, key: KeyType, new_data: t) Error!void {
-            while (true) {
-                const epoch_slot = self.epoch_manager.enter();
-                defer self.epoch_manager.exit(epoch_slot);
+        pub fn update(self: *Self, key: KeyType, new_data: t) !void {
+            const Ctx = struct { cache: *Self, key: KeyType, data: t };
+            return self.cowMutation(Ctx, .{ .cache = self, .key = key, .data = new_data }, struct {
+                fn transform(ctx: Ctx, new_entries: *MapType) anyerror!CowResult {
+                    const old_entry = new_entries.get(ctx.key);
+                    const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
 
-                const old_entries = self.entries.load(.acquire);
+                    const entry = try CacheEntry.init(ctx.cache.allocator, ctx.data);
+                    errdefer ctx.cache.allocator.destroy(entry);
+                    entry.version.store(new_version, .release);
 
-                const new_entries = try self.cloneEntries(old_entries);
-                errdefer {
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                }
-
-                const old_entry = old_entries.get(key);
-                const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
-
-                const entry = try CacheEntry.init(self.allocator, new_data);
-                errdefer self.allocator.destroy(entry);
-                entry.version.store(new_version, .release);
-
-                const gop = try new_entries.getOrPut(key);
-
-                var deferred_old_value: ?*CacheEntry = null;
-                if (gop.found_existing) {
-                    deferred_old_value = gop.value_ptr.*;
+                    var result: CowResult = .{};
+                    const gop = try new_entries.getOrPut(ctx.key);
+                    if (gop.found_existing) {
+                        result.replaced = gop.value_ptr.*;
+                    }
                     gop.value_ptr.* = entry;
-                } else {
-                    gop.value_ptr.* = entry;
+                    return result;
                 }
-
-                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |actual| {
-                    self.allocator.destroy(entry);
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    _ = actual;
-                    continue;
-                }
-
-                if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
-                self.internalDefer(.{ .map = old_entries });
-
-                _ = self.epoch_manager.bump();
-                return;
-            }
+            }.transform);
         }
 
         /// Update an entry in the cache with extended options (e.g., size limit)
         pub fn updateExt(self: *Self, key: KeyType, new_data: t, options: UpdateOptions) !void {
-            while (true) {
-                const epoch_slot = self.epoch_manager.enter();
-                defer self.epoch_manager.exit(epoch_slot);
+            const Ctx = struct { cache: *Self, key: KeyType, data: t, options: UpdateOptions };
+            return self.cowMutation(Ctx, .{ .cache = self, .key = key, .data = new_data, .options = options }, struct {
+                fn transform(ctx: Ctx, new_entries: *MapType) anyerror!CowResult {
+                    var result: CowResult = .{};
 
-                const old_entries = self.entries.load(.acquire);
+                    if (ctx.options.max_capacity) |max| {
+                        const exists = new_entries.contains(ctx.key);
+                        if (!exists and new_entries.count() >= max) {
+                            const to_evict = @min(ctx.options.evict_batch_size, new_entries.count());
+                            var evicted_count: usize = 0;
+                            var nit = new_entries.iterator();
+                            while (nit.next()) |entry| {
+                                if (evicted_count >= to_evict) break;
+                                if (std.meta.eql(entry.key_ptr.*, ctx.key)) continue;
 
-                const new_entries = try self.cloneEntries(old_entries);
-                errdefer {
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                }
+                                try result.evicted.append(ctx.cache.allocator, .{
+                                    .key = entry.key_ptr.*,
+                                    .entry = entry.value_ptr.*,
+                                });
+                                evicted_count += 1;
+                            }
 
-                var evicted_batch = std.ArrayListUnmanaged(struct { key: KeyType, value: *CacheEntry }).empty;
-                defer evicted_batch.deinit(self.allocator);
-
-                if (options.max_capacity) |max| {
-                    const exists = new_entries.contains(key);
-                    if (!exists and new_entries.count() >= max) {
-                        const to_evict = @min(options.evict_batch_size, new_entries.count());
-                        var evicted_count: usize = 0;
-                        var nit = new_entries.iterator();
-                        while (nit.next()) |entry| {
-                            if (evicted_count >= to_evict) break;
-                            if (std.meta.eql(entry.key_ptr.*, key)) continue;
-
-                            try evicted_batch.append(self.allocator, .{ .key = entry.key_ptr.*, .value = entry.value_ptr.* });
-                            evicted_count += 1;
-                        }
-
-                        for (evicted_batch.items) |eb| {
-                            _ = new_entries.remove(eb.key);
+                            for (result.evicted.items) |ev| {
+                                _ = new_entries.remove(ev.key);
+                            }
                         }
                     }
-                }
 
-                const old_entry = old_entries.get(key);
-                const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
+                    const old_entry = new_entries.get(ctx.key);
+                    const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
 
-                const entry = try CacheEntry.init(self.allocator, new_data);
-                errdefer self.allocator.destroy(entry);
-                entry.version.store(new_version, .release);
+                    const entry = try CacheEntry.init(ctx.cache.allocator, ctx.data);
+                    errdefer ctx.cache.allocator.destroy(entry);
+                    entry.version.store(new_version, .release);
 
-                const gop = try new_entries.getOrPut(key);
-
-                var deferred_old_value: ?*CacheEntry = null;
-                if (gop.found_existing) {
-                    deferred_old_value = gop.value_ptr.*;
+                    const gop = try new_entries.getOrPut(ctx.key);
+                    if (gop.found_existing) {
+                        result.replaced = gop.value_ptr.*;
+                    }
                     gop.value_ptr.* = entry;
-                } else {
-                    gop.value_ptr.* = entry;
+                    return result;
                 }
-
-                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |actual| {
-                    self.allocator.destroy(entry);
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    _ = actual;
-                    continue;
-                }
-
-                if (deferred_old_value) |ov| self.internalDefer(.{ .entry = ov });
-                for (evicted_batch.items) |eb| {
-                    self.internalDefer(.{ .entry = eb.value });
-                }
-
-                self.internalDefer(.{ .map = old_entries });
-
-                _ = self.epoch_manager.bump();
-                return;
-            }
+            }.transform);
         }
 
         /// Evict an entry from the cache
