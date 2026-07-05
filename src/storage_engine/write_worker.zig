@@ -161,6 +161,14 @@ pub const WriteWorker = struct {
         }
     }
 
+    fn execTransactionControlChecked(conn: *sqlite.Db, statement: [:0]const u8, comptime label: []const u8) !void {
+        execTransactionControl(conn, statement) catch |err| {
+            const classified_err = errors.classifyError(err);
+            errors.logDatabaseError(label, classified_err, "");
+            return classified_err;
+        };
+    }
+
     fn getDocumentHelper(
         self: *WriteWorker,
         table_index: usize,
@@ -178,6 +186,27 @@ pub const WriteWorker = struct {
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null);
+    }
+
+    /// Prefetch the current record for change tracking. Returns the old record
+    /// when the change queue is active (for insert-vs-update classification) or
+    /// when a guard is present (to distinguish non-existent rows from guard
+    /// conflicts in applyWriteResult). Returns null otherwise.
+    fn prefetchOldRecord(
+        self: *WriteWorker,
+        comptime op_label: []const u8,
+        entry: anytype,
+        namespace_id: i64,
+        sql_cache: *std.AutoHashMap(usize, []const u8),
+    ) ?Record {
+        if (self.change_queue != null or entry.guard_values != null) {
+            if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, sql_cache)) |record| {
+                return record;
+            } else |err| {
+                std.log.err("Failed to capture old state ({s}) for table index {d}: {}", .{ op_label, entry.table_index, err });
+            }
+        }
+        return null;
     }
 
     fn pushOwnedChange(
@@ -227,11 +256,7 @@ pub const WriteWorker = struct {
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         guard_rejected: *std.ArrayListUnmanaged(usize),
     ) !void {
-        execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatch BEGIN", classified_err, "");
-            return classified_err;
-        };
+        try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatch BEGIN");
         errdefer {
             execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
                 const classified_err = errors.classifyError(rollback_err);
@@ -277,11 +302,7 @@ pub const WriteWorker = struct {
             }
         }
 
-        execTransactionControl(&self.conn, "COMMIT") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
-            return classified_err;
-        };
+        try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatch COMMIT");
 
         for (pk_inserts.items) |item| {
             if (item.table_index < self.pk_sets.len) {
@@ -364,17 +385,7 @@ pub const WriteWorker = struct {
         const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
         const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
 
-        // Fetch old state when the change queue is active (for insert-vs-update
-        // classification) or when a guard is present (to distinguish non-existent
-        // rows from guard conflicts in applyWriteResult).
-        var old_record: ?Record = null;
-        if (self.change_queue != null or iop.guard_values != null) {
-            if (getDocumentHelper(self, iop.table_index, namespace_id, iop.id, ctx.sql_cache)) |record| {
-                old_record = record;
-            } else |err| {
-                std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ iop.table_index, err });
-            }
-        }
+        const old_record = self.prefetchOldRecord("pre-UPSERT", iop, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
             if (old_record) |r| r.deinit(self.allocator);
@@ -395,16 +406,7 @@ pub const WriteWorker = struct {
         const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
         const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
 
-        // Fetch old state when the change queue is active or when a guard is
-        // present (to distinguish non-existent rows from guard conflicts).
-        var old_record: ?Record = null;
-        if (self.change_queue != null or uop.guard_values != null) {
-            if (getDocumentHelper(self, uop.table_index, namespace_id, uop.id, ctx.sql_cache)) |record| {
-                old_record = record;
-            } else |err| {
-                std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ uop.table_index, err });
-            }
-        }
+        const old_record = self.prefetchOldRecord("pre-UPDATE", uop, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
             if (old_record) |r| r.deinit(self.allocator);
@@ -736,11 +738,7 @@ pub const WriteWorker = struct {
             pending_changes.deinit(self.allocator);
         }
 
-        execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp BEGIN", classified_err, "");
-            return classified_err;
-        };
+        try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatchOp BEGIN");
         tx_started.* = true;
 
         const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
@@ -851,11 +849,7 @@ pub const WriteWorker = struct {
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
     ) !void {
-        execTransactionControl(&self.conn, "COMMIT") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp COMMIT", classified_err, "");
-            return classified_err;
-        };
+        try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");
         tx_started.* = false;
         self.bumpVersion();
 
@@ -886,17 +880,7 @@ pub const WriteWorker = struct {
         const self = ctx.self;
         const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
-        // Fetch old state when the change queue is active (for insert-vs-update
-        // classification) or when a guard is present (to distinguish non-existent
-        // rows from guard conflicts in applyWriteResult).
-        var old_record: ?Record = null;
-        if (self.change_queue != null or entry.guard_values != null) {
-            if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache)) |record| {
-                old_record = record;
-            } else |err| {
-                std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ entry.table_index, err });
-            }
-        }
+        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
             if (old_record) |r| r.deinit(self.allocator);
@@ -917,16 +901,7 @@ pub const WriteWorker = struct {
     ) !void {
         const self = ctx.self;
 
-        // Fetch old state when the change queue is active or when a guard is
-        // present (to distinguish non-existent rows from guard conflicts).
-        var old_record: ?Record = null;
-        if (self.change_queue != null or entry.guard_values != null) {
-            if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache)) |record| {
-                old_record = record;
-            } else |err| {
-                std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ entry.table_index, err });
-            }
-        }
+        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
             if (old_record) |r| r.deinit(self.allocator);

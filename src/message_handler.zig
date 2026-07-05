@@ -256,6 +256,24 @@ pub const MessageHandler = struct {
         return session;
     }
 
+    fn buildWriteContext(
+        session: Connection.StoreSession,
+        conn: *Connection,
+        namespace: []const u8,
+        write_id: ?[16]u8,
+    ) StoreService.WriteContext {
+        return .{
+            .namespace_id = session.namespace_id,
+            .namespace = namespace,
+            .owner_doc_id = session.user_doc_id,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .conn_id = if (write_id != null) conn.id else null,
+            .write_id = write_id,
+        };
+    }
+
     fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
         if (schema.table("users")) |users_table| {
             if (users_table.namespaced) {
@@ -391,16 +409,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.setPath(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.path,
             value,
         );
@@ -424,16 +433,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.removePath(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.path,
         );
 
@@ -455,16 +455,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.batchWrite(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.ops,
         );
 
