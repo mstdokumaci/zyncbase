@@ -224,6 +224,66 @@ pub const SubscriptionEngine = struct {
         self.active_subs.deinit(self.allocator);
     }
 
+    const GroupCreationResult = struct {
+        group_id: u64,
+        first_sub: bool,
+    };
+
+    /// Creates a new subscription group, clones the filter, and inserts into all indexes.
+    /// Caller (subscribe) is responsible for registering the subscriber in active_subs.
+    fn createSubscriptionGroup(
+        self: *SubscriptionEngine,
+        namespace_id: i64,
+        table_index: usize,
+        filter: QueryFilter,
+        sub_key: SubscriptionGroup.SubscriberKey,
+    ) !GroupCreationResult {
+        const group_id = self.next_group_id;
+        self.next_group_id += 1;
+
+        var cloned_filter = try filter.clone(self.allocator);
+        var cloned_filter_owned = true;
+        errdefer if (cloned_filter_owned) cloned_filter.deinit(self.allocator);
+
+        var group = SubscriptionGroup{
+            .id = group_id,
+            .namespace_id = namespace_id,
+            .table_index = table_index,
+            .filter = cloned_filter,
+        };
+        cloned_filter_owned = false;
+        var group_owned = true;
+        errdefer if (group_owned) group.deinit(self.allocator);
+
+        try group.subscribers.put(self.allocator, sub_key, {});
+        try self.groups.put(self.allocator, group_id, group);
+        group_owned = false;
+        errdefer {
+            if (self.groups.getPtr(group_id)) |inserted_group| inserted_group.deinit(self.allocator);
+            _ = self.groups.remove(group_id);
+        }
+
+        try self.groups_by_filter.put(self.allocator, cloned_filter, group_id);
+        errdefer {
+            _ = self.groups_by_filter.remove(cloned_filter);
+        }
+
+        const coll_key = CollectionKey{ .namespace_id = namespace_id, .table_index = table_index };
+        const gop = try self.groups_by_collection.getOrPut(self.allocator, coll_key);
+        var collection_created = false;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.ArrayListUnmanaged(u64).empty;
+            collection_created = true;
+        }
+        errdefer if (collection_created) {
+            if (self.groups_by_collection.getPtr(coll_key)) |list| list.deinit(self.allocator);
+            _ = self.groups_by_collection.remove(coll_key);
+        };
+        try gop.value_ptr.append(self.allocator, group_id);
+
+        return .{ .group_id = group_id, .first_sub = true };
+    }
+
     /// Registers a new subscriber to a query. Returns true if first sub in group.
     pub fn subscribe(
         self: *SubscriptionEngine,
@@ -250,54 +310,15 @@ pub const SubscriptionEngine = struct {
         if (self.groups_by_filter.get(filter)) |gid| {
             group_id = gid;
         } else {
-            // Create new group
-            group_id = self.next_group_id;
-            self.next_group_id += 1;
-            first_sub = true;
-
-            var cloned_filter = try filter.clone(self.allocator);
-            var cloned_filter_owned = true;
-            errdefer if (cloned_filter_owned) cloned_filter.deinit(self.allocator);
-
-            var group = SubscriptionGroup{
-                .id = group_id,
-                .namespace_id = namespace_id,
-                .table_index = table_index,
-                .filter = cloned_filter,
-            };
-            cloned_filter_owned = false;
-            var group_owned = true;
-            errdefer if (group_owned) group.deinit(self.allocator);
-
-            try group.subscribers.put(self.allocator, sub_key, {});
+            const result = try self.createSubscriptionGroup(
+                namespace_id,
+                table_index,
+                filter,
+                sub_key,
+            );
+            group_id = result.group_id;
+            first_sub = result.first_sub;
             subscriber_in_group = true;
-            try self.groups.put(self.allocator, group_id, group);
-            group_owned = false;
-            errdefer {
-                if (self.groups.getPtr(group_id)) |inserted_group| inserted_group.deinit(self.allocator);
-                _ = self.groups.remove(group_id);
-            }
-
-            try self.groups_by_filter.put(self.allocator, cloned_filter, group_id);
-            errdefer {
-                _ = self.groups_by_filter.remove(cloned_filter);
-            }
-
-            // Index by collection
-            const gop = try self.groups_by_collection.getOrPut(self.allocator, coll_key);
-            var collection_created = false;
-            if (!gop.found_existing) {
-                gop.value_ptr.* = std.ArrayListUnmanaged(u64).empty;
-                collection_created = true;
-            }
-            errdefer if (collection_created) {
-                if (self.groups_by_collection.getPtr(coll_key)) |list| list.deinit(self.allocator);
-                _ = self.groups_by_collection.remove(coll_key);
-            };
-            try gop.value_ptr.append(self.allocator, group_id);
-            errdefer {
-                self.removeGroupFromCollectionIndex(coll_key, group_id);
-            }
         }
 
         if (!first_sub) {
