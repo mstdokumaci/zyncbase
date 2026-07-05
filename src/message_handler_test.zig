@@ -46,6 +46,36 @@ test "Connection - add subscription IDs" {
     try testing.expectEqual(@as(u64, 300), state.subscription_ids.items[2]);
 }
 
+test "MessageHandler: oversized rate limit does not divide by zero" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-rate-limit-large", &.{});
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    app.handler.init(
+        allocator,
+        &app.memory_strategy,
+        &app.violation_tracker,
+        &app.store_service,
+        &app.presence_manager,
+        &app.subscription_engine,
+        .{ .max_messages_per_second = 1_000_001 },
+        &app.auth_config,
+        &app.schema,
+        null,
+        &app.empty_claims,
+    );
+
+    sc.conn.request_tokens = 1;
+    sc.conn.last_request_time = std.time.microTimestamp() - 1_000_000;
+
+    var message = [_]u8{0x81};
+    try app.handler.handleMessage(sc.conn, &message);
+}
+
 test "MessageHandler: store operations require ready scope" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;

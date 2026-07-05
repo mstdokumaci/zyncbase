@@ -200,6 +200,9 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 defer result.deinit(self.allocator);
 
                 if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                    if (result.created) |entry| {
+                        entry.deinit(self.allocator);
+                    }
                     new_entries.deinit();
                     self.allocator.destroy(new_entries);
                     continue;
@@ -242,6 +245,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
         pub const CowResult = struct {
             replaced: ?*CacheEntry = null,
+            created: ?*CacheEntry = null,
             evicted: std.ArrayListUnmanaged(struct { key: KeyType, entry: *CacheEntry }) = .empty,
 
             pub fn deinit(self: *CowResult, allocator: Allocator) void {
@@ -326,6 +330,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                         result.replaced = gop.value_ptr.*;
                     }
                     gop.value_ptr.* = entry;
+                    result.created = entry;
                     return result;
                 }
             }.transform);
@@ -373,6 +378,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                         result.replaced = gop.value_ptr.*;
                     }
                     gop.value_ptr.* = entry;
+                    result.created = entry;
                     return result;
                 }
             }.transform);

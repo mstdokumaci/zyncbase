@@ -18,7 +18,6 @@ const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
 const query_ast = @import("query_ast.zig");
 const query_parser = @import("query_parser.zig");
-const read_buffer = @import("storage_engine/read_buffer.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -115,8 +114,8 @@ pub const MessageHandler = struct {
                     conn.last_request_time = now_us;
                 } else {
                     const elapsed_us: u64 = @intCast(@max(0, now_us - conn.last_request_time.?));
-                    const interval_us = 1_000_000 / rate;
-                    const tokens_to_add = @min(burst_capacity -| conn.request_tokens, elapsed_us / interval_us);
+                    const capped_elapsed_us = @min(elapsed_us, 2_000_000);
+                    const tokens_to_add = @min(burst_capacity -| conn.request_tokens, (capped_elapsed_us * rate) / 1_000_000);
                     conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
                     conn.last_request_time = now_us;
                 }
