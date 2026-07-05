@@ -201,7 +201,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
                 if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                     if (result.created) |entry| {
-                        entry.deinit(self.allocator);
+                        self.allocator.destroy(entry);
                     }
                     new_entries.deinit();
                     self.allocator.destroy(new_entries);
