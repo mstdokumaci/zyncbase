@@ -100,7 +100,7 @@ pub const Connection = struct {
     is_backpressured: bool = false,
     ref_count: std.atomic.Value(usize),
     created_at: i64,
-    request_tokens: f64,
+    request_tokens: u64,
     last_request_time: ?i64,
 
     pub fn initPool(self: *Connection, allocator: Allocator) void {
@@ -141,7 +141,7 @@ pub const Connection = struct {
         self.ws = ws;
         self.ref_count.store(1, .release);
         self.created_at = std.time.timestamp();
-        self.request_tokens = 0.0;
+        self.request_tokens = 0;
         self.last_request_time = null;
     }
 

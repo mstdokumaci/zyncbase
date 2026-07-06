@@ -18,7 +18,6 @@ const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
 const query_ast = @import("query_ast.zig");
 const query_parser = @import("query_parser.zig");
-const read_buffer = @import("storage_engine/read_buffer.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -103,41 +102,38 @@ pub const MessageHandler = struct {
         const ws = &conn.ws;
         const conn_id = conn.id;
 
-        // 1. Enforce rate limiting
+        // 1. Enforce rate limiting (integer token bucket)
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
                 const now_us = std.time.microTimestamp();
-                const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
+                const rate: u64 = self.security_config.max_messages_per_second;
+                const burst_capacity: u64 = rate * 2_000_000;
 
                 if (conn.last_request_time == null) {
-                    // First request for this connection: grant full burst
                     conn.request_tokens = burst_capacity;
                     conn.last_request_time = now_us;
                 } else {
-                    const elapsed_us = now_us - conn.last_request_time.?;
-                    // Basic token bucket / leak rate
-                    const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
-                    const elapsed_f: f64 = @floatFromInt(@max(0, elapsed_us));
-                    const tokens_to_add: f64 = elapsed_f * (rate_limit / 1_000_000.0);
-
+                    const elapsed_us: u64 = @intCast(@max(0, now_us - conn.last_request_time.?));
+                    const capped_elapsed_us = @min(elapsed_us, 2_000_000);
+                    const tokens_to_add = capped_elapsed_us * rate;
                     conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
                     conn.last_request_time = now_us;
                 }
 
-                if (conn.request_tokens < 1.0) break :blk true;
-                conn.request_tokens -= 1.0;
+                if (conn.request_tokens < 1_000_000) break :blk true;
+                conn.request_tokens -= 1_000_000;
                 break :blk false;
             };
 
             if (is_rate_limited) {
                 std.log.warn("Rate limit exceeded for connection {}: tokens={d:.2} (limit={d}/s, burst={d})", .{
                     conn_id,
-                    conn.request_tokens,
+                    @as(f64, @floatFromInt(conn.request_tokens)) / 1_000_000.0,
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
-                const ms_until_token: u64 = @intFromFloat(@ceil((1.0 - conn.request_tokens) / rate_limit * 1000.0));
+                const rate: u64 = self.security_config.max_messages_per_second;
+                const ms_until_token: u64 = (1000 + rate - 1) / rate;
                 var err = wire.getWireError(error.RateLimited);
                 err.retry_after_ms = ms_until_token;
                 try self.sendError(self.allocator, conn, null, err);
@@ -256,6 +252,34 @@ pub const MessageHandler = struct {
         return session;
     }
 
+    fn extractTableIndex(parsed: msgpack.Payload) !u64 {
+        return switch (parsed) {
+            .map => |m| if (m.getByString("table_index")) |ti| switch (ti) {
+                .uint => |v| v,
+                else => return error.InvalidMessageFormat,
+            } else return error.MissingRequiredFields,
+            else => return error.InvalidMessageFormat,
+        };
+    }
+
+    fn buildWriteContext(
+        session: Connection.StoreSession,
+        conn: *Connection,
+        namespace: []const u8,
+        write_id: ?[16]u8,
+    ) StoreService.WriteContext {
+        return .{
+            .namespace_id = session.namespace_id,
+            .namespace = namespace,
+            .owner_doc_id = session.user_doc_id,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .conn_id = if (write_id != null) conn.id else null,
+            .write_id = write_id,
+        };
+    }
+
     fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
         if (schema.table("users")) |users_table| {
             if (users_table.namespaced) {
@@ -356,7 +380,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .load_more,
@@ -366,9 +390,7 @@ pub const MessageHandler = struct {
             .auth_predicate = auth_clone,
             .sub_id = req.subId,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 
@@ -391,16 +413,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.setPath(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.path,
             value,
         );
@@ -424,16 +437,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.removePath(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.path,
         );
 
@@ -455,16 +459,7 @@ pub const MessageHandler = struct {
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.batchWrite(
-            .{
-                .namespace_id = session.namespace_id,
-                .namespace = namespace,
-                .owner_doc_id = session.user_doc_id,
-                .session_user_id = session.user_doc_id,
-                .session_external_id = conn.getExternalUserId(),
-                .session_claims = conn.getSessionClaimsPtr(),
-                .conn_id = if (write_ack != null) conn.id else null,
-                .write_id = if (write_ack) |ack| ack.write_id else null,
-            },
+            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
             payloads.ops,
         );
 
@@ -478,13 +473,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const table_index = try wire.extractStoreTableIndexFast(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreSubscribe message: {}", .{err});
             return err;
         };
+
+        const table_index = try extractTableIndex(parsed);
 
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const session = try requireStoreSession(conn);
@@ -514,7 +509,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .subscribe,
@@ -524,9 +519,7 @@ pub const MessageHandler = struct {
             .auth_predicate = auth_clone,
             .sub_id = sub_id,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 
@@ -537,13 +530,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const table_index = try wire.extractStoreTableIndexFast(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreQuery message: {}", .{err});
             return err;
         };
+
+        const table_index = try extractTableIndex(parsed);
 
         const session = try requireStoreSession(conn);
         const namespace_id = session.namespace_id;
@@ -566,7 +559,7 @@ pub const MessageHandler = struct {
         var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
         errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
 
-        const request = read_buffer.ReadRequest{
+        try self.store_service.storage_engine.enqueueRead(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .kind = .query,
@@ -574,10 +567,9 @@ pub const MessageHandler = struct {
             .namespace_id = namespace_id,
             .filter = filter,
             .auth_predicate = auth_clone,
+            .sub_id = null,
             .allocator = self.allocator,
-        };
-
-        try self.store_service.storage_engine.enqueueRead(request);
+        });
         return null;
     }
 

@@ -6,14 +6,9 @@ const index = @import("index.zig");
 
 const Allocator = std.mem.Allocator;
 
-const planned_constraint_keys = [_][]const u8{
-    "enum",
-    "pattern",
-    "format",
-    "minLength",
-    "maxLength",
-    "minimum",
-    "maximum",
+const all_field_keys = [_][]const u8{
+    "type", "indexed", "references", "onDelete",  "items",     "fields",  "metadata",
+    "enum", "pattern", "format",     "minLength", "maxLength", "minimum", "maximum",
 };
 
 fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
@@ -688,51 +683,28 @@ fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "\"{s}\"", .{name});
 }
 
-fn rejectUnknownRootKeys(root: std.json.Value) !void {
-    var it = root.object.iterator();
+fn rejectUnknownKeys(comptime allowed: []const []const u8, obj: std.json.Value) !void {
+    var it = obj.object.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "version")) continue;
-        if (std.mem.eql(u8, key, "store")) continue;
-        if (std.mem.eql(u8, key, "metadata")) continue;
-        if (std.mem.eql(u8, key, "presence")) continue;
-        return error.UnknownSchemaKey;
+        inline for (allowed) |ak| {
+            if (std.mem.eql(u8, key, ak)) break;
+        } else {
+            return error.UnknownSchemaKey;
+        }
     }
+}
+
+fn rejectUnknownRootKeys(root: std.json.Value) !void {
+    return rejectUnknownKeys(&.{ "version", "store", "metadata", "presence" }, root);
 }
 
 fn rejectUnknownTableKeys(table_def: std.json.Value) !void {
-    var it = table_def.object.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "fields")) continue;
-        if (std.mem.eql(u8, key, "required")) continue;
-        if (std.mem.eql(u8, key, "namespaced")) continue;
-        if (std.mem.eql(u8, key, "metadata")) continue;
-        return error.UnknownSchemaKey;
-    }
+    return rejectUnknownKeys(&.{ "fields", "required", "namespaced", "metadata" }, table_def);
 }
 
 fn rejectUnknownFieldKeys(field_def: std.json.Value) !void {
-    var it = field_def.object.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "type")) continue;
-        if (std.mem.eql(u8, key, "indexed")) continue;
-        if (std.mem.eql(u8, key, "references")) continue;
-        if (std.mem.eql(u8, key, "onDelete")) continue;
-        if (std.mem.eql(u8, key, "items")) continue;
-        if (std.mem.eql(u8, key, "fields")) continue;
-        if (std.mem.eql(u8, key, "metadata")) continue;
-        if (isPlannedConstraintKey(key)) continue;
-        return error.UnknownSchemaKey;
-    }
-}
-
-fn isPlannedConstraintKey(key: []const u8) bool {
-    for (planned_constraint_keys) |planned| {
-        if (std.mem.eql(u8, key, planned)) return true;
-    }
-    return false;
+    return rejectUnknownKeys(&all_field_keys, field_def);
 }
 
 fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
