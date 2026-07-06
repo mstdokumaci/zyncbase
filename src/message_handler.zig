@@ -133,8 +133,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second * 2,
                 });
                 const rate: u64 = self.security_config.max_messages_per_second;
-                const deficit = rate -| conn.request_tokens;
-                const ms_until_token: u64 = (deficit * 1000) / rate;
+                const ms_until_token: u64 = (1000 + rate - 1) / rate;
                 var err = wire.getWireError(error.RateLimited);
                 err.retry_after_ms = ms_until_token;
                 try self.sendError(self.allocator, conn, null, err);

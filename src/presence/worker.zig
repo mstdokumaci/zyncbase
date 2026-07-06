@@ -281,11 +281,10 @@ pub const PresenceWorker = struct {
 
         if (user_batches.items.len == 0 and shared_batches.items.len == 0) return;
 
-        var pushed_any = false;
-        pushed_any = self.dispatchBatches(user_batches.items, wire.encodePresenceBroadcast, "user");
-        pushed_any = self.dispatchBatches(shared_batches.items, wire.encodeSharedStateBroadcast, "shared") or pushed_any;
+        const pushed_user = self.dispatchBatches(user_batches.items, wire.encodePresenceBroadcast, "user");
+        const pushed_shared = self.dispatchBatches(shared_batches.items, wire.encodeSharedStateBroadcast, "shared");
 
-        if (pushed_any) {
+        if (pushed_user or pushed_shared) {
             self.notifier.notify();
         }
     }
