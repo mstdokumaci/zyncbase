@@ -59,12 +59,17 @@ fn writeFieldsForPrefix(
     fields: []const types.Field,
     prefix: []const u8,
 ) !void {
+    var seen = std.StringHashMapUnmanaged(void).empty;
+    defer seen.deinit(allocator);
+
     var emitted: usize = 0;
-    for (fields, 0..) |field, field_index| {
+    for (fields) |field| {
         const remainder = fieldRemainder(field.name, prefix) orelse continue;
         const segment_end = std.mem.indexOf(u8, remainder, "__") orelse remainder.len;
         const segment = remainder[0..segment_end];
-        if (segmentSeen(fields, prefix, field_index, segment)) continue;
+
+        const gop = try seen.getOrPut(allocator, segment);
+        if (gop.found_existing) continue;
 
         if (emitted > 0) try w.separator();
         try writeJsonString(w.buf, allocator, segment);
@@ -116,15 +121,6 @@ fn fieldRemainder(field_name: []const u8, prefix: []const u8) ?[]const u8 {
     if (field_name.len <= prefix.len + 2) return null;
     if (!std.mem.eql(u8, field_name[prefix.len .. prefix.len + 2], "__")) return null;
     return field_name[prefix.len + 2 ..];
-}
-
-fn segmentSeen(fields: []const types.Field, prefix: []const u8, current_index: usize, segment: []const u8) bool {
-    for (fields[0..current_index]) |candidate| {
-        const remainder = fieldRemainder(candidate.name, prefix) orelse continue;
-        const segment_end = std.mem.indexOf(u8, remainder, "__") orelse remainder.len;
-        if (std.mem.eql(u8, remainder[0..segment_end], segment)) return true;
-    }
-    return false;
 }
 
 fn replaceAll(allocator: std.mem.Allocator, input: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {

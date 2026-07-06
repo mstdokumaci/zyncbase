@@ -95,11 +95,11 @@ fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.Namesp
         allocator.free(segments);
     }
 
-    const store_filter = try parseCondition(allocator, obj.get("storeFilter") orelse return error.InvalidNamespaceRule);
+    const store_filter = try parseRequiredCondition(allocator, obj, "storeFilter");
     errdefer store_filter.deinit(allocator);
-    const presence_read = try parseCondition(allocator, obj.get("presenceRead") orelse return error.InvalidNamespaceRule);
+    const presence_read = try parseRequiredCondition(allocator, obj, "presenceRead");
     errdefer presence_read.deinit(allocator);
-    const presence_write = try parseCondition(allocator, obj.get("presenceWrite") orelse return error.InvalidNamespaceRule);
+    const presence_write = try parseRequiredCondition(allocator, obj, "presenceWrite");
     errdefer presence_write.deinit(allocator);
     const presence_shared_write_val = obj.get("presenceSharedWrite") orelse obj.get("presenceWrite").?;
     const presence_shared_write = try parseCondition(allocator, presence_shared_write_val);
@@ -136,6 +136,11 @@ fn parseStoreRule(allocator: Allocator, value: std.json.Value) !types.StoreRule 
         .read = read,
         .write = write,
     };
+}
+
+fn parseRequiredCondition(allocator: Allocator, obj: std.json.ObjectMap, key: []const u8) !types.Condition {
+    const val = obj.get(key) orelse return error.InvalidNamespaceRule;
+    return parseCondition(allocator, val);
 }
 
 fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition {

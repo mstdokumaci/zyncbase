@@ -984,6 +984,146 @@ test "duplicate field index in value pair-array resolves to last-wins" {
     try testing.expect(result);
 }
 
+// ─── validateLiteralValue Tests ─────────────────────────────────────────────
+// These tests exercise validateLiteralValue indirectly via validateDocPredicate.
+// Each test constructs a doc-scoped comparison with a literal RHS and calls
+// validateDocPredicate, which routes through validateDocComparison →
+// validateLiteralValue.
+
+test "validateLiteralValue in_set with valid array of text scalars passes" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const items = try allocator.alloc(ScalarValue, 2);
+    items[0] = .{ .text = try allocator.dupe(u8, "active") };
+    items[1] = .{ .text = try allocator.dupe(u8, "pending") };
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
+        .op = .in_set,
+        .rhs = .{ .literal = .{ .array = items } },
+    } };
+    defer condition.deinit(allocator);
+
+    try authorization.validateDocPredicate(condition, &table);
+}
+
+test "validateLiteralValue in_set with non-array value returns error.InvalidValue" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
+        .op = .in_set,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "active") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateLiteralValue not_in_set with valid array of text scalars passes" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const items = try allocator.alloc(ScalarValue, 1);
+    items[0] = .{ .text = try allocator.dupe(u8, "banned") };
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
+        .op = .not_in_set,
+        .rhs = .{ .literal = .{ .array = items } },
+    } };
+    defer condition.deinit(allocator);
+
+    try authorization.validateDocPredicate(condition, &table);
+}
+
+test "validateLiteralValue contains with array field and scalar value passes" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .contains,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "zig") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    try authorization.validateDocPredicate(condition, &table);
+}
+
+test "validateLiteralValue contains with text field and text scalar passes" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "description", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "description") },
+        .op = .contains,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "hello") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    try authorization.validateDocPredicate(condition, &table);
+}
+
+test "validateLiteralValue contains with non-scalar value returns error.InvalidValue" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    // Passing an array where a scalar is required
+    const items = try allocator.alloc(ScalarValue, 1);
+    items[0] = .{ .text = try allocator.dupe(u8, "zig") };
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .contains,
+        .rhs = .{ .literal = .{ .array = items } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateLiteralValue generic eq operator with scalar value passes" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "score", .field_type = .integer },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .integer = 42 } } },
+    } };
+    defer condition.deinit(allocator);
+
+    try authorization.validateDocPredicate(condition, &table);
+}
+
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {

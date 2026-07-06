@@ -261,12 +261,16 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
 fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (var_ctx.scope) {
         .session => {
-            if (std.mem.eql(u8, var_ctx.field, "userId")) {
-                return if (ctx.session_user_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
-            }
-            if (std.mem.eql(u8, var_ctx.field, "externalId")) {
-                return if (ctx.session_external_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } }) else null;
-            }
+            if (session_field_map.get(var_ctx.field)) |sf| switch (sf) {
+                .userId => return if (ctx.session_user_id) |id|
+                    ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } })
+                else
+                    null,
+                .externalId => return if (ctx.session_external_id) |id|
+                    ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } })
+                else
+                    null,
+            };
             if (ctx.session_claims) |claims| {
                 if (claims.get(var_ctx.field)) |value| {
                     return ResolvedAuthValue.fromBorrowed(value);
@@ -341,6 +345,31 @@ fn findLastValuePair(pairs: []const msgpack.Payload, field_index: usize) ?msgpac
     return null;
 }
 
+const ScalarArrayPair = struct { scalar: ScalarValue, array: []const ScalarValue };
+const ArrayScalarPair = struct { array: []const ScalarValue, scalar: ScalarValue };
+
+const SessionField = enum { userId, externalId };
+const session_field_map = std.StaticStringMap(SessionField).initComptime(.{
+    .{ "userId", .userId },
+    .{ "externalId", .externalId },
+});
+
+inline fn extractScalarArray(lhs: Value, rhs: Value) ?ScalarArrayPair {
+    if (lhs != .scalar) return null;
+    if (rhs != .array) return null;
+    return .{ .scalar = lhs.scalar, .array = rhs.array };
+}
+
+inline fn extractArrayScalar(lhs: Value, rhs: Value) ?ArrayScalarPair {
+    if (lhs != .array) return null;
+    if (rhs != .scalar) return null;
+    return .{ .array = lhs.array, .scalar = rhs.scalar };
+}
+
+inline fn binarySearchScalar(haystack: []const ScalarValue, needle: ScalarValue) bool {
+    return std.sort.binarySearch(ScalarValue, haystack, needle, ScalarValue.order) != null;
+}
+
 fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
     return switch (op) {
         .eq => lhs.eql(rhs),
@@ -356,19 +385,16 @@ fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
             break :blk ord == .lt or ord == .eq;
         },
         .in_set => blk: {
-            if (lhs != .scalar) break :blk false;
-            if (rhs != .array) break :blk false;
-            break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
+            const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
+            break :blk binarySearchScalar(pair.array, pair.scalar);
         },
         .not_in_set => blk: {
-            if (lhs != .scalar) break :blk false;
-            if (rhs != .array) break :blk false;
-            break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
+            const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
+            break :blk !binarySearchScalar(pair.array, pair.scalar);
         },
         .contains => blk: {
-            if (lhs != .array) break :blk false;
-            if (rhs != .scalar) break :blk false;
-            break :blk std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
+            const pair = extractArrayScalar(lhs, rhs) orelse break :blk false;
+            break :blk binarySearchScalar(pair.array, pair.scalar);
         },
     };
 }

@@ -154,13 +154,13 @@ pub fn appendConditionSql(
             }
             try appendLikePredicate(allocator, buf, values, val, "'%' || ? || '%'");
         },
-        .startsWith => {
+        .startsWith, .endsWith => {
             const val = try requireValue(cond);
-            try appendLikePredicate(allocator, buf, values, val, "? || '%'");
-        },
-        .endsWith => {
-            const val = try requireValue(cond);
-            try appendLikePredicate(allocator, buf, values, val, "'%' || ?");
+            const pattern: []const u8 = if (cond.op == .startsWith)
+                "? || '%'"
+            else
+                "'%' || ?";
+            try appendLikePredicate(allocator, buf, values, val, pattern);
         },
         .in, .notIn => {
             try appendInPredicate(allocator, buf, values, cond);

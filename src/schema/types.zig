@@ -119,6 +119,10 @@ pub const Field = struct {
     pub fn isSystem(self: Field) bool {
         return self.kind == .system or self.kind == .timestamp;
     }
+
+    pub fn needsLengthCheck(self: Field) bool {
+        return self.storage_type == .doc_id;
+    }
 };
 
 pub const Table = struct {
