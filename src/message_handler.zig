@@ -107,7 +107,7 @@ pub const MessageHandler = struct {
             const is_rate_limited = blk: {
                 const now_us = std.time.microTimestamp();
                 const rate: u64 = self.security_config.max_messages_per_second;
-                const burst_capacity: u64 = rate * 2;
+                const burst_capacity: u64 = rate * 2_000_000;
 
                 if (conn.last_request_time == null) {
                     conn.request_tokens = burst_capacity;
@@ -115,20 +115,20 @@ pub const MessageHandler = struct {
                 } else {
                     const elapsed_us: u64 = @intCast(@max(0, now_us - conn.last_request_time.?));
                     const capped_elapsed_us = @min(elapsed_us, 2_000_000);
-                    const tokens_to_add = @min(burst_capacity -| conn.request_tokens, (capped_elapsed_us * rate) / 1_000_000);
+                    const tokens_to_add = capped_elapsed_us * rate;
                     conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
                     conn.last_request_time = now_us;
                 }
 
-                if (conn.request_tokens < 1) break :blk true;
-                conn.request_tokens -= 1;
+                if (conn.request_tokens < 1_000_000) break :blk true;
+                conn.request_tokens -= 1_000_000;
                 break :blk false;
             };
 
             if (is_rate_limited) {
-                std.log.warn("Rate limit exceeded for connection {}: tokens={d} (limit={d}/s, burst={d})", .{
+                std.log.warn("Rate limit exceeded for connection {}: tokens={d:.2} (limit={d}/s, burst={d})", .{
                     conn_id,
-                    conn.request_tokens,
+                    @as(f64, @floatFromInt(conn.request_tokens)) / 1_000_000.0,
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
