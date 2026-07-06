@@ -316,6 +316,22 @@ fn parseInOperand(
     return result;
 }
 
+fn parseContainsOperand(
+    allocator: std.mem.Allocator,
+    field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType,
+    raw: msgpack.Payload,
+) ParserError!?Value {
+    return switch (field_type) {
+        .text => blk: {
+            if (raw != .str) return error.InvalidOperandType;
+            break :blk try parseScalarValue(allocator, .text, raw);
+        },
+        .array => try parseArrayElementValue(allocator, items_type, raw),
+        else => error.UnsupportedOperatorForFieldType,
+    };
+}
+
 fn parseConditionValueForOperator(
     allocator: std.mem.Allocator,
     op: Operator,
@@ -339,21 +355,15 @@ fn parseConditionValueForOperator(
             if (field_type == .array) return error.UnsupportedOperatorForFieldType;
             return try parseScalarValue(allocator, field_type, raw);
         },
-        .contains => switch (field_type) {
-            .text => blk: {
-                if (raw != .str) return error.InvalidOperandType;
-                break :blk try parseScalarValue(allocator, .text, raw);
-            },
-            .array => try parseArrayElementValue(allocator, items_type, raw),
-            else => return error.UnsupportedOperatorForFieldType,
-        },
+        .contains => return parseContainsOperand(allocator, field_type, items_type, raw),
         .startsWith, .endsWith => {
             if (field_type != .text) return error.UnsupportedOperatorForFieldType;
             if (raw != .str) return error.InvalidOperandType;
             return try parseScalarValue(allocator, .text, raw);
         },
         .in, .notIn => try parseInOperand(allocator, field_type, raw),
-        .isNull, .isNotNull => unreachable,
+        // .isNull and .isNotNull are handled by the early guard above and never reach here.
+        else => unreachable,
     };
 }
 

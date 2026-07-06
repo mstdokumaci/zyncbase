@@ -81,25 +81,39 @@ pub fn validateValue(ft: schema.FieldType, value: msgpack.Payload) !void {
     if (!match) return error.TypeMismatch;
 }
 
+fn buildArrayValue(
+    allocator: Allocator,
+    comptime Item: type,
+    items: []const Item,
+    items_type: schema.FieldType,
+    comptime decode_fn: fn (Allocator, schema.FieldType, Item) anyerror!ScalarValue,
+    comptime is_nil_fn: fn (Item) bool,
+) !Value {
+    const result_items = try allocator.alloc(ScalarValue, items.len);
+    var i: usize = 0;
+    errdefer {
+        for (result_items[0..i]) |*item| item.deinit(allocator);
+        allocator.free(result_items);
+    }
+    while (i < items.len) : (i += 1) {
+        if (is_nil_fn(items[i])) return error.NullNotAllowed;
+        result_items[i] = try decode_fn(allocator, items_type, items[i]);
+    }
+    var result = Value{ .array = result_items };
+    try result.sortedSet(allocator);
+    return result;
+}
+
 pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: msgpack.Payload) !Value {
     if (value == .nil) return .nil;
     return switch (ft) {
         .array => {
-            const arr = value.arr;
-            const items = try allocator.alloc(ScalarValue, arr.len);
-            var i: usize = 0;
-            errdefer {
-                for (items[0..i]) |*item| item.deinit(allocator);
-                allocator.free(items);
-            }
             const it = items_type orelse return error.TypeMismatch;
-            while (i < arr.len) : (i += 1) {
-                if (arr[i] == .nil) return error.NullNotAllowed;
-                items[i] = try scalarFromPayload(allocator, it, arr[i]);
-            }
-            var result = Value{ .array = items };
-            try result.sortedSet(allocator);
-            return result;
+            return buildArrayValue(allocator, msgpack.Payload, value.arr, it, scalarFromPayload, struct {
+                fn f(v: msgpack.Payload) bool {
+                    return v == .nil;
+                }
+            }.f);
         },
         else => .{ .scalar = try scalarFromPayload(allocator, ft, value) },
     };
@@ -110,23 +124,24 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
     return switch (ft) {
         .array => {
             if (value != .array) return error.TypeMismatch;
-            const arr = value.array;
-            const items = try allocator.alloc(ScalarValue, arr.items.len);
-            var i: usize = 0;
-            errdefer {
-                for (items[0..i]) |*item| item.deinit(allocator);
-                allocator.free(items);
-            }
             const it = items_type orelse return error.TypeMismatch;
-            while (i < arr.items.len) : (i += 1) {
-                if (arr.items[i] == .null) return error.NullNotAllowed;
-                items[i] = try scalarFromJson(allocator, it, arr.items[i]);
-            }
-            var result = Value{ .array = items };
-            try result.sortedSet(allocator);
-            return result;
+            return buildArrayValue(allocator, std.json.Value, value.array.items, it, scalarFromJson, struct {
+                fn f(v: std.json.Value) bool {
+                    return v == .null;
+                }
+            }.f);
         },
         else => .{ .scalar = try scalarFromJson(allocator, ft, value) },
+    };
+}
+
+fn scalarFromDynamicJsonItem(allocator: Allocator, item: std.json.Value) !ScalarValue {
+    return switch (item) {
+        .string => |s| .{ .text = try allocator.dupe(u8, s) },
+        .integer => |n| .{ .integer = n },
+        .float => |f| .{ .real = f },
+        .bool => |b| .{ .boolean = b },
+        else => error.InvalidClaimArrayElement,
     };
 }
 
@@ -145,14 +160,7 @@ pub fn fromDynamicJson(allocator: Allocator, value: std.json.Value) !Value {
                 allocator.free(items);
             }
             for (arr.items, 0..) |item, i| {
-                const scalar = switch (item) {
-                    .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
-                    .integer => |n| ScalarValue{ .integer = n },
-                    .float => |f| ScalarValue{ .real = f },
-                    .bool => |b| ScalarValue{ .boolean = b },
-                    else => return error.InvalidClaimArrayElement,
-                };
-                items[i] = scalar;
+                items[i] = try scalarFromDynamicJsonItem(allocator, item);
                 initialized += 1;
             }
             break :blk .{ .array = items };

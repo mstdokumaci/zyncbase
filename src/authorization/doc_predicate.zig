@@ -329,26 +329,31 @@ fn validateLiteralValue(
     lhs_type: ValueType,
     value: Value,
 ) DocPredicateError!void {
-    if (op == .in_set or op == .not_in_set) {
-        if (value != .array) return error.InvalidValue;
-        try validateScalarItems(try lhs_type.membershipItemsType(), value.array);
-        return;
-    }
+    switch (op) {
+        .in_set, .not_in_set => {
+            if (value != .array) return error.InvalidValue;
+            try validateScalarItems(try lhs_type.membershipItemsType(), value.array);
+        },
+        .contains => {
+            if (lhs_type.storage_type == .array) {
+                if (value != .scalar) return error.InvalidValue;
+                try validateScalarType(try lhs_type.arrayItemsType(), value.scalar);
+            } else {
+                // .text contains: value must be .text scalar
+                if (value != .scalar or value.scalar != .text) return error.InvalidValue;
+            }
+        },
+        else => {
+            if (lhs_type.storage_type == .array) {
+                if (value != .array) return error.InvalidValue;
+                try validateScalarItems(try lhs_type.arrayItemsType(), value.array);
+                return;
+            }
 
-    if (op == .contains and lhs_type.storage_type == .array) {
-        if (value != .scalar) return error.InvalidValue;
-        try validateScalarType(try lhs_type.arrayItemsType(), value.scalar);
-        return;
+            if (value != .scalar) return error.InvalidValue;
+            try validateScalarType(lhs_type.storage_type, value.scalar);
+        },
     }
-
-    if (lhs_type.storage_type == .array) {
-        if (value != .array) return error.InvalidValue;
-        try validateScalarItems(try lhs_type.arrayItemsType(), value.array);
-        return;
-    }
-
-    if (value != .scalar) return error.InvalidValue;
-    try validateScalarType(lhs_type.storage_type, value.scalar);
 }
 
 fn validateContextVarValue(

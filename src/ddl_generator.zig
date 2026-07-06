@@ -71,7 +71,7 @@ fn emitUserColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Tab
         if (field.required) {
             try buf.appendSlice(allocator, " NOT NULL");
         }
-        if (field.storage_type == .doc_id) {
+        if (field.needsLengthCheck()) {
             try buf.appendSlice(allocator, " CHECK(length(");
             try buf.appendSlice(allocator, field.name_quoted);
             try buf.appendSlice(allocator, ") = 16)");
