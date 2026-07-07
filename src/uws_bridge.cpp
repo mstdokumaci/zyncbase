@@ -488,6 +488,85 @@ extern "C"
         return ret == 1 ? 1 : 0;
     }
 
+    int openssl_verify_rsa_pss(
+        const char *hash_alg,
+        const unsigned char *n_bytes, size_t n_len,
+        const unsigned char *e_bytes, size_t e_len,
+        const unsigned char *data, size_t data_len,
+        const unsigned char *sig, size_t sig_len)
+    {
+        OSSL_PARAM_BLD *param_bld = OSSL_PARAM_BLD_new();
+        if (!param_bld) return 0;
+
+        BIGNUM *bn_n = BN_bin2bn(n_bytes, n_len, nullptr);
+        BIGNUM *bn_e = BN_bin2bn(e_bytes, e_len, nullptr);
+        if (!bn_n || !bn_e) {
+            if (bn_n) BN_free(bn_n);
+            if (bn_e) BN_free(bn_e);
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
+
+        if (OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_N, bn_n) != 1 ||
+            OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_E, bn_e) != 1) {
+            BN_free(bn_n);
+            BN_free(bn_e);
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
+
+        OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(param_bld);
+        OSSL_PARAM_BLD_free(param_bld);
+        BN_free(bn_n);
+        BN_free(bn_e);
+
+        if (!params) return 0;
+
+        EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+        EVP_PKEY *pkey = nullptr;
+        if (pkey_ctx) {
+            if (EVP_PKEY_fromdata_init(pkey_ctx) == 1) {
+                if (EVP_PKEY_fromdata(pkey_ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) != 1) {
+                    pkey = nullptr;
+                }
+            }
+            EVP_PKEY_CTX_free(pkey_ctx);
+        }
+        OSSL_PARAM_free(params);
+
+        if (!pkey) return 0;
+
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        if (!ctx) {
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        const EVP_MD *md = EVP_get_digestbyname(hash_alg);
+        if (!md) {
+            EVP_MD_CTX_free(ctx);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        int ret = 0;
+        EVP_PKEY_CTX *pctx = nullptr;
+        if (EVP_DigestVerifyInit(ctx, &pctx, md, nullptr, pkey) == 1) {
+            if (pctx &&
+                EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) == 1 &&
+                EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, md) == 1 &&
+                EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, RSA_PSS_SALTLEN_DIGEST) == 1) {
+                if (EVP_DigestVerifyUpdate(ctx, data, data_len) == 1) {
+                    ret = EVP_DigestVerifyFinal(ctx, sig, sig_len);
+                }
+            }
+        }
+
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
+        return ret == 1 ? 1 : 0;
+    }
+
     int openssl_verify_ec(
         const char *curve_name,
         const unsigned char *x_bytes, size_t x_len,

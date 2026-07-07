@@ -512,7 +512,7 @@ fn verifyAsymmetricSignature(
         const e_bytes = try decodeBase64Url(allocator, e_b64);
         defer allocator.free(e_bytes);
 
-        const hash_alg = if (std.mem.eql(u8, alg, "RS256") or std.mem.eql(u8, alg, "PS256"))
+        const hash_alg: [:0]const u8 = if (std.mem.eql(u8, alg, "RS256") or std.mem.eql(u8, alg, "PS256"))
             "SHA256"
         else if (std.mem.eql(u8, alg, "RS384") or std.mem.eql(u8, alg, "PS384"))
             "SHA384"
@@ -521,17 +521,30 @@ fn verifyAsymmetricSignature(
         else
             return error.UnsupportedAlgorithm;
 
-        const verified = c.openssl_verify_rsa(
-            hash_alg.ptr,
-            n_bytes.ptr,
-            n_bytes.len,
-            e_bytes.ptr,
-            e_bytes.len,
-            msg.ptr,
-            msg.len,
-            sig.ptr,
-            sig.len,
-        );
+        const verified = if (std.mem.startsWith(u8, alg, "PS"))
+            c.openssl_verify_rsa_pss(
+                hash_alg,
+                n_bytes.ptr,
+                n_bytes.len,
+                e_bytes.ptr,
+                e_bytes.len,
+                msg.ptr,
+                msg.len,
+                sig.ptr,
+                sig.len,
+            )
+        else
+            c.openssl_verify_rsa(
+                hash_alg,
+                n_bytes.ptr,
+                n_bytes.len,
+                e_bytes.ptr,
+                e_bytes.len,
+                msg.ptr,
+                msg.len,
+                sig.ptr,
+                sig.len,
+            );
         return verified != 0;
     } else if (std.mem.startsWith(u8, alg, "ES")) {
         const crv = jwk.crv orelse return error.InvalidJwk;
@@ -543,7 +556,7 @@ fn verifyAsymmetricSignature(
         const y_bytes = try decodeBase64Url(allocator, y_b64);
         defer allocator.free(y_bytes);
 
-        const curve_name = if (std.mem.eql(u8, crv, "P-256"))
+        const curve_name: [:0]const u8 = if (std.mem.eql(u8, crv, "P-256"))
             "P-256"
         else if (std.mem.eql(u8, crv, "P-384"))
             "P-384"
@@ -553,7 +566,7 @@ fn verifyAsymmetricSignature(
             return error.UnsupportedCurve;
 
         const verified = c.openssl_verify_ec(
-            curve_name.ptr,
+            curve_name,
             x_bytes.ptr,
             x_bytes.len,
             y_bytes.ptr,
