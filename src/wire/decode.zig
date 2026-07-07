@@ -119,15 +119,6 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
-// === Comptime Table-Driven Map Decoder ===
-//
-// All field-by-field extractors share the same skeleton:
-//   readMapHeader → for map_len { readStr key; match against fields; else skipValue }
-// This generic drives that loop from a comptime field table, collapsing the 12
-// near-identical hand-written extractors into one-line tables. Critically, it
-// centralizes the Payload lifecycle (free-on-overwrite + errdefer) that was
-// previously hand-copied into four functions.
-
 const FieldKind = enum { str, u64, payload };
 
 const Field = struct {
