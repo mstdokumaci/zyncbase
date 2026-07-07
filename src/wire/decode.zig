@@ -185,6 +185,27 @@ fn extractMap(
                 @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is non-optional but missing from the table");
             }
         }
+
+        for (table) |tf| {
+            var found_in_struct = false;
+            for (@typeInfo(T).@"struct".fields) |f| {
+                if (std.mem.eql(u8, tf.field, f.name)) {
+                    found_in_struct = true;
+                    break;
+                }
+            }
+            if (!found_in_struct) {
+                @compileError("Field '" ++ tf.field ++ "' in table is not a field of " ++ @typeName(T));
+            }
+        }
+
+        for (table, 0..) |f1, i| {
+            for (table[i + 1 ..]) |f2| {
+                if (std.mem.eql(u8, f1.key, f2.key)) {
+                    @compileError("Duplicate key '" ++ f1.key ++ "' in table");
+                }
+            }
+        }
     }
     const map_len = try readMapHeader(bytes, &pos);
 
