@@ -119,6 +119,16 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
+inline fn freePayload(allocator: std.mem.Allocator, slot: *anyopaque, is_optional: bool, found: bool) void {
+    if (is_optional) {
+        const p: *?Payload = @ptrCast(@alignCast(slot));
+        if (p.*) |payload| payload.free(allocator);
+    } else if (found) {
+        const p: *Payload = @ptrCast(@alignCast(slot));
+        p.free(allocator);
+    }
+}
+
 const FieldKind = enum { str, u64, payload };
 
 const Field = struct {
@@ -176,11 +186,7 @@ fn extractMap(
             if (f.kind == .payload) {
                 const slot = &@field(result, f.field);
                 const ft = fieldOf(T, f.field);
-                if (@typeInfo(ft) == .optional) {
-                    if (slot.*) |p| p.free(allocator);
-                } else if (found[i]) {
-                    slot.free(allocator);
-                }
+                freePayload(allocator, slot, @typeInfo(ft) == .optional, found[i]);
             }
         }
     }
@@ -204,11 +210,7 @@ fn extractMap(
                     .payload => {
                         const new_payload = try readSubtree(bytes, &pos, allocator);
                         const ft = fieldOf(T, f.field);
-                        if (@typeInfo(ft) == .optional) {
-                            if (slot.*) |old| old.free(allocator);
-                        } else if (found[i]) {
-                            slot.free(allocator);
-                        }
+                        freePayload(allocator, slot, @typeInfo(ft) == .optional, found[i]);
                         slot.* = new_payload;
                         found[i] = true;
                     },
