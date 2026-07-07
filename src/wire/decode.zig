@@ -143,6 +143,24 @@ fn extractMap(
     allocator: std.mem.Allocator, // only referenced when table has a .payload field
 ) !T {
     var pos: usize = 0;
+    comptime {
+        for (@typeInfo(T).@"struct".fields) |f| {
+            const is_optional = @typeInfo(f.type) == .optional;
+            var found_in_table = false;
+            for (table) |tf| {
+                if (std.mem.eql(u8, tf.field, f.name)) {
+                    found_in_table = true;
+                    if (!is_optional and !tf.required) {
+                        @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is non-optional but marked as not required in the table");
+                    }
+                    break;
+                }
+            }
+            if (!is_optional and !found_in_table) {
+                @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is non-optional but missing from the table");
+            }
+        }
+    }
     const map_len = try readMapHeader(bytes, &pos);
 
     // SAFETY: result is fully initialized by the loop over the fields of T before it is returned.
@@ -184,14 +202,14 @@ fn extractMap(
                         found[i] = true;
                     },
                     .payload => {
-                        // Free previous value before overwriting (duplicate keys: last wins).
+                        const new_payload = try readSubtree(bytes, &pos, allocator);
                         const ft = fieldOf(T, f.field);
                         if (@typeInfo(ft) == .optional) {
                             if (slot.*) |old| old.free(allocator);
                         } else if (found[i]) {
                             slot.free(allocator);
                         }
-                        slot.* = try readSubtree(bytes, &pos, allocator);
+                        slot.* = new_payload;
                         found[i] = true;
                     },
                 }
