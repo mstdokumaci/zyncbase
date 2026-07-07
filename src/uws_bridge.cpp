@@ -526,7 +526,9 @@ extern "C"
         EVP_PKEY *pkey = nullptr;
         if (pkey_ctx) {
             if (EVP_PKEY_fromdata_init(pkey_ctx) == 1) {
-                EVP_PKEY_fromdata(pkey_ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params);
+                if (EVP_PKEY_fromdata(pkey_ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) != 1) {
+                    pkey = nullptr;
+                }
             }
             EVP_PKEY_CTX_free(pkey_ctx);
         }
