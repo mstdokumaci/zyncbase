@@ -507,8 +507,13 @@ extern "C"
             return 0;
         }
 
-        OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_N, bn_n);
-        OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_E, bn_e);
+        if (OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_N, bn_n) != 1 ||
+            OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_E, bn_e) != 1) {
+            BN_free(bn_n);
+            BN_free(bn_e);
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
 
         OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(param_bld);
         OSSL_PARAM_BLD_free(param_bld);
