@@ -171,6 +171,25 @@ fn validateTable(comptime T: type, comptime table: []const Field) void {
                 if (!is_optional and !tf.required) {
                     @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is non-optional but marked as not required in the table");
                 }
+                const field_type = f.type;
+                const base_type = if (is_optional) @typeInfo(field_type).optional.child else field_type;
+                switch (tf.kind) {
+                    .str => {
+                        if (base_type != []const u8) {
+                            @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is expected to be []const u8 for kind .str, but got " ++ @typeName(field_type));
+                        }
+                    },
+                    .u64 => {
+                        if (base_type != u64) {
+                            @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is expected to be u64 for kind .u64, but got " ++ @typeName(field_type));
+                        }
+                    },
+                    .payload => {
+                        if (base_type != Payload) {
+                            @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is expected to be Payload for kind .payload, but got " ++ @typeName(field_type));
+                        }
+                    },
+                }
                 break;
             }
         }
@@ -396,34 +415,20 @@ pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Alloca
     return extractMap(PresenceSetSharedRequest, &presence_set_shared_table, bytes, allocator);
 }
 
+const empty_table = [_]Field{};
+
 pub const PresenceSubscribeRequest = struct {};
 
 pub fn extractPresenceSubscribeFast(bytes: []const u8) !PresenceSubscribeRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        _ = key;
-        try msgpack_skip.skipValue(bytes, &pos);
-    }
-
-    return .{};
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceSubscribeRequest, &empty_table, bytes, undefined);
 }
 
 pub const PresenceSubscribeSharedRequest = struct {};
 
 pub fn extractPresenceSubscribeSharedFast(bytes: []const u8) !PresenceSubscribeSharedRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        _ = key;
-        try msgpack_skip.skipValue(bytes, &pos);
-    }
-
-    return .{};
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceSubscribeSharedRequest, &empty_table, bytes, undefined);
 }
 
 pub const PresenceUnsubscribeSharedRequest = struct {
@@ -442,14 +447,6 @@ pub fn extractPresenceUnsubscribeSharedFast(bytes: []const u8) !PresenceUnsubscr
 pub const PresenceRemoveRequest = struct {};
 
 pub fn extractPresenceRemoveFast(bytes: []const u8) !PresenceRemoveRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        _ = key;
-        try msgpack_skip.skipValue(bytes, &pos);
-    }
-
-    return .{};
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceRemoveRequest, &empty_table, bytes, undefined);
 }
