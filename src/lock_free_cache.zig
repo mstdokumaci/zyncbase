@@ -201,7 +201,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
                 if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                     if (result.created) |entry| {
-                        entry.deinit(self.allocator);
+                        self.allocator.destroy(entry);
                     }
                     new_entries.deinit();
                     self.allocator.destroy(new_entries);
@@ -321,7 +321,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
 
                     const entry = try CacheEntry.init(ctx.cache.allocator, ctx.data);
-                    errdefer entry.deinit(ctx.cache.allocator);
+                    errdefer ctx.cache.allocator.destroy(entry);
                     entry.version.store(new_version, .release);
 
                     var result: CowResult = .{};
@@ -371,7 +371,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
 
                     const entry = try CacheEntry.init(ctx.cache.allocator, ctx.data);
-                    errdefer entry.deinit(ctx.cache.allocator);
+                    errdefer ctx.cache.allocator.destroy(entry);
                     entry.version.store(new_version, .release);
 
                     const gop = try new_entries.getOrPut(ctx.key);
