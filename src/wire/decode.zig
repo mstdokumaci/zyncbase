@@ -124,7 +124,7 @@ inline fn freePayload(allocator: std.mem.Allocator, slot: anytype, found: bool) 
     if (@typeInfo(T) == .optional) {
         if (slot.*) |payload| payload.free(allocator);
     } else if (found) {
-        slot.free(allocator);
+        slot.*.free(allocator);
     }
 }
 
