@@ -1,7 +1,6 @@
 const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const comptimeKeyPayload = @import("comptime.zig").comptimeKeyPayload;
 const msgpack_skip = @import("msgpack_skip.zig");
 
 pub const Envelope = struct {
@@ -20,22 +19,6 @@ pub const StoreUnsubscribeRequest = struct {
 pub const StoreLoadMoreRequest = struct {
     subId: u64,
     nextCursor: []const u8,
-};
-
-const Key = struct {
-    pub const @"type" = comptimeKeyPayload("type");
-    pub const id = comptimeKeyPayload("id");
-    pub const namespace = comptimeKeyPayload("namespace");
-    pub const sub_id = comptimeKeyPayload("subId");
-    pub const next_cursor = comptimeKeyPayload("nextCursor");
-    pub const path = comptimeKeyPayload("path");
-    pub const value = comptimeKeyPayload("value");
-    pub const table_index = comptimeKeyPayload("table_index");
-    pub const ops = comptimeKeyPayload("ops");
-    pub const confirm = comptimeKeyPayload("confirm");
-    pub const write_id = comptimeKeyPayload("writeId");
-    pub const token = comptimeKeyPayload("token");
-    pub const data = comptimeKeyPayload("data");
 };
 
 // === Low-Level MessagePack Parser Primitives ===
@@ -136,94 +119,142 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
-// === Fast Envelope Extractor ===
+// === Comptime Table-Driven Map Decoder ===
+//
+// All field-by-field extractors share the same skeleton:
+//   readMapHeader → for map_len { readStr key; match against fields; else skipValue }
+// This generic drives that loop from a comptime field table, collapsing the 12
+// near-identical hand-written extractors into one-line tables. Critically, it
+// centralizes the Payload lifecycle (free-on-overwrite + errdefer) that was
+// previously hand-copied into four functions.
 
-pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
+const FieldKind = enum { str, u64, payload };
+
+const Field = struct {
+    key: []const u8, // wire-format name, e.g. "writeId"
+    kind: FieldKind,
+    field: []const u8, // result-struct field name, e.g. "write_id"
+    required: bool,
+};
+
+/// Type of a named field of T (avoids depending on @FieldType availability).
+fn fieldOf(comptime T: type, comptime name: []const u8) type {
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        if (comptime std.mem.eql(u8, f.name, name)) return f.type;
+    }
+    @compileError(@typeName(T) ++ " has no field '" ++ name ++ "'");
+}
+
+fn extractMap(
+    comptime T: type,
+    comptime table: []const Field,
+    bytes: []const u8,
+    allocator: std.mem.Allocator, // only referenced when table has a .payload field
+) !T {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
-    // SAFETY: all fields of result are set before use via the found_type/found_id guards below
-    var result: Envelope = undefined;
-    var found_type: bool = false;
-    var found_id: bool = false;
+    // SAFETY: result is fully initialized by the loop over the fields of T before it is returned.
+    var result: T = undefined;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        if (@typeInfo(f.type) == .optional) @field(result, f.name) = null;
+    }
+    var found = [_]bool{false} ** table.len;
 
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.type)) {
-            result.type = try readStr(bytes, &pos);
-            found_type = true;
-        } else if (std.mem.eql(u8, key, Key.id)) {
-            result.id = try readU64(bytes, &pos);
-            found_id = true;
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
+    // If a later read errors, release any Payload slots already populated.
+    errdefer {
+        inline for (table, 0..) |f, i| {
+            if (f.kind == .payload) {
+                const slot = &@field(result, f.field);
+                const ft = fieldOf(T, f.field);
+                if (@typeInfo(ft) == .optional) {
+                    if (slot.*) |p| p.free(allocator);
+                } else if (found[i]) {
+                    slot.free(allocator);
+                }
+            }
         }
     }
 
-    if (!found_type or !found_id) return error.MissingRequiredFields;
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        var handled = false;
+        inline for (table, 0..) |f, i| {
+            if (!handled and std.mem.eql(u8, key, f.key)) {
+                handled = true;
+                const slot = &@field(result, f.field);
+                switch (f.kind) {
+                    .str => {
+                        slot.* = try readStr(bytes, &pos);
+                        found[i] = true;
+                    },
+                    .u64 => {
+                        slot.* = try readU64(bytes, &pos);
+                        found[i] = true;
+                    },
+                    .payload => {
+                        // Free previous value before overwriting (duplicate keys: last wins).
+                        const ft = fieldOf(T, f.field);
+                        if (@typeInfo(ft) == .optional) {
+                            if (slot.*) |old| old.free(allocator);
+                        } else if (found[i]) {
+                            slot.free(allocator);
+                        }
+                        slot.* = try readSubtree(bytes, &pos, allocator);
+                        found[i] = true;
+                    },
+                }
+            }
+        }
+        if (!handled) try msgpack_skip.skipValue(bytes, &pos);
+    }
+
+    inline for (table, 0..) |f, i| {
+        if (f.required and !found[i]) return error.MissingRequiredFields;
+    }
     return result;
+}
+
+// === Fast Envelope Extractor ===
+
+const envelope_table = [_]Field{
+    .{ .key = "type", .kind = .str, .field = "type", .required = true },
+    .{ .key = "id", .kind = .u64, .field = "id", .required = true },
+};
+
+pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(Envelope, &envelope_table, bytes, undefined);
 }
 
 // === Type-Specific Fast Decoders ===
 
+const store_set_namespace_table = [_]Field{
+    .{ .key = "namespace", .kind = .str, .field = "namespace", .required = true },
+};
+
 pub fn extractStoreSetNamespaceFast(bytes: []const u8) !StoreSetNamespaceRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var namespace: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.namespace)) {
-            namespace = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{ .namespace = namespace orelse return error.MissingRequiredFields };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(StoreSetNamespaceRequest, &store_set_namespace_table, bytes, undefined);
 }
+
+const store_unsubscribe_table = [_]Field{
+    .{ .key = "subId", .kind = .u64, .field = "subId", .required = true },
+};
 
 pub fn extractStoreUnsubscribeFast(bytes: []const u8) !StoreUnsubscribeRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var sub_id: ?u64 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.sub_id)) {
-            sub_id = try readU64(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{ .subId = sub_id orelse return error.MissingRequiredFields };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(StoreUnsubscribeRequest, &store_unsubscribe_table, bytes, undefined);
 }
 
+const store_load_more_table = [_]Field{
+    .{ .key = "subId", .kind = .u64, .field = "subId", .required = true },
+    .{ .key = "nextCursor", .kind = .str, .field = "nextCursor", .required = true },
+};
+
 pub fn extractStoreLoadMoreFast(bytes: []const u8) !StoreLoadMoreRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var sub_id: ?u64 = null;
-    var next_cursor: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.sub_id)) {
-            sub_id = try readU64(bytes, &pos);
-        } else if (std.mem.eql(u8, key, Key.next_cursor)) {
-            next_cursor = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .subId = sub_id orelse return error.MissingRequiredFields,
-        .nextCursor = next_cursor orelse return error.MissingRequiredFields,
-    };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(StoreLoadMoreRequest, &store_load_more_table, bytes, undefined);
 }
 
 // === Subtree Payload Extractors (for Group B handlers that need Payload) ===
@@ -235,42 +266,15 @@ pub const StorePathPayloads = struct {
     write_id: ?[]const u8 = null,
 };
 
+const store_path_table = [_]Field{
+    .{ .key = "path", .kind = .payload, .field = "path", .required = true },
+    .{ .key = "value", .kind = .payload, .field = "value", .required = false },
+    .{ .key = "confirm", .kind = .str, .field = "confirm", .required = false },
+    .{ .key = "writeId", .kind = .str, .field = "write_id", .required = false },
+};
+
 pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator) !StorePathPayloads {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var path: ?Payload = null;
-    var value: ?Payload = null;
-    errdefer {
-        if (path) |p| p.free(allocator);
-        if (value) |v| v.free(allocator);
-    }
-    var confirm: ?[]const u8 = null;
-    var write_id: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.path)) {
-            if (path) |p| p.free(allocator);
-            path = try readSubtree(bytes, &pos, allocator);
-        } else if (std.mem.eql(u8, key, Key.value)) {
-            if (value) |v| v.free(allocator);
-            value = try readSubtree(bytes, &pos, allocator);
-        } else if (std.mem.eql(u8, key, Key.confirm)) {
-            confirm = try readStr(bytes, &pos);
-        } else if (std.mem.eql(u8, key, Key.write_id)) {
-            write_id = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .path = path orelse return error.MissingRequiredFields,
-        .value = value,
-        .confirm = confirm,
-        .write_id = write_id,
-    };
+    return extractMap(StorePathPayloads, &store_path_table, bytes, allocator);
 }
 
 pub const StoreBatchPayloads = struct {
@@ -279,55 +283,27 @@ pub const StoreBatchPayloads = struct {
     write_id: ?[]const u8 = null,
 };
 
+const store_batch_table = [_]Field{
+    .{ .key = "ops", .kind = .payload, .field = "ops", .required = true },
+    .{ .key = "confirm", .kind = .str, .field = "confirm", .required = false },
+    .{ .key = "writeId", .kind = .str, .field = "write_id", .required = false },
+};
+
 pub fn extractStoreBatchPayloads(
     bytes: []const u8,
     allocator: std.mem.Allocator,
 ) !StoreBatchPayloads {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var ops: ?Payload = null;
-    errdefer if (ops) |o| o.free(allocator);
-    var confirm: ?[]const u8 = null;
-    var write_id: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.ops)) {
-            if (ops) |o| o.free(allocator);
-            ops = try readSubtree(bytes, &pos, allocator);
-        } else if (std.mem.eql(u8, key, Key.confirm)) {
-            confirm = try readStr(bytes, &pos);
-        } else if (std.mem.eql(u8, key, Key.write_id)) {
-            write_id = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .ops = ops orelse return error.MissingRequiredFields,
-        .confirm = confirm,
-        .write_id = write_id,
-    };
+    return extractMap(StoreBatchPayloads, &store_batch_table, bytes, allocator);
 }
 
+const AuthRefreshResult = struct { token: []const u8 };
+const auth_refresh_table = [_]Field{
+    .{ .key = "token", .kind = .str, .field = "token", .required = true },
+};
+
 pub fn extractAuthRefreshFast(bytes: []const u8) ![]const u8 {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var token: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.token)) {
-            token = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return token orelse return error.MissingRequiredFields;
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return (try extractMap(AuthRefreshResult, &auth_refresh_table, bytes, undefined)).token;
 }
 
 fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
@@ -342,100 +318,50 @@ pub const PresenceSetNamespaceRequest = struct {
     namespace: []const u8,
 };
 
+const presence_set_namespace_table = [_]Field{
+    .{ .key = "namespace", .kind = .str, .field = "namespace", .required = true },
+};
+
 pub fn extractPresenceSetNamespaceFast(bytes: []const u8) !PresenceSetNamespaceRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var namespace: ?[]const u8 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.namespace)) {
-            namespace = try readStr(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .namespace = namespace orelse return error.MissingRequiredFields,
-    };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceSetNamespaceRequest, &presence_set_namespace_table, bytes, undefined);
 }
 
 pub const PresenceSetRequest = struct {
     data: Payload,
 };
 
+const presence_set_table = [_]Field{
+    .{ .key = "data", .kind = .payload, .field = "data", .required = true },
+};
+
 pub fn extractPresenceSetFast(bytes: []const u8, allocator: std.mem.Allocator) !PresenceSetRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var data: ?Payload = null;
-    errdefer if (data) |d| d.free(allocator);
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.data)) {
-            if (data) |d| d.free(allocator);
-            data = try readSubtree(bytes, &pos, allocator);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .data = data orelse return error.MissingRequiredFields,
-    };
+    return extractMap(PresenceSetRequest, &presence_set_table, bytes, allocator);
 }
 
 pub const PresenceUnsubscribeRequest = struct {
     subId: u64,
 };
 
+const presence_unsubscribe_table = [_]Field{
+    .{ .key = "subId", .kind = .u64, .field = "subId", .required = true },
+};
+
 pub fn extractPresenceUnsubscribeFast(bytes: []const u8) !PresenceUnsubscribeRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var sub_id: ?u64 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.sub_id)) {
-            sub_id = try readU64(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .subId = sub_id orelse return error.MissingRequiredFields,
-    };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceUnsubscribeRequest, &presence_unsubscribe_table, bytes, undefined);
 }
 
 pub const PresenceSetSharedRequest = struct {
     data: Payload,
 };
 
+const presence_set_shared_table = [_]Field{
+    .{ .key = "data", .kind = .payload, .field = "data", .required = true },
+};
+
 pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Allocator) !PresenceSetSharedRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var data: ?Payload = null;
-    errdefer if (data) |d| d.free(allocator);
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.data)) {
-            if (data) |d| d.free(allocator);
-            data = try readSubtree(bytes, &pos, allocator);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .data = data orelse return error.MissingRequiredFields,
-    };
+    return extractMap(PresenceSetSharedRequest, &presence_set_shared_table, bytes, allocator);
 }
 
 pub const PresenceSubscribeRequest = struct {};
@@ -472,24 +398,13 @@ pub const PresenceUnsubscribeSharedRequest = struct {
     subId: u64,
 };
 
+const presence_unsubscribe_shared_table = [_]Field{
+    .{ .key = "subId", .kind = .u64, .field = "subId", .required = true },
+};
+
 pub fn extractPresenceUnsubscribeSharedFast(bytes: []const u8) !PresenceUnsubscribeSharedRequest {
-    var pos: usize = 0;
-    const map_len = try readMapHeader(bytes, &pos);
-
-    var sub_id: ?u64 = null;
-
-    for (0..map_len) |_| {
-        const key = try readStr(bytes, &pos);
-        if (std.mem.eql(u8, key, Key.sub_id)) {
-            sub_id = try readU64(bytes, &pos);
-        } else {
-            try msgpack_skip.skipValue(bytes, &pos);
-        }
-    }
-
-    return .{
-        .subId = sub_id orelse return error.MissingRequiredFields,
-    };
+    // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
+    return extractMap(PresenceUnsubscribeSharedRequest, &presence_unsubscribe_shared_table, bytes, undefined);
 }
 
 pub const PresenceRemoveRequest = struct {};
