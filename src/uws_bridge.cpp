@@ -552,7 +552,9 @@ extern "C"
         int ret = 0;
         EVP_PKEY_CTX *pctx = nullptr;
         if (EVP_DigestVerifyInit(ctx, &pctx, md, nullptr, pkey) == 1) {
-            if (EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) == 1 &&
+            if (pctx &&
+                EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) == 1 &&
+                EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, md) == 1 &&
                 EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, RSA_PSS_SALTLEN_DIGEST) == 1) {
                 if (EVP_DigestVerifyUpdate(ctx, data, data_len) == 1) {
                     ret = EVP_DigestVerifyFinal(ctx, sig, sig_len);
