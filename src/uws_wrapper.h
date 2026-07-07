@@ -125,6 +125,13 @@ int openssl_verify_rsa(
     const unsigned char *data, size_t data_len,
     const unsigned char *sig, size_t sig_len);
 
+int openssl_verify_rsa_pss(
+    const char *hash_alg,
+    const unsigned char *n_bytes, size_t n_len,
+    const unsigned char *e_bytes, size_t e_len,
+    const unsigned char *data, size_t data_len,
+    const unsigned char *sig, size_t sig_len);
+
 int openssl_verify_ec(
     const char *curve_name,
     const unsigned char *x_bytes, size_t x_len,

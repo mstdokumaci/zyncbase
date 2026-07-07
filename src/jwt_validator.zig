@@ -521,17 +521,30 @@ fn verifyAsymmetricSignature(
         else
             return error.UnsupportedAlgorithm;
 
-        const verified = c.openssl_verify_rsa(
-            hash_alg.ptr,
-            n_bytes.ptr,
-            n_bytes.len,
-            e_bytes.ptr,
-            e_bytes.len,
-            msg.ptr,
-            msg.len,
-            sig.ptr,
-            sig.len,
-        );
+        const verified = if (std.mem.startsWith(u8, alg, "PS"))
+            c.openssl_verify_rsa_pss(
+                hash_alg.ptr,
+                n_bytes.ptr,
+                n_bytes.len,
+                e_bytes.ptr,
+                e_bytes.len,
+                msg.ptr,
+                msg.len,
+                sig.ptr,
+                sig.len,
+            )
+        else
+            c.openssl_verify_rsa(
+                hash_alg.ptr,
+                n_bytes.ptr,
+                n_bytes.len,
+                e_bytes.ptr,
+                e_bytes.len,
+                msg.ptr,
+                msg.len,
+                sig.ptr,
+                sig.len,
+            );
         return verified != 0;
     } else if (std.mem.startsWith(u8, alg, "ES")) {
         const crv = jwk.crv orelse return error.InvalidJwk;
