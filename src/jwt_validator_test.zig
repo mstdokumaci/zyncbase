@@ -196,14 +196,14 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
     keys[0] = Jwk{
         .kty = try allocator.dupe(u8, "RSA"),
         .kid = try allocator.dupe(u8, "key1"),
-        .n = try allocator.dupe(u8, "zQmTZuiEgwcDzyYpt0lxoHZ75nW0SeaJChIMdKa1F39Gv4KC8DFGVyDtcjdd5AaMfxPYZukpUMr3fAIqNvEKLneTFkM5LDcn3jddLIfEi7E-JVt-64VXy2n4A_x2ojtVmO4EWstN9CDWlCkxunwBCyKYceOd5c6jHY1yh38cm-aHlDUlCuBETAysmg11fVqd_BwxBvPm8jxCBYpj8Cy1e3ac4fcppmIrAkAVDukQT_Pce_MO7gc0M9aoMimNhOUwoBMAZ__jNJYXrtVszFhWR1cQ0dBo54U_50BH127mcXVfYCY42s9h85IkHVflBjQbI7mfUXXDaZ5VPLALwxmqiQ"),
+        .n = try allocator.dupe(u8, "2SJJNHh5kweKQwpXL796HER09fDVdeKAn6VO9pI9JGpv_WCM4KUxfuPyoJUlMNKsNj5QQCuOvJ4lrNwNRr5wPK2wPDsYRZSwhhr3ocUNAFgXf9YeBxSRoax9WHjPSTK6ai-lPWykj_gTl0AbOcw9bgY1ZOlh6DEVu_uPUkUOo7NXLkd5kIxakCWaf4MAl0qAs4bNmnPM78Nn5PdoF8UJ-vbEZ2sYu_PYp3q-GsdIfCxLLV8F3Xj5lQLR6nfIoz1L8tHPuPSh08B_rFuDdDhtcfsW0fPF_CyYelTydwTyVD_CzZpM0vgTLr8Uuxd8f7rqEdSp3h0IzR0cNGp4jcKHHw"),
         .e = try allocator.dupe(u8, "AQAB"),
     };
     try cache.setKeys(keys, std.time.timestamp());
 
-    const token_rs = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6MTc4MzQzNjA5OH0.ckRCpEjU6WmsVA5HcW0K5hguKlCNXHvhi2wmhmgZW9vrq3k2-veeEeZJ6TX3JzBKyCFdCNOPa64AEDV-FN3ipPsW3EyLkOMH8eTdEbtJsV9PlfEad7pLpNZqPS5uyM8Rcj-X4QcYaB_BOxHCgnn92KqrOzzw5R23EnhmwuuOx-GvmDEZOcX4yzNherXtyLPSNPjUd1uHkhu7-bT57IqJmZRm8X1Of8IfhSYdb0eLi4cjxv3ABbenC9_mahFt4Z11qHf7Ci-Mozt1hVl-qtyOdsE_CT2daDi0f40wWyn-A4okbwd-eKXuOic-I9asaJl3bcanABxqcxOLjW2_m8nkRg";
+    const token_rs = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6NDAwMDAwMDAwMH0.Rs_fn7LadvhYdkjEiowVbslQybN1DjW7tVzY4teRQzgqClPjcfyAvI30_QgnMOHfQAcy5dXITWw2pv4mnc9vFVIpmO3wLqIsmyHS_IZ563QS0s7ZMnsHECeTeQaXIFhz8Q1xZeKkJ5zXuTi8zTdMpOS_UTObd_RXKP5g8dZQXOaU5xEijixLaGAkxwST1aqWj0C6SjJNleGFgi_s3csUfyW41jBUV6qigt17tM7FzYt9kz-jjJArLiZEgGQLlf8w036UUPWphPBPJjBHc7qOhZLC_YVPeyYAXyRb0BwNSNGfHhzLMqxaYs0QtYTBrEgU0tRIkqYjYNICxyU9LXhCZg";
 
-    const token_ps = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6MTc4MzQzNjA5OH0.RIPutpVZL4Xn9laZlhydUEhiqG8lByW7xDMtM_-PFWbbeCPXF6YlwJh-QtgNQ00yS4zdx1mnTIPqLsWGpWnUBbxCtVGtTq2MWvJW4SuktkumBOWIGwXR72mS0hwfR5somU_Am_f-kBoB297xX0uNAtMFkMgwYy_CRkFBuU_a5PPi3bejDJfS70aSrvNiI9MxQC67m7EThGqJy5ScnYJAEhqdfL8Yb757ZDb3Xne1RvFejQT4rlQmVSIe9dbB20rFStdrmdwMZghRaxQ1c3TVIwgllZRqHwF_8eCqgOqRtLuHKEpQIKD8qKwzE0sH3unHOa1AcCok64dg5EyttZGFEw";
+    const token_ps = "eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6NDAwMDAwMDAwMH0.zvwY0WtlGBc7s9XLsKoH9U126wGRUCHg_oxyHa9UfcBvxtaDp2Od8Yur2FE46ufa6am19TTowpq103t0BcxvghXH-YHbtqL3eJjCEk1g1ETlvfhDyfbwL9QmOKoTeRMnKj3DoyL9hVendps0ZqLWYIyVLkgSwu4T63Ru5tAuew0be-C185DHx-dna9aRBKTbd-oM5aef-_lJUB4ObatspVSB5z52T_fJI0K1wvKS8L3h0d0-lcjKoUOLVy4Bka4mV9NWWHy-EYUZmBheZ2b8kaKfqmYUKsK19tMgHZJ4tbZF861pHF_UVLU40iBDqLfhqP6_siDsr_wneU9URrS55Q";
 
     // 1. Verify RS256 token with RS256 validator
     {
@@ -212,7 +212,6 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
             .jwks_cache = &cache,
-            .current_time = 1783430000,
         });
         const sub = try validator.validate(allocator, token_rs);
         defer allocator.free(sub);
@@ -226,7 +225,6 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
             .jwks_cache = &cache,
-            .current_time = 1783430000,
         });
         const sub = try validator.validate(allocator, token_ps);
         defer allocator.free(sub);
