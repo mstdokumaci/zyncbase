@@ -119,20 +119,18 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
-inline fn freePayload(allocator: std.mem.Allocator, slot: *anyopaque, is_optional: bool, found: bool) void {
-    if (is_optional) {
-        const p: *?Payload = @ptrCast(@alignCast(slot));
-        if (p.*) |payload| payload.free(allocator);
+inline fn freePayload(allocator: std.mem.Allocator, slot: anytype, found: bool) void {
+    const T = @TypeOf(slot.*);
+    if (@typeInfo(T) == .optional) {
+        if (slot.*) |payload| payload.free(allocator);
     } else if (found) {
-        const p: *Payload = @ptrCast(@alignCast(slot));
-        p.free(allocator);
+        slot.free(allocator);
     }
 }
 
 inline fn assignField(
-    comptime T: type,
     f: Field,
-    slot: *anyopaque,
+    slot: anytype,
     bytes: []const u8,
     pos: *usize,
     allocator: std.mem.Allocator,
@@ -140,24 +138,15 @@ inline fn assignField(
 ) !void {
     switch (f.kind) {
         .str => {
-            const p: *[]const u8 = @ptrCast(@alignCast(slot));
-            p.* = try readStr(bytes, pos);
+            slot.* = try readStr(bytes, pos);
         },
         .u64 => {
-            const p: *u64 = @ptrCast(@alignCast(slot));
-            p.* = try readU64(bytes, pos);
+            slot.* = try readU64(bytes, pos);
         },
         .payload => {
             const new_payload = try readSubtree(bytes, pos, allocator);
-            const ft = fieldOf(T, f.field);
-            freePayload(allocator, slot, @typeInfo(ft) == .optional, found.*);
-            if (@typeInfo(ft) == .optional) {
-                const p: *?Payload = @ptrCast(@alignCast(slot));
-                p.* = new_payload;
-            } else {
-                const p: *Payload = @ptrCast(@alignCast(slot));
-                p.* = new_payload;
-            }
+            freePayload(allocator, slot, found.*);
+            slot.* = new_payload;
         },
     }
     found.* = true;
@@ -171,14 +160,6 @@ const Field = struct {
     field: []const u8, // result-struct field name, e.g. "write_id"
     required: bool,
 };
-
-/// Type of a named field of T (avoids depending on @FieldType availability).
-fn fieldOf(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"struct".fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, name)) return f.type;
-    }
-    @compileError(@typeName(T) ++ " has no field '" ++ name ++ "'");
-}
 
 fn extractMap(
     comptime T: type,
@@ -219,23 +200,22 @@ fn extractMap(
         inline for (table, 0..) |f, i| {
             if (f.kind == .payload) {
                 const slot = &@field(result, f.field);
-                const ft = fieldOf(T, f.field);
-                freePayload(allocator, slot, @typeInfo(ft) == .optional, found[i]);
+                freePayload(allocator, slot, found[i]);
             }
         }
     }
 
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
-        var handled = false;
         inline for (table, 0..) |f, i| {
-            if (!handled and std.mem.eql(u8, key, f.key)) {
-                handled = true;
+            if (std.mem.eql(u8, key, f.key)) {
                 const slot = &@field(result, f.field);
-                try assignField(T, f, @ptrCast(slot), bytes, &pos, allocator, &found[i]);
+                try assignField(f, slot, bytes, &pos, allocator, &found[i]);
+                break;
             }
+        } else {
+            try msgpack_skip.skipValue(bytes, &pos);
         }
-        if (!handled) try msgpack_skip.skipValue(bytes, &pos);
     }
 
     inline for (table, 0..) |f, i| {
