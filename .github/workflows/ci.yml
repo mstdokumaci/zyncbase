@@ -28,7 +28,7 @@ jobs:
 
   test-sanitized:
     name: Test with ThreadSanitizer
-    runs-on: macos-latest
+    runs-on: macos-25
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
