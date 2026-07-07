@@ -129,6 +129,40 @@ inline fn freePayload(allocator: std.mem.Allocator, slot: *anyopaque, is_optiona
     }
 }
 
+inline fn assignField(
+    comptime T: type,
+    f: Field,
+    slot: *anyopaque,
+    bytes: []const u8,
+    pos: *usize,
+    allocator: std.mem.Allocator,
+    found: *bool,
+) !void {
+    switch (f.kind) {
+        .str => {
+            const p: *[]const u8 = @ptrCast(@alignCast(slot));
+            p.* = try readStr(bytes, pos);
+        },
+        .u64 => {
+            const p: *u64 = @ptrCast(@alignCast(slot));
+            p.* = try readU64(bytes, pos);
+        },
+        .payload => {
+            const new_payload = try readSubtree(bytes, pos, allocator);
+            const ft = fieldOf(T, f.field);
+            freePayload(allocator, slot, @typeInfo(ft) == .optional, found.*);
+            if (@typeInfo(ft) == .optional) {
+                const p: *?Payload = @ptrCast(@alignCast(slot));
+                p.* = new_payload;
+            } else {
+                const p: *Payload = @ptrCast(@alignCast(slot));
+                p.* = new_payload;
+            }
+        },
+    }
+    found.* = true;
+}
+
 const FieldKind = enum { str, u64, payload };
 
 const Field = struct {
@@ -198,23 +232,7 @@ fn extractMap(
             if (!handled and std.mem.eql(u8, key, f.key)) {
                 handled = true;
                 const slot = &@field(result, f.field);
-                switch (f.kind) {
-                    .str => {
-                        slot.* = try readStr(bytes, &pos);
-                        found[i] = true;
-                    },
-                    .u64 => {
-                        slot.* = try readU64(bytes, &pos);
-                        found[i] = true;
-                    },
-                    .payload => {
-                        const new_payload = try readSubtree(bytes, &pos, allocator);
-                        const ft = fieldOf(T, f.field);
-                        freePayload(allocator, slot, @typeInfo(ft) == .optional, found[i]);
-                        slot.* = new_payload;
-                        found[i] = true;
-                    },
-                }
+                try assignField(T, f, @ptrCast(slot), bytes, &pos, allocator, &found[i]);
             }
         }
         if (!handled) try msgpack_skip.skipValue(bytes, &pos);
