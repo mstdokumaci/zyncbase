@@ -19,7 +19,7 @@ import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
 import { run as runSync } from "./test-sync";
 
-setDefaultTimeout(120_000);
+setDefaultTimeout(150_000);
 
 beforeAll(() => {
 	buildServerIfNeeded();

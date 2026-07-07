@@ -223,6 +223,55 @@ test "extractStoreLoadMoreFast: missing nextCursor" {
     try testing.expectError(error.MissingRequiredFields, wire.extractStoreLoadMoreFast(bytes));
 }
 
+test "extractStoreUnsubscribeFast: wrong type for subId" {
+    const allocator = testing.allocator;
+
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+    try writeFixMapHeader(writer, 1);
+    try writeFixStr(writer, "subId");
+    try writeFixStr(writer, "not-a-number"); // subId as string instead of u64
+
+    try testing.expectError(error.InvalidMessageFormat, wire.extractStoreUnsubscribeFast(buf.items));
+}
+
+test "extractEnvelopeFast: duplicate key, last wins" {
+    const allocator = testing.allocator;
+
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+    try writeFixMapHeader(writer, 3);
+    try writeFixStr(writer, "type");
+    try writeFixStr(writer, "first");
+    try writeFixStr(writer, "id");
+    try writer.writeByte(0x01); // positive fixint 1
+    try writeFixStr(writer, "type");
+    try writeFixStr(writer, "second"); // duplicate — last write should win
+
+    const result = try wire.extractEnvelopeFast(buf.items);
+    try testing.expectEqualStrings("second", result.type);
+}
+
+test "extractPresenceSetFast: duplicate data key, last wins" {
+    const allocator = testing.allocator;
+
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+    try writeFixMapHeader(writer, 2);
+    try writeFixStr(writer, "data");
+    try writer.writeByte(0xc0); // nil — first value
+    try writeFixStr(writer, "data");
+    try writeFixStr(writer, "hello"); // string — second value (last wins)
+
+    const result = try wire.extractPresenceSetFast(buf.items, allocator);
+    defer result.data.free(allocator);
+    try testing.expect(result.data == .str);
+    try testing.expectEqualStrings("hello", result.data.str.value());
+}
+
 // === Encode Tests (unchanged) ===
 
 test "encodeSuccess: produces valid MsgPack" {
