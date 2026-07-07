@@ -212,6 +212,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
             .jwks_cache = &cache,
+            .current_time = 1783430000,
         });
         const sub = try validator.validate(allocator, token_rs);
         defer allocator.free(sub);
@@ -225,6 +226,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
             .jwks_cache = &cache,
+            .current_time = 1783430000,
         });
         const sub = try validator.validate(allocator, token_ps);
         defer allocator.free(sub);

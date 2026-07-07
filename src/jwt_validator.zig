@@ -183,6 +183,7 @@ pub const JwtValidationConfig = struct {
     audience: ?[]const u8 = null,
     subject_claim: []const u8 = "sub",
     jwks_cache: ?*JwksCache = null,
+    current_time: ?i64 = null,
 };
 
 pub const JwtValidator = struct {
@@ -359,7 +360,7 @@ fn verifyHmacSignature(alg: []const u8, secret: []const u8, msg: []const u8, sig
 }
 
 fn validateStandardClaims(config: JwtValidationConfig, payload: std.json.Value) !void {
-    const now = std.time.timestamp();
+    const now = config.current_time orelse std.time.timestamp();
 
     if (!validateTimeClaims(payload, now)) {
         return error.TokenExpired;
