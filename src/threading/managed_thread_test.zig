@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const managedThread = @import("managed_thread.zig").managedThread;
+const ErrorLatch = @import("latch.zig").ErrorLatch;
 
 const TestContext = struct {
     ran: bool = false,
@@ -93,18 +94,20 @@ test "managedThread: lockWork and unlockWork round-trip" {
 
 test "managedThread: waitForWork blocks until signal" {
     var mt = managedThread(TestContext).init();
+    var ready_latch = ErrorLatch{};
 
     const Signaller = struct {
-        fn run(mt_ptr: *@TypeOf(mt)) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+        fn run(mt_ptr: *@TypeOf(mt), ready: *ErrorLatch) void {
+            ready.wait() catch |err| @panic(@errorName(err));
             mt_ptr.lockWork();
             mt_ptr.signal();
             mt_ptr.unlockWork();
         }
     };
-    const t = try std.Thread.spawn(.{}, Signaller.run, .{&mt});
+    const t = try std.Thread.spawn(.{}, Signaller.run, .{ &mt, &ready_latch });
 
     mt.lockWork();
+    ready_latch.resolve({});
     mt.waitForWork();
     mt.unlockWork();
     t.join();
@@ -133,18 +136,20 @@ test "managedThread: waitForWorkTimed returns stop when already requested" {
 
 test "managedThread: waitForWorkTimed returns signaled when woken" {
     var mt = managedThread(TestContext).init();
+    var ready_latch = ErrorLatch{};
 
     const Signaller = struct {
-        fn run(mt_ptr: *@TypeOf(mt)) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+        fn run(mt_ptr: *@TypeOf(mt), ready: *ErrorLatch) void {
+            ready.wait() catch |err| @panic(@errorName(err));
             mt_ptr.lockWork();
             mt_ptr.signal();
             mt_ptr.unlockWork();
         }
     };
-    const t = try std.Thread.spawn(.{}, Signaller.run, .{&mt});
+    const t = try std.Thread.spawn(.{}, Signaller.run, .{ &mt, &ready_latch });
 
     mt.lockWork();
+    ready_latch.resolve({});
     const result = mt.waitForWorkTimed(100 * std.time.ns_per_ms);
     mt.unlockWork();
     t.join();
