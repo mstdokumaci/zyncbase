@@ -147,47 +147,6 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: D
     };
 }
 
-pub fn decodeRecord(
-    allocator: Allocator,
-    stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema.Table,
-) !Record {
-    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
-
-    var values = try allocator.alloc(Value, col_count);
-    var i: usize = 0;
-    errdefer {
-        for (values[0..i]) |value| value.deinit(allocator);
-        allocator.free(values);
-    }
-
-    while (i < col_count) : (i += 1) {
-        const field = table_metadata.fields[i];
-        const val = try sql.typedValueFromColumn(allocator, stmt, @intCast(i), field);
-        errdefer val.deinit(allocator);
-        values[i] = val;
-    }
-    return Record{
-        .values = values,
-    };
-}
-
-/// Step a prepared statement and return a decoded record if a row is available,
-/// or null if execution completed without results.  Returns a classified error
-/// on any other step result.
-pub fn stepReturning(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema.Table,
-) !?Record {
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
-    return null;
-}
-
 pub fn execSelectDocument(
     allocator: Allocator,
     db: *sqlite.Db,
@@ -207,7 +166,7 @@ pub fn execSelectDocument(
         }
     }
 
-    return try stepReturning(allocator, db, stmt, table_metadata);
+    return try sql.fetchRecord(allocator, db, stmt, table_metadata);
 }
 
 pub fn execQuery(
@@ -232,11 +191,11 @@ pub fn execQuery(
     }
 
     while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
-
-        try records_list.append(allocator, try decodeRecord(allocator, stmt, table_metadata));
+        if (try sql.fetchRecord(allocator, db, stmt, table_metadata)) |rec| {
+            try records_list.append(allocator, rec);
+        } else {
+            break;
+        }
     }
 
     const has_more = if (requested_limit) |limit_u32| blk: {

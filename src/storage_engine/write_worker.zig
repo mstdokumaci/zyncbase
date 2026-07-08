@@ -1081,7 +1081,7 @@ pub const WriteWorker = struct {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
+        return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
     }
 
     fn executeUpdate(
@@ -1115,7 +1115,7 @@ pub const WriteWorker = struct {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
+        return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
     }
 
     fn executeDelete(
@@ -1136,6 +1136,6 @@ pub const WriteWorker = struct {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
+        return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
     }
 };

@@ -332,6 +332,44 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
     };
 }
 
+fn decodeRecord(
+    allocator: Allocator,
+    stmt: *sqlite.c.sqlite3_stmt,
+    table_metadata: *const schema.Table,
+) !typed.Record {
+    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
+    if (col_count != table_metadata.fields.len) return errors.StorageError.ColumnCountMismatch;
+
+    var values = try allocator.alloc(typed.Value, col_count);
+    var i: usize = 0;
+    errdefer {
+        for (values[0..i]) |value| value.deinit(allocator);
+        allocator.free(values);
+    }
+
+    while (i < col_count) : (i += 1) {
+        const field = table_metadata.fields[i];
+        const val = try typedValueFromColumn(allocator, stmt, @intCast(i), field);
+        errdefer val.deinit(allocator);
+        values[i] = val;
+    }
+    return typed.Record{
+        .values = values,
+    };
+}
+
+pub fn fetchRecord(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
+    table_metadata: *const schema.Table,
+) !?typed.Record {
+    const rc = sqlite.c.sqlite3_step(stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
+    return null;
+}
+
 pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     db.exec(
         "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
