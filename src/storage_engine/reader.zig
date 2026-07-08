@@ -173,6 +173,21 @@ pub fn decodeRecord(
     };
 }
 
+/// Step a prepared statement and return a decoded record if a row is available,
+/// or null if execution completed without results.  Returns a classified error
+/// on any other step result.
+pub fn stepReturning(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
+    table_metadata: *const schema.Table,
+) !?Record {
+    const rc = sqlite.c.sqlite3_step(stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
+    return null;
+}
+
 pub fn execSelectDocument(
     allocator: Allocator,
     db: *sqlite.Db,
@@ -182,9 +197,7 @@ pub fn execSelectDocument(
     table_metadata: *const schema.Table,
     guard_values: ?[]const Value,
 ) !?Record {
-    const id_bytes = typed.docIdToBytes(id);
-    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    try sql.bindDocIdNamespace(stmt, db, 1, id, namespace_id);
 
     var bind_idx: c_int = 3;
     if (guard_values) |vals| {
@@ -194,11 +207,7 @@ pub fn execSelectDocument(
         }
     }
 
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
-
-    return try decodeRecord(allocator, stmt, table_metadata);
+    return try stepReturning(allocator, db, stmt, table_metadata);
 }
 
 pub fn execQuery(

@@ -16,48 +16,25 @@ pub const ReaderNode = struct {
     stmt_cache: sql.StatementCache,
 };
 
+fn pragmaChecked(db: *sqlite.Db, comptime name: []const u8, comptime value: []const u8) !void {
+    _ = db.pragma(void, .{}, name, value) catch |err| {
+        const classified_err = errors.classifyError(err);
+        errors.logDatabaseError("configureDatabase " ++ name, classified_err, "");
+        return classified_err;
+    };
+}
+
 pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     if (is_writer) {
-        _ = db.pragma(void, .{}, "journal_mode", "wal") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("configureDatabase journal_mode", classified_err, "");
-            return classified_err;
-        };
-
-        _ = db.pragma(void, .{}, "wal_autocheckpoint", "1000") catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
-            return classified_err;
-        };
+        try pragmaChecked(db, "journal_mode", "wal");
+        try pragmaChecked(db, "wal_autocheckpoint", "1000");
     }
 
-    _ = db.pragma(void, .{}, "busy_timeout", "5000") catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("configureDatabase busy_timeout", classified_err, "");
-        return classified_err;
-    };
-
-    _ = db.pragma(void, .{}, "read_uncommitted", "true") catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("configureDatabase read_uncommitted", classified_err, "");
-        return classified_err;
-    };
-
-    _ = db.pragma(void, .{}, "synchronous", "normal") catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("configureDatabase synchronous", classified_err, "");
-        return classified_err;
-    };
-    _ = db.pragma(void, .{}, "cache_size", "-64000") catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("configureDatabase cache_size", classified_err, "");
-        return classified_err;
-    };
-    _ = db.pragma(void, .{}, "mmap_size", "268435456") catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("configureDatabase mmap_size", classified_err, "");
-        return classified_err;
-    };
+    try pragmaChecked(db, "busy_timeout", "5000");
+    try pragmaChecked(db, "read_uncommitted", "true");
+    try pragmaChecked(db, "synchronous", "normal");
+    try pragmaChecked(db, "cache_size", "-64000");
+    try pragmaChecked(db, "mmap_size", "268435456");
 }
 
 pub fn getWalSize(allocator: Allocator, db_path: []const u8, in_memory: bool) !usize {

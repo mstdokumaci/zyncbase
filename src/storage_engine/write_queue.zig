@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const typed = @import("../typed.zig");
+const filter_sql = @import("filter_sql.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
 
@@ -57,14 +58,8 @@ pub const BatchEntry = struct {
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
         allocator.free(self.sql);
-        if (self.values) |vals| {
-            for (vals) |v| v.deinit(allocator);
-            allocator.free(vals);
-        }
-        if (self.guard_values) |vals| {
-            for (vals) |v| v.deinit(allocator);
-            allocator.free(vals);
-        }
+        if (self.values) |vals| filter_sql.deinitValueSlice(allocator, vals);
+        if (self.guard_values) |vals| filter_sql.deinitValueSlice(allocator, vals);
     }
 };
 
@@ -145,28 +140,17 @@ pub const WriteOp = union(enum) {
         switch (self) {
             .upsert => |op| {
                 allocator.free(op.sql);
-                for (op.values) |value| value.deinit(allocator);
-                allocator.free(op.values);
-                if (op.guard_values) |guard_vals| {
-                    for (guard_vals) |v| v.deinit(allocator);
-                    allocator.free(guard_vals);
-                }
+                filter_sql.deinitValueSlice(allocator, op.values);
+                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
             },
             .update => |op| {
                 allocator.free(op.sql);
-                for (op.values) |value| value.deinit(allocator);
-                allocator.free(op.values);
-                if (op.guard_values) |guard_vals| {
-                    for (guard_vals) |v| v.deinit(allocator);
-                    allocator.free(guard_vals);
-                }
+                filter_sql.deinitValueSlice(allocator, op.values);
+                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
             },
             .delete => |op| {
                 allocator.free(op.sql);
-                if (op.guard_values) |guard_vals| {
-                    for (guard_vals) |v| v.deinit(allocator);
-                    allocator.free(guard_vals);
-                }
+                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
             },
             .resolve_session => |op| {
                 allocator.free(op.namespace);

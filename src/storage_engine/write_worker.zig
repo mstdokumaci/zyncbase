@@ -30,6 +30,21 @@ const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
 
+/// Classify a database error, log it, and optionally deinit an old record.
+/// Used as the catch handler in executeBatch* / handle*Entry functions.
+fn mapAndLogError(
+    label: []const u8,
+    err: anyerror,
+    table_name: []const u8,
+    allocator: Allocator,
+    old_record: ?Record,
+) anyerror {
+    if (old_record) |r| r.deinit(allocator);
+    const classified_err = errors.classifyError(err);
+    errors.logDatabaseError(label, classified_err, table_name);
+    return classified_err;
+}
+
 pub const WriteWorker = struct {
     allocator: Allocator,
     conn: sqlite.Db,
@@ -415,10 +430,7 @@ pub const WriteWorker = struct {
         const old_record = self.prefetchOldRecord("pre-UPSERT", iop, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
-            if (old_record) |r| r.deinit(self.allocator);
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatch UPSERT", err, table_metadata.name, self.allocator, old_record);
         };
 
         return applyWriteResult(self, ctx, iop.table_index, namespace_id, iop.id, iop.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
@@ -436,10 +448,7 @@ pub const WriteWorker = struct {
         const old_record = self.prefetchOldRecord("pre-UPDATE", uop, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
-            if (old_record) |r| r.deinit(self.allocator);
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatch UPDATE", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatch UPDATE", err, table_metadata.name, self.allocator, old_record);
         };
 
         return applyWriteResult(self, ctx, uop.table_index, namespace_id, uop.id, uop.guard_values != null, has_write_ack, false, false, old_record, maybe_new_record);
@@ -458,9 +467,7 @@ pub const WriteWorker = struct {
         // something, or null when no row matched.  We do NOT need a pre-fetch here
         // because the deleted row is returned by the SQL statement itself (RETURNING).
         const maybe_old_record = executeDelete(self, dop, namespace_id, table_metadata) catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatch DELETE", err, table_metadata.name, self.allocator, null);
         };
 
         // Guard semantics for delete: if the row was not affected and a guard is
@@ -883,10 +890,7 @@ pub const WriteWorker = struct {
         const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
-            if (old_record) |r| r.deinit(self.allocator);
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatchOp UPSERT", err, table_metadata.name, self.allocator, old_record);
         };
 
         const succeeded = try applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, ctx.is_confirmed, true, false, old_record, maybe_new_record);
@@ -904,10 +908,7 @@ pub const WriteWorker = struct {
         const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id, ctx.sql_cache);
 
         const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
-            if (old_record) |r| r.deinit(self.allocator);
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp UPDATE", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatchOp UPDATE", err, table_metadata.name, self.allocator, old_record);
         };
 
         const succeeded = try applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, ctx.is_confirmed, false, false, old_record, maybe_new_record);
@@ -924,9 +925,7 @@ pub const WriteWorker = struct {
 
         // executeDelete returns the old row via RETURNING — no pre-fetch needed.
         const maybe_old_record = executeDelete(self, entry, namespace_id, table_metadata) catch |err| {
-            const classified_err = errors.classifyError(err);
-            errors.logDatabaseError("executeBatchOp DELETE", classified_err, table_metadata.name);
-            return classified_err;
+            return mapAndLogError("executeBatchOp DELETE", err, table_metadata.name, self.allocator, null);
         };
 
         // Guard semantics for delete: distinguish "row doesn't exist" (idempotent
@@ -1053,11 +1052,8 @@ pub const WriteWorker = struct {
         const stmt = mstmt.stmt;
 
         var bind_idx: c_int = 1;
-        const id_bytes = typed.docIdToBytes(op.id);
-        if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
+        try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
+        bind_idx += 2;
         const owner_id_bytes = typed.docIdToBytes(owner_id);
         if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
@@ -1085,12 +1081,7 @@ pub const WriteWorker = struct {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
-        }
-        if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
-        return null;
+        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
     }
 
     fn executeUpdate(
@@ -1117,23 +1108,14 @@ pub const WriteWorker = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
-        const id_bytes = typed.docIdToBytes(op.id);
-        if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
-
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
+        try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
+        bind_idx += 2;
 
         if (op.guard_values) |guard_vals| {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
-        }
-        if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
-        return null;
+        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
     }
 
     fn executeDelete(
@@ -1147,21 +1129,13 @@ pub const WriteWorker = struct {
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
-        const id_bytes = typed.docIdToBytes(op.id);
-        if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-
-        if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        try sql.bindDocIdNamespace(stmt, &self.conn, 1, op.id, namespace_id);
 
         var bind_idx: c_int = 3;
         if (op.guard_values) |guard_vals| {
             try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
-        }
-        if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
-        return null;
+        return try reader.stepReturning(self.allocator, &self.conn, stmt, table_metadata);
     }
 };

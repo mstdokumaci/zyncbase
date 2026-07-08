@@ -283,6 +283,20 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
+/// Bind a document id blob at `index` and a namespace id integer at `index + 1`.
+/// The common id+namespace prefix used by select/delete statements.
+pub fn bindDocIdNamespace(
+    stmt: *sqlite.c.sqlite3_stmt,
+    db: *sqlite.Db,
+    index: c_int,
+    id: typed.DocId,
+    namespace_id: i64,
+) !void {
+    const id_bytes = typed.docIdToBytes(id);
+    if (bindBlobTransient(stmt, index, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, index + 1, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+}
+
 pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     return switch (col_type) {
