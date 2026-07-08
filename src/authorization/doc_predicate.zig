@@ -223,7 +223,7 @@ fn comparisonToQueryCondition(
 
     return .{
         .field_index = field_index,
-        .op = mapToQueryOp(comp.op),
+        .op = comp.op,
         .value = try rhs_value.intoOwned(allocator),
         .field_type = field_meta.storage_type,
         .items_type = field_meta.items_type,
@@ -325,12 +325,12 @@ const ValueType = struct {
 };
 
 fn validateLiteralValue(
-    op: types.ComparisonOp,
+    op: query_ast.Operator,
     lhs_type: ValueType,
     value: Value,
 ) DocPredicateError!void {
     switch (op) {
-        .in_set, .not_in_set => {
+        .in, .notIn => {
             if (value != .array) return error.InvalidValue;
             try validateScalarItems(try lhs_type.membershipItemsType(), value.array);
         },
@@ -357,7 +357,7 @@ fn validateLiteralValue(
 }
 
 fn validateContextVarValue(
-    op: types.ComparisonOp,
+    op: query_ast.Operator,
     lhs_type: ValueType,
     ctx_var: types.ContextVar,
     table: *const schema.Table,
@@ -390,11 +390,11 @@ fn resolveContextVarType(ctx_var: types.ContextVar, table: *const schema.Table) 
 }
 
 fn validateRhsType(
-    op: types.ComparisonOp,
+    op: query_ast.Operator,
     lhs_type: ValueType,
     rhs_type: ValueType,
 ) DocPredicateError!void {
-    if (op == .in_set or op == .not_in_set) {
+    if (op == .in or op == .notIn) {
         if (rhs_type.storage_type != .array) return error.InvalidValue;
         try validateItemsType(try lhs_type.membershipItemsType(), rhs_type.items_type);
         return;
@@ -440,26 +440,14 @@ fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) D
     }
 }
 
-fn operatorAllowedForField(op: types.ComparisonOp, field_type: schema.FieldType) bool {
+fn operatorAllowedForField(op: query_ast.Operator, field_type: schema.FieldType) bool {
     return switch (op) {
         .eq, .ne => true,
         .gt, .gte, .lt, .lte => field_type != .array,
         .contains => field_type == .text or field_type == .array,
-        .in_set, .not_in_set => true,
-    };
-}
-
-fn mapToQueryOp(op: types.ComparisonOp) query_ast.Operator {
-    return switch (op) {
-        .eq => .eq,
-        .ne => .ne,
-        .gt => .gt,
-        .gte => .gte,
-        .lt => .lt,
-        .lte => .lte,
-        .in_set => .in,
-        .not_in_set => .notIn,
-        .contains => .contains,
+        .in, .notIn => true,
+        // Query-only operators not produced by the auth parser.
+        .startsWith, .endsWith, .isNull, .isNotNull => false,
     };
 }
 

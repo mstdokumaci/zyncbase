@@ -251,7 +251,7 @@ test "evaluateCondition logical_or short-circuits on allow" {
     try testing.expect(result == .allow);
 }
 
-test "evaluateCondition in_set works with array" {
+test "evaluateCondition in works with array" {
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -263,7 +263,7 @@ test "evaluateCondition in_set works with array" {
 
     const cond = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try arena_allocator.dupe(u8, "tenant_id") },
-        .op = .in_set,
+        .op = .in,
         .rhs = .{ .literal = .{ .array = arr } },
     } };
     // No defer deinit — all memory is arena-owned
@@ -664,21 +664,21 @@ test "validateDocPredicate validates context variable shape by operator" {
     });
     defer table.deinit(allocator);
 
-    var valid_in_set = authorization.Condition{ .comparison = .{
+    var valid_in = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
-        .op = .in_set,
+        .op = .in,
         .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } },
     } };
-    defer valid_in_set.deinit(allocator);
-    try authorization.validateDocPredicate(valid_in_set, &table);
+    defer valid_in.deinit(allocator);
+    try authorization.validateDocPredicate(valid_in, &table);
 
-    var scalar_in_set = authorization.Condition{ .comparison = .{
+    var scalar_in = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
-        .op = .in_set,
+        .op = .in,
         .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } },
     } };
-    defer scalar_in_set.deinit(allocator);
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(scalar_in_set, &table));
+    defer scalar_in.deinit(allocator);
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(scalar_in, &table));
 
     var array_contains_array = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
@@ -990,7 +990,7 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 // validateDocPredicate, which routes through validateDocComparison →
 // validateLiteralValue.
 
-test "validateLiteralValue in_set with valid array of text scalars passes" {
+test "validateLiteralValue in with valid array of text scalars passes" {
     const allocator = testing.allocator;
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -1003,7 +1003,7 @@ test "validateLiteralValue in_set with valid array of text scalars passes" {
     items[1] = .{ .text = try allocator.dupe(u8, "pending") };
     var condition = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .in_set,
+        .op = .in,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);
@@ -1011,7 +1011,7 @@ test "validateLiteralValue in_set with valid array of text scalars passes" {
     try authorization.validateDocPredicate(condition, &table);
 }
 
-test "validateLiteralValue in_set with non-array value returns error.InvalidValue" {
+test "validateLiteralValue in with non-array value returns error.InvalidValue" {
     const allocator = testing.allocator;
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -1021,7 +1021,7 @@ test "validateLiteralValue in_set with non-array value returns error.InvalidValu
 
     var condition = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .in_set,
+        .op = .in,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "active") } } },
     } };
     defer condition.deinit(allocator);
@@ -1029,7 +1029,7 @@ test "validateLiteralValue in_set with non-array value returns error.InvalidValu
     try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
 }
 
-test "validateLiteralValue not_in_set with valid array of text scalars passes" {
+test "validateLiteralValue notIn with valid array of text scalars passes" {
     const allocator = testing.allocator;
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -1041,7 +1041,7 @@ test "validateLiteralValue not_in_set with valid array of text scalars passes" {
     items[0] = .{ .text = try allocator.dupe(u8, "banned") };
     var condition = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .not_in_set,
+        .op = .notIn,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);

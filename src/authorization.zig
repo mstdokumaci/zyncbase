@@ -1,4 +1,5 @@
 const types = @import("authorization/types.zig");
+const query_ast = @import("query_ast.zig");
 const defaults = @import("authorization/defaults.zig");
 const pattern_mod = @import("authorization/pattern.zig");
 const evaluate_mod = @import("authorization/evaluate.zig");
@@ -13,7 +14,7 @@ pub const NamespaceRule = types.NamespaceRule;
 pub const StoreRule = types.StoreRule;
 pub const Condition = types.Condition;
 pub const Comparison = types.Comparison;
-pub const ComparisonOp = types.ComparisonOp;
+pub const Operator = query_ast.Operator;
 pub const ContextVar = types.ContextVar;
 pub const VarScope = types.VarScope;
 pub const Value = types.Value;

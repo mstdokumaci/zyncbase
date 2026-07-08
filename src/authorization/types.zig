@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("../typed.zig");
+const query_ast = @import("../query_ast.zig");
 const Value = typed.Value;
 
 /// Result of matching namespace against pattern.
@@ -121,25 +122,13 @@ pub const Condition = union(enum) {
 
 pub const Comparison = struct {
     lhs: ContextVar,
-    op: ComparisonOp,
+    op: query_ast.Operator,
     rhs: Operand,
 
     pub fn deinit(self: *Comparison, allocator: Allocator) void {
         self.lhs.deinit(allocator);
         self.rhs.deinit(allocator);
     }
-};
-
-pub const ComparisonOp = enum {
-    eq,
-    ne,
-    gt,
-    gte,
-    lt,
-    lte,
-    in_set,
-    not_in_set,
-    contains,
 };
 
 pub const ContextVar = struct {
