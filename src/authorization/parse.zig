@@ -4,6 +4,7 @@ const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const doc_predicate = @import("doc_predicate.zig");
 const schema_mod = @import("../schema.zig");
+const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
@@ -225,16 +226,16 @@ fn parseContextVar(allocator: Allocator, raw: []const u8) !types.ContextVar {
     return .{ .scope = scope, .field = field };
 }
 
-fn parseComparisonOp(op_str: []const u8) !types.ComparisonOp {
-    const map = std.StaticStringMap(types.ComparisonOp).initComptime(.{
+fn parseComparisonOp(op_str: []const u8) !query_ast.Operator {
+    const map = std.StaticStringMap(query_ast.Operator).initComptime(.{
         .{ "eq", .eq },
         .{ "ne", .ne },
         .{ "gt", .gt },
         .{ "gte", .gte },
         .{ "lt", .lt },
         .{ "lte", .lte },
-        .{ "in", .in_set },
-        .{ "notIn", .not_in_set },
+        .{ "in", .in },
+        .{ "notIn", .notIn },
         .{ "contains", .contains },
     });
     return map.get(op_str) orelse error.InvalidComparisonOperator;

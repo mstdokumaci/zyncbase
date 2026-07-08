@@ -3,6 +3,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed.zig");
+const query_ast = @import("../query_ast.zig");
 const schema_mod = @import("../schema.zig");
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
@@ -370,7 +371,7 @@ inline fn binarySearchScalar(haystack: []const ScalarValue, needle: ScalarValue)
     return std.sort.binarySearch(ScalarValue, haystack, needle, ScalarValue.order) != null;
 }
 
-fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
+fn compareValues(lhs: Value, op: query_ast.Operator, rhs: Value) bool {
     return switch (op) {
         .eq => lhs.eql(rhs),
         .ne => !lhs.eql(rhs),
@@ -384,11 +385,11 @@ fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
             const ord = lhs.order(rhs);
             break :blk ord == .lt or ord == .eq;
         },
-        .in_set => blk: {
+        .in => blk: {
             const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
             break :blk binarySearchScalar(pair.array, pair.scalar);
         },
-        .not_in_set => blk: {
+        .notIn => blk: {
             const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
             break :blk !binarySearchScalar(pair.array, pair.scalar);
         },
@@ -396,5 +397,8 @@ fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
             const pair = extractArrayScalar(lhs, rhs) orelse break :blk false;
             break :blk binarySearchScalar(pair.array, pair.scalar);
         },
+        // Auth parser only produces the 9 documented ops above; these query-only
+        // ops cannot reach here. unreachable keeps the switch exhaustive.
+        else => unreachable,
     };
 }
