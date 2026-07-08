@@ -5,6 +5,20 @@ const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const typed = @import("typed.zig");
 const json_read = @import("json/read.zig");
 
+/// Maps JWT RSA/PSS algorithm names to their OpenSSL hash digest names.
+const rsa_hash_alg = std.StaticStringMap([:0]const u8).initComptime(.{
+    .{ "RS256", "SHA256" }, .{ "PS256", "SHA256" },
+    .{ "RS384", "SHA384" }, .{ "PS384", "SHA384" },
+    .{ "RS512", "SHA512" }, .{ "PS512", "SHA512" },
+});
+
+/// Maps JWK EC curve names to their OpenSSL curve (group) names.
+const ec_curve_name = std.StaticStringMap([:0]const u8).initComptime(.{
+    .{ "P-256", "P-256" },
+    .{ "P-384", "P-384" },
+    .{ "P-521", "P-521" },
+});
+
 pub const Jwk = struct {
     kty: []const u8,
     kid: []const u8,
@@ -339,23 +353,28 @@ fn verifyTokenSignature(
     }
 }
 
+const HmacVariant = struct {
+    name: []const u8,
+    T: type,
+    len: u32,
+};
+
+const hmac_variants = [_]HmacVariant{
+    .{ .name = "HS256", .T = std.crypto.auth.hmac.sha2.HmacSha256, .len = 32 },
+    .{ .name = "HS384", .T = std.crypto.auth.hmac.sha2.HmacSha384, .len = 48 },
+    .{ .name = "HS512", .T = std.crypto.auth.hmac.sha2.HmacSha512, .len = 64 },
+};
+
 fn verifyHmacSignature(alg: []const u8, secret: []const u8, msg: []const u8, sig_bytes: []const u8) !bool {
-    if (std.mem.eql(u8, alg, "HS256")) {
-        if (sig_bytes.len != 32) return false;
-        var computed: [32]u8 = undefined;
-        std.crypto.auth.hmac.sha2.HmacSha256.create(&computed, msg, secret);
-        return std.crypto.timing_safe.eql([32]u8, computed, sig_bytes[0..32].*);
-    } else if (std.mem.eql(u8, alg, "HS384")) {
-        if (sig_bytes.len != 48) return false;
-        var computed: [48]u8 = undefined;
-        std.crypto.auth.hmac.sha2.HmacSha384.create(&computed, msg, secret);
-        return std.crypto.timing_safe.eql([48]u8, computed, sig_bytes[0..48].*);
-    } else if (std.mem.eql(u8, alg, "HS512")) {
-        if (sig_bytes.len != 64) return false;
-        var computed: [64]u8 = undefined;
-        std.crypto.auth.hmac.sha2.HmacSha512.create(&computed, msg, secret);
-        return std.crypto.timing_safe.eql([64]u8, computed, sig_bytes[0..64].*);
-    } else return error.UnsupportedAlgorithm;
+    inline for (hmac_variants) |v| {
+        if (std.mem.eql(u8, alg, v.name)) {
+            if (sig_bytes.len != v.len) return false;
+            var computed: [v.len]u8 = undefined;
+            v.T.create(&computed, msg, secret);
+            return std.crypto.timing_safe.eql([v.len]u8, computed, sig_bytes[0..v.len].*);
+        }
+    }
+    return error.UnsupportedAlgorithm;
 }
 
 fn validateStandardClaims(config: JwtValidationConfig, payload: std.json.Value) !void {
@@ -512,14 +531,7 @@ fn verifyAsymmetricSignature(
         const e_bytes = try decodeBase64Url(allocator, e_b64);
         defer allocator.free(e_bytes);
 
-        const hash_alg: [:0]const u8 = if (std.mem.eql(u8, alg, "RS256") or std.mem.eql(u8, alg, "PS256"))
-            "SHA256"
-        else if (std.mem.eql(u8, alg, "RS384") or std.mem.eql(u8, alg, "PS384"))
-            "SHA384"
-        else if (std.mem.eql(u8, alg, "RS512") or std.mem.eql(u8, alg, "PS512"))
-            "SHA512"
-        else
-            return error.UnsupportedAlgorithm;
+        const hash_alg: [:0]const u8 = rsa_hash_alg.get(alg) orelse return error.UnsupportedAlgorithm;
 
         const verified = if (std.mem.startsWith(u8, alg, "PS"))
             c.openssl_verify_rsa_pss(
@@ -556,14 +568,7 @@ fn verifyAsymmetricSignature(
         const y_bytes = try decodeBase64Url(allocator, y_b64);
         defer allocator.free(y_bytes);
 
-        const curve_name: [:0]const u8 = if (std.mem.eql(u8, crv, "P-256"))
-            "P-256"
-        else if (std.mem.eql(u8, crv, "P-384"))
-            "P-384"
-        else if (std.mem.eql(u8, crv, "P-521"))
-            "P-521"
-        else
-            return error.UnsupportedCurve;
+        const curve_name: [:0]const u8 = ec_curve_name.get(crv) orelse return error.UnsupportedCurve;
 
         const verified = c.openssl_verify_ec(
             curve_name,
