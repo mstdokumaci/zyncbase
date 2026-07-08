@@ -5,13 +5,11 @@ const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
-const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
 const storage_cache = @import("cache.zig");
 const SqlBuf = @import("../sql_buf.zig").SqlBuf;
 
-const StorageError = errors.StorageError;
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Cursor = typed.Cursor;
