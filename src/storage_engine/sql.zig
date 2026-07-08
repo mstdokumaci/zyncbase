@@ -283,6 +283,20 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
+/// Bind a document id blob at `index` and a namespace id integer at `index + 1`.
+/// The common id+namespace prefix used by select/delete statements.
+pub fn bindDocIdNamespace(
+    stmt: *sqlite.c.sqlite3_stmt,
+    db: *sqlite.Db,
+    index: c_int,
+    id: typed.DocId,
+    namespace_id: i64,
+) !void {
+    const id_bytes = typed.docIdToBytes(id);
+    if (bindBlobTransient(stmt, index, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, index + 1, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+}
+
 pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     return switch (col_type) {
@@ -316,6 +330,44 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
         },
         else => .nil,
     };
+}
+
+fn decodeRecord(
+    allocator: Allocator,
+    stmt: *sqlite.c.sqlite3_stmt,
+    table_metadata: *const schema.Table,
+) !typed.Record {
+    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
+    if (col_count != table_metadata.fields.len) return errors.StorageError.ColumnCountMismatch;
+
+    var values = try allocator.alloc(typed.Value, col_count);
+    var i: usize = 0;
+    errdefer {
+        for (values[0..i]) |value| value.deinit(allocator);
+        allocator.free(values);
+    }
+
+    while (i < col_count) : (i += 1) {
+        const field = table_metadata.fields[i];
+        const val = try typedValueFromColumn(allocator, stmt, @intCast(i), field);
+        errdefer val.deinit(allocator);
+        values[i] = val;
+    }
+    return typed.Record{
+        .values = values,
+    };
+}
+
+pub fn fetchRecord(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
+    table_metadata: *const schema.Table,
+) !?typed.Record {
+    const rc = sqlite.c.sqlite3_step(stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
+    return null;
 }
 
 pub fn ensureNamespaceTable(db: *sqlite.Db) !void {

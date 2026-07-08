@@ -633,7 +633,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
         };
 
         const values = try self.cloneColumnValues(columns);
@@ -682,7 +682,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
         };
 
         const values = try self.cloneColumnValues(columns);
@@ -762,7 +762,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
 
         const values = try self.cloneColumnValues(columns);
         errdefer {
@@ -799,7 +799,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
 
         const values = try self.cloneColumnValues(columns);
         errdefer {
@@ -836,7 +836,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
 
         return .{
             .kind = .delete,
@@ -1039,7 +1039,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
         };
 
         const op = WriteOp{

@@ -15,6 +15,7 @@ pub const ScalarValue = types.ScalarValue;
 pub const Value = types.Value;
 pub const Record = types.Record;
 pub const Cursor = types.Cursor;
+pub const deinitValueSlice = types.deinitValueSlice;
 
 pub const valueFromPayload = codec.fromPayload;
 pub const valueFromJson = codec.fromJson;

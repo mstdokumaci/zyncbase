@@ -14,7 +14,7 @@ pub const RenderedPredicate = struct {
 
     pub fn deinit(self: *RenderedPredicate, allocator: Allocator) void {
         if (self.values) |values| {
-            deinitValueSlice(allocator, values);
+            typed.deinitValueSlice(allocator, values);
         }
         if (self.sql) |sql| {
             allocator.free(sql);
@@ -38,11 +38,6 @@ pub const RenderedPredicate = struct {
         return values;
     }
 };
-
-pub fn deinitValueSlice(allocator: Allocator, values: []Value) void {
-    for (values) |value| value.deinit(allocator);
-    allocator.free(values);
-}
 
 pub fn appendClonedValue(
     allocator: Allocator,

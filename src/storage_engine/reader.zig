@@ -5,13 +5,11 @@ const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
-const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
 const storage_cache = @import("cache.zig");
 const SqlBuf = @import("../sql_buf.zig").SqlBuf;
 
-const StorageError = errors.StorageError;
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Cursor = typed.Cursor;
@@ -147,32 +145,6 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: D
     };
 }
 
-pub fn decodeRecord(
-    allocator: Allocator,
-    stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema.Table,
-) !Record {
-    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
-
-    var values = try allocator.alloc(Value, col_count);
-    var i: usize = 0;
-    errdefer {
-        for (values[0..i]) |value| value.deinit(allocator);
-        allocator.free(values);
-    }
-
-    while (i < col_count) : (i += 1) {
-        const field = table_metadata.fields[i];
-        const val = try sql.typedValueFromColumn(allocator, stmt, @intCast(i), field);
-        errdefer val.deinit(allocator);
-        values[i] = val;
-    }
-    return Record{
-        .values = values,
-    };
-}
-
 pub fn execSelectDocument(
     allocator: Allocator,
     db: *sqlite.Db,
@@ -182,9 +154,7 @@ pub fn execSelectDocument(
     table_metadata: *const schema.Table,
     guard_values: ?[]const Value,
 ) !?Record {
-    const id_bytes = typed.docIdToBytes(id);
-    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    try sql.bindDocIdNamespace(stmt, db, 1, id, namespace_id);
 
     var bind_idx: c_int = 3;
     if (guard_values) |vals| {
@@ -194,11 +164,7 @@ pub fn execSelectDocument(
         }
     }
 
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
-
-    return try decodeRecord(allocator, stmt, table_metadata);
+    return try sql.fetchRecord(allocator, db, stmt, table_metadata);
 }
 
 pub fn execQuery(
@@ -223,11 +189,11 @@ pub fn execQuery(
     }
 
     while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
-
-        try records_list.append(allocator, try decodeRecord(allocator, stmt, table_metadata));
+        if (try sql.fetchRecord(allocator, db, stmt, table_metadata)) |rec| {
+            try records_list.append(allocator, rec);
+        } else {
+            break;
+        }
     }
 
     const has_more = if (requested_limit) |limit_u32| blk: {
