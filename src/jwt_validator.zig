@@ -356,7 +356,7 @@ fn verifyTokenSignature(
 const HmacVariant = struct {
     name: []const u8,
     T: type,
-    len: u32,
+    len: usize,
 };
 
 const hmac_variants = [_]HmacVariant{
