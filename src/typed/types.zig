@@ -171,6 +171,13 @@ pub const Value = union(enum) {
     }
 };
 
+/// Deinit each value in a slice, then free the slice itself.
+/// This is the bulk ownership primitive for `[]Value` slices.
+pub fn deinitValueSlice(allocator: Allocator, values: []Value) void {
+    for (values) |value| value.deinit(allocator);
+    allocator.free(values);
+}
+
 fn scalarValueLessThan(_: void, a: ScalarValue, b: ScalarValue) bool {
     return a.lessThan(b);
 }

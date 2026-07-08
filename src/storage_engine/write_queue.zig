@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
 const typed = @import("../typed.zig");
-const filter_sql = @import("filter_sql.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
 
@@ -58,8 +57,8 @@ pub const BatchEntry = struct {
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
         allocator.free(self.sql);
-        if (self.values) |vals| filter_sql.deinitValueSlice(allocator, vals);
-        if (self.guard_values) |vals| filter_sql.deinitValueSlice(allocator, vals);
+        if (self.values) |vals| typed.deinitValueSlice(allocator, vals);
+        if (self.guard_values) |vals| typed.deinitValueSlice(allocator, vals);
     }
 };
 
@@ -140,17 +139,17 @@ pub const WriteOp = union(enum) {
         switch (self) {
             .upsert => |op| {
                 allocator.free(op.sql);
-                filter_sql.deinitValueSlice(allocator, op.values);
-                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
+                typed.deinitValueSlice(allocator, op.values);
+                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
             },
             .update => |op| {
                 allocator.free(op.sql);
-                filter_sql.deinitValueSlice(allocator, op.values);
-                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
+                typed.deinitValueSlice(allocator, op.values);
+                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
             },
             .delete => |op| {
                 allocator.free(op.sql);
-                if (op.guard_values) |guard_vals| filter_sql.deinitValueSlice(allocator, guard_vals);
+                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
             },
             .resolve_session => |op| {
                 allocator.free(op.namespace);
