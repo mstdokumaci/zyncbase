@@ -921,7 +921,7 @@ pub const StorageEngine = struct {
             .guard_failed => return ManagedResult{ .records = &[_]Record{}, .allocator = null },
             .hit => |hit| {
                 return ManagedResult{
-                    .records = @constCast(hit.record[0..1]),
+                    .records = hit.record[0..1],
                     .handle = hit.handle,
                 };
             },

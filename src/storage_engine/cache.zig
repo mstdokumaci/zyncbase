@@ -54,7 +54,7 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: t
 }
 
 pub const CacheHit = struct {
-    record: *const typed.Record,
+    record: *typed.Record,
     handle: metadata_cache_type.Handle,
 };
 
