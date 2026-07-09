@@ -123,11 +123,11 @@ pub const Condition = union(enum) {
 pub const Comparison = struct {
     lhs: ContextVar,
     op: query_ast.Operator,
-    rhs: Operand,
+    rhs: ?Operand,
 
     pub fn deinit(self: *Comparison, allocator: Allocator) void {
         self.lhs.deinit(allocator);
-        self.rhs.deinit(allocator);
+        if (self.rhs) |rhs| rhs.deinit(allocator);
     }
 };
 

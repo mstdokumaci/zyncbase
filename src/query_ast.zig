@@ -2,6 +2,7 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const typed = @import("typed.zig");
 const Value = typed.Value;
+const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
 
 pub const Operator = enum(u8) {
@@ -18,6 +19,73 @@ pub const Operator = enum(u8) {
     notIn = 10,
     isNull = 11,
     isNotNull = 12,
+
+    /// Returns true for operators that take no right-hand side operand.
+    pub fn isNullary(self: Operator) bool {
+        return switch (self) {
+            .isNull, .isNotNull => true,
+            else => false,
+        };
+    }
+
+    /// Evaluate a nullary operator against a resolved LHS value.
+    /// Caller must ensure `self.isNullary()` is true.
+    pub fn compareNullary(self: Operator, val: Value) bool {
+        return switch (self) {
+            .isNull => val == .nil,
+            .isNotNull => val != .nil,
+            else => unreachable,
+        };
+    }
+
+    /// Evaluate a binary operator given resolved LHS and RHS values.
+    /// Returns false for type mismatches rather than erroring.
+    pub fn compare(self: Operator, lhs: Value, rhs: Value) bool {
+        return switch (self) {
+            .eq => lhs.eql(rhs),
+            .ne => !lhs.eql(rhs),
+            .gt => lhs.order(rhs) == .gt,
+            .gte => blk: {
+                const ord = lhs.order(rhs);
+                break :blk ord == .gt or ord == .eq;
+            },
+            .lt => lhs.order(rhs) == .lt,
+            .lte => blk: {
+                const ord = lhs.order(rhs);
+                break :blk ord == .lt or ord == .eq;
+            },
+            .startsWith => blk: {
+                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
+                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
+                break :blk std.ascii.startsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+            },
+            .endsWith => blk: {
+                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
+                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
+                break :blk std.ascii.endsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+            },
+            .in => blk: {
+                if (lhs != .scalar) break :blk false;
+                if (rhs != .array) break :blk false;
+                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
+            },
+            .notIn => blk: {
+                if (lhs != .scalar) break :blk false;
+                if (rhs != .array) break :blk false;
+                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
+            },
+            .contains => blk: {
+                // array.contains(scalar): binary search
+                if (lhs == .array and rhs == .scalar)
+                    break :blk std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
+                // text.contains(text): case-insensitive substring
+                if (lhs == .scalar and lhs.scalar == .text and rhs == .scalar and rhs.scalar == .text)
+                    break :blk std.ascii.indexOfIgnoreCase(lhs.scalar.text, rhs.scalar.text) != null;
+                break :blk false;
+            },
+            .isNull, .isNotNull => unreachable, // use compareNullary
+        };
+    }
 };
 
 pub const Condition = struct {

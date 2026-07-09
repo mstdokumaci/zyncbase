@@ -3,11 +3,9 @@ const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed.zig");
-const query_ast = @import("../query_ast.zig");
 const schema_mod = @import("../schema.zig");
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
-const ScalarValue = typed.ScalarValue;
 
 pub const EvalContext = struct {
     allocator: Allocator,
@@ -117,13 +115,19 @@ fn evaluateConditionWithDocInternal(condition: types.Condition, ctx: EvalContext
 }
 
 fn evaluateComparisonWithDoc(comp: types.Comparison, ctx: EvalContext) bool {
-    var lhs = resolveDocOperand(comp.lhs, ctx) orelse return false;
-    defer lhs.deinit(ctx.allocator);
+    var lhs = resolveDocOperand(comp.lhs, ctx);
+    if (lhs) |*l| {
+        defer l.deinit(ctx.allocator);
+        if (comp.op.isNullary()) return comp.op.compareNullary(l.valueView());
 
-    var rhs = resolveOperand(comp.rhs, ctx) orelse return false;
-    defer rhs.deinit(ctx.allocator);
+        var rhs = resolveOperand(comp.rhs.?, ctx) orelse return false;
+        defer rhs.deinit(ctx.allocator);
 
-    return compareValues(lhs.valueView(), comp.op, rhs.valueView());
+        return comp.op.compare(l.valueView(), rhs.valueView());
+    } else {
+        if (comp.op.isNullary()) return comp.op.compareNullary(.nil);
+        return false;
+    }
 }
 
 fn resolveDocOperand(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
@@ -250,13 +254,19 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
         return if (strict) .deny else .needs_doc_predicate;
     }
 
-    var lhs = resolveContextVar(comp.lhs, ctx) orelse return .deny;
-    defer lhs.deinit(ctx.allocator);
+    var lhs = resolveContextVar(comp.lhs, ctx);
+    if (lhs) |*l| {
+        defer l.deinit(ctx.allocator);
+        if (comp.op.isNullary()) return if (comp.op.compareNullary(l.valueView())) .allow else .deny;
 
-    var rhs = resolveOperand(comp.rhs, ctx) orelse return .deny;
-    defer rhs.deinit(ctx.allocator);
+        var rhs = resolveOperand(comp.rhs.?, ctx) orelse return .deny;
+        defer rhs.deinit(ctx.allocator);
 
-    return if (compareValues(lhs.valueView(), comp.op, rhs.valueView())) .allow else .deny;
+        return if (comp.op.compare(l.valueView(), rhs.valueView())) .allow else .deny;
+    } else {
+        if (comp.op.isNullary()) return if (comp.op.compareNullary(.nil)) .allow else .deny;
+        return .deny;
+    }
 }
 
 fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
@@ -346,59 +356,8 @@ fn findLastValuePair(pairs: []const msgpack.Payload, field_index: usize) ?msgpac
     return null;
 }
 
-const ScalarArrayPair = struct { scalar: ScalarValue, array: []const ScalarValue };
-const ArrayScalarPair = struct { array: []const ScalarValue, scalar: ScalarValue };
-
 const SessionField = enum { userId, externalId };
 const session_field_map = std.StaticStringMap(SessionField).initComptime(.{
     .{ "userId", .userId },
     .{ "externalId", .externalId },
 });
-
-inline fn extractScalarArray(lhs: Value, rhs: Value) ?ScalarArrayPair {
-    if (lhs != .scalar) return null;
-    if (rhs != .array) return null;
-    return .{ .scalar = lhs.scalar, .array = rhs.array };
-}
-
-inline fn extractArrayScalar(lhs: Value, rhs: Value) ?ArrayScalarPair {
-    if (lhs != .array) return null;
-    if (rhs != .scalar) return null;
-    return .{ .array = lhs.array, .scalar = rhs.scalar };
-}
-
-inline fn binarySearchScalar(haystack: []const ScalarValue, needle: ScalarValue) bool {
-    return std.sort.binarySearch(ScalarValue, haystack, needle, ScalarValue.order) != null;
-}
-
-fn compareValues(lhs: Value, op: query_ast.Operator, rhs: Value) bool {
-    return switch (op) {
-        .eq => lhs.eql(rhs),
-        .ne => !lhs.eql(rhs),
-        .gt => lhs.order(rhs) == .gt,
-        .gte => blk: {
-            const ord = lhs.order(rhs);
-            break :blk ord == .gt or ord == .eq;
-        },
-        .lt => lhs.order(rhs) == .lt,
-        .lte => blk: {
-            const ord = lhs.order(rhs);
-            break :blk ord == .lt or ord == .eq;
-        },
-        .in => blk: {
-            const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
-            break :blk binarySearchScalar(pair.array, pair.scalar);
-        },
-        .notIn => blk: {
-            const pair = extractScalarArray(lhs, rhs) orelse break :blk false;
-            break :blk !binarySearchScalar(pair.array, pair.scalar);
-        },
-        .contains => blk: {
-            const pair = extractArrayScalar(lhs, rhs) orelse break :blk false;
-            break :blk binarySearchScalar(pair.array, pair.scalar);
-        },
-        // Auth parser only produces the 9 documented ops above; these query-only
-        // ops cannot reach here. unreachable keeps the switch exhaustive.
-        else => unreachable,
-    };
-}
