@@ -9,25 +9,9 @@ const typed = @import("typed.zig");
 const authorization = @import("authorization.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
+const ReadKind = storage_mod.ReadKind;
+const ReadRequest = storage_mod.ReadRequest;
 const DocId = typed.DocId;
-
-/// Returns the id value if the filter is a simple `id = ?` point lookup.
-fn isIdEqualsFilter(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
-    // Must have: exactly 1 AND condition, no OR, no order, no cursor
-    const conds = filter.predicate.conditions orelse return null;
-    if (conds.len != 1) return null;
-    if (filter.predicate.or_conditions != null) return null;
-    if (filter.order_by.field_index != id_index or filter.order_by.desc) return null;
-    if (filter.after != null) return null;
-
-    const cond = conds[0];
-    if (cond.op != .eq) return null;
-    if (cond.field_index != id_index) return null;
-
-    const val = cond.value orelse return null;
-    if (val != .scalar or val.scalar != .doc_id) return null;
-    return val.scalar.doc_id;
-}
 
 /// Decode a pair-array payload into a deduplicated list of column values.
 /// Wire protocol: duplicate field index → last-wins (reverse scan, skip seen).
@@ -147,6 +131,17 @@ pub const StoreService = struct {
         write_id: ?[16]u8 = null,
     };
 
+    pub const ReadContext = struct {
+        conn_id: u64,
+        msg_id: u64,
+        session_user_id: DocId,
+        session_external_id: ?[]const u8,
+        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+        namespace: []const u8,
+        namespace_id: i64,
+        allocator: Allocator,
+    };
+
     pub const ScopedSession = struct {
         namespace_id: i64,
         user_doc_id: DocId,
@@ -184,6 +179,102 @@ pub const StoreService = struct {
     ) !void {
         if (namespace.len == 0 or external_user_id.len == 0) return error.InvalidMessageFormat;
         try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, scope_seq, namespace, external_user_id, is_presence);
+    }
+
+    pub fn enqueueRead(self: *StoreService, request: ReadRequest) !void {
+        try self.storage_engine.enqueueRead(request);
+    }
+
+    /// Builds a ReadRequest for an initial query/subscribe read.
+    /// Performs read authorization and parses the wire filter payload, then
+    /// hands ownership of the resulting allocations to the returned ReadRequest.
+    pub fn prepareQueryRead(
+        self: *StoreService,
+        ctx: ReadContext,
+        table_index: usize,
+        parsed: msgpack.Payload,
+        sub_id: ?u64,
+        kind: ReadKind,
+    ) !ReadRequest {
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
+
+        const read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+        });
+
+        var filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
+        errdefer filter.deinit(ctx.allocator);
+
+        var auth_predicate: ?query_ast.FilterPredicate = read_auth;
+        errdefer if (auth_predicate) |*p| p.deinit(ctx.allocator);
+
+        return ReadRequest{
+            .conn_id = ctx.conn_id,
+            .msg_id = ctx.msg_id,
+            .kind = kind,
+            .table_index = table_index,
+            .namespace_id = ctx.namespace_id,
+            .filter = filter,
+            .auth_predicate = auth_predicate,
+            .sub_id = sub_id,
+            .allocator = ctx.allocator,
+        };
+    }
+
+    /// Builds a ReadRequest for a load-more read over an existing subscription.
+    /// Clones the subscription's filter, decodes the cursor token, and attaches
+    /// it as the filter's `after` anchor.
+    pub fn prepareLoadMoreRead(
+        self: *StoreService,
+        ctx: ReadContext,
+        table_index: usize,
+        namespace_id: i64,
+        sub_filter: query_ast.QueryFilter,
+        sub_id: u64,
+        next_cursor: []const u8,
+    ) !ReadRequest {
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
+
+        const read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+        });
+
+        var filter_clone = try sub_filter.clone(ctx.allocator);
+        errdefer filter_clone.deinit(ctx.allocator);
+
+        const cursor = try query_parser.decodeCursorToken(
+            ctx.allocator,
+            next_cursor,
+            filter_clone.order_by.field_type,
+            filter_clone.order_by.items_type,
+        );
+        if (filter_clone.after) |*old| old.deinit(ctx.allocator);
+        filter_clone.after = cursor;
+
+        var auth_predicate: ?query_ast.FilterPredicate = read_auth;
+        errdefer if (auth_predicate) |*p| p.deinit(ctx.allocator);
+
+        return ReadRequest{
+            .conn_id = ctx.conn_id,
+            .msg_id = ctx.msg_id,
+            .kind = .load_more,
+            .table_index = table_index,
+            .namespace_id = namespace_id,
+            .filter = filter_clone,
+            .auth_predicate = auth_predicate,
+            .sub_id = sub_id,
+            .allocator = ctx.allocator,
+        };
     }
 
     pub fn setPath(
@@ -259,73 +350,6 @@ pub const StoreService = struct {
 
         entries_owned = false;
         try self.storage_engine.batchWrite(entries, ctx.conn_id, ctx.write_id);
-    }
-
-    pub fn queryCollection(
-        self: *StoreService,
-        allocator: Allocator,
-        namespace_id: i64,
-        table_index_payload: msgpack.Payload,
-        payload: msgpack.Payload,
-        auth_predicate: ?*const query_ast.FilterPredicate,
-    ) !QueryResult {
-        const table_index = msgpack.extractPayloadUsize(table_index_payload) orelse return error.InvalidMessageFormat;
-        const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
-
-        var filter = try query_parser.parseQueryFilter(allocator, self.schema, table_index, payload);
-        errdefer filter.deinit(allocator);
-
-        if (isIdEqualsFilter(&filter, schema_mod.id_field_index)) |id| {
-            var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id, auth_predicate);
-            errdefer result.deinit();
-            return .{
-                .table_index = table_index,
-                .table = table,
-                .results = result,
-                .filter = filter,
-                .next_cursor_str = null,
-            };
-        }
-
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, &filter, auth_predicate);
-        errdefer {
-            results.result.deinit();
-            if (results.next_cursor_str) |s| allocator.free(s);
-        }
-        return .{
-            .table_index = table_index,
-            .table = table,
-            .results = results.result,
-            .filter = filter,
-            .next_cursor_str = results.next_cursor_str,
-        };
-    }
-
-    pub fn queryMore(
-        self: *StoreService,
-        allocator: Allocator,
-        table_index: usize,
-        namespace_id: i64,
-        filter: *query_ast.QueryFilter,
-        next_cursor: []const u8,
-        auth_predicate: ?*const query_ast.FilterPredicate,
-    ) !CursorResult {
-        const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
-        const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
-
-        if (filter.after) |*old| old.deinit(allocator);
-        filter.after = cursor;
-
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter, auth_predicate);
-        errdefer {
-            results.result.deinit();
-            if (results.next_cursor_str) |s| allocator.free(s);
-        }
-        return .{
-            .table = table,
-            .results = results.result,
-            .next_cursor_str = results.next_cursor_str,
-        };
     }
 
     fn parseStorePath(
@@ -476,30 +500,5 @@ pub const StoreService = struct {
             auth_predicate_ptr,
             timestamp,
         );
-    }
-};
-
-pub const QueryResult = struct {
-    table_index: usize,
-    table: *const schema_mod.Table,
-    results: storage_mod.ManagedResult,
-    filter: query_ast.QueryFilter,
-    next_cursor_str: ?[]const u8 = null,
-
-    pub fn deinit(self: *QueryResult, allocator: Allocator) void {
-        self.results.deinit();
-        self.filter.deinit(allocator);
-        if (self.next_cursor_str) |s| allocator.free(s);
-    }
-};
-
-pub const CursorResult = struct {
-    table: *const schema_mod.Table,
-    results: storage_mod.ManagedResult,
-    next_cursor_str: ?[]const u8 = null,
-
-    pub fn deinit(self: *CursorResult, allocator: Allocator) void {
-        self.results.deinit();
-        if (self.next_cursor_str) |s| allocator.free(s);
     }
 };

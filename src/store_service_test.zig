@@ -4,10 +4,10 @@ const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
-const sth = @import("storage_engine_test_helpers.zig");
 const schema = @import("schema.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
+const query_parser = @import("query_parser.zig");
 const StorageError = storage_mod.StorageError;
 const typed = @import("typed.zig");
 
@@ -17,6 +17,19 @@ fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
         .namespace = "public",
         .owner_doc_id = typed.zeroDocId,
         .session_user_id = typed.zeroDocId,
+    };
+}
+
+fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
+    return .{
+        .conn_id = 1,
+        .msg_id = 1,
+        .session_user_id = typed.zeroDocId,
+        .session_external_id = null,
+        .session_claims = null,
+        .namespace = "public",
+        .namespace_id = namespace_id,
+        .allocator = std.testing.allocator,
     };
 }
 
@@ -447,12 +460,9 @@ test "StoreService: query - basic search" {
         .{ .name = "people", .fields = &.{"name"} },
     });
     defer app.deinit();
-    const people = try app.table("people");
 
-    // Seed data
-    try people.insertText(1, 1, "name", "Alice");
-    try people.insertText(2, 1, "name", "Bob");
-    try people.flush();
+    const ctx = readCtx(1);
+    const table_index = app.tableIndex("people");
 
     // Build filter: { "conditions": [ ["id", 0, 1] ] }
     const tbl_md = app.schema.table("people") orelse return error.UnknownTable;
@@ -461,13 +471,15 @@ test "StoreService: query - basic search" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try app.store_service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("people")), filter_map, null);
-    defer qr.deinit(allocator);
+    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null, .query);
+    defer read_req.deinit(allocator);
 
-    if (qr.results.records.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 1), qr.results.records.len);
-    const doc = qr.results.records[0];
-    _ = try sth.expectFieldString(doc, people.metadata, "name", "Alice");
+    try testing.expectEqual(storage_mod.ReadKind.query, read_req.kind);
+    try testing.expectEqual(table_index, read_req.table_index);
+    try testing.expectEqual(@as(i64, 1), read_req.namespace_id);
+    try testing.expectEqual(@as(?u64, null), read_req.sub_id);
+    // Filter conditions are parsed from the payload
+    try testing.expect(read_req.filter.predicate.conditions != null);
 }
 
 test "StoreService: query - orderBy and limit" {
@@ -477,13 +489,9 @@ test "StoreService: query - orderBy and limit" {
         .{ .name = "tasks", .fields = &.{"title"} },
     });
     defer app.deinit();
-    const service = &app.store_service;
 
-    const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
-    for (tasks, 0..) |t, i| {
-        try app.insertText("tasks", i + 1, 1, "title", t);
-    }
-    try app.storage_engine.flushPendingWrites();
+    const ctx = readCtx(1);
+    const table_index = app.tableIndex("tasks");
 
     // Filter: orderBy created_at DESC, limit 2
     const tbl_md = app.schema.table("tasks") orelse return error.UnknownTable;
@@ -493,12 +501,12 @@ test "StoreService: query - orderBy and limit" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("tasks")), filter_map, null);
-    defer qr.deinit(allocator);
+    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null, .query);
+    defer read_req.deinit(allocator);
 
-    if (qr.results.records.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), qr.results.records.len);
-    try testing.expect(qr.next_cursor_str != null);
+    try testing.expectEqual(@as(?u32, 2), read_req.filter.limit);
+    // created_at is the last field (index = fields.len - 1), order_by.desc = true
+    try testing.expectEqual(true, read_req.filter.order_by.desc);
 }
 
 test "StoreService: query - negative cases" {
@@ -509,26 +517,26 @@ test "StoreService: query - negative cases" {
     });
     defer app.deinit();
     const service = &app.store_service;
+    const ctx = readCtx(1);
 
-    // 1. Unknown collection
+    // 1. Unknown table
     {
         const tbl_md = app.schema.table("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
-        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(999), filter_map, null);
-        try testing.expectError(StorageError.UnknownTable, err);
+        const err = service.prepareQueryRead(ctx, 999, filter_map, null, .query);
+        try testing.expectError(error.UnknownTable, err);
     }
 
-    // 2. Unknown field
+    // 2. Unknown field in filter conditions
     {
         const tbl_md = app.schema.table("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
-            .conditions = .{.{ @as(usize, 999), 0, "val" }}, // Explicitly use an invalid field index
+            .conditions = .{.{ @as(usize, 999), 0, "val" }},
         });
         defer filter_map.free(allocator);
-
-        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map, null);
-        try testing.expectError(StorageError.UnknownField, err);
+        const err = service.prepareQueryRead(ctx, app.tableIndex("data"), filter_map, null, .query);
+        try testing.expectError(error.UnknownField, err);
     }
 }
 
@@ -539,52 +547,44 @@ test "StoreService: queryMore - pagination" {
         .{ .name = "data", .fields = &.{"val"} },
     });
     defer app.deinit();
-    const data_table = try app.table("data");
-    const service = &app.store_service;
 
-    // Seed 5 items
-    var i: usize = 0;
-    while (i < 5) : (i += 1) {
-        const str = try std.fmt.allocPrint(allocator, "item-{}", .{i});
-        defer allocator.free(str);
-        const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
-        defer allocator.free(id);
-        try data_table.insertText(i + 1, 1, "val", str);
-    }
-    try data_table.flush();
+    const ctx = readCtx(1);
+    const table_index = app.tableIndex("data");
+    const sub_id: u64 = 42;
 
-    // 1. Initial query: limit 2
+    // Build a subscription filter with limit 2
     const tbl_md = app.schema.table("data") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
         .limit = 2,
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map, null);
-    defer qr.deinit(allocator);
+    // Prepare an initial subscribe read request to get a properly parsed filter
+    var initial_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, sub_id, .subscribe);
+    defer initial_req.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 2), qr.results.records.len);
-    try testing.expect(qr.next_cursor_str != null);
+    // Encode a synthetic cursor for the load-more request.
+    // Default order_by is the id field (doc_id type), so sort_value must be a doc_id.
+    const cursor_token = try query_parser.encodeCursorToken(allocator, .{
+        .sort_value = .{ .scalar = .{ .doc_id = typed.zeroDocId } },
+        .id = typed.zeroDocId,
+    });
+    defer allocator.free(cursor_token);
 
-    // Use the pre-encoded cursor token from QueryResult
-    const encoded_cursor = qr.next_cursor_str orelse return error.TestExpectedValue;
+    // Prepare a load-more read request using the initial filter and cursor
+    var load_more_req = try app.store_service.prepareLoadMoreRead(
+        ctx,
+        table_index,
+        1, // namespace_id
+        initial_req.filter,
+        sub_id,
+        cursor_token,
+    );
+    defer load_more_req.deinit(allocator);
 
-    // 2. Query with cursor: fetch next 2
-    var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor, null);
-    defer next_page.deinit(allocator);
-
-    if (next_page.results.records.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), next_page.results.records.len);
-
-    // Verify results are different (pagination worked)
-    if (qr.results.records.len == 0) return error.TestExpectedValue;
-    const first_doc = qr.results.records[0];
-    const first_page_id = try sth.getFieldDocId(first_doc, data_table.metadata, "id");
-
-    const second_doc = next_page.results.records[0];
-    const second_page_id = try sth.getFieldDocId(second_doc, data_table.metadata, "id");
-
-    try testing.expect(first_page_id != second_page_id);
+    try testing.expectEqual(storage_mod.ReadKind.load_more, load_more_req.kind);
+    try testing.expectEqual(sub_id, load_more_req.sub_id.?);
+    try testing.expect(load_more_req.filter.after != null);
 }
 
 test "StoreService: validateFieldWrite tests" {

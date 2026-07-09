@@ -16,8 +16,6 @@ const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
-const query_ast = @import("query_ast.zig");
-const query_parser = @import("query_parser.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -357,40 +355,22 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const table = self.schema.tableByIndex(sub_query.table_index) orelse return error.UnknownTable;
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
-            .config = self.auth_config,
-            .table = table,
+        var read_req = try self.store_service.prepareLoadMoreRead(.{
+            .conn_id = conn.id,
+            .msg_id = msg_id,
             .session_user_id = session.user_doc_id,
             .session_external_id = conn.getExternalUserId(),
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
-        });
-
-        var filter_clone = try sub_query.filter.clone(self.allocator);
-        errdefer filter_clone.deinit(self.allocator);
-
-        const cursor = try query_parser.decodeCursorToken(self.allocator, req.nextCursor, filter_clone.order_by.field_type, filter_clone.order_by.items_type);
-        if (filter_clone.after) |*old| old.deinit(self.allocator);
-        filter_clone.after = cursor;
-
-        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
-
-        try self.store_service.storage_engine.enqueueRead(.{
-            .conn_id = conn.id,
-            .msg_id = msg_id,
-            .kind = .load_more,
-            .table_index = sub_query.table_index,
-            .namespace_id = sub_query.namespace_id,
-            .filter = filter_clone,
-            .auth_predicate = auth_clone,
-            .sub_id = req.subId,
+            .namespace_id = session.namespace_id,
             .allocator = self.allocator,
-        });
+        }, sub_query.table_index, sub_query.namespace_id, sub_query.filter, req.subId, req.nextCursor);
+        errdefer read_req.deinit(self.allocator);
+
+        try self.store_service.enqueueRead(read_req);
         return null;
     }
 
@@ -483,43 +463,28 @@ pub const MessageHandler = struct {
 
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const session = try requireStoreSession(conn);
-        const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-
-        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
-            .config = self.auth_config,
-            .table = table,
+        var read_req = try self.store_service.prepareQueryRead(.{
+            .conn_id = conn.id,
+            .msg_id = msg_id,
             .session_user_id = session.user_doc_id,
             .session_external_id = conn.getExternalUserId(),
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
-        });
+            .namespace_id = session.namespace_id,
+            .allocator = self.allocator,
+        }, table_index, parsed, sub_id, .subscribe);
+        errdefer read_req.deinit(self.allocator);
 
-        var filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
-        errdefer filter.deinit(self.allocator);
-
-        // Register subscription synchronously before async read so notifications are not missed
-        _ = try self.subscription_engine.subscribe(namespace_id, table_index, filter, conn.id, sub_id);
+        // Register subscription synchronously before async read so notifications are not missed.
+        // subscribe() clones the filter internally; read_req retains ownership.
+        _ = try self.subscription_engine.subscribe(session.namespace_id, table_index, read_req.filter, conn.id, sub_id);
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
         errdefer conn.removeSubscription(sub_id);
 
-        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
-
-        try self.store_service.storage_engine.enqueueRead(.{
-            .conn_id = conn.id,
-            .msg_id = msg_id,
-            .kind = .subscribe,
-            .table_index = table_index,
-            .namespace_id = namespace_id,
-            .filter = filter,
-            .auth_predicate = auth_clone,
-            .sub_id = sub_id,
-            .allocator = self.allocator,
-        });
+        try self.store_service.enqueueRead(read_req);
         return null;
     }
 
@@ -539,37 +504,21 @@ pub const MessageHandler = struct {
         const table_index = try extractTableIndex(parsed);
 
         const session = try requireStoreSession(conn);
-        const namespace_id = session.namespace_id;
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-
-        const read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
-            .config = self.auth_config,
-            .table = table,
+        var read_req = try self.store_service.prepareQueryRead(.{
+            .conn_id = conn.id,
+            .msg_id = msg_id,
             .session_user_id = session.user_doc_id,
             .session_external_id = conn.getExternalUserId(),
             .session_claims = conn.getSessionClaimsPtr(),
             .namespace = namespace,
-        });
-
-        var filter = try query_parser.parseQueryFilter(self.allocator, self.schema, table_index, parsed);
-        errdefer filter.deinit(self.allocator);
-
-        var auth_clone: ?query_ast.FilterPredicate = if (read_auth) |p| try p.clone(self.allocator) else null;
-        errdefer if (auth_clone != null) auth_clone.?.deinit(self.allocator);
-
-        try self.store_service.storage_engine.enqueueRead(.{
-            .conn_id = conn.id,
-            .msg_id = msg_id,
-            .kind = .query,
-            .table_index = table_index,
-            .namespace_id = namespace_id,
-            .filter = filter,
-            .auth_predicate = auth_clone,
-            .sub_id = null,
+            .namespace_id = session.namespace_id,
             .allocator = self.allocator,
-        });
+        }, table_index, parsed, null, .query);
+        errdefer read_req.deinit(self.allocator);
+
+        try self.store_service.enqueueRead(read_req);
         return null;
     }
 
