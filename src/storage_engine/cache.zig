@@ -58,23 +58,32 @@ pub const CacheHit = struct {
     handle: metadata_cache_type.Handle,
 };
 
+pub const GetCacheResult = union(enum) {
+    miss,
+    guard_failed,
+    hit: CacheHit,
+};
+
 pub fn getCachedRecord(
     cache: *metadata_cache_type,
     cache_key: MetadataCacheKey,
     guard_predicate: ?*const query_ast.FilterPredicate,
-) !?CacheHit {
+) !GetCacheResult {
     const handle = cache.get(cache_key) catch |err| switch (err) {
-        error.NotFound => return null,
+        error.NotFound => return .miss,
         else => return err,
     };
     errdefer handle.release();
     if (guard_predicate) |predicate| {
         if (!try filter_eval.evaluatePredicate(predicate, handle.data())) {
-            return null;
+            handle.release();
+            return .guard_failed;
         }
     }
-    return CacheHit{
-        .record = handle.data(),
-        .handle = handle,
+    return .{
+        .hit = .{
+            .record = handle.data(),
+            .handle = handle,
+        },
     };
 }

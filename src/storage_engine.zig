@@ -916,11 +916,15 @@ pub const StorageEngine = struct {
         }
 
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
-        if (try storage_cache.getCachedRecord(&self.metadata_cache, cache_key, guard_predicate)) |hit| {
-            return ManagedResult{
-                .records = @constCast(hit.record[0..1]),
-                .handle = hit.handle,
-            };
+        switch (try storage_cache.getCachedRecord(&self.metadata_cache, cache_key, guard_predicate)) {
+            .miss => {},
+            .guard_failed => return ManagedResult{ .records = &[_]Record{}, .allocator = null },
+            .hit => |hit| {
+                return ManagedResult{
+                    .records = @constCast(hit.record[0..1]),
+                    .handle = hit.handle,
+                };
+            },
         }
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;

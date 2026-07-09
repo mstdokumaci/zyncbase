@@ -216,11 +216,15 @@ pub const ReadWorker = struct {
 
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        if (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate) catch null) |hit| {
-            defer hit.handle.release();
-            const cloned = hit.record.clone(self.read_arena.allocator()) catch
-                return .{ .record = null };
-            return .{ .record = cloned };
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate) catch .miss) {
+            .miss => {},
+            .guard_failed => return .{ .record = null },
+            .hit => |hit| {
+                defer hit.handle.release();
+                const cloned = hit.record.clone(self.read_arena.allocator()) catch
+                    return .{ .record = null };
+                return .{ .record = cloned };
+            },
         }
 
         // Build SQL outside the node mutex — only accesses allocator + read-only metadata
