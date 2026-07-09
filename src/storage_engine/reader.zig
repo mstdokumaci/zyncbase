@@ -7,11 +7,9 @@ const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
-const storage_cache = @import("cache.zig");
 const SqlBuf = @import("../sql_buf.zig").SqlBuf;
 
 const DocId = typed.DocId;
-const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Cursor = typed.Cursor;
 const Record = typed.Record;
 const Value = typed.Value;
@@ -134,15 +132,6 @@ fn appendGuardPredicate(
     try buf.appendSlice(allocator, " AND (");
     try filter_sql.appendFilterPredicateSql(allocator, buf, values, table_metadata, predicate);
     try buf.append(allocator, ')');
-}
-
-pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: DocId) MetadataCacheKey {
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
-    return MetadataCacheKey{
-        .namespace_id = effective_namespace_id,
-        .table_index = table_metadata.index,
-        .id = id,
-    };
 }
 
 pub fn execSelectDocument(

@@ -513,7 +513,7 @@ pub const WriteWorker = struct {
         for (batch.items) |op| {
             if (getOpTarget(op)) |target| {
                 const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
-                const key = reader.getCacheKey(table_metadata, target.namespace_id, target.id);
+                const key = storage_cache.getCacheKey(table_metadata, target.namespace_id, target.id);
                 eviction_keys.appendAssumeCapacity(key);
             }
         }
@@ -726,7 +726,7 @@ pub const WriteWorker = struct {
         };
         for (entries) |entry| {
             const table_metadata = self.schema.tableByIndex(entry.table_index) orelse continue;
-            const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
+            const key = storage_cache.getCacheKey(table_metadata, entry.namespace_id, entry.id);
             eviction_keys.appendAssumeCapacity(key);
         }
     }

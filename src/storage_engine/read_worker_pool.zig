@@ -7,7 +7,6 @@ const typed = @import("../typed.zig");
 const storage_cache = @import("cache.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
-const filter_eval = @import("../filter_eval.zig");
 const read_mod = @import("reader.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
@@ -215,27 +214,17 @@ pub const ReadWorker = struct {
             if (predicate.isAlwaysFalse()) return .{ .record = null };
         }
 
-        const cache_key = read_mod.getCacheKey(table_metadata, namespace_id, id);
+        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        if (self.metadata_cache.get(cache_key)) |handle| {
-            const typed_record_ptr = handle.data();
-            const slice: []Record = typed_record_ptr[0..1];
-            if (guard_predicate) |predicate| {
-                if (filter_eval.evaluatePredicate(predicate, &slice[0]) catch false) {
-                    // cache hit with passing guard
-                } else {
-                    handle.release();
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate) catch .miss) {
+            .miss => {},
+            .guard_failed => return .{ .record = null },
+            .hit => |hit| {
+                defer hit.handle.release();
+                const cloned = hit.record.clone(self.read_arena.allocator()) catch
                     return .{ .record = null };
-                }
-            }
-            defer handle.release();
-            const cloned = slice[0].clone(self.read_arena.allocator()) catch {
-                return .{ .record = null };
-            };
-            return .{ .record = cloned };
-        } else |err| switch (err) {
-            error.NotFound => {},
-            else => return .{ .record = null },
+                return .{ .record = cloned };
+            },
         }
 
         // Build SQL outside the node mutex — only accesses allocator + read-only metadata
