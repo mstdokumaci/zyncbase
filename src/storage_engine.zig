@@ -17,7 +17,6 @@ const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
-const filter_eval = @import("filter_eval.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
 const read_buffer = @import("storage_engine/read_buffer.zig");
@@ -865,33 +864,6 @@ pub const StorageEngine = struct {
         return values;
     }
 
-    /// Attempt a cache hit for a single-document select.
-    /// Returns a ManagedResult if found (and guard passes), null on miss, or an error.
-    fn tryCacheHit(
-        self: *StorageEngine,
-        cache_key: storage_cache.MetadataCacheKey,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-    ) !?ManagedResult {
-        const handle = self.metadata_cache.get(cache_key) catch |err| switch (err) {
-            error.NotFound => return null,
-            else => return err,
-        };
-        errdefer handle.release();
-        const typed_record_ptr = handle.data();
-        // Cast *Record to *[1]Record for a zero-copy single-element slice (cache handle keeps memory alive).
-        const slice: []Record = typed_record_ptr[0..1];
-        if (guard_predicate) |predicate| {
-            if (!try filter_eval.evaluatePredicate(predicate, &slice[0])) {
-                handle.release();
-                return ManagedResult{ .records = &[_]Record{}, .allocator = null };
-            }
-        }
-        return ManagedResult{
-            .records = slice,
-            .handle = handle,
-        };
-    }
-
     /// Execute a single-document SELECT against SQLite and populate the cache if the
     /// read is still consistent with the current write version.
     fn executeAndCacheResult(
@@ -943,8 +915,13 @@ pub const StorageEngine = struct {
             if (predicate.isAlwaysFalse()) return ManagedResult{ .records = &[_]Record{}, .allocator = null };
         }
 
-        const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
-        if (try self.tryCacheHit(cache_key, guard_predicate)) |result| return result;
+        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
+        if (try storage_cache.getCachedRecord(&self.metadata_cache, cache_key, guard_predicate)) |hit| {
+            return ManagedResult{
+                .records = @constCast(hit.record[0..1]),
+                .handle = hit.handle,
+            };
+        }
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
         const node = &self.reader_nodes[reader_idx];
