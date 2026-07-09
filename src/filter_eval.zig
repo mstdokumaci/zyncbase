@@ -37,53 +37,14 @@ pub fn evaluateCondition(cond: *const Condition, record: *const Record) !bool {
     const val = record.values[cond.field_index];
 
     return switch (cond.op) {
-        .eq, .ne, .gt, .lt, .gte, .lte => try evalComparison(cond.op, val, cond.value),
         .isNull => val == .nil,
         .isNotNull => val != .nil,
-        .startsWith => evalTextMatchBool(val, cond.value, std.ascii.startsWithIgnoreCase),
-        .endsWith => evalTextMatchBool(val, cond.value, std.ascii.endsWithIgnoreCase),
         .contains => blk: {
             if (cond.field_type == .array) break :blk evalArrayContains(val, cond.value);
             break :blk evalTextMatchIndex(val, cond.value) != null;
         },
-        .in => evalIn(val, cond.value),
-        .notIn => !evalIn(val, cond.value),
+        else => cond.op.compare(val, cond.value orelse return error.MissingConditionValue),
     };
-}
-
-fn evalComparison(op: query_ast.Operator, val: Value, maybe_target: ?Value) !bool {
-    const target = maybe_target orelse return switch (op) {
-        .eq => false,
-        .ne => true,
-        .gt, .lt, .gte, .lte => false,
-        else => unreachable,
-    };
-    return switch (op) {
-        .eq => val.eql(target),
-        .ne => !val.eql(target),
-        .gt => val.order(target) == .gt,
-        .lt => val.order(target) == .lt,
-        .gte => blk: {
-            const res = val.order(target);
-            break :blk res == .gt or res == .eq;
-        },
-        .lte => blk: {
-            const res = val.order(target);
-            break :blk res == .lt or res == .eq;
-        },
-        else => unreachable,
-    };
-}
-
-fn evalTextMatchBool(
-    val: Value,
-    maybe_target: ?Value,
-    comptime match_fn: fn ([]const u8, []const u8) bool,
-) bool {
-    if (val != .scalar or val.scalar != .text) return false;
-    const target = maybe_target orelse return false;
-    if (target != .scalar or target.scalar != .text) return false;
-    return match_fn(val.scalar.text, target.scalar.text);
 }
 
 fn evalTextMatchIndex(val: Value, maybe_target: ?Value) ?usize {
@@ -98,11 +59,4 @@ fn evalArrayContains(val: Value, maybe_target: ?Value) bool {
     const target = maybe_target orelse return false;
     if (target != .scalar) return false;
     return std.sort.binarySearch(ScalarValue, val.array, target.scalar, ScalarValue.order) != null;
-}
-
-fn evalIn(val: Value, maybe_target: ?Value) bool {
-    if (val != .scalar) return false;
-    const target = maybe_target orelse return false;
-    if (target != .array) return false;
-    return std.sort.binarySearch(ScalarValue, target.array, val.scalar, ScalarValue.order) != null;
 }

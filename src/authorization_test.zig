@@ -72,11 +72,11 @@ test "AuthConfig parses empty boolean and float array literals" {
     try testing.expectEqual(@as(usize, 3), conds.len);
 
     try testing.expect(conds[0] == .comparison);
-    const empty = conds[0].comparison.rhs.literal.array;
+    const empty = (conds[0].comparison.rhs orelse return error.TestExpectedValue).literal.array;
     try testing.expectEqual(@as(usize, 0), empty.len);
 
     try testing.expect(conds[1] == .comparison);
-    const bools = conds[1].comparison.rhs.literal.array;
+    const bools = (conds[1].comparison.rhs orelse return error.TestExpectedValue).literal.array;
     try testing.expectEqual(@as(usize, 2), bools.len);
     try testing.expect(bools[0] == .boolean);
     try testing.expect(!bools[0].boolean);
@@ -84,7 +84,7 @@ test "AuthConfig parses empty boolean and float array literals" {
     try testing.expect(bools[1].boolean);
 
     try testing.expect(conds[2] == .comparison);
-    const floats = conds[2].comparison.rhs.literal.array;
+    const floats = (conds[2].comparison.rhs orelse return error.TestExpectedValue).literal.array;
     try testing.expectEqual(@as(usize, 2), floats.len);
     try testing.expect(floats[0] == .real);
     try testing.expectEqual(@as(f64, 1.5), floats[0].real);
@@ -564,7 +564,7 @@ test "buildDocPredicate clones borrowed literal RHS into predicate" {
     var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
-    const literal_text = config.store_rules[0].write.comparison.rhs.literal.scalar.text;
+    const literal_text = (config.store_rules[0].write.comparison.rhs orelse return error.TestExpectedValue).literal.scalar.text;
     const conditions = predicate.conditions orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), conditions.len);
     const predicate_value = conditions[0].value orelse return error.TestExpectedValue;
@@ -1122,6 +1122,207 @@ test "validateLiteralValue generic eq operator with scalar value passes" {
     defer condition.deinit(allocator);
 
     try authorization.validateDocPredicate(condition, &table);
+}
+
+// ─── New operator tests ───────────────────────────────────────────────────────
+
+test "parse accepts isNull string shorthand for $doc field" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":"isNull"}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const write_cond = config.store_rules[0].write;
+    try testing.expect(write_cond == .comparison);
+    try testing.expectEqual(query_ast.Operator.isNull, write_cond.comparison.op);
+    try testing.expect(write_cond.comparison.rhs == null);
+}
+
+test "parse accepts isNotNull string shorthand for $doc field" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":"isNotNull"}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const write_cond = config.store_rules[0].write;
+    try testing.expect(write_cond == .comparison);
+    try testing.expectEqual(query_ast.Operator.isNotNull, write_cond.comparison.op);
+    try testing.expect(write_cond.comparison.rhs == null);
+}
+
+test "parse rejects unknown string shorthand" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$doc.f":"notAnOp"}}]}
+    ;
+    try testing.expectError(error.InvalidComparisonOperator, initTestConfig(allocator, json));
+}
+
+test "parse accepts startsWith for $doc text field" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"startsWith":"pub"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const write_cond = config.store_rules[0].write;
+    try testing.expect(write_cond == .comparison);
+    try testing.expectEqual(query_ast.Operator.startsWith, write_cond.comparison.op);
+    try testing.expect(write_cond.comparison.rhs != null);
+    try testing.expect(write_cond.comparison.rhs.? == .literal);
+}
+
+test "parse accepts endsWith for $doc text field" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"endsWith":"_suffix"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const write_cond = config.store_rules[0].write;
+    try testing.expect(write_cond == .comparison);
+    try testing.expectEqual(query_ast.Operator.endsWith, write_cond.comparison.op);
+}
+
+test "evaluateCondition: isNull allows when session field is absent" {
+    const allocator = testing.allocator;
+
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .session, .field = "userId" },
+        .op = .isNull,
+        .rhs = null,
+    } };
+
+    const ctx = EvalContext{ .allocator = allocator, .session_user_id = null };
+    try testing.expectEqual(.allow, authorization.evaluateCondition(condition, ctx));
+}
+
+test "evaluateCondition: isNull denies when session field is present" {
+    const allocator = testing.allocator;
+
+    const test_id = typed.generateUuidV7();
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .session, .field = "userId" },
+        .op = .isNull,
+        .rhs = null,
+    } };
+
+    const ctx = EvalContext{ .allocator = allocator, .session_user_id = test_id };
+    try testing.expectEqual(.deny, authorization.evaluateCondition(condition, ctx));
+}
+
+test "evaluateCondition: isNotNull allows when session field is present" {
+    const allocator = testing.allocator;
+
+    const test_id = typed.generateUuidV7();
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .session, .field = "userId" },
+        .op = .isNotNull,
+        .rhs = null,
+    } };
+
+    const ctx = EvalContext{ .allocator = allocator, .session_user_id = test_id };
+    try testing.expectEqual(.allow, authorization.evaluateCondition(condition, ctx));
+}
+
+test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "deletedAt", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
+        .op = .isNull,
+        .rhs = null,
+    } };
+    defer condition.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    try testing.expect(predicate.conditions != null);
+    try testing.expectEqual(@as(usize, 1), predicate.conditions.?.len);
+    const cond = predicate.conditions.?[0];
+    try testing.expectEqual(query_ast.Operator.isNull, cond.op);
+    try testing.expect(cond.value == null);
+}
+
+test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "deletedAt", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
+        .op = .isNotNull,
+        .rhs = null,
+    } };
+    defer condition.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    try testing.expect(predicate.conditions != null);
+    const cond = predicate.conditions.?[0];
+    try testing.expectEqual(query_ast.Operator.isNotNull, cond.op);
+    try testing.expect(cond.value == null);
+}
+
+test "buildDocPredicate lowers startsWith to query_ast.Condition with text value" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
+        .op = .startsWith,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "pub") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    try testing.expect(predicate.conditions != null);
+    const cond = predicate.conditions.?[0];
+    try testing.expectEqual(query_ast.Operator.startsWith, cond.op);
+    try testing.expect(cond.value != null);
+    try testing.expect(cond.value.? == .scalar);
+    try testing.expect(cond.value.?.scalar == .text);
+    try testing.expectEqualStrings("pub", cond.value.?.scalar.text);
+}
+
+test "validateDocPredicate rejects startsWith on non-text field" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "score", .field_type = .integer },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
+        .op = .startsWith,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "prefix") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.UnsupportedOperatorForFieldType, authorization.validateDocPredicate(condition, &table));
 }
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────

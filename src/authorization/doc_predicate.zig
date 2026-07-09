@@ -218,13 +218,16 @@ fn comparisonToQueryCondition(
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field_meta = table.fields[field_index];
 
-    var rhs_value = evaluate_mod.resolveOperand(comp.rhs, ctx) orelse return error.InvalidValue;
-    defer rhs_value.deinit(allocator);
+    const value: ?typed.Value = if (comp.rhs) |rhs| blk: {
+        var rhs_value = evaluate_mod.resolveOperand(rhs, ctx) orelse return error.InvalidValue;
+        defer rhs_value.deinit(allocator);
+        break :blk try rhs_value.intoOwned(allocator);
+    } else null;
 
     return .{
         .field_index = field_index,
         .op = comp.op,
-        .value = try rhs_value.intoOwned(allocator),
+        .value = value,
         .field_type = field_meta.storage_type,
         .items_type = field_meta.items_type,
     };
@@ -293,7 +296,10 @@ fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) Doc
 
     if (!operatorAllowedForField(comp.op, lhs_type.storage_type)) return error.UnsupportedOperatorForFieldType;
 
-    switch (comp.rhs) {
+    // Nullary operators have no RHS; nothing further to validate.
+    if (comp.op.isNullary()) return;
+
+    switch (comp.rhs orelse return error.UnsupportedAuthorizationPredicate) {
         .literal => |value| try validateLiteralValue(comp.op, lhs_type, value),
         .context_var => |ctx_var| try validateContextVarValue(comp.op, lhs_type, ctx_var, table),
     }
@@ -343,6 +349,10 @@ fn validateLiteralValue(
                 if (value != .scalar or value.scalar != .text) return error.InvalidValue;
             }
         },
+        .startsWith, .endsWith => {
+            if (value != .scalar or value.scalar != .text) return error.InvalidValue;
+        },
+        .isNull, .isNotNull => unreachable, // nullary — no literal RHS
         else => {
             if (lhs_type.storage_type == .array) {
                 if (value != .array) return error.InvalidValue;
@@ -406,6 +416,11 @@ fn validateRhsType(
         return;
     }
 
+    if (op == .startsWith or op == .endsWith) {
+        if (rhs_type.storage_type != .text) return error.InvalidValue;
+        return;
+    }
+
     try validateMatchingValueType(lhs_type, rhs_type);
 }
 
@@ -445,9 +460,9 @@ fn operatorAllowedForField(op: query_ast.Operator, field_type: schema.FieldType)
         .eq, .ne => true,
         .gt, .gte, .lt, .lte => field_type != .array,
         .contains => field_type == .text or field_type == .array,
+        .startsWith, .endsWith => field_type == .text,
         .in, .notIn => true,
-        // Query-only operators not produced by the auth parser.
-        .startsWith, .endsWith, .isNull, .isNotNull => false,
+        .isNull, .isNotNull => true,
     };
 }
 

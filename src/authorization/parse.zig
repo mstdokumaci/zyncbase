@@ -193,6 +193,14 @@ fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.
     const lhs = try parseContextVar(allocator, lhs_str);
     errdefer lhs.deinit(allocator);
 
+    // Nullary operators: { "$doc.field": "isNull" }
+    // The RHS value is the operator name as a plain string — no operand.
+    if (rhs_val == .string) {
+        const op = try parseNullaryOp(rhs_val.string);
+        return .{ .comparison = .{ .lhs = lhs, .op = op, .rhs = null } };
+    }
+
+    // Binary operators: { "$doc.field": { "eq": value } }
     if (rhs_val != .object) return error.InvalidComparison;
     const op_obj = rhs_val.object;
     if (op_obj.count() != 1) return error.InvalidComparison;
@@ -200,16 +208,12 @@ fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.
     var it = op_obj.iterator();
     const op_entry = it.next() orelse return error.InvalidComparison;
     const op_str = op_entry.key_ptr.*;
-    const op = try parseComparisonOp(op_str);
+    const op = try parseBinaryOp(op_str);
 
     const rhs = try parseOperand(allocator, op_entry.value_ptr.*);
     errdefer rhs.deinit(allocator);
 
-    return .{ .comparison = .{
-        .lhs = lhs,
-        .op = op,
-        .rhs = rhs,
-    } };
+    return .{ .comparison = .{ .lhs = lhs, .op = op, .rhs = rhs } };
 }
 
 fn parseContextVar(allocator: Allocator, raw: []const u8) !types.ContextVar {
@@ -226,7 +230,15 @@ fn parseContextVar(allocator: Allocator, raw: []const u8) !types.ContextVar {
     return .{ .scope = scope, .field = field };
 }
 
-fn parseComparisonOp(op_str: []const u8) !query_ast.Operator {
+fn parseNullaryOp(op_str: []const u8) !query_ast.Operator {
+    const map = std.StaticStringMap(query_ast.Operator).initComptime(.{
+        .{ "isNull", .isNull },
+        .{ "isNotNull", .isNotNull },
+    });
+    return map.get(op_str) orelse error.InvalidComparisonOperator;
+}
+
+fn parseBinaryOp(op_str: []const u8) !query_ast.Operator {
     const map = std.StaticStringMap(query_ast.Operator).initComptime(.{
         .{ "eq", .eq },
         .{ "ne", .ne },
@@ -237,6 +249,8 @@ fn parseComparisonOp(op_str: []const u8) !query_ast.Operator {
         .{ "in", .in },
         .{ "notIn", .notIn },
         .{ "contains", .contains },
+        .{ "startsWith", .startsWith },
+        .{ "endsWith", .endsWith },
     });
     return map.get(op_str) orelse error.InvalidComparisonOperator;
 }
