@@ -101,7 +101,7 @@ test "storage: error handling concurrent access safety" {
     const runRead = struct {
         fn run(t_ctx: ThreadContext, table_index: usize) void {
             const record = sth.readDoc(t_ctx.allocator, t_ctx.storage, table_index, 1, 1) catch return; // zwanzig-disable-line: swallowed-error
-            defer if (record) |r| r.deinit(allocator);
+            defer if (record) |r| r.deinit(t_ctx.allocator);
         }
     }.run;
     var threads: [4]std.Thread = undefined;
