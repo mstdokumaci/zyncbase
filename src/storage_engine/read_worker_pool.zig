@@ -216,7 +216,7 @@ pub const ReadWorker = struct {
 
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate) catch .miss) {
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate)) {
             .miss => {},
             .guard_failed => return .{ .record = null },
             .hit => |hit| {

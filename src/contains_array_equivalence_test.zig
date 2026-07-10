@@ -79,10 +79,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res = try engine.selectQuery(allocator, items_md.index, ns, &sql_filter, null);
-    defer sql_res.result.deinit();
+    const sql_res = try sth.queryDocs(allocator, engine, items_md.index, ns, &sql_filter);
+    defer sql_res.deinit(allocator);
 
-    var sql_ids = try collectResultSetIds(allocator, sql_res.result.records, items_md);
+    var sql_ids = try collectResultSetIds(allocator, sql_res.records, items_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
@@ -100,13 +100,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res = try engine.selectQuery(allocator, items_md.index, ns, &all_filter, null);
-    defer all_res.result.deinit();
+    const all_res = try sth.queryDocs(allocator, engine, items_md.index, ns, &all_filter);
+    defer all_res.deinit(allocator);
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
-    for (all_res.result.records) |row| {
+    for (all_res.records) |row| {
         if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
             const id = sth.getFieldDocIdOrNull(row, items_md, "id") orelse continue;
             try mem_ids.put(id, {});
@@ -180,10 +180,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res2 = try engine.selectQuery(allocator, players_md.index, ns, &sql_filter, null);
-    defer sql_res2.result.deinit();
+    const sql_res = try sth.queryDocs(allocator, engine, players_md.index, ns, &sql_filter);
+    defer sql_res.deinit(allocator);
 
-    var sql_ids = try collectResultSetIds(allocator, sql_res2.result.records, players_md);
+    var sql_ids = try collectResultSetIds(allocator, sql_res.records, players_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
@@ -201,13 +201,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res2 = try engine.selectQuery(allocator, players_md.index, ns, &all_filter, null);
-    defer all_res2.result.deinit();
+    const all_res = try sth.queryDocs(allocator, engine, players_md.index, ns, &all_filter);
+    defer all_res.deinit(allocator);
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
-    for (all_res2.result.records) |row| {
+    for (all_res.records) |row| {
         if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
             const id = sth.getFieldDocIdOrNull(row, players_md, "id") orelse continue;
             try mem_ids.put(id, {});

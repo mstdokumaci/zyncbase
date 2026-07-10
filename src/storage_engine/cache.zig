@@ -68,14 +68,11 @@ pub fn getCachedRecord(
     cache: *metadata_cache_type,
     cache_key: MetadataCacheKey,
     guard_predicate: ?*const query_ast.FilterPredicate,
-) !GetCacheResult {
-    const handle = cache.get(cache_key) catch |err| switch (err) {
-        error.NotFound => return .miss,
-        else => return err,
-    };
+) GetCacheResult {
+    const handle = cache.get(cache_key) catch return .miss;
     errdefer handle.release();
     if (guard_predicate) |predicate| {
-        if (!try filter_eval.evaluatePredicate(predicate, handle.data())) {
+        if (!(filter_eval.evaluatePredicate(predicate, handle.data()) catch @panic("evaluatePredicate failed"))) {
             handle.release();
             return .guard_failed;
         }

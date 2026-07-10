@@ -46,9 +46,8 @@ test "storage: stability no crashes on concurrent errors" {
                 // Try to set a value
                 t_ctx.ctx.insertText("test", key, 1, "val", "value") catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
-                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, 1, null) catch continue; // zwanzig-disable-line: swallowed-error
-                defer managed.deinit();
-                _ = managed.records;
+                const record = sth.readDoc(t_ctx.allocator, &t_ctx.ctx.engine, tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
+                defer if (record) |r| r.deinit(t_ctx.allocator);
                 // Try to delete the value
                 t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1, null, null, null) catch continue; // zwanzig-disable-line: swallowed-error
             }

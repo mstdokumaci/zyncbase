@@ -272,9 +272,9 @@ test "logging: error details" {
     {
         const tbl_md = app.schema.table("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
-        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, 1, null);
-        defer managed.deinit();
-        try testing.expect(managed.records.len == 0);
+        const record = try sth.readDoc(testing.allocator, storage_engine, tbl_md.index, 1, 1);
+        defer if (record) |r| r.deinit(testing.allocator);
+        try testing.expect(record == null);
     }
 
     // Test 4: Multiple error types are logged

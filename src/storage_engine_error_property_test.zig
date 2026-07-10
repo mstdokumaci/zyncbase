@@ -51,9 +51,9 @@ test "storage: error handling read-only filesystem" {
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        var managed = try tbl.selectDocument(allocator, 1, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len > 0);
+        const record = try tbl.readDoc(allocator, 1, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 test "storage: error handling constraint violations" {
@@ -100,9 +100,8 @@ test "storage: error handling concurrent access safety" {
     };
     const runRead = struct {
         fn run(t_ctx: ThreadContext, table_index: usize) void {
-            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, 1, null) catch return; // zwanzig-disable-line: swallowed-error
-            defer managed.deinit();
-            _ = managed.records;
+            const record = sth.readDoc(t_ctx.allocator, t_ctx.storage, table_index, 1, 1) catch return; // zwanzig-disable-line: swallowed-error
+            defer if (record) |r| r.deinit(t_ctx.allocator);
         }
     }.run;
     var threads: [4]std.Thread = undefined;
@@ -124,9 +123,9 @@ test "storage: error handling empty paths" {
     try ctx.insertText("data_table", 1, 1, "val", "value");
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 1, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len > 0);
+        const record = try tbl.readDoc(allocator, 1, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 test "storage: error handling large values" {
@@ -146,9 +145,9 @@ test "storage: error handling large values" {
     }
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 1, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len > 0);
+        const record = try tbl.readDoc(allocator, 1, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 test "storage: error handling delete non-existent key" {
@@ -163,8 +162,8 @@ test "storage: error handling delete non-existent key" {
     try tbl.deleteDocument(999, 1);
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 999, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len == 0);
+        const record = try tbl.readDoc(allocator, 999, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record == null);
     }
 }
