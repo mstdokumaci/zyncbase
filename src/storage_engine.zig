@@ -491,7 +491,7 @@ pub const StorageEngine = struct {
     }
 
     /// Returns a reference to the engine's schema.
-    pub fn schemaRef(self: *StorageEngine) *const Schema {
+    pub fn schemaRef(self: *const StorageEngine) *const Schema {
         return self.schema;
     }
 

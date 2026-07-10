@@ -6,7 +6,6 @@ const typed = @import("typed.zig");
 const tth = @import("typed_test_helpers.zig");
 const reader_mod = @import("storage_engine/reader.zig");
 const sql_mod = @import("storage_engine/sql.zig");
-const sqlite = @import("sqlite");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
@@ -57,8 +56,8 @@ pub fn readDoc(
     const sql_query = try sql_mod.buildSelectDocumentSql(allocator, table_metadata, null);
     defer allocator.free(sql_query);
 
-    const dynamic = try node.conn.prepareDynamic(sql_query);
-    defer _ = sqlite.c.sqlite3_finalize(dynamic.stmt);
+    var dynamic = try node.conn.prepareDynamic(sql_query);
+    defer dynamic.deinit();
 
     return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null);
 }
@@ -82,8 +81,8 @@ pub fn queryDocs(
     const query_res = try reader_mod.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, null);
     defer query_res.deinit(allocator);
 
-    const dynamic = try node.conn.prepareDynamic(query_res.sql);
-    defer _ = sqlite.c.sqlite3_finalize(dynamic.stmt);
+    var dynamic = try node.conn.prepareDynamic(query_res.sql);
+    defer dynamic.deinit();
 
     const exec_res = try reader_mod.execQuery(
         allocator,
