@@ -333,10 +333,7 @@ test "storage: repeated flush consistency" {
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
     const qres = try test_table.queryDocs(allocator, 1, &filter);
-    defer {
-        for (qres.records) |r| r.deinit(allocator);
-        allocator.free(qres.records);
-    }
+    defer qres.deinit(allocator);
     try testing.expectEqual(@as(usize, 50), qres.records.len);
 }
 

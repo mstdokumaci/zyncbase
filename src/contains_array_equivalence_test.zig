@@ -18,12 +18,6 @@ fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metad
     return ids;
 }
 
-fn freeQueryResult(allocator: std.mem.Allocator, res: sth.QueryResult) void {
-    for (res.records) |r| r.deinit(allocator);
-    allocator.free(res.records);
-    if (res.next_cursor) |c| allocator.free(c);
-}
-
 test "contains on array field: SQL and in-memory evaluator return same rows (text)" {
     const allocator = testing.allocator;
 
@@ -86,7 +80,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer sql_filter.deinit(allocator);
 
     const sql_res = try sth.queryDocs(allocator, engine, items_md.index, ns, &sql_filter);
-    defer freeQueryResult(allocator, sql_res);
+    defer sql_res.deinit(allocator);
 
     var sql_ids = try collectResultSetIds(allocator, sql_res.records, items_md);
     defer sql_ids.deinit();
@@ -107,7 +101,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer all_filter.deinit(allocator);
 
     const all_res = try sth.queryDocs(allocator, engine, items_md.index, ns, &all_filter);
-    defer freeQueryResult(allocator, all_res);
+    defer all_res.deinit(allocator);
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();
@@ -187,7 +181,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer sql_filter.deinit(allocator);
 
     const sql_res = try sth.queryDocs(allocator, engine, players_md.index, ns, &sql_filter);
-    defer freeQueryResult(allocator, sql_res);
+    defer sql_res.deinit(allocator);
 
     var sql_ids = try collectResultSetIds(allocator, sql_res.records, players_md);
     defer sql_ids.deinit();
@@ -208,7 +202,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer all_filter.deinit(allocator);
 
     const all_res = try sth.queryDocs(allocator, engine, players_md.index, ns, &all_filter);
-    defer freeQueryResult(allocator, all_res);
+    defer all_res.deinit(allocator);
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();

@@ -225,7 +225,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        const read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+        var read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -233,12 +233,9 @@ pub const StoreService = struct {
             .session_claims = ctx.session_claims,
             .namespace = ctx.namespace,
         });
+        errdefer if (read_auth) |*p| p.deinit(ctx.allocator);
 
-        var filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
-        errdefer filter.deinit(ctx.allocator);
-
-        var auth_predicate: ?query_ast.FilterPredicate = read_auth;
-        errdefer if (auth_predicate) |*p| p.deinit(ctx.allocator);
+        const filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
 
         return ReadRequest{
             .conn_id = ctx.conn_id,
@@ -247,7 +244,7 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = ctx.namespace_id,
             .filter = filter,
-            .auth_predicate = auth_predicate,
+            .auth_predicate = read_auth,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };
@@ -267,7 +264,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        const read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+        var read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -275,6 +272,7 @@ pub const StoreService = struct {
             .session_claims = ctx.session_claims,
             .namespace = ctx.namespace,
         });
+        errdefer if (read_auth) |*p| p.deinit(ctx.allocator);
 
         var filter_clone = try sub_filter.clone(ctx.allocator);
         errdefer filter_clone.deinit(ctx.allocator);
@@ -288,9 +286,6 @@ pub const StoreService = struct {
         if (filter_clone.after) |*old| old.deinit(ctx.allocator);
         filter_clone.after = cursor;
 
-        var auth_predicate: ?query_ast.FilterPredicate = read_auth;
-        errdefer if (auth_predicate) |*p| p.deinit(ctx.allocator);
-
         return ReadRequest{
             .conn_id = ctx.conn_id,
             .msg_id = ctx.msg_id,
@@ -298,7 +293,7 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = namespace_id,
             .filter = filter_clone,
-            .auth_predicate = auth_predicate,
+            .auth_predicate = read_auth,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };

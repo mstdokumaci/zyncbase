@@ -296,10 +296,7 @@ test "StorageEngine: query collection" {
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
     const qres = try people.queryDocs(allocator, 2, &filter);
-    defer {
-        for (qres.records) |r| r.deinit(allocator);
-        allocator.free(qres.records);
-    }
+    defer qres.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), qres.records.len);
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {

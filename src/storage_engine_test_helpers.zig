@@ -30,6 +30,12 @@ pub const NamedColumn = struct {
 pub const QueryResult = struct {
     records: []typed.Record,
     next_cursor: ?[]const u8,
+
+    pub fn deinit(self: QueryResult, allocator: Allocator) void {
+        for (self.records) |r| r.deinit(allocator);
+        allocator.free(self.records);
+        if (self.next_cursor) |c| allocator.free(c);
+    }
 };
 
 /// Read a single document by ID directly from SQLite (bypasses cache and guard predicates).
