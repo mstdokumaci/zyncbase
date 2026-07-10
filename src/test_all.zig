@@ -33,6 +33,7 @@ test {
     _ = @import("schema_json_test.zig");
     _ = @import("schema_normalize_test.zig");
     _ = @import("schema_index_test.zig");
+    _ = @import("schema_field_path_test.zig");
     _ = @import("ddl_generator_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");

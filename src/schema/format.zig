@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const json_write = @import("../json/write.zig");
+const field_path = @import("field_path.zig");
 const writeJsonString = json_write.writeJsonString;
 
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
@@ -45,7 +46,7 @@ fn writeRequiredFields(w: *json_write.Writer, allocator: std.mem.Allocator, fiel
     for (fields) |field| {
         if (!field.required) continue;
         if (emitted > 0) try w.separator();
-        const dotted = try replaceAll(allocator, field.name, "__", ".");
+        const dotted = try field_path.toDotted(allocator, field.name);
         defer allocator.free(dotted);
         try writeJsonString(w.buf, allocator, dotted);
         emitted += 1;
@@ -64,9 +65,9 @@ fn writeFieldsForPrefix(
 
     var emitted: usize = 0;
     for (fields) |field| {
-        const remainder = fieldRemainder(field.name, prefix) orelse continue;
-        const segment_end = std.mem.indexOf(u8, remainder, "__") orelse remainder.len;
-        const segment = remainder[0..segment_end];
+        const rem = field_path.remainder(field.name, prefix) orelse continue;
+        const split = field_path.splitFirst(rem);
+        const segment = split.segment;
 
         const gop = try seen.getOrPut(allocator, segment);
         if (gop.found_existing) continue;
@@ -75,11 +76,8 @@ fn writeFieldsForPrefix(
         try writeJsonString(w.buf, allocator, segment);
         try w.buf.append(allocator, ':');
 
-        if (segment_end < remainder.len) {
-            const child_prefix = if (prefix.len == 0)
-                try allocator.dupe(u8, segment)
-            else
-                try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, segment });
+        if (split.rest != null) {
+            const child_prefix = try field_path.join(allocator, prefix, segment);
             defer allocator.free(child_prefix);
 
             try w.beginObject();
@@ -113,16 +111,4 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
         try w.rawField("metadata", metadata.json);
     }
     try w.endObject();
-}
-
-fn fieldRemainder(field_name: []const u8, prefix: []const u8) ?[]const u8 {
-    if (prefix.len == 0) return field_name;
-    if (!std.mem.startsWith(u8, field_name, prefix)) return null;
-    if (field_name.len <= prefix.len + 2) return null;
-    if (!std.mem.eql(u8, field_name[prefix.len .. prefix.len + 2], "__")) return null;
-    return field_name[prefix.len + 2 ..];
-}
-
-fn replaceAll(allocator: std.mem.Allocator, input: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {
-    return std.mem.replaceOwned(u8, allocator, input, needle, replacement);
 }
