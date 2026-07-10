@@ -37,6 +37,7 @@ test {
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
+    _ = @import("query_ast_test.zig");
     _ = @import("filter_eval_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");

@@ -88,6 +88,69 @@ pub const Operator = enum(u8) {
     }
 };
 
+/// The value shape an operator expects for a given field type.
+///
+/// This is the single source of truth shared by the query parser (which
+/// decodes a raw MessagePack operand into a `Value`) and the authorization
+/// predicate validator (which checks the shape of an already-parsed literal
+/// `Value`). Deriving both from this predicate guarantees that a condition a
+/// client query can send is also one an authorization rule may express, and
+/// vice versa — eliminating the divergent op × field-type matrix that
+/// previously let a rule validate while the equivalent query failed to parse.
+pub const ValueShape = enum {
+    /// Operator takes no right-hand side operand (isNull / isNotNull).
+    nullary,
+    /// A single scalar of the field's storage type (eq / ne / gt / lt / … on a
+    /// scalar field).
+    scalar,
+    /// A `.text` scalar specifically (startsWith / endsWith).
+    scalar_text,
+    /// An array of scalars of the field's storage type (in / notIn). Array
+    /// fields are rejected for membership operators.
+    array_membership,
+    /// An array of element scalars of the field's items type (eq / ne on an
+    /// array field).
+    array_field,
+    /// `contains` on an array field expects a single element scalar (items_type).
+    contains_element,
+    /// `contains` on a text field expects a `.text` scalar.
+    contains_text,
+};
+
+/// Returns the value shape `op` expects for `field_type` / `items_type`, or
+/// `UnsupportedOperatorForFieldType` when the combination is not permitted.
+pub fn operatorExpectsValueShape(
+    op: Operator,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
+) error{UnsupportedOperatorForFieldType}!ValueShape {
+    _ = items_type;
+    switch (op) {
+        .isNull, .isNotNull => return .nullary,
+        .startsWith, .endsWith => {
+            if (field_type != .text) return error.UnsupportedOperatorForFieldType;
+            return .scalar_text;
+        },
+        .contains => switch (field_type) {
+            .text => return .contains_text,
+            .array => return .contains_element,
+            else => return error.UnsupportedOperatorForFieldType,
+        },
+        .in, .notIn => {
+            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+            return .array_membership;
+        },
+        .gt, .gte, .lt, .lte => {
+            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+            return .scalar;
+        },
+        .eq, .ne => {
+            if (field_type == .array) return .array_field;
+            return .scalar;
+        },
+    }
+}
+
 pub const Condition = struct {
     field_index: usize,
     op: Operator,
