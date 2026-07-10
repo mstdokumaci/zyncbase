@@ -433,7 +433,7 @@ test "StorageEngine: concurrent reads" {
     const Thread = struct {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, table_index: usize, id: u128) !void {
             const record = try sth.readDoc(alloc, eng, table_index, id, 2);
-            defer if (record) |r| r.deinit(allocator);
+            defer if (record) |r| r.deinit(alloc);
             try testing.expect(record != null);
         }
     };

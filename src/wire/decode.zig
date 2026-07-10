@@ -358,6 +358,10 @@ const store_path_table = [_]Field{
 
 pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator) !StorePathPayloads {
     const raw = try extractMap(StorePathRawFields, &store_path_table, bytes, allocator);
+    errdefer {
+        raw.path.free(allocator);
+        if (raw.value) |v| v.free(allocator);
+    }
     return .{
         .path = raw.path,
         .value = raw.value,
@@ -387,6 +391,7 @@ pub fn extractStoreBatchPayloads(
     allocator: std.mem.Allocator,
 ) !StoreBatchPayloads {
     const raw = try extractMap(StoreBatchRawFields, &store_batch_table, bytes, allocator);
+    errdefer raw.ops.free(allocator);
     return .{
         .ops = raw.ops,
         .write_id = try decodeWriteAck(raw.confirm, raw.write_id),

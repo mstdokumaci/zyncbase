@@ -90,7 +90,7 @@ test "storage: thread-safe engine access" {
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
                 const record = try sth.readDoc(testing.allocator, eng, table_index, key, 1);
-                defer if (record) |r| r.deinit(allocator);
+                defer if (record) |r| r.deinit(testing.allocator);
             }
         }
     };
