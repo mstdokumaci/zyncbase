@@ -6,6 +6,7 @@ const doc_predicate = @import("doc_predicate.zig");
 const schema_mod = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
+const json_read = @import("../json/read.zig");
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 
@@ -17,7 +18,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
     const root = parsed.value;
     if (root != .object) return error.InvalidAuthConfig;
 
-    try rejectUnknownRootKeys(root);
+    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "namespaces", "store" }, root.object);
 
     const namespaces_val = root.object.get("namespaces") orelse return error.MissingNamespaces;
     if (namespaces_val != .array) return error.InvalidAuthConfig;
@@ -84,7 +85,7 @@ fn validateStoreRule(rule: types.StoreRule, table: *const schema_mod.Table) !voi
 fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.NamespaceRule {
     if (value != .object) return error.InvalidNamespaceRule;
     const obj = value.object;
-    try rejectUnknownNamespaceKeys(obj);
+    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "pattern", "storeFilter", "presenceRead", "presenceWrite", "presenceSharedWrite" }, obj);
 
     const pattern_val = obj.get("pattern") orelse return error.InvalidNamespaceRule;
     if (pattern_val != .string) return error.InvalidNamespaceRule;
@@ -119,7 +120,7 @@ fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.Namesp
 fn parseStoreRule(allocator: Allocator, value: std.json.Value) !types.StoreRule {
     if (value != .object) return error.InvalidStoreRule;
     const obj = value.object;
-    try rejectUnknownStoreKeys(obj);
+    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "collection", "read", "write" }, obj);
 
     const collection_val = obj.get("collection") orelse return error.InvalidStoreRule;
     if (collection_val != .string) return error.InvalidStoreRule;
@@ -305,38 +306,4 @@ fn parseScalarArrayItem(allocator: Allocator, value: std.json.Value) !ScalarValu
         .bool => |b| .{ .boolean = b },
         else => error.InvalidValue,
     };
-}
-
-fn rejectUnknownRootKeys(root: std.json.Value) !void {
-    var it = root.object.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "namespaces")) continue;
-        if (std.mem.eql(u8, key, "store")) continue;
-        return error.UnknownAuthKey;
-    }
-}
-
-fn rejectUnknownNamespaceKeys(obj: std.json.ObjectMap) !void {
-    var it = obj.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "pattern")) continue;
-        if (std.mem.eql(u8, key, "storeFilter")) continue;
-        if (std.mem.eql(u8, key, "presenceRead")) continue;
-        if (std.mem.eql(u8, key, "presenceWrite")) continue;
-        if (std.mem.eql(u8, key, "presenceSharedWrite")) continue;
-        return error.UnknownAuthKey;
-    }
-}
-
-fn rejectUnknownStoreKeys(obj: std.json.ObjectMap) !void {
-    var it = obj.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, "collection")) continue;
-        if (std.mem.eql(u8, key, "read")) continue;
-        if (std.mem.eql(u8, key, "write")) continue;
-        return error.UnknownAuthKey;
-    }
 }

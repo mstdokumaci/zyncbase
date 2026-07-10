@@ -23,7 +23,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     const root = parsed.value;
     if (root != .object) return error.InvalidSchema;
 
-    try rejectUnknownRootKeys(root);
+    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "version", "store", "metadata", "presence" }, root.object);
 
     const version_val = root.object.get("version") orelse return error.MissingVersion;
     if (version_val != .string) return error.InvalidVersion;
@@ -201,7 +201,7 @@ const StoreFieldContext = struct {
     fn preValidate(ctx: *@This(), name: []const u8, def: std.json.Value) !void {
         if (system.isSystemColumn(name)) return error.ReservedFieldName;
         if (ctx.reserve_external_id and std.mem.eql(u8, name, "external_id")) return error.ReservedFieldName;
-        try rejectUnknownFieldKeys(def);
+        try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &all_field_keys, def.object);
     }
 
     fn preObjectValidate(ctx: *@This(), full_name: []const u8) !void {
@@ -494,7 +494,7 @@ fn implicitUsersTable(allocator: Allocator) !types.Table {
 fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.json.Value, is_users_table: bool) !types.Table {
     if (!isValidTableIdentifier(table_name_raw)) return error.InvalidTableName;
     if (table_def != .object) return error.InvalidTableDefinition;
-    try rejectUnknownTableKeys(table_def);
+    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "fields", "required", "namespaced", "metadata" }, table_def.object);
 
     const table_name = try allocator.dupe(u8, table_name_raw);
     errdefer allocator.free(table_name);
@@ -681,30 +681,6 @@ pub fn parseOnDelete(value: []const u8) !types.OnDelete {
 
 fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "\"{s}\"", .{name});
-}
-
-fn rejectUnknownKeys(comptime allowed: []const []const u8, obj: std.json.Value) !void {
-    var it = obj.object.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        inline for (allowed) |ak| {
-            if (std.mem.eql(u8, key, ak)) break;
-        } else {
-            return error.UnknownSchemaKey;
-        }
-    }
-}
-
-fn rejectUnknownRootKeys(root: std.json.Value) !void {
-    return rejectUnknownKeys(&.{ "version", "store", "metadata", "presence" }, root);
-}
-
-fn rejectUnknownTableKeys(table_def: std.json.Value) !void {
-    return rejectUnknownKeys(&.{ "fields", "required", "namespaced", "metadata" }, table_def);
-}
-
-fn rejectUnknownFieldKeys(field_def: std.json.Value) !void {
-    return rejectUnknownKeys(&all_field_keys, field_def);
 }
 
 fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
