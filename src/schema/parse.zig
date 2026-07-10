@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const system = @import("system.zig");
 const json_read = @import("../json/read.zig");
 const index = @import("index.zig");
+const field_path = @import("field_path.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -173,10 +174,7 @@ fn parseObjectFields(
         const type_value = field_def.object.get("type") orelse return error.MissingFieldType;
         if (type_value != .string) return error.InvalidFieldType;
 
-        const full_name = if (prefix.len > 0)
-            try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, field_name })
-        else
-            try allocator.dupe(u8, field_name);
+        const full_name = try field_path.join(allocator, prefix, field_name);
         errdefer allocator.free(full_name);
 
         if (std.mem.eql(u8, type_value.string, "object")) {
@@ -524,7 +522,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         if (required_value != .array) return error.InvalidTableDefinition;
         for (required_value.array.items) |item| {
             if (item != .string) return error.InvalidTableDefinition;
-            const normalized = try std.mem.replaceOwned(u8, allocator, item.string, ".", "__");
+            const normalized = try field_path.normalizeDots(allocator, item.string);
             errdefer allocator.free(normalized);
             try required_set.put(normalized, false);
         }
