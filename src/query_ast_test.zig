@@ -68,12 +68,12 @@ test "operatorExpectsValueShape op x field-type matrix" {
 }
 
 fn expectShape(op: Operator, field_type: schema.FieldType, expected: ValueShape) !void {
-    const actual = try query_ast.operatorExpectsValueShape(op, field_type, null);
+    const actual = try query_ast.operatorExpectsValueShape(op, field_type);
     try std.testing.expectEqual(expected, actual);
 }
 
 fn expectUnsupported(op: Operator, field_type: schema.FieldType) !void {
-    const result = query_ast.operatorExpectsValueShape(op, field_type, null);
+    const result = query_ast.operatorExpectsValueShape(op, field_type);
     try std.testing.expectError(error.UnsupportedOperatorForFieldType, result);
 }
 

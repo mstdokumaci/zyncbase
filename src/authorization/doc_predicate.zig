@@ -294,7 +294,7 @@ fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) Doc
     const field = table.fields[field_index];
     const lhs_type = ValueType.fromField(field);
 
-    _ = try query_ast.operatorExpectsValueShape(comp.op, lhs_type.storage_type, lhs_type.items_type);
+    _ = try query_ast.operatorExpectsValueShape(comp.op, lhs_type.storage_type);
 
     // Nullary operators have no RHS; nothing further to validate.
     if (comp.op.isNullary()) return;
@@ -335,7 +335,7 @@ fn validateLiteralValue(
     lhs_type: ValueType,
     value: Value,
 ) DocPredicateError!void {
-    const shape = try query_ast.operatorExpectsValueShape(op, lhs_type.storage_type, lhs_type.items_type);
+    const shape = try query_ast.operatorExpectsValueShape(op, lhs_type.storage_type);
 
     switch (shape) {
         .nullary => unreachable, // nullary ops have no literal RHS

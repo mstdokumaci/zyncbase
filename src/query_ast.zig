@@ -117,14 +117,12 @@ pub const ValueShape = enum {
     contains_text,
 };
 
-/// Returns the value shape `op` expects for `field_type` / `items_type`, or
+/// Returns the value shape `op` expects for `field_type`, or
 /// `UnsupportedOperatorForFieldType` when the combination is not permitted.
 pub fn operatorExpectsValueShape(
     op: Operator,
     field_type: schema.FieldType,
-    items_type: ?schema.FieldType,
 ) error{UnsupportedOperatorForFieldType}!ValueShape {
-    _ = items_type;
     switch (op) {
         .isNull, .isNotNull => return .nullary,
         .startsWith, .endsWith => {

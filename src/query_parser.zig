@@ -323,7 +323,7 @@ fn parseConditionValueForOperator(
     items_type: ?schema_mod.FieldType,
     payload: ?msgpack.Payload,
 ) ParserError!?Value {
-    const shape = try query_ast.operatorExpectsValueShape(op, field_type, items_type);
+    const shape = try query_ast.operatorExpectsValueShape(op, field_type);
 
     if (shape == .nullary) {
         if (payload != null) return error.UnexpectedOperand;
@@ -337,10 +337,10 @@ fn parseConditionValueForOperator(
             if (raw != .str) return error.InvalidOperandType;
             return try parseScalarValue(allocator, .text, raw);
         },
-        .scalar => return try parseFieldValue(allocator, field_type, items_type, raw),
-        .array_membership => return try parseInOperand(allocator, field_type, raw),
-        .array_field => return try parseFieldValue(allocator, field_type, items_type, raw),
-        .contains_element => return try parseArrayElementValue(allocator, items_type, raw),
+        .scalar => try parseFieldValue(allocator, field_type, items_type, raw),
+        .array_membership => try parseInOperand(allocator, field_type, raw),
+        .array_field => try parseFieldValue(allocator, field_type, items_type, raw),
+        .contains_element => try parseArrayElementValue(allocator, items_type, raw),
         .nullary => unreachable,
     };
 }
