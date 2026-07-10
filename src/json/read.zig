@@ -232,3 +232,25 @@ pub fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
 pub fn extractJsonKey(json: []const u8, pos: *usize) ?[]const u8 {
     return extractJsonString(json, pos);
 }
+
+// ---------------------------------------------------------------------------
+// Object-map validation helpers
+// ---------------------------------------------------------------------------
+
+/// Rejects any keys in `obj` that are not in the comptime `allowed` list.
+/// Returns the caller-supplied error tag on first unknown key.
+pub fn rejectUnknownKeys(
+    comptime err: anytype,
+    comptime allowed: []const []const u8,
+    obj: ObjectMap,
+) !void {
+    var it = obj.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        inline for (allowed) |ak| {
+            if (std.mem.eql(u8, key, ak)) break;
+        } else {
+            return err;
+        }
+    }
+}
