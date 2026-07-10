@@ -683,11 +683,7 @@ pub fn parseOnDelete(value: []const u8) !types.OnDelete {
 }
 
 fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
-    const result = try allocator.alloc(u8, name.len + 2);
-    result[0] = '"';
-    @memcpy(result[1 .. name.len + 1], name);
-    result[name.len + 1] = '"';
-    return result;
+    return std.mem.concat(allocator, u8, &.{ "\"", name, "\"" });
 }
 
 fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
