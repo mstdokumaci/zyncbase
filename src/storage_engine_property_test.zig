@@ -89,8 +89,8 @@ test "storage: thread-safe engine access" {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
-                var managed = try eng.selectDocument(testing.allocator, table_index, key, 1, null);
-                defer managed.deinit();
+                const record = try sth.readDoc(testing.allocator, eng, table_index, key, 1);
+                defer if (record) |r| r.deinit(allocator);
             }
         }
     };
@@ -116,10 +116,9 @@ test "storage: thread-safe engine access" {
     // Flush writes and verify data
     try engine.flushPendingWrites();
     // Verify some data was written
-    var managed = try test_table.selectDocument(allocator, 1, 1);
-    defer managed.deinit();
-    const doc = managed.records;
-    try testing.expect(doc.len > 0);
+    const record = try test_table.readDoc(allocator, 1, 1);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
 }
 
 test "storage: connection pool reuse and release" {
@@ -144,10 +143,9 @@ test "storage: connection pool reuse and release" {
     const test_table = try ctx.table("test");
     while (i < num_operations) : (i += 1) {
         const key: u128 = if (i % 2 == 0) 1 else 2;
-        var managed = try test_table.selectDocument(testing.allocator, key, 1);
-        defer managed.deinit();
-        const doc = managed.records;
-        try testing.expect(doc.len > 0);
+        const record = try test_table.readDoc(testing.allocator, key, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
     // If we got here, connections were properly released and reused
 }
@@ -183,10 +181,9 @@ test "storage: persistence round-trip (various types)" {
     const test_table = try ctx.table("test");
     // Retrieve and verify all test cases
     for (test_cases) |tc| {
-        var managed = try test_table.selectDocument(allocator, tc.id, tc.namespace_id);
-        defer managed.deinit();
-        const doc = managed.records;
-        try testing.expect(doc.len > 0);
+        const record = try test_table.readDoc(allocator, tc.id, tc.namespace_id);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 
@@ -214,17 +211,17 @@ test "storage: insert/delete inverse consistency" {
         try ctx.insertText("test", tc.id, tc.namespace_id, "val", tc.value);
         try engine.flushPendingWrites();
         // Verify it exists
-        var managed1 = try test_table.selectDocument(allocator, tc.id, tc.namespace_id);
-        defer managed1.deinit();
-        try testing.expect(managed1.records.len > 0);
+        const record1 = try test_table.readDoc(allocator, tc.id, tc.namespace_id);
+        defer if (record1) |r| r.deinit(allocator);
+        try testing.expect(record1 != null);
 
         // Delete
         try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id, null, null, null);
         try engine.flushPendingWrites();
         // Verify it's gone
-        var managed2 = try test_table.selectDocument(allocator, tc.id, tc.namespace_id);
-        defer managed2.deinit();
-        try testing.expect(managed2.records.len == 0);
+        const record2 = try test_table.readDoc(allocator, tc.id, tc.namespace_id);
+        defer if (record2) |r| r.deinit(allocator);
+        try testing.expect(record2 == null);
     }
 }
 
@@ -246,14 +243,12 @@ test "storage: transaction isolation and consistency" {
     try engine.flushPendingWrites();
     const test_table = try ctx.table("test");
     // Verify initial state
-    var managed1 = try test_table.selectDocument(allocator, 1, 1);
-    defer managed1.deinit();
-    const doc1 = managed1.records;
-    var managed2 = try test_table.selectDocument(allocator, 2, 1);
-    defer managed2.deinit();
-    const doc2 = managed2.records;
-    try testing.expect(doc1.len > 0);
-    try testing.expect(doc2.len > 0);
+    const record1 = try test_table.readDoc(allocator, 1, 1);
+    defer if (record1) |r| r.deinit(allocator);
+    try testing.expect(record1 != null);
+    const record2 = try test_table.readDoc(allocator, 2, 1);
+    defer if (record2) |r| r.deinit(allocator);
+    try testing.expect(record2 != null);
     // Queue multiple operations that should execute atomically in a batch
     {
         try ctx.insertText("test", 1, 1, "val", "updated1");
@@ -263,21 +258,18 @@ test "storage: transaction isolation and consistency" {
     // Flush to ensure operations are processed
     try engine.flushPendingWrites();
 
-    var managed_up1 = try test_table.selectDocument(allocator, 1, 1);
-    defer managed_up1.deinit();
-    const up1 = managed_up1.records;
+    const record_up1 = try test_table.readDoc(allocator, 1, 1);
+    defer if (record_up1) |r| r.deinit(allocator);
 
-    var managed_up2 = try test_table.selectDocument(allocator, 2, 1);
-    defer managed_up2.deinit();
-    const up2 = managed_up2.records;
+    const record_up2 = try test_table.readDoc(allocator, 2, 1);
+    defer if (record_up2) |r| r.deinit(allocator);
 
-    var managed_n3 = try test_table.selectDocument(allocator, 3, 1);
-    defer managed_n3.deinit();
-    const n3 = managed_n3.records;
+    const record_n3 = try test_table.readDoc(allocator, 3, 1);
+    defer if (record_n3) |r| r.deinit(allocator);
 
-    try testing.expect(up1.len > 0);
-    try testing.expect(up2.len > 0);
-    try testing.expect(n3.len > 0);
+    try testing.expect(record_up1 != null);
+    try testing.expect(record_up2 != null);
+    try testing.expect(record_n3 != null);
 }
 
 test "storage: concurrent batch processing" {
@@ -311,9 +303,9 @@ test "storage: concurrent batch processing" {
         var i: usize = 0;
         while (i < ops_per_batch) : (i += 1) {
             const key: u128 = k * 100 + i + 1;
-            var managed = try test_table.selectDocument(allocator, key, 1);
-            defer managed.deinit();
-            if (managed.records.len > 0) total_found += 1;
+            const record = try test_table.readDoc(allocator, key, 1);
+            defer if (record) |r| r.deinit(allocator);
+            if (record != null) total_found += 1;
         }
     }
     try testing.expectEqual(@as(usize, num_batches * ops_per_batch), total_found);
@@ -340,9 +332,12 @@ test "storage: repeated flush consistency" {
     const test_table = try ctx.table("test");
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try test_table.selectQuery(allocator, 1, &filter);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 50), managed.records.len);
+    const qres = try test_table.queryDocs(allocator, 1, &filter);
+    defer {
+        for (qres.records) |r| r.deinit(allocator);
+        allocator.free(qres.records);
+    }
+    try testing.expectEqual(@as(usize, 50), qres.records.len);
 }
 
 // Additional property: Data integrity across engine restarts
@@ -373,9 +368,9 @@ test "storage: data persistence across restarts" {
         defer ctx.deinit();
 
         const test_table = try ctx.table("test");
-        var managed = try test_table.selectDocument(allocator, 1, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len > 0);
+        const record = try test_table.readDoc(allocator, 1, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 
@@ -414,17 +409,17 @@ test "storage: schema update integrity" {
         const test_table = try ctx.table("test");
 
         // Existing data should be accessible
-        var managed1 = try test_table.selectDocument(allocator, 1, 1);
-        defer managed1.deinit();
-        try testing.expect(managed1.records.len > 0);
+        const record1 = try test_table.readDoc(allocator, 1, 1);
+        defer if (record1) |r| r.deinit(allocator);
+        try testing.expect(record1 != null);
 
         // New data with new field
         try ctx.insertInt("test", 2, 1, "val2", 42);
         try ctx.engine.flushPendingWrites();
 
-        var managed2 = try test_table.selectDocument(allocator, 2, 1);
-        defer managed2.deinit();
-        try testing.expect(managed2.records.len > 0);
+        const record2 = try test_table.readDoc(allocator, 2, 1);
+        defer if (record2) |r| r.deinit(allocator);
+        try testing.expect(record2 != null);
     }
 }
 
@@ -463,8 +458,8 @@ test "storage: random operations fuzzing" {
             2 => {
                 // Query
                 const test_table = try ctx.table("items");
-                var managed = try test_table.selectDocument(allocator, id, ns);
-                managed.deinit();
+                const record = try test_table.readDoc(allocator, id, ns);
+                if (record) |r| r.deinit(allocator);
             },
             3 => {
                 // Flush

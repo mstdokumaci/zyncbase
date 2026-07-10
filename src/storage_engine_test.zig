@@ -224,9 +224,9 @@ test "StorageEngine: delete document" {
     try docs.deleteDocument(1, 1);
     try docs.flush();
 
-    var managed = try docs.selectDocument(allocator, 1, 1);
-    defer managed.deinit();
-    try testing.expect(managed.records.len == 0);
+    const record = try docs.readDoc(allocator, 1, 1);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record == null);
 }
 test "StorageEngine: upsertDocument and selectDocument" {
     const allocator = testing.allocator;
@@ -255,9 +255,9 @@ test "StorageEngine: selectDocument non-existent key" {
     defer ctx.deinit();
     const items = try ctx.table("items");
 
-    var managed = try items.selectDocument(allocator, 999, 2);
-    defer managed.deinit();
-    try testing.expect(managed.records.len == 0);
+    const record = try items.readDoc(allocator, 999, 2);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record == null);
 }
 test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
@@ -295,9 +295,12 @@ test "StorageEngine: query collection" {
     // Query for collection using empty filter
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try people.selectQuery(allocator, 2, &filter);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 2), managed.records.len);
+    const qres = try people.queryDocs(allocator, 2, &filter);
+    defer {
+        for (qres.records) |r| r.deinit(allocator);
+        allocator.free(qres.records);
+    }
+    try testing.expectEqual(@as(usize, 2), qres.records.len);
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = testing.allocator;
@@ -321,9 +324,9 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
     defer doc1.deinit();
     _ = try doc1.expectFieldString("val", "ns1");
 
-    var managed = try items.selectDocument(allocator, 1, 4);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 0), managed.records.len);
+    const record = try items.readDoc(allocator, 1, 4);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record == null);
 }
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
@@ -347,9 +350,9 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     const elapsed = timer.read();
     try testing.expect(elapsed < std.time.ns_per_s);
 
-    var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
-    defer managed.deinit();
-    try testing.expect(managed.records.len > 0);
+    const record = try (try ctx.table("items")).readDoc(allocator, 1, 5);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
 }
 
 test "StorageEngine: low-level batch writer cleans up when begin fails" {
@@ -432,9 +435,9 @@ test "StorageEngine: concurrent reads" {
     const items_table_index = ctx.tableIndex("items");
     const Thread = struct {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, table_index: usize, id: u128) !void {
-            var managed = try eng.selectDocument(alloc, table_index, id, 2, null);
-            defer managed.deinit();
-            try testing.expect(managed.records.len > 0);
+            const record = try sth.readDoc(alloc, eng, table_index, id, 2);
+            defer if (record) |r| r.deinit(allocator);
+            try testing.expect(record != null);
         }
     };
     var threads: [4]std.Thread = undefined;
@@ -487,9 +490,9 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
 
     for (0..num_keys) |i| {
         const id: u128 = i + 1;
-        var managed = try (try verify_ctx.table("items")).selectDocument(allocator, id, 1);
-        defer managed.deinit();
-        try testing.expect(managed.records.len > 0);
+        const record = try (try verify_ctx.table("items")).readDoc(allocator, id, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
     }
 }
 test "StorageEngine: client writes blocked during migration" {
@@ -671,10 +674,10 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     }
     try testing.expectEqual(@as(usize, 0), entries.len);
 
-    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
-    defer result.deinit();
-    try testing.expectEqual(@as(usize, 1), result.records.len);
-    const val = result.records[0].values[val_field_idx];
+    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
+    const val = record.?.values[val_field_idx];
     try testing.expectEqualStrings("original", val.scalar.text);
 }
 
@@ -722,9 +725,9 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 
-    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
-    defer result.deinit();
-    try testing.expectEqual(@as(usize, 1), result.records.len);
+    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
 }
 
 test "StorageEngine: confirmed delete of non-existent row succeeds" {
@@ -840,10 +843,10 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     try testing.expectEqual(conn_id, entries[0].conn_id);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
 
-    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
-    defer result.deinit();
-    try testing.expectEqual(@as(usize, 1), result.records.len);
-    const val = result.records[0].values[val_field_idx];
+    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
+    const val = record.?.values[val_field_idx];
     try testing.expectEqualStrings("new", val.scalar.text);
 }
 
@@ -893,9 +896,9 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 
-    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
-    defer result.deinit();
-    try testing.expectEqual(@as(usize, 1), result.records.len);
-    const val = result.records[0].values[val_field_idx];
+    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
+    const val = record.?.values[val_field_idx];
     try testing.expectEqualStrings("original", val.scalar.text);
 }

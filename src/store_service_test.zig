@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const schema = @import("schema.zig");
@@ -266,9 +267,9 @@ test "StoreService: remove" {
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema.table("people") orelse return error.UnknownTable;
-        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1, null);
-        defer managed.deinit();
-        try testing.expect(managed.records.len == 0);
+        const record = try sth.readDoc(allocator, &app.storage_engine, tbl_md.index, 1, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record == null);
     }
 
     // 3. Negative: Unknown table
@@ -429,9 +430,9 @@ test "StoreService: persistence and namespace isolation" {
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
-        var managed_b = try test_table.selectDocument(allocator, 1, 4);
-        defer managed_b.deinit();
-        try testing.expectEqual(@as(usize, 0), managed_b.records.len);
+        const record_b = try test_table.readDoc(allocator, 1, 4);
+        defer if (record_b) |r| r.deinit(allocator);
+        try testing.expect(record_b == null);
     }
 
     // 3. Updates
@@ -778,9 +779,9 @@ test "StoreService: batchWrite - mixed set and remove" {
     try app.storage_engine.flushPendingWrites();
 
     // Doc 1 should be gone
-    var managed = try items.selectDocument(allocator, 1, 1);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 0), managed.records.len);
+    const record = try items.readDoc(allocator, 1, 1);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record == null);
 
     // Doc 2 should exist
     var doc2 = try items.getOne(allocator, 2, 1);
@@ -929,9 +930,9 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     try testing.expect(scope_a.user_doc_id != scope_c.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_a.user_doc_id, schema.global_namespace_id, null);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.records.len);
+    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_a.user_doc_id, schema.global_namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
 }
 
 test "StoreService: resolveStoreScope isolates user ids when users is namespaced" {
@@ -959,9 +960,9 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     try testing.expect(scope_a1.user_doc_id != scope_b.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id, null);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.records.len);
+    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_b.user_doc_id, scope_b.namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
 }
 
 test "StoreService: create requires all required fields but update does not" {

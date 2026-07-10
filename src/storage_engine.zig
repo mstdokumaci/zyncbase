@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const reader = @import("storage_engine/reader.zig");
 const write_worker_mod = @import("storage_engine/write_worker.zig");
 const WriteWorker = write_worker_mod.WriteWorker;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
@@ -26,43 +25,23 @@ const send_queue_type = @import("send_queue.zig").send_queue;
 pub const StorageError = storage_errors.StorageError;
 pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
-pub const TableMetadata = schema_mod.Table;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
-pub const CheckpointStats = write_queue.CheckpointStats;
-pub const ReconnectionConfig = write_queue.ReconnectionConfig;
+const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
 pub const AckLatch = write_queue.AckLatch;
+const CheckpointStats = write_queue.CheckpointStats;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
 pub const ReadKind = read_buffer.ReadKind;
 const DocId = typed.DocId;
 const Value = typed.Value;
-const Record = typed.Record;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
-
-/// A managed result that might be backed by a cache handle.
-/// Every result is exposed as a slice of Records.
-/// Caller MUST call deinit() to release any potential cache handles and memory.
-pub const ManagedResult = struct {
-    records: []Record,
-    handle: ?metadata_cache_type.Handle = null,
-    allocator: ?Allocator = null,
-
-    pub fn deinit(self: *ManagedResult) void {
-        if (self.handle) |h| {
-            h.release();
-        } else if (self.allocator) |alloc| {
-            for (self.records) |r| r.deinit(alloc);
-            alloc.free(self.records);
-        }
-    }
-};
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
 
@@ -502,10 +481,6 @@ pub const StorageEngine = struct {
         }
     }
 
-    pub fn readRequestQueue(self: *StorageEngine) *read_buffer.read_request_queue {
-        return &self.read_request_queue;
-    }
-
     /// Return the raw writer connection for setup-time tools (migrations).
     /// Only allowed during the 'setup' phase.
     pub fn getSetupConn(self: *StorageEngine) !*sqlite.Db {
@@ -515,8 +490,15 @@ pub const StorageEngine = struct {
         return self.write_worker.setupConn();
     }
 
-    pub fn changeQueue(self: *StorageEngine) ?*ChangeQueue {
-        return self.write_worker.change_queue;
+    /// Returns a reference to the engine's schema.
+    pub fn schemaRef(self: *StorageEngine) *const Schema {
+        return self.schema;
+    }
+
+    /// Round-robin reader node selection. Returns the next reader node.
+    pub fn nextReaderNode(self: *StorageEngine) *ReaderNode {
+        const idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
+        return &self.reader_nodes[idx];
     }
 
     pub fn sessionResolutionBuffer(self: *StorageEngine) *SessionResolutionBuffer {
@@ -862,139 +844,6 @@ pub const StorageEngine = struct {
             initialized_count += 1;
         }
         return values;
-    }
-
-    /// Execute a single-document SELECT against SQLite and populate the cache if the
-    /// read is still consistent with the current write version.
-    fn executeAndCacheResult(
-        self: *StorageEngine,
-        allocator: Allocator,
-        node: *ReaderNode,
-        sql_query: []const u8,
-        id: DocId,
-        effective_namespace_id: i64,
-        table_metadata: *const schema_mod.Table,
-        rendered_guard: ?filter_sql.RenderedPredicate,
-        cache_key: storage_cache.MetadataCacheKey,
-    ) !ManagedResult {
-        // Snapshot write_seq before the DB read.
-        const seq_before = self.write_worker.snapshotVersion();
-
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
-        defer mstmt.release();
-        const result = try reader.execSelectDocument(allocator, &node.conn, mstmt.stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
-        if (result) |record| {
-            errdefer record.deinit(allocator);
-            if (self.write_worker.snapshotVersion() == seq_before) {
-                // Populate cache with a persistent copy (cloned into GPA)
-                const cache_record = try record.clone(self.allocator);
-                errdefer cache_record.deinit(self.allocator);
-                try self.metadata_cache.update(cache_key, cache_record);
-            }
-            const items = try allocator.alloc(Record, 1);
-            items[0] = record;
-            return ManagedResult{ .records = items, .allocator = allocator };
-        }
-        return ManagedResult{ .records = &[_]Record{}, .allocator = null };
-    }
-
-    /// Select a single document by ID.
-    pub fn selectDocument(
-        self: *StorageEngine,
-        allocator: Allocator,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-    ) !ManagedResult {
-        try self.ensureRunning();
-        const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
-
-        if (guard_predicate) |predicate| {
-            if (predicate.isAlwaysFalse()) return ManagedResult{ .records = &[_]Record{}, .allocator = null };
-        }
-
-        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
-        switch (try storage_cache.getCachedRecord(&self.metadata_cache, cache_key, guard_predicate)) {
-            .miss => {},
-            .guard_failed => return ManagedResult{ .records = &[_]Record{}, .allocator = null },
-            .hit => |hit| {
-                return ManagedResult{
-                    .records = hit.record[0..1],
-                    .handle = hit.handle,
-                };
-            },
-        }
-
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
-        const node = &self.reader_nodes[reader_idx];
-        node.mutex.lock();
-        defer node.mutex.unlock();
-
-        var rendered_guard = try filter_sql.renderAndClause(allocator, table_metadata, guard_predicate);
-        defer if (rendered_guard) |*rendered| rendered.deinit(allocator);
-
-        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
-        defer allocator.free(sql_query);
-
-        return self.executeAndCacheResult(allocator, node, sql_query, id, effective_namespace_id, table_metadata, rendered_guard, cache_key);
-    }
-
-    /// SELECT for a query filter.
-    pub fn selectQuery(
-        self: *StorageEngine,
-        allocator: Allocator,
-        table_index: usize,
-        namespace_id: i64,
-        filter: *const query_ast.QueryFilter,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-    ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
-        try self.ensureRunning();
-        const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
-
-        if (filter.predicate.isAlwaysFalse()) {
-            return .{
-                .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
-                .next_cursor_str = null,
-            };
-        }
-        if (guard_predicate) |predicate| {
-            if (predicate.isAlwaysFalse()) {
-                return .{
-                    .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
-                    .next_cursor_str = null,
-                };
-            }
-        }
-
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
-        const node = &self.reader_nodes[reader_idx];
-        node.mutex.lock();
-        defer node.mutex.unlock();
-
-        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, guard_predicate);
-        defer query_res.deinit(allocator);
-
-        const sort_field_index = filter.order_by.field_index;
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
-        defer mstmt.release();
-        const stmt = mstmt.stmt;
-        const exec_res = try reader.execQuery(
-            allocator,
-            &node.conn,
-            stmt,
-            query_res.values,
-            table_metadata,
-            filter.limit,
-            sort_field_index,
-        );
-
-        return .{
-            .result = ManagedResult{ .records = exec_res.records, .allocator = allocator },
-            .next_cursor_str = exec_res.next_cursor_str,
-        };
     }
 
     /// DELETE a document from a table.

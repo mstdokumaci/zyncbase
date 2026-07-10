@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
+const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 
 /// Helper to setup a ZyncBaseServer for wiring tests with a clean configuration
@@ -59,10 +60,9 @@ test "Integration: Error propagation through layers" {
 
     const test_tbl = server.storage_engine.schema.table("test") orelse return error.TableNotFound;
     // Verify storage engine interaction through wiring
-    var managed = try server.storage_engine.selectDocument(allocator, test_tbl.index, 999, 1, null);
-    defer managed.deinit();
-    const doc = managed.records;
-    try testing.expect(doc.len == 0);
+    const record = try sth.readDoc(allocator, &server.storage_engine, test_tbl.index, 999, 1);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record == null);
 
     // Verify components have expected internal pointers
     try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);

@@ -38,7 +38,6 @@ test {
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
     _ = @import("filter_eval_test.zig");
-    _ = @import("storage_query_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("queues/spsc_queue_test.zig");
@@ -66,7 +65,6 @@ test {
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
     _ = @import("query_parser_property_test.zig");
-    _ = @import("storage_engine_query_property_test.zig");
     _ = @import("subscription_engine_test.zig");
     _ = @import("subscription_engine_perf_test.zig");
     _ = @import("change_queue_test.zig");

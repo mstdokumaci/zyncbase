@@ -6,6 +6,7 @@ const AppTestContext = helpers.AppTestContext;
 const parseResponse = helpers.parseResponse;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_utils.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
@@ -156,12 +157,12 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
     try app.storage_engine.flushPendingWrites();
 
     // Read back via storage engine
-    var managed = try app.storage_engine.selectDocument(allocator, table.index, 1, conn.namespace_id, null);
-    defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.records.len);
-    try testing.expectEqualStrings("hello", managed.records[0].values[table.fieldIndex("title").?].scalar.text);
-    try testing.expectEqual(@as(i64, 100), managed.records[0].values[table.fieldIndex("must_be_complete__before").?].scalar.integer);
-    try testing.expectEqual(@as(i64, 200), managed.records[0].values[table.fieldIndex("must_be_complete__after").?].scalar.integer);
+    const record = try sth.readDoc(allocator, &app.storage_engine, table.index, 1, conn.namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
+    try testing.expectEqualStrings("hello", record.?.values[table.fieldIndex("title").?].scalar.text);
+    try testing.expectEqual(@as(i64, 100), record.?.values[table.fieldIndex("must_be_complete__before").?].scalar.integer);
+    try testing.expectEqual(@as(i64, 200), record.?.values[table.fieldIndex("must_be_complete__after").?].scalar.integer);
 }
 
 test "MessageHandler: StoreSet routes and maps StoreService errors" {

@@ -4,6 +4,9 @@ const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
 const typed = @import("typed.zig");
 const tth = @import("typed_test_helpers.zig");
+const reader_mod = @import("storage_engine/reader.zig");
+const sql_mod = @import("storage_engine/sql.zig");
+const sqlite = @import("sqlite");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
@@ -23,6 +26,74 @@ pub const NamedColumn = struct {
     field: []const u8,
     value: typed.Value,
 };
+
+pub const QueryResult = struct {
+    records: []typed.Record,
+    next_cursor: ?[]const u8,
+};
+
+/// Read a single document by ID directly from SQLite (bypasses cache and guard predicates).
+/// Returns null if the document does not exist.
+pub fn readDoc(
+    allocator: Allocator,
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed.DocId,
+    namespace_id: i64,
+) !?typed.Record {
+    const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+
+    const node = engine.nextReaderNode();
+    node.mutex.lock();
+    defer node.mutex.unlock();
+
+    const sql_query = try sql_mod.buildSelectDocumentSql(allocator, table_metadata, null);
+    defer allocator.free(sql_query);
+
+    const dynamic = try node.conn.prepareDynamic(sql_query);
+    defer _ = sqlite.c.sqlite3_finalize(dynamic.stmt);
+
+    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null);
+}
+
+/// Execute a query directly from SQLite (bypasses cache and guard predicates).
+/// Caller must free each record and the records slice.
+pub fn queryDocs(
+    allocator: Allocator,
+    engine: *StorageEngine,
+    table_index: usize,
+    namespace_id: i64,
+    filter: *const query_ast.QueryFilter,
+) !QueryResult {
+    const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+
+    const node = engine.nextReaderNode();
+    node.mutex.lock();
+    defer node.mutex.unlock();
+
+    const query_res = try reader_mod.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, null);
+    defer query_res.deinit(allocator);
+
+    const dynamic = try node.conn.prepareDynamic(query_res.sql);
+    defer _ = sqlite.c.sqlite3_finalize(dynamic.stmt);
+
+    const exec_res = try reader_mod.execQuery(
+        allocator,
+        &node.conn,
+        dynamic.stmt,
+        query_res.values,
+        table_metadata,
+        filter.limit,
+        filter.order_by.field_index,
+    );
+
+    return .{
+        .records = exec_res.records,
+        .next_cursor = exec_res.next_cursor_str,
+    };
+}
 
 pub const TableFixture = struct {
     engine: *StorageEngine,
@@ -75,24 +146,22 @@ pub const TableFixture = struct {
         try self.engine.flushPendingWrites();
     }
 
-    pub fn selectDocument(
+    pub fn readDoc(
         self: TableFixture,
         allocator: Allocator,
         id: typed.DocId,
         namespace_id: i64,
-    ) !storage_engine.ManagedResult {
-        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace_id, null);
+    ) !?typed.Record {
+        return Helpers.readDoc(allocator, self.engine, self.metadata.index, id, namespace_id);
     }
 
-    pub fn selectQuery(
+    pub fn queryDocs(
         self: TableFixture,
         allocator: Allocator,
         namespace_id: i64,
         filter: *const query_ast.QueryFilter,
-    ) !storage_engine.ManagedResult {
-        const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter, null);
-        if (res.next_cursor_str) |s| allocator.free(s);
-        return res.result;
+    ) !QueryResult {
+        return Helpers.queryDocs(allocator, self.engine, self.metadata.index, namespace_id, filter);
     }
 
     pub fn deleteDocument(
@@ -109,49 +178,46 @@ pub const TableFixture = struct {
         id: typed.DocId,
         namespace_id: i64,
     ) !ManagedDocument {
-        var managed = try self.selectDocument(allocator, id, namespace_id);
-        if (managed.records.len == 0) {
-            managed.deinit();
-            return error.NotFound;
-        }
-        return .{ .fixture = self, .managed = managed };
+        const record = try self.readDoc(allocator, id, namespace_id) orelse return error.NotFound;
+        return .{ .fixture = self, .record = record, .allocator = allocator };
     }
 };
 
 pub const ManagedDocument = struct {
     fixture: TableFixture,
-    managed: storage_engine.ManagedResult,
+    record: typed.Record,
+    allocator: Allocator,
 
     pub fn deinit(self: *ManagedDocument) void {
-        self.managed.deinit();
+        self.record.deinit(self.allocator);
     }
 
     pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed.DocId {
-        return Helpers.getFieldDocIdOrNull(self.managed.records[0], self.fixture.metadata, key);
+        return Helpers.getFieldDocIdOrNull(self.record, self.fixture.metadata, key);
     }
 
     pub fn getFieldInt(self: *const ManagedDocument, key: []const u8) !i64 {
-        return Helpers.getFieldInt(self.managed.records[0], self.fixture.metadata, key);
+        return Helpers.getFieldInt(self.record, self.fixture.metadata, key);
     }
 
     pub fn expectMissingField(self: *const ManagedDocument, key: []const u8) !void {
-        try Helpers.expectMissingField(self.managed.records[0], self.fixture.metadata, key);
+        try Helpers.expectMissingField(self.record, self.fixture.metadata, key);
     }
 
     pub fn expectFieldTextArray(self: *const ManagedDocument, key: []const u8, expected: []const []const u8) !void {
-        try Helpers.expectFieldTextArray(self.managed.records[0], self.fixture.metadata, key, expected);
+        try Helpers.expectFieldTextArray(self.record, self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldString(self: *const ManagedDocument, key: []const u8, expected: []const u8) !typed.Value {
-        return Helpers.expectFieldString(self.managed.records[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldString(self.record, self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldDocId(self: *const ManagedDocument, key: []const u8, expected: typed.DocId) !typed.DocId {
-        return Helpers.expectFieldDocId(self.managed.records[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldDocId(self.record, self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldInt(self: *const ManagedDocument, key: []const u8, expected: i64) !i64 {
-        return Helpers.expectFieldInt(self.managed.records[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldInt(self.record, self.fixture.metadata, key, expected);
     }
 };
 
@@ -281,13 +347,6 @@ pub const EngineTestContext = struct {
 pub fn makeField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
     var f = schema_helpers.makeField(name, sql_type);
     f.required = required;
-    return f;
-}
-
-/// Helper to create an indexed Field.
-pub fn makeIndexedField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
-    var f = makeField(name, sql_type, required);
-    f.indexed = true;
     return f;
 }
 
