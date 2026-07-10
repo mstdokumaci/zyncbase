@@ -358,7 +358,7 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        var read_req = try self.store_service.prepareLoadMoreRead(.{
+        try self.store_service.loadMore(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .session_user_id = session.user_doc_id,
@@ -368,9 +368,6 @@ pub const MessageHandler = struct {
             .namespace_id = session.namespace_id,
             .allocator = self.allocator,
         }, sub_query.table_index, sub_query.namespace_id, sub_query.filter, req.subId, req.nextCursor);
-        errdefer read_req.deinit(self.allocator);
-
-        try self.store_service.enqueueRead(read_req);
         return null;
     }
 
@@ -389,11 +386,8 @@ pub const MessageHandler = struct {
 
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        // Parse write acknowledgment metadata
-        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
-
         try self.store_service.setPath(
-            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
+            buildWriteContext(session, conn, namespace, payloads.write_id),
             payloads.path,
             value,
         );
@@ -413,11 +407,8 @@ pub const MessageHandler = struct {
 
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        // Parse write acknowledgment metadata
-        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
-
         try self.store_service.removePath(
-            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
+            buildWriteContext(session, conn, namespace, payloads.write_id),
             payloads.path,
         );
 
@@ -435,11 +426,8 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        // Parse write acknowledgment metadata
-        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
-
         try self.store_service.batchWrite(
-            buildWriteContext(session, conn, namespace, if (write_ack) |ack| ack.write_id else null),
+            buildWriteContext(session, conn, namespace, payloads.write_id),
             payloads.ops,
         );
 
@@ -506,7 +494,7 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        var read_req = try self.store_service.prepareQueryRead(.{
+        try self.store_service.query(.{
             .conn_id = conn.id,
             .msg_id = msg_id,
             .session_user_id = session.user_doc_id,
@@ -515,10 +503,7 @@ pub const MessageHandler = struct {
             .namespace = namespace,
             .namespace_id = session.namespace_id,
             .allocator = self.allocator,
-        }, table_index, parsed, null, .query);
-        errdefer read_req.deinit(self.allocator);
-
-        try self.store_service.enqueueRead(read_req);
+        }, table_index, parsed);
         return null;
     }
 
@@ -915,25 +900,4 @@ fn isSecurityError(err: anyerror) bool {
         => true,
         else => false,
     };
-}
-
-fn parseWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?struct { write_id: [16]u8 } {
-    const confirm_val = confirm_str orelse {
-        // No confirm field — a writeId without confirm is a client bug.
-        if (write_id_str != null) return error.InvalidWriteAck;
-        return null;
-    };
-    if (!std.mem.eql(u8, confirm_val, "committed")) {
-        // "accepted" (or any other value) with a writeId is a client bug: the
-        // writeId would never be resolved, causing a silent hang on the client.
-        // Reject early so the client gets an immediate error instead.
-        if (write_id_str != null) return error.InvalidWriteAck;
-        return null;
-    }
-    // confirm == "committed": writeId is required and must be valid.
-    const wid_str = write_id_str orelse return error.InvalidWriteAck;
-    if (wid_str.len != 32) return error.InvalidWriteAck;
-    var write_id: [16]u8 = undefined;
-    _ = std.fmt.hexToBytes(&write_id, wid_str) catch return error.InvalidWriteAck;
-    return .{ .write_id = write_id };
 }

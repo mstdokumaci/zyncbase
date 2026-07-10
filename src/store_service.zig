@@ -185,6 +185,33 @@ pub const StoreService = struct {
         try self.storage_engine.enqueueRead(request);
     }
 
+    /// Builds and enqueues a query read request in one step.
+    pub fn query(
+        self: *StoreService,
+        ctx: ReadContext,
+        table_index: usize,
+        parsed: msgpack.Payload,
+    ) !void {
+        var read_req = try self.prepareQueryRead(ctx, table_index, parsed, null, .query);
+        errdefer read_req.deinit(ctx.allocator);
+        try self.enqueueRead(read_req);
+    }
+
+    /// Builds and enqueues a load-more read request in one step.
+    pub fn loadMore(
+        self: *StoreService,
+        ctx: ReadContext,
+        table_index: usize,
+        namespace_id: i64,
+        sub_filter: query_ast.QueryFilter,
+        sub_id: u64,
+        next_cursor: []const u8,
+    ) !void {
+        var read_req = try self.prepareLoadMoreRead(ctx, table_index, namespace_id, sub_filter, sub_id, next_cursor);
+        errdefer read_req.deinit(ctx.allocator);
+        try self.enqueueRead(read_req);
+    }
+
     /// Builds a ReadRequest for an initial query/subscribe read.
     /// Performs read authorization and parses the wire filter payload, then
     /// hands ownership of the resulting allocations to the returned ReadRequest.
