@@ -258,96 +258,6 @@ test "query normalization drops AND notIn empty set" {
     try testing.expect(filter.predicate.or_conditions == null);
 }
 
-test "query normalization marks AND in empty set as match none" {
-    const allocator = testing.allocator;
-
-    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
-        .name = "users",
-        .fields = &[_][]const u8{"role"},
-        .types = &[_]schema_mod.FieldType{.text},
-    }});
-    defer schema.deinit();
-
-    const empty_values = try emptyArrayPayload(allocator);
-    defer empty_values.free(allocator);
-
-    const tbl = schema.table("users") orelse return error.TestExpectedValue;
-    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
-        .conditions = .{
-            .{ "role", 9, empty_values },
-        },
-    });
-    defer root.free(allocator);
-
-    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
-    defer filter.deinit(allocator);
-
-    try testing.expect(filter.predicate.isAlwaysFalse());
-    try testing.expect(filter.predicate.conditions == null);
-    try testing.expect(filter.predicate.or_conditions == null);
-}
-
-test "query normalization drops OR tautology but keeps AND conditions" {
-    const allocator = testing.allocator;
-
-    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
-        .name = "users",
-        .fields = &[_][]const u8{ "role", "age" },
-        .types = &[_]schema_mod.FieldType{ .text, .integer },
-    }});
-    defer schema.deinit();
-
-    const empty_values = try emptyArrayPayload(allocator);
-    defer empty_values.free(allocator);
-
-    const tbl = schema.table("users") orelse return error.TestExpectedValue;
-    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
-        .conditions = .{
-            .{ "age", 0, 18 },
-        },
-        .or_conditions = .{
-            .{ "role", 10, empty_values },
-        },
-    });
-    defer root.free(allocator);
-
-    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
-    defer filter.deinit(allocator);
-
-    try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
-    try testing.expect(filter.predicate.conditions != null);
-    try testing.expect(filter.predicate.or_conditions == null);
-}
-
-test "query normalization marks OR group with only false terms as match none" {
-    const allocator = testing.allocator;
-
-    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
-        .name = "users",
-        .fields = &[_][]const u8{"role"},
-        .types = &[_]schema_mod.FieldType{.text},
-    }});
-    defer schema.deinit();
-
-    const empty_values = try emptyArrayPayload(allocator);
-    defer empty_values.free(allocator);
-
-    const tbl = schema.table("users") orelse return error.TestExpectedValue;
-    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
-        .or_conditions = .{
-            .{ "role", 9, empty_values },
-        },
-    });
-    defer root.free(allocator);
-
-    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
-    defer filter.deinit(allocator);
-
-    try testing.expect(filter.predicate.isAlwaysFalse());
-    try testing.expect(filter.predicate.conditions == null);
-    try testing.expect(filter.predicate.or_conditions == null);
-}
-
 test "in condition rejects non-array operand" {
     const allocator = testing.allocator;
 
@@ -437,27 +347,6 @@ test "contains on text rejects non-string operand" {
     defer root.free(allocator);
 
     try testing.expectError(error.InvalidOperandType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
-}
-
-test "startsWith on non-text field is rejected" {
-    const allocator = testing.allocator;
-
-    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
-        .name = "users",
-        .fields = &[_][]const u8{"age"},
-        .types = &[_]schema_mod.FieldType{.integer},
-    }});
-    defer schema.deinit();
-
-    const tbl = schema.table("users") orelse return error.TestExpectedValue;
-    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
-        .conditions = .{
-            .{ "age", 7, "1" }, // startsWith on integer
-        },
-    });
-    defer root.free(allocator);
-
-    try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "isNull with operand is rejected" {

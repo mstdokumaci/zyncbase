@@ -316,22 +316,6 @@ fn parseInOperand(
     return result;
 }
 
-fn parseContainsOperand(
-    allocator: std.mem.Allocator,
-    field_type: schema_mod.FieldType,
-    items_type: ?schema_mod.FieldType,
-    raw: msgpack.Payload,
-) ParserError!?Value {
-    return switch (field_type) {
-        .text => blk: {
-            if (raw != .str) return error.InvalidOperandType;
-            break :blk try parseScalarValue(allocator, .text, raw);
-        },
-        .array => try parseArrayElementValue(allocator, items_type, raw),
-        else => error.UnsupportedOperatorForFieldType,
-    };
-}
-
 fn parseConditionValueForOperator(
     allocator: std.mem.Allocator,
     op: Operator,
@@ -339,31 +323,24 @@ fn parseConditionValueForOperator(
     items_type: ?schema_mod.FieldType,
     payload: ?msgpack.Payload,
 ) ParserError!?Value {
-    switch (op) {
-        .isNull, .isNotNull => {
-            if (payload != null) return error.UnexpectedOperand;
-            return null;
-        },
-        else => {},
+    const shape = try query_ast.operatorExpectsValueShape(op, field_type);
+
+    if (shape == .nullary) {
+        if (payload != null) return error.UnexpectedOperand;
+        return null;
     }
 
     const raw = payload orelse return error.MissingOperand;
 
-    return switch (op) {
-        .eq, .ne => try parseFieldValue(allocator, field_type, items_type, raw),
-        .gt, .lt, .gte, .lte => {
-            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
-            return try parseScalarValue(allocator, field_type, raw);
-        },
-        .contains => return parseContainsOperand(allocator, field_type, items_type, raw),
-        .startsWith, .endsWith => {
-            if (field_type != .text) return error.UnsupportedOperatorForFieldType;
+    return switch (shape) {
+        .scalar_text, .contains_text => {
             if (raw != .str) return error.InvalidOperandType;
             return try parseScalarValue(allocator, .text, raw);
         },
-        .in, .notIn => try parseInOperand(allocator, field_type, raw),
-        // .isNull and .isNotNull are handled by the early guard above and never reach here.
-        else => unreachable,
+        .scalar, .array_field => try parseFieldValue(allocator, field_type, items_type, raw),
+        .array_membership => try parseInOperand(allocator, field_type, raw),
+        .contains_element => try parseArrayElementValue(allocator, items_type, raw),
+        .nullary => unreachable,
     };
 }
 

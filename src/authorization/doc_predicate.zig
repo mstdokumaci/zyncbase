@@ -294,7 +294,7 @@ fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) Doc
     const field = table.fields[field_index];
     const lhs_type = ValueType.fromField(field);
 
-    if (!operatorAllowedForField(comp.op, lhs_type.storage_type)) return error.UnsupportedOperatorForFieldType;
+    _ = try query_ast.operatorExpectsValueShape(comp.op, lhs_type.storage_type);
 
     // Nullary operators have no RHS; nothing further to validate.
     if (comp.op.isNullary()) return;
@@ -335,33 +335,28 @@ fn validateLiteralValue(
     lhs_type: ValueType,
     value: Value,
 ) DocPredicateError!void {
-    switch (op) {
-        .in, .notIn => {
+    const shape = try query_ast.operatorExpectsValueShape(op, lhs_type.storage_type);
+
+    switch (shape) {
+        .nullary => unreachable, // nullary ops have no literal RHS
+        .scalar_text, .contains_text => {
+            if (value != .scalar or value.scalar != .text) return error.InvalidValue;
+        },
+        .scalar => {
+            if (value != .scalar) return error.InvalidValue;
+            try validateScalarType(lhs_type.storage_type, value.scalar);
+        },
+        .array_membership => {
             if (value != .array) return error.InvalidValue;
             try validateScalarItems(try lhs_type.membershipItemsType(), value.array);
         },
-        .contains => {
-            if (lhs_type.storage_type == .array) {
-                if (value != .scalar) return error.InvalidValue;
-                try validateScalarType(try lhs_type.arrayItemsType(), value.scalar);
-            } else {
-                // .text contains: value must be .text scalar
-                if (value != .scalar or value.scalar != .text) return error.InvalidValue;
-            }
+        .array_field => {
+            if (value != .array) return error.InvalidValue;
+            try validateScalarItems(try lhs_type.arrayItemsType(), value.array);
         },
-        .startsWith, .endsWith => {
-            if (value != .scalar or value.scalar != .text) return error.InvalidValue;
-        },
-        .isNull, .isNotNull => unreachable, // nullary — no literal RHS
-        else => {
-            if (lhs_type.storage_type == .array) {
-                if (value != .array) return error.InvalidValue;
-                try validateScalarItems(try lhs_type.arrayItemsType(), value.array);
-                return;
-            }
-
+        .contains_element => {
             if (value != .scalar) return error.InvalidValue;
-            try validateScalarType(lhs_type.storage_type, value.scalar);
+            try validateScalarType(try lhs_type.arrayItemsType(), value.scalar);
         },
     }
 }
@@ -453,17 +448,6 @@ fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) D
         .doc_id => if (scalar != .doc_id) return error.InvalidValue,
         .array => return error.InvalidValue,
     }
-}
-
-fn operatorAllowedForField(op: query_ast.Operator, field_type: schema.FieldType) bool {
-    return switch (op) {
-        .eq, .ne => true,
-        .gt, .gte, .lt, .lte => field_type != .array,
-        .contains => field_type == .text or field_type == .array,
-        .startsWith, .endsWith => field_type == .text,
-        .in, .notIn => true,
-        .isNull, .isNotNull => true,
-    };
 }
 
 const PredicateBuilder = struct {
