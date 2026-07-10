@@ -11,7 +11,11 @@ const Allocator = std.mem.Allocator;
 /// When `prefix` is empty the result is a fresh copy of `segment` (no leading separator).
 pub fn join(allocator: Allocator, prefix: []const u8, segment: []const u8) ![]const u8 {
     if (prefix.len == 0) return allocator.dupe(u8, segment);
-    return std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, segment });
+    const result = try allocator.alloc(u8, prefix.len + 2 + segment.len);
+    @memcpy(result[0..prefix.len], prefix);
+    @memcpy(result[prefix.len .. prefix.len + 2], "__");
+    @memcpy(result[prefix.len + 2 ..], segment);
+    return result;
 }
 
 /// Split `path` at the first `__` occurrence.
