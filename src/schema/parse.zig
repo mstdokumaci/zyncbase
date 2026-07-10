@@ -524,7 +524,12 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
             if (item != .string) return error.InvalidTableDefinition;
             const normalized = try field_path.normalizeDots(allocator, item.string);
             errdefer allocator.free(normalized);
-            try required_set.put(normalized, false);
+            const gop = try required_set.getOrPut(normalized);
+            if (gop.found_existing) {
+                allocator.free(normalized);
+            } else {
+                gop.value_ptr.* = false;
+            }
         }
     }
 
