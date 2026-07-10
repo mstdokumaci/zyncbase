@@ -323,9 +323,7 @@ fn parseConditionValueForOperator(
     items_type: ?schema_mod.FieldType,
     payload: ?msgpack.Payload,
 ) ParserError!?Value {
-    const shape = query_ast.operatorExpectsValueShape(op, field_type, items_type) catch |e| switch (e) {
-        error.UnsupportedOperatorForFieldType => return error.UnsupportedOperatorForFieldType,
-    };
+    const shape = try query_ast.operatorExpectsValueShape(op, field_type, items_type);
 
     if (shape == .nullary) {
         if (payload != null) return error.UnexpectedOperand;

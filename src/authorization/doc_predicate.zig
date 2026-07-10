@@ -333,9 +333,7 @@ fn validateLiteralValue(
     lhs_type: ValueType,
     value: Value,
 ) DocPredicateError!void {
-    const shape = query_ast.operatorExpectsValueShape(op, lhs_type.storage_type, lhs_type.items_type) catch |e| switch (e) {
-        error.UnsupportedOperatorForFieldType => return error.UnsupportedOperatorForFieldType,
-    };
+    const shape = try query_ast.operatorExpectsValueShape(op, lhs_type.storage_type, lhs_type.items_type);
 
     switch (shape) {
         .nullary => unreachable, // nullary ops have no literal RHS
