@@ -337,9 +337,8 @@ fn parseConditionValueForOperator(
             if (raw != .str) return error.InvalidOperandType;
             return try parseScalarValue(allocator, .text, raw);
         },
-        .scalar => try parseFieldValue(allocator, field_type, items_type, raw),
+        .scalar, .array_field => try parseFieldValue(allocator, field_type, items_type, raw),
         .array_membership => try parseInOperand(allocator, field_type, raw),
-        .array_field => try parseFieldValue(allocator, field_type, items_type, raw),
         .contains_element => try parseArrayElementValue(allocator, items_type, raw),
         .nullary => unreachable,
     };
