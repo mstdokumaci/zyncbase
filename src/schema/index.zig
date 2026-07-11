@@ -11,7 +11,6 @@ pub fn buildFieldIndex(allocator: std.mem.Allocator, table: *types.Table) !void 
     }
 
     table.field_index_map = map;
-    table.has_index = true;
 }
 
 pub fn buildTableIndex(allocator: std.mem.Allocator, schema: *types.Schema) !void {
@@ -24,5 +23,4 @@ pub fn buildTableIndex(allocator: std.mem.Allocator, schema: *types.Schema) !voi
     }
 
     schema.table_index_map = map;
-    schema.has_index = true;
 }

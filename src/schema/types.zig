@@ -132,8 +132,10 @@ pub const Table = struct {
     namespaced: bool = true,
     is_users_table: bool = false,
     index: usize = 0,
-    field_index_map: ?std.StringHashMapUnmanaged(usize) = null,
-    has_index: bool = false,
+    /// Always populated for runtime tables (built by `buildRuntimeTable`).
+    /// Bare declared-table literals use the empty default — they are never
+    /// queried and only `deinit`'d (a no-op on an empty map).
+    field_index_map: std.StringHashMapUnmanaged(usize) = .{},
     canonical_fields: bool = false,
     user_field_start: usize = 0,
     user_field_end: usize = 0,
@@ -150,9 +152,7 @@ pub const Table = struct {
     delete_document_sql_suffix: []const u8 = "",
 
     pub fn deinit(self: *Table, allocator: Allocator) void {
-        if (self.has_index) {
-            if (self.field_index_map) |*map| map.deinit(allocator);
-        }
+        self.field_index_map.deinit(allocator);
         for (self.fields) |f| f.deinit(allocator);
         allocator.free(self.fields);
         allocator.free(self.name);
@@ -169,14 +169,7 @@ pub const Table = struct {
     }
 
     pub fn fieldIndex(self: *const Table, name: []const u8) ?usize {
-        if (self.has_index) {
-            const map = self.field_index_map orelse return null;
-            return map.get(name);
-        }
-        for (self.fields, 0..) |candidate, idx| {
-            if (std.mem.eql(u8, candidate.name, name)) return idx;
-        }
-        return null;
+        return self.field_index_map.get(name);
     }
 
     pub fn userFields(self: *const Table) []const Field {
@@ -206,8 +199,10 @@ pub const Schema = struct {
     allocator: Allocator,
     version: []const u8,
     tables: []Table,
-    table_index_map: ?std.StringHashMapUnmanaged(usize) = null,
-    has_index: bool = false,
+    /// Always populated for runtime schemas (built by `buildTableIndex`).
+    /// A bare `Schema` literal uses the empty default — never queried,
+    /// `deinit` is a no-op on an empty map.
+    table_index_map: std.StringHashMapUnmanaged(usize) = .{},
     metadata: ?Metadata = null,
 
     // Presence fields
@@ -217,9 +212,7 @@ pub const Schema = struct {
     presence_shared_fields_names: []const []const u8,
 
     pub fn deinit(self: *Schema) void {
-        if (self.has_index) {
-            if (self.table_index_map) |*map| map.deinit(self.allocator);
-        }
+        self.table_index_map.deinit(self.allocator);
         for (self.tables) |*tbl| tbl.deinit(self.allocator);
         self.allocator.free(self.tables);
         self.allocator.free(self.version);
@@ -237,7 +230,7 @@ pub const Schema = struct {
     }
 
     pub fn table(self: *const Schema, name: []const u8) ?*const Table {
-        const idx = (self.table_index_map orelse return null).get(name) orelse return null;
+        const idx = self.table_index_map.get(name) orelse return null;
         return &self.tables[idx];
     }
 
