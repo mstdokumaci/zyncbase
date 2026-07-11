@@ -449,9 +449,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
-        .{ .name = "owner_id", .field_type = .doc_id },
-    });
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
     defer table.deinit(allocator);
 
     const test_id = typed.generateUuidV7();
@@ -483,9 +481,7 @@ test "buildDocPredicate returns null for RAM-only allow" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
-        .{ .name = "owner_id", .field_type = .doc_id },
-    });
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
     defer table.deinit(allocator);
 
     const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
@@ -698,7 +694,6 @@ test "buildDocPredicate preserves logical_or predicate" {
     defer config.deinit();
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
-        .{ .name = "owner_id", .field_type = .doc_id },
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -917,9 +912,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
-        .{ .name = "owner_id", .field_type = .doc_id },
-    });
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
     defer table.deinit(allocator);
 
     const test_id = typed.generateUuidV7();
@@ -1362,41 +1355,34 @@ const TestFieldDef = struct {
 };
 
 fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
-    const name_owned = allocator.dupe(u8, name) catch @panic("oom");
-    const name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom");
-
-    const total_fields = schema_mod.leading_system_field_count + fields.len + schema_mod.trailing_system_field_count;
-    const table_fields = allocator.alloc(schema_mod.Field, total_fields) catch @panic("oom");
-
-    var idx: usize = 0;
-    for (schema_system.leading_system_fields) |f| {
-        table_fields[idx] = f;
-        idx += 1;
+    // Build a declared table (user fields only) and route through the
+    // production runtime-table builder so the field-index map is populated
+    // and the lifecycle matches production exactly.
+    var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom");
+    var built: usize = 0;
+    errdefer {
+        for (declared_fields[0..built]) |*f| f.deinit(allocator);
+        allocator.free(declared_fields);
     }
     for (fields) |field_def| {
-        const field_name = allocator.dupe(u8, field_def.name) catch @panic("oom");
-        const field_name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom");
-        table_fields[idx] = .{
-            .name = field_name,
-            .name_quoted = field_name_quoted,
+        declared_fields[built] = .{
+            .name = allocator.dupe(u8, field_def.name) catch @panic("oom"),
+            .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
             .declared_type = field_def.field_type,
             .storage_type = field_def.field_type,
             .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
-            .kind = .user,
         };
-        idx += 1;
-    }
-    for (schema_system.trailing_system_fields) |f| {
-        table_fields[idx] = f;
-        idx += 1;
+        built += 1;
     }
 
-    return .{
-        .name = name_owned,
-        .name_quoted = name_quoted,
-        .fields = table_fields,
-        .canonical_fields = true,
-        .user_field_start = schema_mod.leading_system_field_count,
-        .user_field_end = schema_mod.leading_system_field_count + fields.len,
+    var declared = schema_mod.Table{
+        .name = allocator.dupe(u8, name) catch @panic("oom"),
+        .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom"),
+        .fields = declared_fields,
+        .is_users_table = std.mem.eql(u8, name, "users"),
+        .namespaced = !std.mem.eql(u8, name, "users"),
     };
+    defer declared.deinit(allocator);
+
+    return schema_mod.buildRuntimeTable(allocator, declared, 0) catch @panic("oom");
 }
