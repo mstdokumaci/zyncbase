@@ -192,6 +192,8 @@ pub const WriteWorker = struct {
         self.conn.deinit();
         self.allocator.free(self.db_path);
         while (self.queue.pop()) |op| {
+            // Defensive: queue should be empty after writeThreadLoopImpl drain,
+            // but deinit here ensures no leaks if stop() is called abruptly.
             op.deinit(self.allocator);
         }
         self.queue.deinit();
@@ -498,9 +500,7 @@ pub const WriteWorker = struct {
         self.batch_eviction_keys.ensureTotalCapacity(self.allocator, batch_len) catch |err| {
             const classified_err = errors.classifyError(err);
             std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
-            for (batch.items) |op| {
-                op.deinit(self.allocator);
-            }
+            self.pushBatchOutcomes(batch.items, null, classified_err);
             batch.clearRetainingCapacity();
             self.endOp(batch_len);
             last_batch_time.* = std.time.milliTimestamp();
@@ -596,6 +596,8 @@ pub const WriteWorker = struct {
         var batch = std.ArrayListUnmanaged(WriteOp){};
         try batch.ensureTotalCapacity(self.allocator, batch_size);
         defer {
+            // Defensive: writeThreadLoopImpl and flushBatch drain the local batch
+            // and the main queue before this point, so deinit here is a fallback.
             for (batch.items) |op| {
                 op.deinit(self.allocator);
             }
