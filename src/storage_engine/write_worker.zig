@@ -45,6 +45,8 @@ fn mapAndLogError(
     return classified_err;
 }
 
+const PkTracking = struct { table_index: usize, id: DocId };
+
 pub const WriteWorker = struct {
     allocator: Allocator,
     conn: sqlite.Db,
@@ -66,6 +68,12 @@ pub const WriteWorker = struct {
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,
+
+    batch_eviction_keys: std.ArrayListUnmanaged(MetadataCacheKey) = .{},
+    batch_pending_changes: std.ArrayListUnmanaged(OwnedRecordChange) = .{},
+    batch_guard_rejected: std.ArrayListUnmanaged(usize) = .{},
+    batch_pk_inserts: std.ArrayListUnmanaged(PkTracking) = .{},
+    batch_pk_deletes: std.ArrayListUnmanaged(PkTracking) = .{},
 
     pub fn beginOp(self: *WriteWorker) void {
         self.flush_wg.add(1);
@@ -188,6 +196,13 @@ pub const WriteWorker = struct {
         }
         self.queue.deinit();
         self.session_resolution_buffer.deinit();
+
+        self.batch_eviction_keys.deinit(self.allocator);
+        for (self.batch_pending_changes.items) |*c| c.deinit(self.allocator);
+        self.batch_pending_changes.deinit(self.allocator);
+        self.batch_guard_rejected.deinit(self.allocator);
+        self.batch_pk_inserts.deinit(self.allocator);
+        self.batch_pk_deletes.deinit(self.allocator);
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -297,18 +312,16 @@ pub const WriteWorker = struct {
                 errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
             };
         }
-        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_inserts.deinit(self.allocator);
-        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_deletes.deinit(self.allocator);
-
         var ctx = BatchCtx{
             .self = self,
             .pending_changes = pending_changes,
-            .pk_inserts = &pk_inserts,
-            .pk_deletes = &pk_deletes,
+            .pk_inserts = &self.batch_pk_inserts,
+            .pk_deletes = &self.batch_pk_deletes,
             .is_confirmed = false, // unused for WriteOp path; guard check uses op.getWriteAckInfo()
         };
+
+        defer self.batch_pk_inserts.clearRetainingCapacity();
+        defer self.batch_pk_deletes.clearRetainingCapacity();
 
         for (ops, 0..) |op, op_idx| {
             switch (op) {
@@ -330,12 +343,12 @@ pub const WriteWorker = struct {
 
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatch COMMIT");
 
-        for (pk_inserts.items) |item| {
+        for (self.batch_pk_inserts.items) |item| {
             if (item.table_index < self.pk_sets.len) {
                 self.pk_sets[item.table_index].insert(self.allocator, item.id);
             }
         }
-        for (pk_deletes.items) |item| {
+        for (self.batch_pk_deletes.items) |item| {
             if (item.table_index < self.pk_sets.len) {
                 self.pk_sets[item.table_index].remove(item.id);
             }
@@ -481,9 +494,8 @@ pub const WriteWorker = struct {
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-        var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-        defer eviction_keys.deinit(self.allocator);
-        eviction_keys.ensureTotalCapacity(self.allocator, batch_len) catch |err| {
+        defer self.batch_eviction_keys.clearRetainingCapacity();
+        self.batch_eviction_keys.ensureTotalCapacity(self.allocator, batch_len) catch |err| {
             const classified_err = errors.classifyError(err);
             std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
             for (batch.items) |op| {
@@ -498,29 +510,27 @@ pub const WriteWorker = struct {
             if (getOpTarget(op)) |target| {
                 const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
                 const key = storage_cache.getCacheKey(table_metadata, target.namespace_id, target.id);
-                eviction_keys.appendAssumeCapacity(key);
+                self.batch_eviction_keys.appendAssumeCapacity(key);
             }
         }
 
-        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
         defer {
-            for (pending_changes.items) |*c| c.deinit(self.allocator);
-            pending_changes.deinit(self.allocator);
+            for (self.batch_pending_changes.items) |*c| c.deinit(self.allocator);
+            self.batch_pending_changes.clearRetainingCapacity();
         }
 
-        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
-        defer guard_rejected.deinit(self.allocator);
+        defer self.batch_guard_rejected.clearRetainingCapacity();
 
-        const result = executeBatch(self, batch.items, &pending_changes, &guard_rejected);
+        const result = executeBatch(self, batch.items, &self.batch_pending_changes, &self.batch_guard_rejected);
         if (result) |_| {
             self.bumpVersion();
 
-            if (eviction_keys.items.len > 0) {
-                self.metadata_cache.bulkEvict(eviction_keys.items);
+            if (self.batch_eviction_keys.items.len > 0) {
+                self.metadata_cache.bulkEvict(self.batch_eviction_keys.items);
             }
 
-            self.pushBatchOutcomes(batch.items, guard_rejected.items, null);
-            flushPendingChanges(self, &pending_changes);
+            self.pushBatchOutcomes(batch.items, self.batch_guard_rejected.items, null);
+            flushPendingChanges(self, &self.batch_pending_changes);
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
@@ -660,8 +670,6 @@ pub const WriteWorker = struct {
         };
     }
 
-    const PkTracking = struct { table_index: usize, id: DocId };
-
     const BatchCtx = struct {
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
@@ -722,10 +730,9 @@ pub const WriteWorker = struct {
         failed_batch_index: *?usize,
         eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
     ) !void {
-        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
         defer {
-            for (pending_changes.items) |*c| c.deinit(self.allocator);
-            pending_changes.deinit(self.allocator);
+            for (self.batch_pending_changes.items) |*c| c.deinit(self.allocator);
+            self.batch_pending_changes.clearRetainingCapacity();
         }
 
         try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatchOp BEGIN");
@@ -736,16 +743,14 @@ pub const WriteWorker = struct {
         else
             false;
 
-        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_inserts.deinit(self.allocator);
-        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_deletes.deinit(self.allocator);
+        defer self.batch_pk_inserts.clearRetainingCapacity();
+        defer self.batch_pk_deletes.clearRetainingCapacity();
 
         var ctx = BatchCtx{
             .self = self,
-            .pending_changes = &pending_changes,
-            .pk_inserts = &pk_inserts,
-            .pk_deletes = &pk_deletes,
+            .pending_changes = &self.batch_pending_changes,
+            .pk_inserts = &self.batch_pk_inserts,
+            .pk_deletes = &self.batch_pk_deletes,
             .is_confirmed = is_confirmed,
         };
 
@@ -768,7 +773,7 @@ pub const WriteWorker = struct {
             };
         }
 
-        try commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes);
+        try commitBatchAndApply(self, tx_started, eviction_keys, &self.batch_pk_inserts, &self.batch_pk_deletes, &self.batch_pending_changes);
     }
 
     pub fn executeBatchOp(
@@ -810,15 +815,14 @@ pub const WriteWorker = struct {
         }
 
         // 1. Build eviction keys from all entries
-        var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-        defer eviction_keys.deinit(self.allocator);
-        self.buildEvictionKeys(entries, &eviction_keys) catch |err| {
+        defer self.batch_eviction_keys.clearRetainingCapacity();
+        self.buildEvictionKeys(entries, &self.batch_eviction_keys) catch |err| {
             final_err = err;
             return;
         };
 
         // 2. Execute all entries in a single transaction
-        self.runBatchTransaction(bop, entries, &tx_started, &failed_batch_index, &eviction_keys) catch |err| {
+        self.runBatchTransaction(bop, entries, &tx_started, &failed_batch_index, &self.batch_eviction_keys) catch |err| {
             final_err = err;
         };
     }
