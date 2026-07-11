@@ -138,6 +138,16 @@ pub const Table = struct {
     user_field_start: usize = 0,
     user_field_end: usize = 0,
     metadata: ?Metadata = null,
+    /// Pre-built SQL for no-guard point lookups. Populated by buildRuntimeTable.
+    /// Empty string on bare Table literals (test helpers) — never free those.
+    select_document_sql: []const u8 = "",
+    /// DELETE WHERE prefix: `DELETE FROM "<t>" WHERE "id"=? AND "namespace_id"=?`
+    /// For no-guard: concat(prefix, suffix). For guard: concat(prefix, guard_fragment, suffix).
+    /// Populated by buildRuntimeTable. Empty string on bare Table literals.
+    delete_document_sql_prefix: []const u8 = "",
+    /// DELETE RETURNING suffix: ` RETURNING <cols>`
+    /// Populated by buildRuntimeTable. Empty string on bare Table literals.
+    delete_document_sql_suffix: []const u8 = "",
 
     pub fn deinit(self: *Table, allocator: Allocator) void {
         if (self.has_index) {
@@ -148,6 +158,9 @@ pub const Table = struct {
         allocator.free(self.name);
         allocator.free(self.name_quoted);
         if (self.metadata) |metadata| metadata.deinit(allocator);
+        if (self.select_document_sql.len > 0) allocator.free(self.select_document_sql);
+        if (self.delete_document_sql_prefix.len > 0) allocator.free(self.delete_document_sql_prefix);
+        if (self.delete_document_sql_suffix.len > 0) allocator.free(self.delete_document_sql_suffix);
     }
 
     pub fn field(self: *const Table, name: []const u8) ?Field {

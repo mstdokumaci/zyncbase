@@ -216,16 +216,9 @@ pub const WriteWorker = struct {
         table_index: usize,
         namespace_id: i64,
         id: DocId,
-        sql_cache: *std.AutoHashMap(usize, []const u8),
     ) !?Record {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return null;
-        const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
-            const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata, null);
-            errdefer self.allocator.free(s);
-            try sql_cache.put(table_index, s);
-            break :blk s;
-        };
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, table_metadata.select_document_sql);
         defer mstmt.release();
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null);
     }
@@ -239,10 +232,9 @@ pub const WriteWorker = struct {
         comptime op_label: []const u8,
         entry: anytype,
         namespace_id: i64,
-        sql_cache: *std.AutoHashMap(usize, []const u8),
     ) ?Record {
         if (self.change_queue != null or entry.guard_values != null) {
-            if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, sql_cache)) |record| {
+            if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id)) |record| {
                 return record;
             } else |err| {
                 std.log.err("Failed to capture old state ({s}) for table index {d}: {}", .{ op_label, entry.table_index, err });
@@ -305,13 +297,6 @@ pub const WriteWorker = struct {
                 errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
             };
         }
-        var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
-        defer {
-            var it = sql_cache.valueIterator();
-            while (it.next()) |sql_str| self.allocator.free(sql_str.*);
-            sql_cache.deinit();
-        }
-
         var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
         defer pk_inserts.deinit(self.allocator);
         var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
@@ -319,7 +304,6 @@ pub const WriteWorker = struct {
 
         var ctx = BatchCtx{
             .self = self,
-            .sql_cache = &sql_cache,
             .pending_changes = pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
@@ -427,7 +411,7 @@ pub const WriteWorker = struct {
         const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
         const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPSERT", iop, namespace_id, ctx.sql_cache);
+        const old_record = self.prefetchOldRecord("pre-UPSERT", iop, namespace_id);
 
         const maybe_new_record = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
             return mapAndLogError("executeBatch UPSERT", err, table_metadata.name, self.allocator, old_record);
@@ -445,7 +429,7 @@ pub const WriteWorker = struct {
         const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
         const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPDATE", uop, namespace_id, ctx.sql_cache);
+        const old_record = self.prefetchOldRecord("pre-UPDATE", uop, namespace_id);
 
         const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
             return mapAndLogError("executeBatch UPDATE", err, table_metadata.name, self.allocator, old_record);
@@ -474,7 +458,7 @@ pub const WriteWorker = struct {
         // present, we must distinguish between "row doesn't exist" (idempotent
         // success) and "row exists but guard condition didn't match" (conflict).
         if (maybe_old_record == null and dop.guard_values != null and has_write_ack) {
-            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id, ctx.sql_cache) catch |err| {
+            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id) catch |err| {
                 const classified_err = errors.classifyError(err);
                 std.log.err("Delete guard post-check failed: {}", .{classified_err});
                 return classified_err;
@@ -680,7 +664,6 @@ pub const WriteWorker = struct {
 
     const BatchCtx = struct {
         self: *WriteWorker,
-        sql_cache: *std.AutoHashMap(usize, []const u8),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pk_inserts: *std.ArrayListUnmanaged(PkTracking),
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
@@ -753,13 +736,6 @@ pub const WriteWorker = struct {
         else
             false;
 
-        var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
-        defer {
-            var it = sql_cache.valueIterator();
-            while (it.next()) |sql_str| self.allocator.free(sql_str.*);
-            sql_cache.deinit();
-        }
-
         var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
         defer pk_inserts.deinit(self.allocator);
         var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
@@ -767,7 +743,6 @@ pub const WriteWorker = struct {
 
         var ctx = BatchCtx{
             .self = self,
-            .sql_cache = &sql_cache,
             .pending_changes = &pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
@@ -887,7 +862,7 @@ pub const WriteWorker = struct {
         const self = ctx.self;
         const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id, ctx.sql_cache);
+        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id);
 
         const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
             return mapAndLogError("executeBatchOp UPSERT", err, table_metadata.name, self.allocator, old_record);
@@ -905,7 +880,7 @@ pub const WriteWorker = struct {
     ) !void {
         const self = ctx.self;
 
-        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id, ctx.sql_cache);
+        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
 
         const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
             return mapAndLogError("executeBatchOp UPDATE", err, table_metadata.name, self.allocator, old_record);
@@ -931,7 +906,7 @@ pub const WriteWorker = struct {
         // Guard semantics for delete: distinguish "row doesn't exist" (idempotent
         // success) from "row exists but guard didn't match" (conflict).
         if (maybe_old_record == null and entry.guard_values != null and ctx.is_confirmed) {
-            const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id, ctx.sql_cache) catch |err| {
+            const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id) catch |err| {
                 const classified_err = errors.classifyError(err);
                 std.log.err("Delete guard post-check failed: {}", .{classified_err});
                 return classified_err;

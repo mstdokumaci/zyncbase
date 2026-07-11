@@ -1,7 +1,6 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const sql_buf_mod = @import("sql_buf.zig");
-const SqlBuf = sql_buf_mod.SqlBuf;
+const schema = @import("../schema.zig");
+const SqlBuf = @import("buf.zig").SqlBuf;
 
 pub const DDLGenerator = struct {
     allocator: std.mem.Allocator,

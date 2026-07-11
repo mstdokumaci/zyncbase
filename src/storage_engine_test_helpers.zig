@@ -5,7 +5,6 @@ const storage_engine = @import("storage_engine.zig");
 const typed = @import("typed.zig");
 const tth = @import("typed_test_helpers.zig");
 const reader_mod = @import("storage_engine/reader.zig");
-const sql_mod = @import("storage_engine/sql.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
@@ -53,10 +52,7 @@ pub fn readDoc(
     node.mutex.lock();
     defer node.mutex.unlock();
 
-    const sql_query = try sql_mod.buildSelectDocumentSql(allocator, table_metadata, null);
-    defer allocator.free(sql_query);
-
-    var dynamic = try node.conn.prepareDynamic(sql_query);
+    var dynamic = try node.conn.prepareDynamic(table_metadata.select_document_sql);
     defer dynamic.deinit();
 
     return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null);

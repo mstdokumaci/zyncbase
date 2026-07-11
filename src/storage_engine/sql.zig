@@ -4,8 +4,9 @@ const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const errors = @import("errors.zig");
 const typed = @import("../typed.zig");
-const SqlBuf = @import("../sql_buf.zig").SqlBuf;
-const SqlList = @import("../sql_buf.zig").SqlList;
+const SqlBuf = @import("../sql/buf.zig").SqlBuf;
+const SqlList = @import("../sql/buf.zig").SqlList;
+const build = @import("../sql/build.zig");
 
 /// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
@@ -138,119 +139,6 @@ pub const ManagedStmt = struct {
         _ = sqlite.c.sqlite3_clear_bindings(self.stmt);
     }
 };
-
-/// Appends the standard ZyncBase column projection list (id, namespace_id, all fields, timestamps)
-/// to the provided buffer. Array/object fields are wrapped in json() to ensure they return
-/// text even if stored as JSONB.
-pub fn appendProjectedColumnsSql(
-    allocator: Allocator,
-    buf: *SqlBuf,
-    table_metadata: *const schema.Table,
-) !void {
-    var list = SqlList.init(buf, ", ");
-    for (table_metadata.fields) |f| {
-        if (f.storage_type == .array) {
-            try list.maybeSep(allocator);
-            try buf.appendSlice(allocator, "json(");
-            try buf.appendSlice(allocator, f.name_quoted);
-            try buf.appendSlice(allocator, ") AS ");
-            try buf.appendSlice(allocator, f.name_quoted);
-        } else {
-            try list.appendItemSlice(allocator, f.name_quoted);
-        }
-    }
-}
-
-pub fn appendSelectFromTableSql(
-    allocator: Allocator,
-    buf: *SqlBuf,
-    table_metadata: *const schema.Table,
-) !void {
-    try buf.appendSlice(allocator, "SELECT ");
-    try appendProjectedColumnsSql(allocator, buf, table_metadata);
-    try buf.appendSlice(allocator, " FROM ");
-    try buf.appendSlice(allocator, table_metadata.name_quoted);
-}
-
-pub fn appendNamespaceFilterSql(
-    allocator: Allocator,
-    buf: *SqlBuf,
-) !void {
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
-    try buf.appendSlice(allocator, " = ?");
-}
-
-pub fn appendCursorPredicateSql(
-    allocator: Allocator,
-    buf: *SqlBuf,
-    sort_field_name_quoted: []const u8,
-    sort_field_is_id: bool,
-    desc: bool,
-) !void {
-    const op = if (desc) "<" else ">";
-
-    if (sort_field_is_id) {
-        try buf.appendSlice(allocator, schema.quoted_id);
-        try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, op);
-        try buf.appendSlice(allocator, " ?");
-        return;
-    }
-
-    try buf.append(allocator, '(');
-    try buf.appendSlice(allocator, sort_field_name_quoted);
-    try buf.appendSlice(allocator, ", ");
-    try buf.appendSlice(allocator, schema.quoted_id);
-    try buf.appendSlice(allocator, ") ");
-    try buf.appendSlice(allocator, op);
-    try buf.appendSlice(allocator, " (?, ?)");
-}
-
-pub fn appendOrderBySql(
-    allocator: Allocator,
-    buf: *SqlBuf,
-    sort_field_name_quoted: []const u8,
-    desc: bool,
-) !void {
-    try buf.appendSlice(allocator, " ORDER BY ");
-    try buf.appendSlice(allocator, sort_field_name_quoted);
-    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
-    try buf.appendSlice(allocator, ", ");
-    try buf.appendSlice(allocator, schema.quoted_id);
-    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
-}
-
-pub fn buildSelectDocumentSql(
-    allocator: Allocator,
-    table_metadata: *const schema.Table,
-    guard_sql: ?[]const u8,
-) ![]const u8 {
-    var buf = SqlBuf.init();
-    defer buf.deinit(allocator);
-
-    try appendSelectFromTableSql(allocator, &buf, table_metadata);
-    try buf.appendSlice(allocator, " WHERE ");
-    try buf.appendSlice(allocator, schema.quoted_id);
-    try buf.appendSlice(allocator, "=? AND ");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
-    try buf.appendSlice(allocator, "=?");
-    if (guard_sql) |fragment| {
-        try buf.appendSlice(allocator, fragment);
-    }
-    return buf.toOwnedSlice(allocator);
-}
-
-pub fn buildSelectAllIdsSql(allocator: Allocator, table_name_quoted: []const u8) ![]const u8 {
-    var buf = SqlBuf.init();
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator, "SELECT ");
-    try buf.appendSlice(allocator, schema.quoted_id);
-    try buf.appendSlice(allocator, " FROM ");
-    try buf.appendSlice(allocator, table_name_quoted);
-
-    return buf.toOwnedSlice(allocator);
-}
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
 pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
@@ -456,7 +344,7 @@ pub fn buildUpsertDocumentSql(
     try appendOnConflictUpdateSet(allocator, &buf, table_metadata, columns);
     try appendUpsertWhereClause(allocator, &buf, table_metadata, guard_sql);
     try buf.appendSlice(allocator, " RETURNING ");
-    try appendProjectedColumnsSql(allocator, &buf, table_metadata);
+    try build.appendProjectedColumnsSql(allocator, &buf, table_metadata);
 
     return buf.toOwnedSlice(allocator);
 }
@@ -558,21 +446,6 @@ fn getColumnField(
     return table_metadata.fields[col.index];
 }
 
-pub fn buildDeleteDocumentSql(
-    allocator: Allocator,
-    table_metadata: *const schema.Table,
-    guard_sql: ?[]const u8,
-) ![]const u8 {
-    var buf = SqlBuf.init();
-    defer buf.deinit(allocator);
-    try buf.appendSlice(allocator, "DELETE FROM ");
-    try buf.appendSlice(allocator, table_metadata.name_quoted);
-    try appendDocIdNamespaceWhere(allocator, &buf, guard_sql);
-    try buf.appendSlice(allocator, " RETURNING ");
-    try appendProjectedColumnsSql(allocator, &buf, table_metadata);
-    return buf.toOwnedSlice(allocator);
-}
-
 pub fn buildUpdateDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
@@ -589,7 +462,7 @@ pub fn buildUpdateDocumentSql(
     try appendUpdateColumnSet(allocator, &buf, table_metadata, columns);
     try appendDocIdNamespaceWhere(allocator, &buf, guard_sql);
     try buf.appendSlice(allocator, " RETURNING ");
-    try appendProjectedColumnsSql(allocator, &buf, table_metadata);
+    try build.appendProjectedColumnsSql(allocator, &buf, table_metadata);
 
     return buf.toOwnedSlice(allocator);
 }

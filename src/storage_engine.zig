@@ -15,6 +15,7 @@ const storage_errors = @import("storage_engine/errors.zig");
 const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
+const sql_build = @import("sql/build.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
@@ -420,7 +421,7 @@ pub const StorageEngine = struct {
         }
 
         for (self.schema.tables, 0..) |table, table_index| {
-            const sql_str = try sql.buildSelectAllIdsSql(self.allocator, table.name_quoted);
+            const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
             defer self.allocator.free(sql_str);
 
             var mstmt = try self.write_worker.stmt_cache.acquire(self.allocator, &self.write_worker.conn, sql_str);
@@ -813,7 +814,20 @@ pub const StorageEngine = struct {
         var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
         defer res.deinit(self.allocator);
 
-        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, res.table_metadata, res.guardSql());
+        const sql_string: []const u8 = blk: {
+            const guard_sql = res.guardSql();
+            break :blk if (guard_sql) |fragment|
+                try std.mem.concat(self.allocator, u8, &.{
+                    res.table_metadata.delete_document_sql_prefix,
+                    fragment,
+                    res.table_metadata.delete_document_sql_suffix,
+                })
+            else
+                try std.mem.concat(self.allocator, u8, &.{
+                    res.table_metadata.delete_document_sql_prefix,
+                    res.table_metadata.delete_document_sql_suffix,
+                });
+        };
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
@@ -864,7 +878,18 @@ pub const StorageEngine = struct {
         defer res.deinit(self.allocator);
         var queued = false;
 
-        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, res.table_metadata, res.guardSql());
+        const guard_sql = res.guardSql();
+        const sql_string: []const u8 = if (guard_sql) |fragment|
+            try std.mem.concat(self.allocator, u8, &.{
+                res.table_metadata.delete_document_sql_prefix,
+                fragment,
+                res.table_metadata.delete_document_sql_suffix,
+            })
+        else
+            try std.mem.concat(self.allocator, u8, &.{
+                res.table_metadata.delete_document_sql_prefix,
+                res.table_metadata.delete_document_sql_suffix,
+            });
         errdefer if (!queued) self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
