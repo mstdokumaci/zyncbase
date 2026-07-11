@@ -486,9 +486,7 @@ pub const WriteWorker = struct {
         eviction_keys.ensureTotalCapacity(self.allocator, batch_len) catch |err| {
             const classified_err = errors.classifyError(err);
             std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
-            for (batch.items) |op| {
-                op.deinit(self.allocator);
-            }
+            self.pushBatchOutcomes(batch.items, null, classified_err);
             batch.clearRetainingCapacity();
             self.endOp(batch_len);
             last_batch_time.* = std.time.milliTimestamp();
