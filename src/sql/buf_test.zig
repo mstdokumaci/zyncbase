@@ -1,5 +1,5 @@
 const std = @import("std");
-const sql_buf = @import("sql_buf.zig");
+const sql_buf = @import("buf.zig");
 const SqlBuf = sql_buf.SqlBuf;
 const SqlList = sql_buf.SqlList;
 

@@ -16,7 +16,9 @@ test {
     _ = @import("json/read_test.zig");
     _ = @import("json/write_test.zig");
     _ = @import("json/iterate_test.zig");
-    _ = @import("sql_buf_test.zig");
+    _ = @import("sql/buf_test.zig");
+    _ = @import("sql/build_test.zig");
+    _ = @import("sql/ddl_test.zig");
     _ = @import("wire/msgpack_skip_test.zig");
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
@@ -34,7 +36,7 @@ test {
     _ = @import("schema_normalize_test.zig");
     _ = @import("schema_index_test.zig");
     _ = @import("schema_field_path_test.zig");
-    _ = @import("ddl_generator_test.zig");
+
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
@@ -63,7 +65,7 @@ test {
     _ = @import("memory_safety_property_test.zig");
     _ = @import("msgpack_utils_property_test.zig");
     _ = @import("schema_property_test.zig");
-    _ = @import("ddl_generator_property_test.zig");
+
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
     _ = @import("query_parser_property_test.zig");

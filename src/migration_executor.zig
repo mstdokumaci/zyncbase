@@ -1,6 +1,6 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-const ddl_generator = @import("ddl_generator.zig");
+const ddl_generator = @import("sql/ddl.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
 

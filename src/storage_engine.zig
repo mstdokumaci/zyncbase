@@ -15,6 +15,7 @@ const storage_errors = @import("storage_engine/errors.zig");
 const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
+const sql_build = @import("sql/build.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
@@ -420,7 +421,7 @@ pub const StorageEngine = struct {
         }
 
         for (self.schema.tables, 0..) |table, table_index| {
-            const sql_str = try sql.buildSelectAllIdsSql(self.allocator, table.name_quoted);
+            const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
             defer self.allocator.free(sql_str);
 
             var mstmt = try self.write_worker.stmt_cache.acquire(self.allocator, &self.write_worker.conn, sql_str);

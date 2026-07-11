@@ -6,8 +6,9 @@ const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 const sql = @import("sql.zig");
+const sql_build = @import("../sql/build.zig");
 const filter_sql = @import("filter_sql.zig");
-const SqlBuf = @import("../sql_buf.zig").SqlBuf;
+const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 
 const DocId = typed.DocId;
 const Cursor = typed.Cursor;
@@ -43,18 +44,18 @@ pub fn buildSelectQuery(
     const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
 
     // 1.. SELECT clause
-    try sql.appendSelectFromTableSql(allocator, &buf, table_metadata);
+    try sql_build.appendSelectFromTableSql(allocator, &buf, table_metadata);
 
     // 2.. WHERE clause
     try buf.appendSlice(allocator, " WHERE ");
-    try sql.appendNamespaceFilterSql(allocator, &buf);
+    try sql_build.appendNamespaceFilterSql(allocator, &buf);
     try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
     try appendWhereConditions(allocator, &buf, &values, table_metadata, filter, sort_field_name_quoted);
     try appendGuardPredicate(allocator, &buf, &values, table_metadata, guard_predicate);
 
     // 3.. ORDER BY
-    try sql.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
+    try sql_build.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
@@ -97,7 +98,7 @@ fn appendWhereConditions(
     if (filter.after) |cursor| {
         if (added_where) try buf.appendSlice(allocator, " AND ");
 
-        try sql.appendCursorPredicateSql(
+        try sql_build.appendCursorPredicateSql(
             allocator,
             buf,
             sort_field_name_quoted,

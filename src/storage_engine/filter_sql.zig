@@ -3,8 +3,8 @@ const Allocator = std.mem.Allocator;
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
-const SqlBuf = @import("../sql_buf.zig").SqlBuf;
-const SqlList = @import("../sql_buf.zig").SqlList;
+const SqlBuf = @import("../sql/buf.zig").SqlBuf;
+const SqlList = @import("../sql/buf.zig").SqlList;
 
 const Value = typed.Value;
 

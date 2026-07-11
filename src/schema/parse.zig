@@ -4,7 +4,7 @@ const system = @import("system.zig");
 const json_read = @import("../json/read.zig");
 const index = @import("index.zig");
 const field_path = @import("field_path.zig");
-const sql_strings = @import("sql_strings.zig");
+const sql_strings = @import("../sql/build.zig");
 
 const Allocator = std.mem.Allocator;
 
