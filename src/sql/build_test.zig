@@ -1,6 +1,7 @@
 const std = @import("std");
 const schema_mod = @import("../schema.zig");
 const schema_helpers = @import("../schema_test_helpers.zig");
+const buf_mod = @import("buf.zig");
 const build = @import("build.zig");
 
 test "appendProjectedColumnsSql projects all fields with proper quoting" {
@@ -12,7 +13,7 @@ test "appendProjectedColumnsSql projects all fields with proper quoting" {
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
-    var buf = @import("buf.zig").SqlBuf.init();
+    var buf = buf_mod.SqlBuf.init();
     defer buf.deinit(allocator);
     try build.appendProjectedColumnsSql(allocator, &buf, table_metadata);
     try std.testing.expectEqualStrings(
@@ -30,7 +31,7 @@ test "appendSelectFromTableSql builds SELECT ... FROM with quoted identifiers" {
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
-    var buf = @import("buf.zig").SqlBuf.init();
+    var buf = buf_mod.SqlBuf.init();
     defer buf.deinit(allocator);
     try build.appendSelectFromTableSql(allocator, &buf, table_metadata);
     try std.testing.expectEqualStrings(
@@ -48,7 +49,7 @@ test "append helpers compose into a complete SELECT query" {
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
-    var buf = @import("buf.zig").SqlBuf.init();
+    var buf = buf_mod.SqlBuf.init();
     defer buf.deinit(allocator);
     try build.appendSelectFromTableSql(allocator, &buf, table_metadata);
     try buf.appendSlice(allocator, " WHERE ");
