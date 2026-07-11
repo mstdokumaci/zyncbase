@@ -4,6 +4,7 @@ const system = @import("system.zig");
 const json_read = @import("../json/read.zig");
 const index = @import("index.zig");
 const field_path = @import("field_path.zig");
+const sql_strings = @import("sql_strings.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -635,6 +636,11 @@ pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_inde
     errdefer table.deinit(allocator);
 
     try index.buildFieldIndex(allocator, &table);
+
+    table.select_document_sql = try sql_strings.buildSelectDocumentSql(allocator, &table);
+    table.delete_document_sql_prefix = try sql_strings.buildDeleteDocumentSqlPrefix(allocator, &table);
+    table.delete_document_sql_suffix = try sql_strings.buildDeleteDocumentSqlSuffix(allocator, &table);
+
     return table;
 }
 

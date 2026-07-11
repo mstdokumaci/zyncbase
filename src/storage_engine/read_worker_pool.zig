@@ -5,7 +5,6 @@ const schema_mod = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 const storage_cache = @import("cache.zig");
-const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
 const read_mod = @import("reader.zig");
 const connection = @import("connection.zig");
@@ -233,10 +232,16 @@ pub const ReadWorker = struct {
         };
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
-        const sql_query = sql.buildSelectDocumentSql(self.allocator, table_metadata, if (rendered_guard) |*rendered| rendered.sqlSlice() else null) catch {
-            return .{ .record = null };
-        };
-        defer self.allocator.free(sql_query);
+        // No-guard: use the pre-built cached string directly (zero alloc).
+        // Guard: concat base + guard fragment (one alloc, freed below).
+        const guard_fragment: ?[]const u8 = if (rendered_guard) |*rendered| rendered.sqlSlice() else null;
+        const sql_query: []const u8 = if (guard_fragment) |fragment|
+            std.mem.concat(self.allocator, u8, &.{ table_metadata.select_document_sql, fragment }) catch {
+                return .{ .record = null };
+            }
+        else
+            table_metadata.select_document_sql;
+        defer if (guard_fragment != null) self.allocator.free(sql_query);
 
         // Snapshot writer version before the DB read to detect concurrent writes
         const seq_before = self.writer_version.load(.acquire);
