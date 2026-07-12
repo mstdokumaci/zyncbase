@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
 
 // This property test verifies that database operations handle errors gracefully:
@@ -13,8 +14,8 @@ test "storage: error handling invalid database path" {
 
     // Try to create storage engine with invalid path
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("_dummy", &.{sth.makeField("val", .text, false)}),
-        sth.makeTable("data_table", &.{sth.makeField("val", .text, false)}),
+        schema_helpers.makeTable("_dummy", &.{schema_helpers.makeField("val", .text)}),
+        schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)}),
     });
     defer schema.deinit();
 
@@ -37,7 +38,7 @@ test "storage: error handling invalid database path" {
 }
 test "storage: error handling read-only filesystem" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -58,7 +59,7 @@ test "storage: error handling read-only filesystem" {
 }
 test "storage: error handling constraint violations" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -84,7 +85,7 @@ test "storage: error handling constraint violations" {
 }
 test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-concurrent", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -113,7 +114,7 @@ test "storage: error handling concurrent access safety" {
 }
 test "storage: error handling empty paths" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -130,7 +131,7 @@ test "storage: error handling empty paths" {
 }
 test "storage: error handling large values" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -152,7 +153,7 @@ test "storage: error handling large values" {
 }
 test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
+    const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
     defer ctx.deinit();

@@ -328,10 +328,10 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
-        tables[0] = sth.makeTable("test", &fields);
+        tables[0] = schema_helpers.makeTable("test", &fields);
         var sm2 = try sth.createSchema(allocator, tables);
         defer sm2.deinit();
 
@@ -423,10 +423,10 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
-        tables[0] = sth.makeTable("test", &fields);
+        tables[0] = schema_helpers.makeTable("test", &fields);
         var sm3 = try sth.createSchema(allocator, tables);
         defer sm3.deinit();
 
@@ -502,10 +502,10 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
-        tables[0] = sth.makeTable("test", &fields);
+        tables[0] = schema_helpers.makeTable("test", &fields);
         var sm4 = try sth.createSchema(allocator, tables);
         defer sm4.deinit();
 

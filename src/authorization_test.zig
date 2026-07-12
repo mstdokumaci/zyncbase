@@ -449,7 +449,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
     const test_id = typed.generateUuidV7();
@@ -481,7 +481,7 @@ test "buildDocPredicate returns null for RAM-only allow" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
     const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
@@ -496,7 +496,7 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -513,7 +513,7 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -552,7 +552,7 @@ test "buildDocPredicate clones borrowed literal RHS into predicate" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -579,7 +579,7 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -614,7 +614,7 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
 test "validateDocPredicate rejects array literal items with wrong type" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
     });
     defer table.deinit(allocator);
@@ -634,7 +634,7 @@ test "validateDocPredicate rejects array literal items with wrong type" {
 test "validateDocPredicate rejects $value array item type mismatch" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
         .{ .name = "scores", .field_type = .array, .items_type = .integer },
     });
@@ -653,7 +653,7 @@ test "validateDocPredicate rejects $value array item type mismatch" {
 test "validateDocPredicate validates context variable shape by operator" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
         .{ .name = "allowed_visibility", .field_type = .array, .items_type = .text },
         .{ .name = "tags", .field_type = .array, .items_type = .text },
@@ -693,7 +693,7 @@ test "buildDocPredicate preserves logical_or predicate" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -761,7 +761,7 @@ test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owne
 test "evaluateConditionWithDoc denies when $doc field is absent from candidate" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -793,7 +793,7 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
 test "evaluateConditionWithDoc allows $doc.status == draft when status is draft" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -831,7 +831,7 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
 test "evaluateConditionWithDoc denies $doc.status == draft when status is published" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -869,7 +869,7 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
 test "authorizeWriteCondition denies create when $doc rule fails" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -912,7 +912,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{});
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
     const test_id = typed.generateUuidV7();
@@ -935,7 +935,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
 test "duplicate field index in value pair-array resolves to last-wins" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -986,7 +986,7 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 test "validateLiteralValue in with valid array of text scalars passes" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1007,7 +1007,7 @@ test "validateLiteralValue in with valid array of text scalars passes" {
 test "validateLiteralValue in with non-array value returns error.InvalidValue" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1025,7 +1025,7 @@ test "validateLiteralValue in with non-array value returns error.InvalidValue" {
 test "validateLiteralValue notIn with valid array of text scalars passes" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1045,7 +1045,7 @@ test "validateLiteralValue notIn with valid array of text scalars passes" {
 test "validateLiteralValue contains with array field and scalar value passes" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
     });
     defer table.deinit(allocator);
@@ -1063,7 +1063,7 @@ test "validateLiteralValue contains with array field and scalar value passes" {
 test "validateLiteralValue contains with text field and text scalar passes" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "description", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1081,7 +1081,7 @@ test "validateLiteralValue contains with text field and text scalar passes" {
 test "validateLiteralValue contains with non-scalar value returns error.InvalidValue" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
     });
     defer table.deinit(allocator);
@@ -1102,7 +1102,7 @@ test "validateLiteralValue contains with non-scalar value returns error.InvalidV
 test "validateLiteralValue generic eq operator with scalar value passes" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "score", .field_type = .integer },
     });
     defer table.deinit(allocator);
@@ -1227,7 +1227,7 @@ test "evaluateCondition: isNotNull allows when session field is present" {
 test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "deletedAt", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1252,7 +1252,7 @@ test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
 test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "deletedAt", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1276,7 +1276,7 @@ test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value"
 test "buildDocPredicate lowers startsWith to query_ast.Condition with text value" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
     });
     defer table.deinit(allocator);
@@ -1303,7 +1303,7 @@ test "buildDocPredicate lowers startsWith to query_ast.Condition with text value
 test "validateDocPredicate rejects startsWith on non-text field" {
     const allocator = testing.allocator;
 
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "score", .field_type = .integer },
     });
     defer table.deinit(allocator);
@@ -1346,37 +1346,4 @@ fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
             .types = &text_types,
         },
     });
-}
-
-const TestFieldDef = struct {
-    name: []const u8,
-    field_type: schema_mod.FieldType,
-    items_type: ?schema_mod.FieldType = null,
-};
-
-fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
-    // Build a declared table (user fields only) and route through the
-    // production runtime-table builder so the field-index map is populated
-    // and the lifecycle matches production exactly.
-    var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom");
-    for (fields, 0..) |field_def, built| {
-        declared_fields[built] = .{
-            .name = allocator.dupe(u8, field_def.name) catch @panic("oom"),
-            .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
-            .declared_type = field_def.field_type,
-            .storage_type = field_def.field_type,
-            .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
-        };
-    }
-
-    var declared = schema_mod.Table{
-        .name = allocator.dupe(u8, name) catch @panic("oom"),
-        .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom"),
-        .fields = declared_fields,
-        .is_users_table = std.mem.eql(u8, name, "users"),
-        .namespaced = !std.mem.eql(u8, name, "users"),
-    };
-    defer declared.deinit(allocator);
-
-    return schema_mod.buildRuntimeTable(allocator, declared, 0) catch |err| @panic(@errorName(err));
 }

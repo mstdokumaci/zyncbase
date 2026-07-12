@@ -15,34 +15,41 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
 
-/// Comptime field builder — auto-computes name_quoted at compile time.
-/// For runtime names, use makeFieldAlloc.
-pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+fn initField(
+    name: []const u8,
+    name_quoted: []const u8,
+    field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType,
+    required: bool,
+    indexed: bool,
+) schema_mod.Field {
     return .{
         .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .declared_type = sql_type,
-        .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
-        .required = false,
-        .indexed = false,
+        .name_quoted = name_quoted,
+        .declared_type = field_type,
+        .storage_type = field_type,
+        .items_type = if (field_type == .array) items_type orelse .text else null,
+        .required = required,
+        .indexed = indexed,
         .references = null,
         .on_delete = null,
     };
 }
 
+/// Comptime field builder — auto-computes name_quoted at compile time.
+/// For runtime names, use makeFieldAlloc.
+pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, false);
+}
+
 /// Comptime indexed field builder.
 pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
-    var f = makeField(name, sql_type);
-    f.indexed = true;
-    return f;
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, true);
 }
 
 /// Comptime required field builder.
 pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
-    var f = makeField(name, sql_type);
-    f.required = true;
-    return f;
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, true, false);
 }
 
 /// Comptime table builder — auto-computes name_quoted at compile time.
@@ -64,17 +71,14 @@ pub fn isClientWritableFieldIndex(table: *const schema_mod.Table, index: usize) 
 /// Runtime field builder (for property tests with randomized names).
 /// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
 pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_mod.FieldType) !schema_mod.Field {
-    return .{
-        .name = try allocator.dupe(u8, name),
-        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
-        .declared_type = sql_type,
-        .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
-        .required = false,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
+    return initField(
+        try allocator.dupe(u8, name),
+        try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        sql_type,
+        null,
+        false,
+        false,
+    );
 }
 
 /// Runtime table builder with auto-computed name_quoted.
@@ -87,6 +91,41 @@ pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []
         .is_users_table = std.mem.eql(u8, name, "users"),
         .namespaced = !std.mem.eql(u8, name, "users"),
     };
+}
+
+pub const TestFieldDef = struct {
+    name: []const u8,
+    field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType = null,
+};
+
+pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef, table_index: usize) schema_mod.Table {
+    var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom"); // zwanzig-disable-line: store-violations-engine
+    for (fields, 0..) |field_def, built| {
+        declared_fields[built] = initField(
+            allocator.dupe(u8, field_def.name) catch @panic("oom"),
+            std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
+            field_def.field_type,
+            field_def.items_type,
+            false,
+            false,
+        );
+    }
+
+    var declared = schema_mod.Table{
+        .name = allocator.dupe(u8, name) catch @panic("oom"),
+        .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom"),
+        .fields = declared_fields,
+        .is_users_table = std.mem.eql(u8, name, "users"),
+        .namespaced = !std.mem.eql(u8, name, "users"),
+    };
+    defer declared.deinit(allocator);
+
+    return schema_mod.buildRuntimeTable(allocator, declared, table_index) catch |err| @panic(@errorName(err));
+}
+
+pub fn makeSingleRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
+    return makeRuntimeTable(allocator, name, fields, 0);
 }
 
 pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const schema_mod.Table) !Schema {
@@ -108,62 +147,17 @@ pub const TableDef = struct {
     types: ?[]const schema_mod.FieldType = null,
 };
 
-fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema_mod.Table {
-    var fields = try allocator.alloc(schema_mod.Field, td.fields.len);
-    var field_count: usize = 0;
-    errdefer {
-        for (fields[0..field_count]) |field| field.deinit(allocator);
-        allocator.free(fields);
-    }
-
-    for (td.fields, 0..) |fn_name, j| {
-        const fname = try allocator.dupe(u8, fn_name);
-        errdefer allocator.free(fname);
-        const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
-        errdefer allocator.free(fname_quoted);
+fn tableDefToTestFieldDefs(allocator: std.mem.Allocator, td: TableDef) ![]TestFieldDef {
+    const types = td.types orelse &[_]schema_mod.FieldType{};
+    const fields = try allocator.alloc(TestFieldDef, td.fields.len);
+    for (td.fields, 0..) |field_name, j| {
+        const field_type: schema_mod.FieldType = if (j < types.len) types[j] else .text;
         fields[j] = .{
-            .name = fname,
-            .name_quoted = fname_quoted,
-            .declared_type = if (td.types) |ts| ts[j] else .text,
-            .storage_type = if (td.types) |ts| ts[j] else .text,
-            .items_type = if (td.types) |ts| if (ts[j] == .array) schema_mod.FieldType.text else null else null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
+            .name = field_name,
+            .field_type = field_type,
         };
-        field_count += 1;
     }
-
-    const tname = try allocator.dupe(u8, td.name);
-    errdefer allocator.free(tname);
-    const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
-    errdefer allocator.free(tname_quoted);
-
-    return .{
-        .name = tname,
-        .name_quoted = tname_quoted,
-        .fields = fields,
-        .is_users_table = std.mem.eql(u8, td.name, "users"),
-        .namespaced = !std.mem.eql(u8, td.name, "users"),
-    };
-}
-
-fn buildImplicitUsersTable(allocator: std.mem.Allocator) !schema_mod.Table {
-    const fields = try allocator.alloc(schema_mod.Field, 0);
-    errdefer allocator.free(fields);
-    const name = try allocator.dupe(u8, "users");
-    errdefer allocator.free(name);
-    const name_quoted = try allocator.dupe(u8, "\"users\"");
-    errdefer allocator.free(name_quoted);
-
-    return .{
-        .name = name,
-        .name_quoted = name_quoted,
-        .fields = fields,
-        .is_users_table = true,
-        .namespaced = false,
-    };
+    return fields;
 }
 
 pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
@@ -174,43 +168,34 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         break :blk false;
     };
 
-    const declared_len = tables_def.len + @intFromBool(!has_users);
-    var declared = try allocator.alloc(schema_mod.Table, declared_len);
-    var decl_count: usize = 0;
-    defer {
-        for (declared[0..decl_count]) |*t| t.deinit(allocator);
-        allocator.free(declared);
-    }
-
-    if (has_users) {
-        for (tables_def) |td| {
-            if (std.mem.eql(u8, td.name, "users")) {
-                declared[decl_count] = try buildDeclaredTableFromDef(allocator, td);
-                decl_count += 1;
-                break;
-            }
-        }
-    } else {
-        declared[decl_count] = try buildImplicitUsersTable(allocator);
-        decl_count += 1;
-    }
-
-    for (tables_def) |td| {
-        if (std.mem.eql(u8, td.name, "users")) continue;
-        declared[decl_count] = try buildDeclaredTableFromDef(allocator, td);
-        decl_count += 1;
-    }
-
-    // Build runtime tables
-    var runtime_tables = try allocator.alloc(schema_mod.Table, decl_count);
+    const runtime_len = tables_def.len + @intFromBool(!has_users);
+    var runtime_tables = try allocator.alloc(schema_mod.Table, runtime_len);
     var built_count: usize = 0;
     errdefer {
         for (runtime_tables[0..built_count]) |*t| t.deinit(allocator);
         allocator.free(runtime_tables);
     }
 
-    for (declared, 0..) |dt, idx| {
-        runtime_tables[built_count] = try schema_mod.buildRuntimeTable(allocator, dt, idx);
+    if (has_users) {
+        for (tables_def) |td| {
+            if (std.mem.eql(u8, td.name, "users")) {
+                const test_fields = try tableDefToTestFieldDefs(allocator, td);
+                defer allocator.free(test_fields);
+                runtime_tables[built_count] = makeRuntimeTable(allocator, "users", test_fields, built_count);
+                built_count += 1;
+                break;
+            }
+        }
+    } else {
+        runtime_tables[built_count] = makeRuntimeTable(allocator, "users", &[_]TestFieldDef{}, built_count);
+        built_count += 1;
+    }
+
+    for (tables_def) |td| {
+        if (std.mem.eql(u8, td.name, "users")) continue;
+        const test_fields = try tableDefToTestFieldDefs(allocator, td);
+        defer allocator.free(test_fields);
+        runtime_tables[built_count] = makeRuntimeTable(allocator, td.name, test_fields, built_count);
         built_count += 1;
     }
 

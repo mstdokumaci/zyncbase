@@ -1,5 +1,4 @@
 const std = @import("std");
-const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("sql/ddl.zig");
 const migration_detector = @import("migration_detector.zig");
@@ -57,12 +56,10 @@ test "migration_executor: additive migration preserves existing data" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table with initial columns
-        var initial_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
-        const initial_table = try schema_helpers.makeTableAlloc(allocator, tname, &initial_fields);
-        defer {
-            allocator.free(initial_table.name);
-            allocator.free(initial_table.name_quoted);
-        }
+        var initial_table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "title", .field_type = .text },
+        });
+        defer initial_table.deinit(allocator);
         const initial_ddl = try gen.generateDDL(initial_table);
         defer allocator.free(initial_ddl);
         try execMultiSql(&db, allocator, initial_ddl);
@@ -78,15 +75,11 @@ test "migration_executor: additive migration preserves existing data" {
         try execSql(&db, allocator, insert_sql);
 
         // Target schema has both columns
-        var target_fields = [_]schema.Field{
-            schema_helpers.makeField("title", .text),
-            schema_helpers.makeField("score", .integer),
-        };
-        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
-        defer {
-            allocator.free(target_tables[0].name);
-            allocator.free(target_tables[0].name_quoted);
-        }
+        var target_table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "title", .field_type = .text },
+            .{ .name = "score", .field_type = .integer },
+        });
+        defer target_table.deinit(allocator);
         const target_version = "1.0.0";
 
         // Build additive migration plan: add a new column
@@ -96,7 +89,7 @@ test "migration_executor: additive migration preserves existing data" {
         defer allocator.free(changes);
         changes[0] = .{
             .kind = .add_column,
-            .table = &target_tables[0],
+            .table = &target_table,
             .field = new_field,
         };
 
@@ -163,12 +156,10 @@ test "migration_executor: destructive migration refused when not allowed" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table
-        var fields = [_]schema.Field{schema_helpers.makeField("col_a", .text)};
-        const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
-        defer {
-            allocator.free(table.name);
-            allocator.free(table.name_quoted);
-        }
+        var table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "col_a", .field_type = .text },
+        });
+        defer table.deinit(allocator);
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -185,19 +176,17 @@ test "migration_executor: destructive migration refused when not allowed" {
         // Build destructive plan
         const kind = destructive_kinds[rand.intRangeAtMost(usize, 0, destructive_kinds.len - 1)];
 
-        var target_fields = [_]schema.Field{schema_helpers.makeField("col_a", .integer)};
-        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
-        defer {
-            allocator.free(target_tables[0].name);
-            allocator.free(target_tables[0].name_quoted);
-        }
+        var target_table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "col_a", .field_type = .integer },
+        });
+        defer target_table.deinit(allocator);
         const target_version = "1.0.0";
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
         changes[0] = .{
             .kind = kind,
-            .table = &target_tables[0],
+            .table = &target_table,
             .field = schema_helpers.makeField("col_a", .integer),
         };
 
@@ -259,19 +248,17 @@ test "migration_executor: schema version persisted after migration" {
         const version = versions[rand.intRangeAtMost(usize, 0, versions.len - 1)];
 
         // Build a create_table plan
-        var target_fields = [_]schema.Field{schema_helpers.makeField("name", .text)};
-        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
-        defer {
-            allocator.free(target_tables[0].name);
-            allocator.free(target_tables[0].name_quoted);
-        }
+        var target_table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "name", .field_type = .text },
+        });
+        defer target_table.deinit(allocator);
         const target_version = version;
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
         changes[0] = .{
             .kind = .create_table,
-            .table = &target_tables[0],
+            .table = &target_table,
             .field = null,
         };
 
@@ -321,12 +308,10 @@ test "migration_executor: major version bump is refused" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table and insert persisted version with lower major
-        var fields = [_]schema.Field{schema_helpers.makeField("data", .text)};
-        const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
-        defer {
-            allocator.free(table.name);
-            allocator.free(table.name_quoted);
-        }
+        var table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "data", .field_type = .text },
+        });
+        defer table.deinit(allocator);
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -343,22 +328,18 @@ test "migration_executor: major version bump is refused" {
         try insertSchemaMetaVersion(&db, allocator, persisted_ver);
 
         // Build a simple add_column plan
-        var target_fields = [_]schema.Field{
-            schema_helpers.makeField("data", .text),
-            schema_helpers.makeField("extra", .text),
-        };
-        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
-        defer {
-            allocator.free(target_tables[0].name);
-            allocator.free(target_tables[0].name_quoted);
-        }
+        var target_table = schema_helpers.makeSingleRuntimeTable(allocator, tname, &[_]schema_helpers.TestFieldDef{
+            .{ .name = "data", .field_type = .text },
+            .{ .name = "extra", .field_type = .text },
+        });
+        defer target_table.deinit(allocator);
         const target_version = target_ver;
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
         changes[0] = .{
             .kind = .add_column,
-            .table = &target_tables[0],
+            .table = &target_table,
             .field = schema_helpers.makeField("extra", .text),
         };
 

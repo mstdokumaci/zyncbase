@@ -4,6 +4,7 @@ const typed = @import("typed.zig");
 const schema = @import("schema.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_ast = @import("query_ast.zig");
@@ -22,10 +23,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     const allocator = testing.allocator;
 
     var fields_arr = [_]schema.Field{
-        sth.makeField("name", .text, false),
-        sth.makeField("tags", .array, false),
+        schema_helpers.makeField("name", .text),
+        schema_helpers.makeField("tags", .array),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
@@ -124,13 +125,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
 test "contains on array field: SQL and in-memory evaluator return same rows (integer)" {
     const allocator = testing.allocator;
 
-    var scores_field = sth.makeField("scores", .array, false);
+    var scores_field = schema_helpers.makeField("scores", .array);
     scores_field.items_type = .integer;
     var fields_arr = [_]schema.Field{
-        sth.makeField("name", .text, false),
+        schema_helpers.makeField("name", .text),
         scores_field,
     };
-    const table = sth.makeTable("players", &fields_arr);
+    const table = schema_helpers.makeTable("players", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();

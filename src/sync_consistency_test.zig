@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
@@ -15,9 +16,9 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 1) Setup a minimal engine/table and subscription engine
     var fields_arr = [_]sth.Field{
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "write-before-subscribe-capture", table);
