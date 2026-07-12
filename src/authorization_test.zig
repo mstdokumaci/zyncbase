@@ -1359,12 +1359,7 @@ fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const
     // production runtime-table builder so the field-index map is populated
     // and the lifecycle matches production exactly.
     var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom");
-    var built: usize = 0;
-    errdefer {
-        for (declared_fields[0..built]) |*f| f.deinit(allocator);
-        allocator.free(declared_fields);
-    }
-    for (fields) |field_def| {
+    for (fields, 0..) |field_def, built| {
         declared_fields[built] = .{
             .name = allocator.dupe(u8, field_def.name) catch @panic("oom"),
             .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
@@ -1372,7 +1367,6 @@ fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const
             .storage_type = field_def.field_type,
             .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
         };
-        built += 1;
     }
 
     var declared = schema_mod.Table{
@@ -1384,5 +1378,5 @@ fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const
     };
     defer declared.deinit(allocator);
 
-    return schema_mod.buildRuntimeTable(allocator, declared, 0) catch @panic("oom");
+    return schema_mod.buildRuntimeTable(allocator, declared, 0) catch |err| @panic(@errorName(err));
 }
