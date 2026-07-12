@@ -4,6 +4,7 @@ const subscription_engine = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_engine.SubscriptionEngine;
 const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_ast = @import("query_ast.zig");
@@ -14,8 +15,8 @@ test "SubscriptionEngine: basic subscribe and match" {
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{
-            sth.makeField("status", .text, false),
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
         }),
     });
     defer schema.deinit();
@@ -62,8 +63,8 @@ test "SubscriptionEngine: group sharing" {
     defer filter.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("coll", &.{
-            sth.makeField("age", .integer, false),
+        schema_helpers.makeTable("coll", &.{
+            schema_helpers.makeField("age", .integer),
         }),
     });
     defer schema.deinit();
@@ -89,7 +90,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
     defer filter.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("c", &.{}),
+        schema_helpers.makeTable("c", &.{}),
     });
     defer schema.deinit();
 
@@ -112,7 +113,7 @@ test "SubscriptionEngine: subscribe/unsubscribe state consistency across all ind
     defer filter.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{}),
+        schema_helpers.makeTable("items", &.{}),
     });
     defer schema.deinit();
 
@@ -202,7 +203,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer filter2.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{}),
+        schema_helpers.makeTable("items", &.{}),
     });
     defer schema.deinit();
 
@@ -244,7 +245,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
         defer filter2.deinit(allocator);
 
         var schema = try sth.createSchema(allocator, &.{
-            sth.makeTable("users", &.{}),
+            schema_helpers.makeTable("users", &.{}),
         });
         defer schema.deinit();
 
@@ -284,7 +285,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
         defer filter2.deinit(allocator);
 
         var schema = try sth.createSchema(allocator, &.{
-            sth.makeTable("coll", &.{}),
+            schema_helpers.makeTable("coll", &.{}),
         });
         defer schema.deinit();
 
@@ -314,7 +315,7 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     defer filter_real.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("scores", &.{}),
+        schema_helpers.makeTable("scores", &.{}),
     });
     defer schema.deinit();
 
@@ -333,7 +334,7 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
 
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    const table = try sth.makeTableAlloc(allocator, long_coll, &.{});
+    const table = try schema_helpers.makeTableAlloc(allocator, long_coll, &.{});
     defer {
         allocator.free(table.name);
         allocator.free(table.name_quoted);
@@ -424,9 +425,9 @@ test "SubscriptionEngine: group sharing with different condition order" {
     defer filter2.deinit(allocator);
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("coll", &.{
-            sth.makeField("status", .text, false),
-            sth.makeField("type", .text, false),
+        schema_helpers.makeTable("coll", &.{
+            schema_helpers.makeField("status", .text),
+            schema_helpers.makeField("type", .text),
         }),
     });
     defer schema.deinit();
@@ -455,7 +456,7 @@ test "SubscriptionEngine: canonical key includes predicate state" {
     filter_none.predicate.state = .match_none;
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("coll", &.{}),
+        schema_helpers.makeTable("coll", &.{}),
     });
     defer schema.deinit();
 
@@ -479,8 +480,8 @@ test "SubscriptionEngine: match-none filter never matches changes" {
     filter.predicate.state = .match_none;
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("users", &.{
-            sth.makeField("role", .text, false),
+        schema_helpers.makeTable("users", &.{
+            schema_helpers.makeField("role", .text),
         }),
     });
     defer schema.deinit();
@@ -524,8 +525,8 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
         defer filter.deinit(allocator);
 
         var schema = try sth.createSchema(allocator, &.{
-            sth.makeTable("users", &.{
-                sth.makeField("role", .text, false),
+            schema_helpers.makeTable("users", &.{
+                schema_helpers.makeField("role", .text),
             }),
         });
         defer schema.deinit();
@@ -565,8 +566,8 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
         defer filter.deinit(allocator);
 
         var schema = try sth.createSchema(allocator, &.{
-            sth.makeTable("users", &.{
-                sth.makeField("role", .text, false),
+            schema_helpers.makeTable("users", &.{
+                schema_helpers.makeField("role", .text),
             }),
         });
         defer schema.deinit();
@@ -596,8 +597,8 @@ test "SubscriptionEngine: unsubscribeMany" {
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{
-            sth.makeField("status", .text, false),
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
         }),
     });
     defer schema.deinit();
@@ -645,8 +646,8 @@ test "SubscriptionEngine: getSubscriptionQuery" {
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{
-            sth.makeField("status", .text, false),
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
         }),
     });
     defer schema.deinit();
@@ -711,11 +712,11 @@ test "SubscriptionEngine: multiple collections isolation" {
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{
-            sth.makeField("status", .text, false),
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
         }),
-        sth.makeTable("orders", &.{
-            sth.makeField("total", .integer, false),
+        schema_helpers.makeTable("orders", &.{
+            schema_helpers.makeField("total", .integer),
         }),
     });
     defer schema.deinit();
@@ -814,8 +815,8 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
-        sth.makeTable("items", &.{
-            sth.makeField("priority", .integer, false),
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("priority", .integer),
         }),
     });
     defer schema.deinit();

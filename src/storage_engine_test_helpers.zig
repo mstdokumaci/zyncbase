@@ -343,25 +343,6 @@ pub const EngineTestContext = struct {
     }
 };
 
-/// Helper to create a Field with standard defaults.
-/// Delegates to schema_helpers.makeField, adding the required parameter.
-pub fn makeField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
-    var f = schema_helpers.makeField(name, sql_type);
-    f.required = required;
-    return f;
-}
-
-/// Helper to create a Table with auto-computed name_quoted.
-pub fn makeTable(comptime name: []const u8, fields: []const Field) Table {
-    return schema_helpers.makeTable(name, fields);
-}
-
-/// Runtime table builder (for property tests with randomized names).
-/// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
-pub fn makeTableAlloc(allocator: Allocator, name: []const u8, fields: []const Field) !Table {
-    return schema_helpers.makeTableAlloc(allocator, name, fields);
-}
-
 /// Creates a canonical runtime schema from declared test tables.
 pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     var runtime_tables = try allocator.alloc(Table, tables.len);
@@ -394,10 +375,10 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
 /// Creates a schema with a single dummy table.
 pub fn createDummySchema(allocator: Allocator) !Schema {
     const fields = try allocator.alloc(Field, 1);
-    fields[0] = makeField("val", .text, false);
+    fields[0] = schema_helpers.makeField("val", .text);
 
     var tables = try allocator.alloc(Table, 1);
-    tables[0] = makeTable("_dummy", fields);
+    tables[0] = schema_helpers.makeTable("_dummy", fields);
     const schema = try createSchema(allocator, tables);
 
     allocator.free(fields);

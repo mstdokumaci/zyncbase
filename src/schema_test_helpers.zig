@@ -15,34 +15,41 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
 
-/// Comptime field builder — auto-computes name_quoted at compile time.
-/// For runtime names, use makeFieldAlloc.
-pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+fn initField(
+    name: []const u8,
+    name_quoted: []const u8,
+    field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType,
+    required: bool,
+    indexed: bool,
+) schema_mod.Field {
     return .{
         .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .declared_type = sql_type,
-        .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
-        .required = false,
-        .indexed = false,
+        .name_quoted = name_quoted,
+        .declared_type = field_type,
+        .storage_type = field_type,
+        .items_type = if (field_type == .array) items_type orelse .text else null,
+        .required = required,
+        .indexed = indexed,
         .references = null,
         .on_delete = null,
     };
 }
 
+/// Comptime field builder — auto-computes name_quoted at compile time.
+/// For runtime names, use makeFieldAlloc.
+pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, false);
+}
+
 /// Comptime indexed field builder.
 pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
-    var f = makeField(name, sql_type);
-    f.indexed = true;
-    return f;
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, true);
 }
 
 /// Comptime required field builder.
 pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
-    var f = makeField(name, sql_type);
-    f.required = true;
-    return f;
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, true, false);
 }
 
 /// Comptime table builder — auto-computes name_quoted at compile time.
@@ -64,17 +71,14 @@ pub fn isClientWritableFieldIndex(table: *const schema_mod.Table, index: usize) 
 /// Runtime field builder (for property tests with randomized names).
 /// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
 pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_mod.FieldType) !schema_mod.Field {
-    return .{
-        .name = try allocator.dupe(u8, name),
-        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
-        .declared_type = sql_type,
-        .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
-        .required = false,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
+    return initField(
+        try allocator.dupe(u8, name),
+        try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        sql_type,
+        null,
+        false,
+        false,
+    );
 }
 
 /// Runtime table builder with auto-computed name_quoted.
@@ -96,18 +100,16 @@ pub const TestFieldDef = struct {
 };
 
 pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef, table_index: usize) schema_mod.Table {
-    // Build a declared table (user fields only) and route through the
-    // production runtime-table builder so the field-index map is populated
-    // and the lifecycle matches production exactly.
     var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom"); // zwanzig-disable-line: store-violations-engine
     for (fields, 0..) |field_def, built| {
-        declared_fields[built] = .{
-            .name = allocator.dupe(u8, field_def.name) catch @panic("oom"),
-            .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
-            .declared_type = field_def.field_type,
-            .storage_type = field_def.field_type,
-            .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
-        };
+        declared_fields[built] = initField(
+            allocator.dupe(u8, field_def.name) catch @panic("oom"),
+            std.fmt.allocPrint(allocator, "\"{s}\"", .{field_def.name}) catch @panic("oom"),
+            field_def.field_type,
+            field_def.items_type,
+            false,
+            false,
+        );
     }
 
     var declared = schema_mod.Table{
@@ -122,9 +124,6 @@ pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: 
     return schema_mod.buildRuntimeTable(allocator, declared, table_index) catch |err| @panic(@errorName(err));
 }
 
-/// Convenience wrapper for building a single standalone runtime table whose
-/// index in a schema is irrelevant (e.g. unit tests that exercise one table
-/// in isolation). Equivalent to makeRuntimeTable(..., table_index = 0).
 pub fn makeSingleRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
     return makeRuntimeTable(allocator, name, fields, 0);
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
@@ -28,7 +29,7 @@ const DirectWriterContext = struct {
         errdefer _ = self.memory_strategy.deinit();
 
         const users_fields = [_]sth.Field{};
-        const users_table = sth.makeTable("users", &users_fields);
+        const users_table = schema_helpers.makeTable("users", &users_fields);
         self.schema = try sth.createSchema(allocator, &[_]sth.Table{ users_table, table });
         errdefer self.schema.deinit();
 
@@ -89,8 +90,8 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEn
 
 test "StorageEngine: shutdown drain completes immediate writer ops" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
     try ctx.init(allocator, table);
     defer ctx.deinit();
@@ -143,8 +144,8 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("_dummy", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("_dummy", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "engine-init", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -159,10 +160,10 @@ test "StorageEngine: insert and select basic" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]sth.Field{
-        sth.makeField("name", .text, false),
-        sth.makeField("age", .integer, false),
+        schema_helpers.makeField("name", .text),
+        schema_helpers.makeField("age", .integer),
     };
-    const table = sth.makeTable("people", &fields_arr);
+    const table = schema_helpers.makeTable("people", &fields_arr);
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-basic", table);
@@ -186,9 +187,9 @@ test "StorageEngine: update document" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]sth.Field{
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("test", &fields_arr);
+    const table = schema_helpers.makeTable("test", &fields_arr);
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-update", table);
@@ -209,9 +210,9 @@ test "StorageEngine: delete document" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]sth.Field{
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("test", &fields_arr);
+    const table = schema_helpers.makeTable("test", &fields_arr);
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-delete", table);
@@ -230,8 +231,8 @@ test "StorageEngine: delete document" {
 }
 test "StorageEngine: upsertDocument and selectDocument" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-crud", table);
     defer ctx.deinit();
@@ -248,8 +249,8 @@ test "StorageEngine: upsertDocument and selectDocument" {
 }
 test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-nonexistent", table);
     defer ctx.deinit();
@@ -261,8 +262,8 @@ test "StorageEngine: selectDocument non-existent key" {
 }
 test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-update", table);
     defer ctx.deinit();
@@ -281,8 +282,8 @@ test "StorageEngine: update existing document" {
 }
 test "StorageEngine: query collection" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("name", .text, false)};
-    const table = sth.makeTable("people", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("name", .text)};
+    const table = schema_helpers.makeTable("people", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-query", table);
     defer ctx.deinit();
@@ -301,8 +302,8 @@ test "StorageEngine: query collection" {
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-namespaces", table);
     defer ctx.deinit();
@@ -328,8 +329,8 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithPerformance(
         &ctx,
@@ -354,8 +355,8 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
 
 test "StorageEngine: low-level batch writer cleans up when begin fails" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
     try ctx.init(allocator, table);
     defer ctx.deinit();
@@ -376,8 +377,8 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
     try ctx.init(allocator, table);
     defer ctx.deinit();
@@ -398,8 +399,8 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
 test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-batch-validate-table", table);
     defer ctx.deinit();
@@ -417,8 +418,8 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
 
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-concurrent", table);
     defer ctx.deinit();
@@ -454,8 +455,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     // its remaining batch before deinit returns.
     const allocator = testing.allocator;
 
-    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     const num_keys = 50;
     var test_dir: []const u8 = undefined;
 
@@ -494,8 +495,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
 }
 test "StorageEngine: client writes blocked during migration" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-migration-block", table);
     defer ctx.deinit();
@@ -513,8 +514,8 @@ test "StorageEngine: client writes blocked during migration" {
 }
 test "StorageEngine: engine healthy after start" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-healthy-start", table);
     defer ctx.deinit();
@@ -524,8 +525,8 @@ test "StorageEngine: engine healthy after start" {
 }
 test "StorageEngine: writes rejected when engine unhealthy" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-unhealthy-reject", table);
     defer ctx.deinit();
@@ -544,8 +545,8 @@ test "StorageEngine: writes rejected when engine unhealthy" {
 }
 test "StorageEngine: ensureHealthy returns error when unhealthy" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-ensure-healthy", table);
     defer ctx.deinit();
@@ -587,10 +588,10 @@ fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_ty
 test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDenied" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-upsert-reject", table);
     defer ctx.deinit();
@@ -634,10 +635,10 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-upsert-accepted", table);
     defer ctx.deinit();
@@ -681,10 +682,10 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
 test "StorageEngine: confirmed delete with rejecting guard returns PermissionDenied" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-delete-reject", table);
     defer ctx.deinit();
@@ -730,10 +731,10 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
 test "StorageEngine: confirmed delete of non-existent row succeeds" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-delete-missing", table);
     defer ctx.deinit();
@@ -765,10 +766,10 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
 test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-update-missing", table);
     defer ctx.deinit();
@@ -803,10 +804,10 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
 test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-upsert-missing", table);
     defer ctx.deinit();
@@ -850,10 +851,10 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
 test "StorageEngine: confirmed update with rejecting guard on existing row returns PermissionDenied" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("author_id", .doc_id, false),
-        sth.makeField("val", .text, false),
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "guard-update-reject", table);
     defer ctx.deinit();

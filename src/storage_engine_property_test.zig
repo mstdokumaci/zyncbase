@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
@@ -56,8 +57,8 @@ test "storage: engine initialization errors" {
 // Storage engine thread safety properties
 test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "prop-multi-table", table);
     defer ctx.deinit();
@@ -123,8 +124,8 @@ test "storage: thread-safe engine access" {
 
 test "storage: connection pool reuse and release" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "prop-many-ns", table);
     defer ctx.deinit();
@@ -152,8 +153,8 @@ test "storage: connection pool reuse and release" {
 
 test "storage: persistence round-trip (various types)" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "prop-burst", table);
     defer ctx.deinit();
@@ -189,8 +190,8 @@ test "storage: persistence round-trip (various types)" {
 
 test "storage: insert/delete inverse consistency" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-inverse", table);
     defer ctx.deinit();
@@ -227,8 +228,8 @@ test "storage: insert/delete inverse consistency" {
 
 test "storage: transaction isolation and consistency" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-txn-isolation", table);
     defer ctx.deinit();
@@ -274,8 +275,8 @@ test "storage: transaction isolation and consistency" {
 
 test "storage: concurrent batch processing" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-concurrent-batches", table);
     defer ctx.deinit();
@@ -314,8 +315,8 @@ test "storage: concurrent batch processing" {
 // Property: Database remains consistent after repeated flush operations
 test "storage: repeated flush consistency" {
     const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-repeated-flush", table);
     defer ctx.deinit();
@@ -344,8 +345,8 @@ test "storage: data persistence across restarts" {
     defer context.deinit();
     const test_dir = context.test_dir;
 
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
 
     // Initial run: Insert data
     {
@@ -378,8 +379,8 @@ test "storage: schema update integrity" {
     defer context.deinit();
     const test_dir = context.test_dir;
 
-    var fields_v1 = [_]sth.Field{sth.makeField("val1", .text, false)};
-    const table_v1 = sth.makeTable("test", &fields_v1);
+    var fields_v1 = [_]sth.Field{schema_helpers.makeField("val1", .text)};
+    const table_v1 = schema_helpers.makeTable("test", &fields_v1);
 
     // Run 1: Version 1 schema - insert data
     {
@@ -394,10 +395,10 @@ test "storage: schema update integrity" {
     // Run 2: Version 2 schema (added field) - verify existing data is still readable
     {
         var fields_v2 = [_]sth.Field{
-            sth.makeField("val1", .text, false),
-            sth.makeField("val2", .integer, false),
+            schema_helpers.makeField("val1", .text),
+            schema_helpers.makeField("val2", .integer),
         };
-        const table_v2 = sth.makeTable("test", &fields_v2);
+        const table_v2 = schema_helpers.makeTable("test", &fields_v2);
 
         var ctx: sth.EngineTestContext = undefined;
         try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v2, .{ .in_memory = false });
@@ -424,10 +425,10 @@ test "storage: schema update integrity" {
 test "storage: random operations fuzzing" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
-        sth.makeField("title", .text, false),
-        sth.makeField("score", .integer, false),
+        schema_helpers.makeField("title", .text),
+        schema_helpers.makeField("score", .integer),
     };
-    const table = sth.makeTable("items", &fields_arr);
+    const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-fuzz", table);
     defer ctx.deinit();

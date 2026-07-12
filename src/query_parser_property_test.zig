@@ -2,6 +2,7 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_mod = @import("schema.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 const testing = std.testing;
 
@@ -11,10 +12,10 @@ test "property: random valid query filters" {
     const random = prng.random();
 
     var fields = [_]schema_mod.Field{
-        sth.makeField("field", .text, false),
+        schema_helpers.makeField("field", .text),
     };
     const tables = [_]schema_mod.Table{
-        sth.makeTable("items", &fields),
+        schema_helpers.makeTable("items", &fields),
     };
 
     var schema = try sth.createSchema(allocator, &tables);
@@ -72,7 +73,7 @@ test "property: reject unknown field names" {
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
         const tables = [_]schema_mod.Table{
-            sth.makeTable("items", &[_]schema_mod.Field{}),
+            schema_helpers.makeTable("items", &[_]schema_mod.Field{}),
         };
 
         var schema = try sth.createSchema(allocator, &tables);

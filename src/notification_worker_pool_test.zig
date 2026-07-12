@@ -8,6 +8,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_ast = @import("query_ast.zig");
@@ -30,8 +31,8 @@ const TestContext = struct {
         self.subscription_engine = SubscriptionEngine.init(allocator);
         self.send_queue = try send_queue_type.init(allocator);
         self.schema = try sth.createSchema(allocator, &.{
-            sth.makeTable("items", &.{
-                sth.makeField("status", .text, false),
+            schema_helpers.makeTable("items", &.{
+                schema_helpers.makeField("status", .text),
             }),
         });
         self.notifier_called = std.atomic.Value(u32).init(0);
