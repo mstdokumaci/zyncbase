@@ -324,7 +324,6 @@ pub fn initFromTables(
         .allocator = allocator,
         .version = version_owned,
         .tables = owned_tables.tables,
-        .has_index = false,
         .metadata = metadata_owned,
         .presence_user_fields = presence_state.user_fields,
         .presence_shared_fields = presence_state.shared_fields,
