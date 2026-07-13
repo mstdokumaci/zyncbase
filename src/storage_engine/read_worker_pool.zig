@@ -56,6 +56,9 @@ pub const ReadWorker = struct {
     /// Per-request arena for record/value allocations. Bulk-freed via reset()
     /// at the start of each request, replacing hundreds of individual GPA frees.
     read_arena: *std.heap.ArenaAllocator,
+    /// Reusable scratch buffer for streaming array-to-JSON serialization.
+    /// Reset (length only) between uses; capacity is retained for steady-state reuse.
+    json_buf: std.ArrayListUnmanaged(u8) = .empty,
 
     pub fn init(
         allocator: Allocator,
@@ -281,6 +284,7 @@ pub const ReadWorker = struct {
                 namespace_id,
                 table_metadata,
                 if (rendered_guard) |rendered| rendered.values else null,
+                &self.json_buf,
             ) catch null;
         };
 
@@ -351,6 +355,7 @@ pub const ReadWorker = struct {
             table_metadata,
             filter.limit,
             sort_field_index,
+            &self.json_buf,
         ) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
@@ -484,6 +489,7 @@ pub const ReadWorkerPool = struct {
 
     pub fn deinit(self: *ReadWorkerPool) void {
         for (self.pool.workers) |*w| {
+            w.json_buf.deinit(w.allocator);
             w.memory_strategy.releaseArena(w.read_arena);
         }
         self.pool.deinit();

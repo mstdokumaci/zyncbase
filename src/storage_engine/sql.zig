@@ -149,7 +149,7 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
 }
 
-pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
+pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator, json_buf: *std.ArrayListUnmanaged(u8)) !void {
     const rc = switch (typed_value) {
         .scalar => |s| switch (s) {
             .doc_id => |id| blk: {
@@ -163,9 +163,9 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
         },
         .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         .array => |items| blk: {
-            const json = try typed.jsonAlloc(allocator, .{ .array = items });
-            defer allocator.free(json);
-            break :blk bindTextTransient(stmt, index, json);
+            json_buf.clearRetainingCapacity();
+            try typed.writeJsonToBuf(json_buf, allocator, .{ .array = items });
+            break :blk bindTextTransient(stmt, index, json_buf.items);
         },
     };
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);

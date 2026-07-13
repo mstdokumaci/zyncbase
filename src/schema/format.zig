@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("types.zig");
 const json_write = @import("../json/write.zig");
 const field_path = @import("field_path.zig");
-const writeJsonString = json_write.writeJsonString;
 
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
@@ -42,14 +41,11 @@ fn writeRequiredFields(w: *json_write.Writer, allocator: std.mem.Allocator, fiel
     if (count == 0) return;
 
     try w.beginArrayField("required");
-    var emitted: usize = 0;
     for (fields) |field| {
         if (!field.required) continue;
-        if (emitted > 0) try w.separator();
         const dotted = try field_path.toDotted(allocator, field.name);
         defer allocator.free(dotted);
-        try writeJsonString(w.buf, allocator, dotted);
-        emitted += 1;
+        try w.stringValue(dotted);
     }
     try w.endArray();
 }
@@ -63,7 +59,6 @@ fn writeFieldsForPrefix(
     var seen = std.StringHashMapUnmanaged(void).empty;
     defer seen.deinit(allocator);
 
-    var emitted: usize = 0;
     for (fields) |field| {
         const rem = field_path.remainder(field.name, prefix) orelse continue;
         const split = field_path.splitFirst(rem);
@@ -72,30 +67,23 @@ fn writeFieldsForPrefix(
         const gop = try seen.getOrPut(allocator, segment);
         if (gop.found_existing) continue;
 
-        if (emitted > 0) try w.separator();
-        try writeJsonString(w.buf, allocator, segment);
-        try w.buf.append(allocator, ':');
-
+        try w.beginObjectField(segment);
         if (split.rest != null) {
             const child_prefix = try field_path.join(allocator, prefix, segment);
             defer allocator.free(child_prefix);
 
-            try w.beginObject();
             try w.field("type", "object");
             try w.beginObjectField("fields");
             try writeFieldsForPrefix(w, allocator, fields, child_prefix);
             try w.endObject();
-            try w.endObject();
         } else {
             try writeFieldDefinition(w, field);
         }
-
-        emitted += 1;
+        try w.endObject();
     }
 }
 
 fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
-    try w.beginObject();
     try w.field("type", field.declared_type.schemaName());
     if (field.declared_type == .array) {
         try w.field("items", (field.items_type orelse types.FieldType.text).schemaName());
@@ -110,5 +98,4 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
     if (field.metadata) |metadata| {
         try w.rawField("metadata", metadata.json);
     }
-    try w.endObject();
 }

@@ -133,12 +133,15 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
     const tv_arr = try typed.valueFromPayload(allocator, .array, .integer, arr_payload);
     const tv_doc_id = Value{ .scalar = .{ .doc_id = doc_id_value } };
 
-    try sql.bindValue(tv_doc_id, &db, insert_stmt, 1, allocator);
-    try sql.bindValue(tv_int, &db, insert_stmt, 2, allocator);
-    try sql.bindValue(tv_real, &db, insert_stmt, 3, allocator);
-    try sql.bindValue(tv_text, &db, insert_stmt, 4, allocator);
-    try sql.bindValue(tv_bool, &db, insert_stmt, 5, allocator);
-    try sql.bindValue(tv_arr, &db, insert_stmt, 6, allocator);
+    var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer json_buf.deinit(allocator);
+
+    try sql.bindValue(tv_doc_id, &db, insert_stmt, 1, allocator, &json_buf);
+    try sql.bindValue(tv_int, &db, insert_stmt, 2, allocator, &json_buf);
+    try sql.bindValue(tv_real, &db, insert_stmt, 3, allocator, &json_buf);
+    try sql.bindValue(tv_text, &db, insert_stmt, 4, allocator, &json_buf);
+    try sql.bindValue(tv_bool, &db, insert_stmt, 5, allocator, &json_buf);
+    try sql.bindValue(tv_arr, &db, insert_stmt, 6, allocator, &json_buf);
 
     try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_DONE), sqlite.c.sqlite3_step(insert_stmt));
 

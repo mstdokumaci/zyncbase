@@ -55,7 +55,10 @@ pub fn readDoc(
     var dynamic = try node.conn.prepareDynamic(table_metadata.select_document_sql);
     defer dynamic.deinit();
 
-    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null);
+    var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer json_buf.deinit(allocator);
+
+    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null, &json_buf);
 }
 
 /// Execute a query directly from SQLite (bypasses cache and guard predicates).
@@ -80,6 +83,9 @@ pub fn queryDocs(
     var dynamic = try node.conn.prepareDynamic(query_res.sql);
     defer dynamic.deinit();
 
+    var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer json_buf.deinit(allocator);
+
     const exec_res = try reader_mod.execQuery(
         allocator,
         &node.conn,
@@ -88,6 +94,7 @@ pub fn queryDocs(
         table_metadata,
         filter.limit,
         filter.order_by.field_index,
+        &json_buf,
     );
 
     return .{

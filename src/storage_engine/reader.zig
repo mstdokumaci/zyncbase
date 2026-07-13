@@ -143,13 +143,14 @@ pub fn execSelectDocument(
     namespace_id: i64,
     table_metadata: *const schema.Table,
     guard_values: ?[]const Value,
+    json_buf: *std.ArrayListUnmanaged(u8),
 ) !?Record {
     try sql.bindDocIdNamespace(stmt, db, 1, id, namespace_id);
 
     var bind_idx: c_int = 3;
     if (guard_values) |vals| {
         for (vals) |val| {
-            try sql.bindValue(val, db, stmt, bind_idx, allocator);
+            try sql.bindValue(val, db, stmt, bind_idx, allocator, json_buf);
             bind_idx += 1;
         }
     }
@@ -165,11 +166,12 @@ pub fn execQuery(
     table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
+    json_buf: *std.ArrayListUnmanaged(u8),
 ) !struct { records: []Record, next_cursor_str: ?[]const u8 } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
-        try sql.bindValue(v, db, stmt, @intCast(i + 1), allocator);
+        try sql.bindValue(v, db, stmt, @intCast(i + 1), allocator, json_buf);
     }
 
     var records_list: std.ArrayListUnmanaged(Record) = .empty;
