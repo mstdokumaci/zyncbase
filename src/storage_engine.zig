@@ -147,6 +147,7 @@ pub const StorageEngine = struct {
             .reconnection_config = .{},
             .write_worker = .{
                 .allocator = allocator,
+                .memory_strategy = memory_strategy,
                 .conn = writer_conn,
                 // SAFETY: Initialized below
                 .stmt_cache = undefined,

@@ -7,6 +7,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RecordChange = @import("subscription_engine.zig").RecordChange;
 const MatchOp = SubscriptionEngine.MatchOp;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const ArenaHandle = @import("memory_strategy.zig").ArenaHandle;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
@@ -80,7 +81,7 @@ pub const NotificationWorkerPool = struct {
     }
 };
 
-const NotificationWorker = struct {
+pub const NotificationWorker = struct {
     thread: managedThread(NotificationWorker),
     id: usize,
     change_queue: *ChangeQueue,
@@ -90,7 +91,7 @@ const NotificationWorker = struct {
     send_queue: *send_queue_type,
     notifier: Notifier,
 
-    fn init(
+    pub fn init(
         id: usize,
         change_queue: *ChangeQueue,
         subscription_engine: *SubscriptionEngine,
@@ -164,34 +165,41 @@ const NotificationWorker = struct {
 
         const id_val_actual = id_val.?;
 
-        const arena = self.memory_strategy.acquireArena() catch |err| {
-            std.log.err("NotificationWorker acquireArena failed: {}", .{err});
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.err("NotificationWorker acquireArenaDeferred failed: {}", .{err});
             return;
         };
-        defer self.memory_strategy.releaseArena(arena);
-        const alloc = arena.allocator();
+        const alloc = handle.allocator();
 
         const matches = self.subscription_engine.handleRecordChange(record_change, alloc) catch |err| {
             std.log.err("NotificationWorker handleRecordChange failed: {}", .{err});
+            handle.release();
             return;
         };
 
-        if (matches.len == 0) return;
+        if (matches.len == 0) {
+            handle.release();
+            return;
+        }
 
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
-        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix)) return;
+        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix)) {
+            handle.release();
+            return;
+        }
 
-        dispatchDeltasToMatches(self, matches, set_suffix, remove_suffix, alloc);
+        dispatchDeltasToMatches(self, matches, set_suffix, remove_suffix, handle);
     }
 
-    fn dispatchDeltasToMatches(
+    pub fn dispatchDeltasToMatches(
         self: *NotificationWorker,
         matches: []const SubscriptionEngine.Match,
         set_suffix: ?[]const u8,
         remove_suffix: ?[]const u8,
-        alloc: std.mem.Allocator,
+        handle: ArenaHandle,
     ) void {
+        const alloc = handle.allocator();
         var out = std.ArrayListUnmanaged(u8).empty;
         var pushed_any = false;
 
@@ -219,14 +227,17 @@ const NotificationWorker = struct {
                 continue;
             };
 
-            const owned_msg = self.memory_strategy.generalAllocator().dupe(u8, out.items) catch |err| {
+            const owned_msg = alloc.dupe(u8, out.items) catch |err| {
                 std.log.err("NotificationWorker failed to dupe encoded delta: {}", .{err});
                 continue;
             };
 
-            self.send_queue.push(.{ .conn_id = match.connection_id, .data = owned_msg }) catch |err| {
+            // Reserve a ref for this entry BEFORE pushing so the consumer can never
+            // observe the refcount dropping to zero before the entry is visible.
+            handle.retain();
+            self.send_queue.push(.{ .conn_id = match.connection_id, .data = owned_msg, .arena = handle }) catch |err| {
                 std.log.err("NotificationWorker failed to push to SendQueue: {}", .{err});
-                self.memory_strategy.generalAllocator().free(owned_msg);
+                handle.release();
                 continue;
             };
             pushed_any = true;
@@ -235,6 +246,10 @@ const NotificationWorker = struct {
         if (pushed_any) {
             self.notifier.notify();
         }
+
+        // Drop the producer hold. If the consumer has already drained every entry,
+        // this releases the arena now; otherwise the consumer's final pop does.
+        handle.release();
     }
 };
 

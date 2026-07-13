@@ -132,6 +132,18 @@ pub const MemoryStrategy = struct {
         self.arena_pool.release(arena);
     }
 
+    /// Acquire an arena whose lifetime is shared between producer and consumer via
+    /// a refcount. Returns a handle holding one reference (the producer hold).
+    /// The refcount is arena-resident (a single bump per change). See `ArenaHandle`
+    /// (defined at file scope below) for the shared-ownership lifecycle.
+    pub fn acquireArenaDeferred(self: *MemoryStrategy) !ArenaHandle {
+        const arena = try self.acquireArena();
+        errdefer self.releaseArena(arena);
+        const rc = try arena.allocator().create(std.atomic.Value(u32));
+        rc.* = std.atomic.Value(u32).init(1);
+        return .{ .arena = arena, .refcount = rc, .ms = self };
+    }
+
     /// Acquire a connection from the pool
     pub fn acquireConnection(self: *MemoryStrategy) !*Connection {
         return self.connection_pool.acquire();
@@ -338,5 +350,43 @@ pub const MemoryStrategy = struct {
                 self.allocator.destroy(item);
             }
         };
+    }
+};
+
+/// Shared-ownership handle to an arena whose lifetime is extended beyond the
+/// producer's scope (e.g. arena-resident data handed to a queue consumer that
+/// drains asynchronously). The arena is returned to the pool when the last
+/// reference is dropped.
+///
+/// Usage: `acquireArenaDeferred` (a `MemoryStrategy` method) returns a handle
+/// holding one reference (the "producer hold"). Call `retain()` before handing
+/// the handle to a consumer (e.g. before pushing to a queue). Call `release()`
+/// when done — the arena is released when the last reference is dropped.
+///
+/// Memory ordering:
+///   `retain`  uses `.monotonic` — visibility of arena data to the consumer is
+///   established by the queue's own release/acquire pair, not by the refcount.
+///   `release` uses `.acq_rel` — ensures every dropper's prior reads of arena
+///   data are visible to the dropper that performs the arena reset, so the arena
+///   is never reset before all consumers have finished reading.
+pub const ArenaHandle = struct {
+    arena: *std.heap.ArenaAllocator,
+    refcount: *std.atomic.Value(u32),
+    ms: *MemoryStrategy,
+
+    pub fn allocator(self: ArenaHandle) Allocator {
+        return self.arena.allocator();
+    }
+
+    pub fn retain(self: ArenaHandle) void {
+        _ = self.refcount.fetchAdd(1, .monotonic);
+    }
+
+    pub fn release(self: ArenaHandle) void {
+        const prev = self.refcount.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+        if (prev == 1) {
+            self.ms.releaseArena(self.arena);
+        }
     }
 };

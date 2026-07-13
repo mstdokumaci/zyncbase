@@ -70,9 +70,9 @@ test {
     _ = @import("migration_executor_property_test.zig");
     _ = @import("query_parser_property_test.zig");
     _ = @import("subscription_engine_test.zig");
-    _ = @import("subscription_engine_perf_test.zig");
     _ = @import("change_queue_test.zig");
     _ = @import("notification_worker_pool_test.zig");
+    _ = @import("notification_worker_pool_perf_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
     _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");

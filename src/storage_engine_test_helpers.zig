@@ -336,7 +336,13 @@ pub const EngineTestContext = struct {
         if (cleanup) {
             self.test_context.deinit();
         } else {
-            if (self.test_context.send_queue) |*sq| sq.deinit();
+            if (self.test_context.send_queue) |*sq| {
+                while (sq.pop()) |entry| {
+                    entry.deinit();
+                }
+                sq.deinit();
+            }
+            if (self.test_context.send_node_pool) |*pool| pool.deinit();
             if (self.test_context.change_queue) |*cq| cq.deinit();
             self.allocator.free(self.test_context.test_dir);
         }

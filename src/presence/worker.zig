@@ -7,6 +7,7 @@ const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 
@@ -72,6 +73,7 @@ pub const work_queue_type = spscQueue(PresenceOp, MemoryStrategy.AllocPool);
 
 pub const PresenceWorker = struct {
     allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
     notifier: Notifier,
@@ -82,6 +84,7 @@ pub const PresenceWorker = struct {
     pub fn init(
         self: *PresenceWorker,
         allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
         presence_manager: *PresenceManager,
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
@@ -89,6 +92,7 @@ pub const PresenceWorker = struct {
     ) !void {
         self.* = .{
             .allocator = allocator,
+            .memory_strategy = memory_strategy,
             .presence_manager = presence_manager,
             .send_queue = send_queue,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
@@ -199,12 +203,18 @@ pub const PresenceWorker = struct {
         };
         defer snapshot.deinit(self.allocator);
 
-        const msg = wire.encodePresenceUserSnapshot(self.allocator, sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.err("PresenceWorker acquire arena failed: {}", .{err});
+            return;
+        };
+        defer handle.release();
+
+        const msg = wire.encodePresenceUserSnapshot(handle.allocator(), sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
             std.log.err("PresenceWorker encodePresenceUserSnapshot failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
             return;
         };
-        self.pushToSendQueue(sub.conn_id, msg);
+        self.pushToSendQueue(sub.conn_id, msg, handle);
     }
 
     fn processSubscribeShared(self: *PresenceWorker, sub: anytype) void {
@@ -215,8 +225,14 @@ pub const PresenceWorker = struct {
         };
         defer if (shared) |*s| s.deinit(self.allocator);
 
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.err("PresenceWorker acquire arena failed: {}", .{err});
+            return;
+        };
+        defer handle.release();
+
         const msg = wire.encodePresenceSharedSnapshot(
-            self.allocator,
+            handle.allocator(),
             sub.msg_id,
             sub.sub_id,
             if (shared) |*s| s else null,
@@ -225,24 +241,31 @@ pub const PresenceWorker = struct {
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "encode failed");
             return;
         };
-        self.pushToSendQueue(sub.conn_id, msg);
+        self.pushToSendQueue(sub.conn_id, msg, handle);
     }
 
-    fn pushToSendQueue(self: *PresenceWorker, conn_id: u64, msg: []const u8) void {
-        self.send_queue.push(.{ .conn_id = conn_id, .data = msg }) catch |err| {
+    fn pushToSendQueue(self: *PresenceWorker, conn_id: u64, msg: []const u8, handle: ArenaHandle) void {
+        handle.retain();
+        self.send_queue.push(.{ .conn_id = conn_id, .data = msg, .arena = handle }) catch |err| {
             std.log.err("PresenceWorker send_queue push failed: {}", .{err});
-            self.allocator.free(msg);
+            handle.release();
             return;
         };
         self.notifier.notify();
     }
 
     fn sendError(self: *PresenceWorker, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
-        const err_msg = wire.encodeError(self.allocator, msg_id, .{
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.err("PresenceWorker sendError acquire arena failed: {}", .{err});
+            return;
+        };
+        defer handle.release();
+
+        const err_msg = wire.encodeError(handle.allocator(), msg_id, .{
             .code = code,
             .message = message,
         }) catch return;
-        self.pushToSendQueue(conn_id, err_msg);
+        self.pushToSendQueue(conn_id, err_msg, handle);
     }
 
     fn flush(self: *PresenceWorker) void {
@@ -296,16 +319,24 @@ pub const PresenceWorker = struct {
         comptime log_label: []const u8,
     ) bool {
         var pushed_any = false;
+
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.err("PresenceWorker dispatchBatches acquire arena failed: {}", .{err});
+            return false;
+        };
+        defer handle.release();
+
         for (batches) |batch| {
             if (batch.subscribers.items.len == 0) continue;
             for (batch.subscribers.items) |subscriber| {
-                const msg = encode_fn(self.allocator, subscriber.sub_id, batch.updates.items) catch |err| {
+                const msg = encode_fn(handle.allocator(), subscriber.sub_id, batch.updates.items) catch |err| {
                     std.log.err("PresenceWorker encode {s} broadcast failed: {}", .{ log_label, err });
                     continue;
                 };
-                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg }) catch |err| {
+                handle.retain();
+                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg, .arena = handle }) catch |err| {
                     std.log.err("PresenceWorker push {s} broadcast failed: {}", .{ log_label, err });
-                    self.allocator.free(msg);
+                    handle.release();
                     continue;
                 };
                 pushed_any = true;

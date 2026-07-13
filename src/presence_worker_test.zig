@@ -5,6 +5,7 @@ const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const schema_mod = @import("schema.zig");
 const msgpack = @import("msgpack_utils.zig");
 const send_queue_type = @import("send_queue.zig").send_queue;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed = @import("typed.zig");
 
 fn makeTestUserFields(allocator: std.mem.Allocator) ![]const schema_mod.PresenceField {
@@ -43,12 +44,13 @@ fn notifierFn(ctx: ?*anyopaque) void {
 
 fn setupWorker(
     allocator: std.mem.Allocator,
+    memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
     notifier_counter: *std.atomic.Value(u32),
 ) !*PresenceWorker {
     const worker = try allocator.create(PresenceWorker);
-    try worker.init(allocator, presence_manager, send_queue, notifierFn, notifier_counter);
+    try worker.init(allocator, memory_strategy, presence_manager, send_queue, notifierFn, notifier_counter);
     try worker.spawn();
     return worker;
 }
@@ -64,8 +66,19 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
-    defer send_queue.deinit();
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer std.debug.assert(memory_strategy.deinit() == .ok);
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 256, null, null);
+    defer send_node_pool.deinit();
+
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
@@ -77,7 +90,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
     defer {
         worker.stop();
         worker.deinit();
@@ -110,9 +123,9 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     // Verify notifier was called
     try testing.expect(notifier_called.load(.monotonic) > 0);
 
-    // Drain and free the send_queue entry
+    // Drain and release the send_queue entry
     if (send_queue.pop()) |entry| {
-        allocator.free(entry.data);
+        entry.deinit();
     }
 }
 
@@ -127,8 +140,19 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
-    defer send_queue.deinit();
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer std.debug.assert(memory_strategy.deinit() == .ok);
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 256, null, null);
+    defer send_node_pool.deinit();
+
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
@@ -140,7 +164,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
     defer {
         worker.stop();
         worker.deinit();
@@ -168,12 +192,23 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
-    defer send_queue.deinit();
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer std.debug.assert(memory_strategy.deinit() == .ok);
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 256, null, null);
+    defer send_node_pool.deinit();
+
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
-    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
     defer {
         worker.stop();
         worker.deinit();
@@ -203,9 +238,9 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try testing.expect(send_queue.hasItems());
     try testing.expect(notifier_called.load(.monotonic) > 0);
 
-    // Drain and free
+    // Drain and release
     if (send_queue.pop()) |entry| {
-        allocator.free(entry.data);
+        entry.deinit();
     }
 }
 
@@ -220,8 +255,19 @@ test "PresenceWorker: multiple ops batched into single flush" {
     presence_manager.init(allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
-    defer send_queue.deinit();
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer std.debug.assert(memory_strategy.deinit() == .ok);
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 256, null, null);
+    defer send_node_pool.deinit();
+
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
 
     var notifier_called = std.atomic.Value(u32).init(0);
 
@@ -234,7 +280,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
     defer {
         worker.stop();
         worker.deinit();
@@ -267,6 +313,6 @@ test "PresenceWorker: multiple ops batched into single flush" {
 
     // Drain all entries
     while (send_queue.pop()) |entry| {
-        allocator.free(entry.data);
+        entry.deinit();
     }
 }

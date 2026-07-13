@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 
 const TestEntry = struct {
     id: u64,
@@ -11,9 +12,14 @@ const TestEntry = struct {
     }
 };
 
+const AllocPool = MemoryStrategy.AllocPool;
+const queue_type = mpscQueue(TestEntry, AllocPool);
+const PoolType = AllocPool(queue_type.Node);
+
 test "MpscQueue: multiple producers single consumer" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     const thread_count = 4;
@@ -21,7 +27,8 @@ test "MpscQueue: multiple producers single consumer" {
     const total_items = thread_count * items_per_thread;
 
     const ProducerContext = struct {
-        q: *mpscQueue(TestEntry),
+        q: *queue_type,
+        allocator: std.mem.Allocator,
         thread_id: u64,
         count: usize,
     };
@@ -37,14 +44,14 @@ test "MpscQueue: multiple producers single consumer" {
             while (i < ctx.count) : (i += 1) {
                 var buf: [32]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "msg-{}-{}", .{ ctx.thread_id, i }) catch return error.TestFailed;
-                try ctx.q.push(.{ .id = ctx.thread_id * 10000 + i, .msg = try ctx.q.allocator.dupe(u8, msg) });
+                try ctx.q.push(.{ .id = ctx.thread_id * 10000 + i, .msg = try ctx.allocator.dupe(u8, msg) });
             }
         }
     }.run;
 
     for (0..thread_count) |i| {
         const ctx = try alloc.create(ProducerContext);
-        ctx.* = .{ .q = &q, .thread_id = @intCast(i), .count = items_per_thread };
+        ctx.* = .{ .q = &q, .allocator = alloc, .thread_id = @intCast(i), .count = items_per_thread };
         contexts[i] = ctx;
         threads[i] = try std.Thread.spawn(.{}, producer, .{ctx});
     }
@@ -65,14 +72,16 @@ test "MpscQueue: multiple producers single consumer" {
 
 test "MpscQueue: concurrent push and pop stress" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     const producer_count = 3;
     const items_per_producer = 500;
 
     const ProducerContext = struct {
-        q: *mpscQueue(TestEntry),
+        q: *queue_type,
+        allocator: std.mem.Allocator,
         count: usize,
     };
 
@@ -85,13 +94,13 @@ test "MpscQueue: concurrent push and pop stress" {
         fn run(ctx: *ProducerContext) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                try ctx.q.push(.{ .id = i, .msg = try ctx.q.allocator.dupe(u8, "stress") });
+                try ctx.q.push(.{ .id = i, .msg = try ctx.allocator.dupe(u8, "stress") });
             }
         }
     }.run;
 
     const ConsumerContext = struct {
-        q: *mpscQueue(TestEntry),
+        q: *queue_type,
         alloc: std.mem.Allocator,
         consumed: std.atomic.Value(usize),
         total_expected: usize,
@@ -116,7 +125,7 @@ test "MpscQueue: concurrent push and pop stress" {
 
     for (0..producer_count) |i| {
         const ctx = try alloc.create(ProducerContext);
-        ctx.* = .{ .q = &q, .count = items_per_producer };
+        ctx.* = .{ .q = &q, .allocator = alloc, .count = items_per_producer };
         producer_contexts[i] = ctx;
         threads[i] = try std.Thread.spawn(.{}, producer, .{ctx});
     }
@@ -142,7 +151,8 @@ test "MpscQueue: concurrent push and pop stress" {
 
 test "MpscQueue: push during drain" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     try q.push(.{ .id = 1, .msg = try alloc.dupe(u8, "initial1") });
