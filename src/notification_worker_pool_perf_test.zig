@@ -191,9 +191,10 @@ test "NotificationWorkerPool: dispatch fanout performance" {
     // Baseline (10k subs / 5k matches), per-iteration avg [ms]:
     //   ReleaseFast: A~0.04  C~0.36  D~0.11  total~0.52  (pool-parameterized MPSC queue)
     //   Debug:       A~0.21  C~16.9  D~14    total~31.1  (pool-parameterized MPSC queue, 500 iters)
-    // Thresholds carry ~2x headroom over the Debug baseline to absorb machine/allocator
+    //   TSan:        A~1.6   C~37.2  D~21.6  total~60.4  (pool-parameterized MPSC queue, 500 iters)
+    // Thresholds carry ~2x headroom over the Debug/TSan baseline to absorb machine/allocator
     // variance while still catching regressions, especially in the pool-backed dispatch stage C.
-    const target_a: f64 = if (is_tsan) 1.5 else if (is_debug) 0.5 else 0.15;
+    const target_a: f64 = if (is_tsan) 3.5 else if (is_debug) 0.5 else 0.15;
     const target_c: f64 = if (is_tsan) 60.0 else if (is_debug) 35.0 else 0.9;
     const target_total: f64 = if (is_tsan) 120.0 else if (is_debug) 65.0 else 1.0;
 
