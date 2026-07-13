@@ -18,6 +18,7 @@ const TestContext = struct {
     memory_strategy: MemoryStrategy,
     change_queue: ChangeQueue,
     subscription_engine: SubscriptionEngine,
+    send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     send_queue: send_queue_type,
     schema: sth.Schema,
     notifier_called: std.atomic.Value(u32),
@@ -29,7 +30,8 @@ const TestContext = struct {
         try self.memory_strategy.init(allocator);
         self.change_queue = try ChangeQueue.init(allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(allocator);
-        self.send_queue = try send_queue_type.init(allocator);
+        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 256, null, null);
+        self.send_queue = try send_queue_type.init(&self.send_node_pool);
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
                 schema_helpers.makeField("status", .text),
@@ -40,7 +42,11 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
+        while (self.send_queue.pop()) |*entry| {
+            entry.deinit();
+        }
         self.send_queue.deinit();
+        self.send_node_pool.deinit();
         self.subscription_engine.deinit();
         self.change_queue.deinit();
         std.debug.assert(self.memory_strategy.deinit() == .ok);
@@ -116,9 +122,9 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
     // Verify notifier was called
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
-    // Drain and free the send_queue entry
-    if (ctx.send_queue.pop()) |entry| {
-        ctx.memory_strategy.generalAllocator().free(entry.data);
+    // Drain and release the send_queue entry (notification entries are arena-held).
+    if (ctx.send_queue.pop()) |*entry| {
+        entry.deinit();
     }
 }
 

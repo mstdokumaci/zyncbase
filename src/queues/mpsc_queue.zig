@@ -1,36 +1,56 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
-pub fn mpscQueue(comptime T: type) type {
-    _ = @typeName(T);
+/// Generic lock-free multi-producer single-consumer queue.
+///
+/// Uses the Vyukov linked-list algorithm: producers append to `tail` via
+/// an atomic swap, the consumer advances `head`. A stub node always sits
+/// at `head` so that push and pop never touch the same node concurrently.
+///
+/// Node allocation is parameterized via a pool type function. The pool must
+/// provide `acquire(self: *Pool) !*Node` and `release(self: *Pool, node: *Node) void`.
+/// Use `MemoryStrategy.IndexPool` for zero-allocation pooled nodes, or
+/// `MemoryStrategy.AllocPool` for simple on-demand allocation.
+///
+/// The queue is not blocking — callers are expected to pair it with a
+/// notifier for blocking semantics (see NotificationWorkerPool).
+///
+/// `deinit` only releases the stub node. Callers must drain remaining items
+/// (calling `pop` + item `deinit`) before calling `deinit`.
+pub fn mpscQueue( // zwanzig-disable-line: unused-parameter identifier-style
+    comptime T: type,
+    comptime PoolFn: fn (comptime N: type) type,
+) type {
     return struct {
         const Self = @This();
 
-        const Node = struct {
+        pub const Node = struct {
             data: T,
             next: std.atomic.Value(?*Node),
         };
 
+        const Pool = PoolFn(Node);
+
         head: *Node,
         tail: std.atomic.Value(*Node),
-        allocator: Allocator,
+        pool: *Pool,
 
-        pub fn init(allocator: Allocator) !Self {
-            const stub = try allocator.create(Node);
-            // SAFETY: Sentinel node — data is never read, only next pointer is used.
-            stub.* = .{
-                .data = undefined,
-                .next = std.atomic.Value(?*Node).init(null),
-            };
-            return .{
+        pub fn init(pool: *Pool) !Self {
+            const stub = try pool.acquire();
+            stub.next = std.atomic.Value(?*Node).init(null);
+            return Self{
                 .head = stub,
                 .tail = std.atomic.Value(*Node).init(stub),
-                .allocator = allocator,
+                .pool = pool,
             };
         }
 
+        /// Release the stub node. Callers must drain remaining items first.
+        pub fn deinit(self: *Self) void {
+            self.pool.release(self.head);
+        }
+
         pub fn push(self: *Self, item: T) !void {
-            const node = try self.allocator.create(Node);
+            const node = try self.pool.acquire();
             node.* = .{
                 .data = item,
                 .next = std.atomic.Value(?*Node).init(null),
@@ -45,27 +65,12 @@ pub fn mpscQueue(comptime T: type) type {
 
             const data: T = next.data;
             self.head = next;
-            self.allocator.destroy(head);
+            self.pool.release(head);
             return data;
         }
 
         pub fn hasItems(self: *const Self) bool {
             return self.head.next.load(.acquire) != null;
-        }
-
-        pub fn deinit(self: *Self) void {
-            while (true) {
-                const head = self.head;
-                const next = head.next.load(.acquire) orelse {
-                    self.allocator.destroy(head);
-                    return;
-                };
-                if (comptime @typeInfo(T) == .@"struct" or @typeInfo(T) == .@"union" or @typeInfo(T) == .@"enum") {
-                    if (@hasDecl(T, "deinit")) next.data.deinit(self.allocator);
-                }
-                self.allocator.destroy(head);
-                self.head = next;
-            }
         }
     };
 }

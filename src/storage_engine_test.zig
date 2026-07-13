@@ -622,7 +622,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 
@@ -667,7 +667,7 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
     try testing.expectEqual(@as(usize, 0), entries.len);
@@ -715,7 +715,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 
@@ -755,7 +755,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 
@@ -792,7 +792,7 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 
@@ -833,7 +833,7 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 
@@ -885,7 +885,7 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
-        for (entries) |e| allocator.free(e.data);
+        for (entries) |e| e.deinit();
         allocator.free(entries);
     }
 

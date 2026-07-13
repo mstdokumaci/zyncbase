@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 
 const TestEntry = struct {
     id: u64,
@@ -11,9 +12,14 @@ const TestEntry = struct {
     }
 };
 
+const AllocPool = MemoryStrategy.AllocPool;
+const queue_type = mpscQueue(TestEntry, AllocPool);
+const PoolType = AllocPool(queue_type.Node);
+
 test "MpscQueue: empty queue" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     try testing.expect(!q.hasItems());
@@ -22,7 +28,8 @@ test "MpscQueue: empty queue" {
 
 test "MpscQueue: push and pop single entry" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     try q.push(.{ .id = 42, .msg = try alloc.dupe(u8, "hello") });
@@ -39,7 +46,8 @@ test "MpscQueue: push and pop single entry" {
 
 test "MpscQueue: push multiple entries preserves FIFO order" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     try q.push(.{ .id = 1, .msg = try alloc.dupe(u8, "first") });
@@ -66,7 +74,8 @@ test "MpscQueue: push multiple entries preserves FIFO order" {
 
 test "MpscQueue: pop after drain returns null" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
     defer q.deinit();
 
     try q.push(.{ .id = 1, .msg = try alloc.dupe(u8, "a") });
@@ -80,13 +89,18 @@ test "MpscQueue: pop after drain returns null" {
     try testing.expect(q.pop() == null);
 }
 
-test "MpscQueue: deinit frees remaining entries via deinit fn" {
+test "MpscQueue: drain releases remaining entries" {
     const alloc = testing.allocator;
-    var q = try mpscQueue(TestEntry).init(alloc);
+    var pool = PoolType.init(alloc);
+    var q = try queue_type.init(&pool);
 
     try q.push(.{ .id = 1, .msg = try alloc.dupe(u8, "unconsumed1") });
     try q.push(.{ .id = 2, .msg = try alloc.dupe(u8, "unconsumed2") });
     try q.push(.{ .id = 3, .msg = try alloc.dupe(u8, "unconsumed3") });
+
+    while (q.pop()) |entry| {
+        alloc.free(entry.msg);
+    }
 
     q.deinit();
 }

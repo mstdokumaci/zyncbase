@@ -100,23 +100,30 @@ pub const ReadWorker = struct {
             const request = self.request_queue.pop() orelse break;
             const response = self.executeRead(request);
 
+            const handle = self.memory_strategy.acquireArenaDeferred() catch |acq_err| {
+                std.log.err("ReadWorker: failed to acquire arena: {}", .{acq_err});
+                continue;
+            };
+            defer handle.release();
+
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
-                const encoded = wire.encodeError(self.allocator, msg_id, .{
+                const encoded = wire.encodeError(handle.allocator(), msg_id, .{
                     .code = "STORE_QUERY",
                     .message = @errorName(err),
                 }) catch {
                     std.log.err("ReadWorker: failed to encode error", .{});
                     continue;
                 };
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
+                handle.retain();
+                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push error to send queue", .{});
-                    self.allocator.free(encoded);
+                    handle.release();
                     continue;
                 };
                 self.notifier.notify();
             } else {
-                const encoded = wire.encodeQuery(self.allocator, .{
+                const encoded = wire.encodeQuery(handle.allocator(), .{
                     .msg_id = response.msg_id,
                     .sub_id = response.sub_id,
                     .records = response.records,
@@ -126,9 +133,10 @@ pub const ReadWorker = struct {
                     std.log.err("ReadWorker: failed to encode query", .{});
                     continue;
                 };
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded }) catch {
+                handle.retain();
+                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push to send queue", .{});
-                    self.allocator.free(encoded);
+                    handle.release();
                     continue;
                 };
                 self.notifier.notify();
@@ -136,7 +144,15 @@ pub const ReadWorker = struct {
         }
 
         while (self.request_queue.popTimed(0)) |request| {
-            const shutdown_encoded = wire.encodeError(self.allocator, request.msg_id, .{
+            const handle = self.memory_strategy.acquireArenaDeferred() catch |acq_err| {
+                std.log.err("ReadWorker: failed to acquire arena for shutdown: {}", .{acq_err});
+                cleanupRequest(request);
+                self.notifier.notify();
+                continue;
+            };
+            defer handle.release();
+
+            const shutdown_encoded = wire.encodeError(handle.allocator(), request.msg_id, .{
                 .code = "STORE_QUERY",
                 .message = "shutdown",
             }) catch |err| {
@@ -145,9 +161,10 @@ pub const ReadWorker = struct {
                 self.notifier.notify();
                 continue;
             };
-            self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded }) catch |err| {
+            handle.retain();
+            self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded, .arena = handle }) catch |err| {
                 std.log.err("ReadWorker: failed to push shutdown error: {}", .{err});
-                self.allocator.free(shutdown_encoded);
+                handle.release();
             };
             cleanupRequest(request);
             self.notifier.notify();

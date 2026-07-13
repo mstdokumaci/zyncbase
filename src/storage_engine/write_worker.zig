@@ -16,6 +16,7 @@ const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBu
 const SessionResolutionResult = @import("../connection.zig").SessionResolutionResult;
 const wire = @import("../wire.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -47,6 +48,7 @@ fn mapAndLogError(
 
 pub const WriteWorker = struct {
     allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
     conn: sqlite.Db,
     stmt_cache: StatementCache,
     version: std.atomic.Value(u64),
@@ -115,22 +117,29 @@ pub const WriteWorker = struct {
             return;
         };
 
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |acq_err| {
+            std.log.err("WriteWorker: failed to acquire arena: {}", .{acq_err});
+            return;
+        };
+        defer handle.release();
+
         const msg = if (err) |e| blk: {
             const wire_err = wire.getWireError(e);
-            break :blk wire.encodeWriteError(self.allocator, write_id, wire_err, batch_index) catch |encode_err| {
+            break :blk wire.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
                 return;
             };
         } else blk: {
-            break :blk wire.encodeWriteCommitted(self.allocator, write_id) catch |encode_err| {
+            break :blk wire.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
                 return;
             };
         };
 
-        sq.push(.{ .conn_id = conn_id, .data = msg }) catch |push_err| {
+        handle.retain();
+        sq.push(.{ .conn_id = conn_id, .data = msg, .arena = handle }) catch |push_err| {
             std.log.err("WriteWorker: failed to push write outcome to SendQueue: {}", .{push_err});
-            self.allocator.free(msg);
+            handle.release();
             return;
         };
     }

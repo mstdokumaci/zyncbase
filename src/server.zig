@@ -59,6 +59,7 @@ pub const ZyncBaseServer = struct {
     presence_manager: PresenceManager,
     presence_worker: ?*PresenceWorker,
     send_queue: send_queue_type,
+    send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -117,6 +118,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.auth_config.deinit();
 
         try self.initQueues();
+        errdefer self.send_node_pool.deinit();
         errdefer self.send_queue.deinit();
         errdefer self.change_queue.deinit();
 
@@ -230,7 +232,10 @@ pub const ZyncBaseServer = struct {
     }
 
     fn initQueues(self: *ZyncBaseServer) !void {
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 4096, null, null);
+        errdefer self.send_node_pool.deinit();
+        self.send_queue = try send_queue_type.init(&self.send_node_pool);
+        errdefer self.send_queue.deinit();
         self.change_queue = try ChangeQueue.init(
             self.memory_strategy.generalAllocator(),
             self.thread_budget.notification,
@@ -278,6 +283,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.memory_strategy.generalAllocator().destroy(pw);
         try pw.init(
             self.memory_strategy.generalAllocator(),
+            &self.memory_strategy,
             &self.presence_manager,
             &self.send_queue,
             storageEngineWakeup,
@@ -634,9 +640,13 @@ pub const ZyncBaseServer = struct {
         // Stop background threads before any shared-resource deinit.
         self.stopBackgroundWorkers();
 
-        // send_queue.deinit() frees any remaining unconsumed data.
+        // send_queue.deinit() releases the stub node. Drain remaining entries first.
         std.log.debug("Deinitializing send_queue", .{});
+        while (self.send_queue.pop()) |*entry| {
+            entry.deinit();
+        }
         self.send_queue.deinit();
+        self.send_node_pool.deinit();
 
         // change_queue.deinit() frees any remaining unconsumed change jobs.
         std.log.debug("Deinitializing change_queue", .{});
