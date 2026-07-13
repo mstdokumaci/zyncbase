@@ -129,11 +129,8 @@ test "NotificationWorkerPool: dispatch fanout performance" {
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
 
-    // The dispatch/drain stages are allocation-bound on the thread-safe GPA, which is
-    // ~200-500x slower in Debug/TSan than Release. Scaling the iteration count per
-    // mode keeps the test from running for minutes while still locking the baseline.
-    const iterations: usize = if (is_tsan) 10 else if (is_debug) 30 else 500;
-    const warmup: usize = if (is_tsan) 2 else if (is_debug) 3 else 5;
+    const iterations: usize = 500;
+    const warmup: usize = 5;
 
     // Warm up (also confirms matching + dispatch + drain paths run end-to-end).
     for (0..warmup) |_| {
@@ -168,18 +165,15 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         total_b += t.read();
 
         t = try std.time.Timer.start();
-        // C: dispatch does an arena-resident dupe (no GPA alloc) and queues the entry.
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         total_c += t.read();
 
         t = try std.time.Timer.start();
-        // D: pop frees the MPSC node (GPA) and decrements the arena refcount; the
         // final pop releases the arena back to the pool.
         while (ctx.send_queue.pop()) |*entry| {
             entry.deinit();
         }
         total_d += t.read();
-        // dispatchDeltasToMatches owns the arena; the drain above released it.
     }
 
     const inv_iters: f64 = 1.0 / @as(f64, @floatFromInt(iterations));
@@ -196,12 +190,12 @@ test "NotificationWorkerPool: dispatch fanout performance" {
 
     // Baseline (10k subs / 5k matches), per-iteration avg [ms]:
     //   ReleaseFast: A~0.04  C~0.36  D~0.11  total~0.52  (pool-parameterized MPSC queue)
-    //   Debug:       A~0.21  C~17    D~14    total~31    (pool-parameterized MPSC queue)
-    // Thresholds carry ~3x headroom to absorb machine/allocator variance while
-    // still catching regressions, especially in the pool-backed dispatch stage C.
-    const target_a: f64 = if (is_tsan) 3.0 else if (is_debug) 1.0 else 0.3;
-    const target_c: f64 = if (is_tsan) 150.0 else if (is_debug) 50.0 else 1.2;
-    const target_total: f64 = if (is_tsan) 300.0 else if (is_debug) 100.0 else 1.5;
+    //   Debug:       A~0.21  C~16.9  D~14    total~31.1  (pool-parameterized MPSC queue, 500 iters)
+    // Thresholds carry ~2x headroom over the Debug baseline to absorb machine/allocator
+    // variance while still catching regressions, especially in the pool-backed dispatch stage C.
+    const target_a: f64 = if (is_tsan) 1.5 else if (is_debug) 0.5 else 0.15;
+    const target_c: f64 = if (is_tsan) 60.0 else if (is_debug) 35.0 else 0.9;
+    const target_total: f64 = if (is_tsan) 120.0 else if (is_debug) 65.0 else 1.0;
 
     try testing.expect(avg_a < target_a);
     try testing.expect(avg_c < target_c);
