@@ -408,12 +408,14 @@ pub fn extractAuthRefreshFast(bytes: []const u8) ![]const u8 {
     return (try extractMap(AuthRefreshResult, &auth_refresh_table, bytes, undefined)).token;
 }
 
-fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
-    const start = pos.*;
-    try msgpack_skip.skipValue(bytes, pos);
-    const slice = bytes[start..pos.*];
-    var reader: std.Io.Reader = .fixed(slice);
-    return msgpack.decode(allocator, &reader);
+pub fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
+    // Single-pass: decode the value directly from the cursor and let the reader
+    // report how many bytes it consumed, so we don't need a separate skipValue
+    // walk first. `reader` is a pointer so `decodeConsumed` can read back `seek`.
+    var reader: std.Io.Reader = .fixed(bytes[pos.*..]);
+    const res = try msgpack.decodeConsumed(allocator, &reader);
+    pos.* += res.consumed;
+    return res.payload;
 }
 
 pub const PresenceSetNamespaceRequest = struct {

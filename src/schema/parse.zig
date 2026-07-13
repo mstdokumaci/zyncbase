@@ -62,10 +62,12 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     // Build name arrays for presence fields
     var user_names = std.ArrayListUnmanaged([]const u8).empty;
     defer user_names.deinit(allocator);
+    try user_names.ensureTotalCapacityPrecise(allocator, presence_user_fields.items.len);
     for (presence_user_fields.items) |f| try user_names.append(allocator, f.name);
 
     var shared_names = std.ArrayListUnmanaged([]const u8).empty;
     defer shared_names.deinit(allocator);
+    try shared_names.ensureTotalCapacityPrecise(allocator, presence_shared_fields.items.len);
     for (presence_shared_fields.items) |f| try shared_names.append(allocator, f.name);
 
     return initFromTables(

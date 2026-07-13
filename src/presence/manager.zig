@@ -715,6 +715,7 @@ pub const PresenceManager = struct {
         // Collect expired keys first — modifying the map while iterating is UB.
         var to_remove = std.ArrayListUnmanaged(i64).empty;
         defer to_remove.deinit(self.allocator);
+        to_remove.ensureTotalCapacity(self.allocator, self.namespace_empty_at.count()) catch return;
         {
             var grace_iter = self.namespace_empty_at.iterator();
             while (grace_iter.next()) |entry| {
