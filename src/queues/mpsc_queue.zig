@@ -46,6 +46,7 @@ pub fn mpscQueue( // zwanzig-disable-line: unused-parameter identifier-style
 
         /// Release the stub node. Callers must drain remaining items first.
         pub fn deinit(self: *Self) void {
+            std.debug.assert(!self.hasItems());
             self.pool.release(self.head);
         }
 

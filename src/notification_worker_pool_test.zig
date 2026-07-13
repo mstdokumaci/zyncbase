@@ -42,7 +42,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |*entry| {
+        while (self.send_queue.pop()) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -123,7 +123,7 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
     // Drain and release the send_queue entry (notification entries are arena-held).
-    if (ctx.send_queue.pop()) |*entry| {
+    if (ctx.send_queue.pop()) |entry| {
         entry.deinit();
     }
 }

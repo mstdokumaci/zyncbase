@@ -383,7 +383,9 @@ pub const ArenaHandle = struct {
     }
 
     pub fn release(self: ArenaHandle) void {
-        if (self.refcount.fetchSub(1, .acq_rel) == 1) {
+        const prev = self.refcount.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+        if (prev == 1) {
             self.ms.releaseArena(self.arena);
         }
     }

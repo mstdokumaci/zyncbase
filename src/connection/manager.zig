@@ -254,7 +254,7 @@ pub const ConnectionManager = struct {
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
-        while (send_queue.pop()) |*entry| {
+        while (send_queue.pop()) |entry| {
             defer entry.deinit();
 
             const conn = self.acquireConnection(entry.conn_id) catch |err| {

@@ -76,7 +76,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
 
     var send_queue = try send_queue_type.init(&send_node_pool);
     defer {
-        while (send_queue.pop()) |*entry| entry.deinit();
+        while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -124,7 +124,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     try testing.expect(notifier_called.load(.monotonic) > 0);
 
     // Drain and release the send_queue entry
-    if (send_queue.pop()) |*entry| {
+    if (send_queue.pop()) |entry| {
         entry.deinit();
     }
 }
@@ -150,7 +150,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
 
     var send_queue = try send_queue_type.init(&send_node_pool);
     defer {
-        while (send_queue.pop()) |*entry| entry.deinit();
+        while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -202,7 +202,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
 
     var send_queue = try send_queue_type.init(&send_node_pool);
     defer {
-        while (send_queue.pop()) |*entry| entry.deinit();
+        while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -239,7 +239,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try testing.expect(notifier_called.load(.monotonic) > 0);
 
     // Drain and release
-    if (send_queue.pop()) |*entry| {
+    if (send_queue.pop()) |entry| {
         entry.deinit();
     }
 }
@@ -265,7 +265,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
 
     var send_queue = try send_queue_type.init(&send_node_pool);
     defer {
-        while (send_queue.pop()) |*entry| entry.deinit();
+        while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -312,7 +312,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try testing.expect(send_queue.hasItems());
 
     // Drain all entries
-    while (send_queue.pop()) |*entry| {
+    while (send_queue.pop()) |entry| {
         entry.deinit();
     }
 }

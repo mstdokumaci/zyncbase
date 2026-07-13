@@ -337,7 +337,7 @@ pub const EngineTestContext = struct {
             self.test_context.deinit();
         } else {
             if (self.test_context.send_queue) |*sq| {
-                while (sq.pop()) |*entry| {
+                while (sq.pop()) |entry| {
                     entry.deinit();
                 }
                 sq.deinit();

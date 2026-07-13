@@ -44,7 +44,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |*entry| {
+        while (self.send_queue.pop()) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -141,7 +141,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         const set_suffix = try wire.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
-        while (ctx.send_queue.pop()) |*entry| {
+        while (ctx.send_queue.pop()) |entry| {
             entry.deinit();
         }
     }
@@ -170,7 +170,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
 
         t = try std.time.Timer.start();
         // final pop releases the arena back to the pool.
-        while (ctx.send_queue.pop()) |*entry| {
+        while (ctx.send_queue.pop()) |entry| {
             entry.deinit();
         }
         total_d += t.read();

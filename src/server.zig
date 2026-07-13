@@ -642,7 +642,7 @@ pub const ZyncBaseServer = struct {
 
         // send_queue.deinit() releases the stub node. Drain remaining entries first.
         std.log.debug("Deinitializing send_queue", .{});
-        while (self.send_queue.pop()) |*entry| {
+        while (self.send_queue.pop()) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
