@@ -148,10 +148,12 @@ fn encodeStr(writer: anytype, v: []const u8) !void {
     try msgpack.writeMsgPackStr(writer, v);
 }
 
-/// Write a 16-byte write id as a lowercase hex msgpack string.
+/// Write a 16-byte write id as a lowercase hex msgpack string (always 32 chars -> str8).
 inline fn writeWriteIdHex(writer: anytype, write_id: [16]u8) !void {
     const hex_buf = std.fmt.bytesToHex(write_id, .lower);
-    try msgpack.writeMsgPackStr(writer, &hex_buf);
+    try writer.writeByte(0xd9);
+    try writer.writeByte(32);
+    try writer.writeAll(&hex_buf);
 }
 
 /// Write the common `{type: "ok", id: <u64>}` response prefix (raw-bytes hot path).
