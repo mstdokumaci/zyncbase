@@ -267,15 +267,32 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
         list.deinit(allocator);
     }
     for (parsed.value.keys) |key| {
+        const kty = try allocator.dupe(u8, key.kty);
+        errdefer allocator.free(kty);
+        const kid = try allocator.dupe(u8, key.kid);
+        errdefer allocator.free(kid);
+        const alg = if (key.alg) |a| try allocator.dupe(u8, a) else null;
+        errdefer if (alg) |a| allocator.free(a);
+        const n = if (key.n) |n| try allocator.dupe(u8, n) else null;
+        errdefer if (n) |v| allocator.free(v);
+        const e = if (key.e) |e| try allocator.dupe(u8, e) else null;
+        errdefer if (e) |v| allocator.free(v);
+        const crv = if (key.crv) |crv_v| try allocator.dupe(u8, crv_v) else null;
+        errdefer if (crv) |v| allocator.free(v);
+        const x = if (key.x) |x| try allocator.dupe(u8, x) else null;
+        errdefer if (x) |v| allocator.free(v);
+        const y = if (key.y) |y| try allocator.dupe(u8, y) else null;
+        errdefer if (y) |v| allocator.free(v);
+
         var jwk = Jwk{
-            .kty = try allocator.dupe(u8, key.kty),
-            .kid = try allocator.dupe(u8, key.kid),
-            .alg = if (key.alg) |a| try allocator.dupe(u8, a) else null,
-            .n = if (key.n) |n| try allocator.dupe(u8, n) else null,
-            .e = if (key.e) |e| try allocator.dupe(u8, e) else null,
-            .crv = if (key.crv) |crv_v| try allocator.dupe(u8, crv_v) else null,
-            .x = if (key.x) |x| try allocator.dupe(u8, x) else null,
-            .y = if (key.y) |y| try allocator.dupe(u8, y) else null,
+            .kty = kty,
+            .kid = kid,
+            .alg = alg,
+            .n = n,
+            .e = e,
+            .crv = crv,
+            .x = x,
+            .y = y,
             .pkey = null,
         };
         errdefer jwk.deinit(allocator);

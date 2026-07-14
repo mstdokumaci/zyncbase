@@ -578,8 +578,6 @@ extern "C"
         ECDSA_SIG_free(ec_sig);
 
         if (der_sig_len <= 0 || !der_sig) {
-            BN_free(bn_r);
-            BN_free(bn_s);
             return 0;
         }
 
