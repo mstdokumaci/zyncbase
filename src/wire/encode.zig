@@ -154,7 +154,7 @@ inline fn writeWriteIdHex(writer: anytype, write_id: [16]u8) !void {
     buf[0] = 0xd9;
     buf[1] = 32;
     const hex = std.fmt.bytesToHex(write_id, .lower);
-    @memcpy(buf[2..], &hex);
+    @memcpy(buf[2..34], &hex);
     try writer.writeAll(&buf);
 }
 
