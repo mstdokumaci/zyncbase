@@ -41,9 +41,6 @@ pub const effectiveNamespaceLabel = system.effectiveNamespaceLabel;
 
 pub const initSchema = parse.initFromJson;
 
-pub const mapType = parse.mapType;
-pub const mapPrimitiveType = parse.mapPrimitiveType;
-pub const parseOnDelete = parse.parseOnDelete;
 pub const buildRuntimeTable = parse.buildRuntimeTable;
 pub const max_store_fields = parse.max_store_fields;
 pub const buildTableIndex = index_mod.buildTableIndex;

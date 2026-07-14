@@ -204,7 +204,7 @@ const StoreFieldContext = struct {
     }
 
     fn fieldType(type_str: []const u8) !types.FieldType {
-        return mapType(type_str);
+        return field_type_map.get(type_str) orelse error.UnknownFieldType;
     }
 
     fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, field_def: std.json.Value) !void {
@@ -262,7 +262,7 @@ const PresenceFieldContext = struct {
     fn preObjectValidate(_: *@This(), _: []const u8) !void {}
 
     fn fieldType(type_str: []const u8) !types.FieldType {
-        return mapPrimitiveType(type_str);
+        return array_item_type_map.get(type_str) orelse error.UnsupportedArrayItemsType;
     }
 
     fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, _: std.json.Value) !void {
@@ -653,27 +653,18 @@ fn validateReferences(schema: *const types.Schema) !void {
     }
 }
 
-pub fn mapType(type_str: []const u8) !types.FieldType {
-    if (std.mem.eql(u8, type_str, "string")) return .text;
-    if (std.mem.eql(u8, type_str, "integer")) return .integer;
-    if (std.mem.eql(u8, type_str, "number")) return .real;
-    if (std.mem.eql(u8, type_str, "boolean")) return .boolean;
-    if (std.mem.eql(u8, type_str, "array")) return .array;
-    return error.UnknownFieldType;
-}
+const primitive_type_kvs = .{
+    .{ "string", types.FieldType.text },
+    .{ "integer", types.FieldType.integer },
+    .{ "number", types.FieldType.real },
+    .{ "boolean", types.FieldType.boolean },
+};
 
-pub fn mapPrimitiveType(type_str: []const u8) !types.FieldType {
-    const field_type = mapType(type_str) catch return error.UnsupportedArrayItemsType;
-    if (field_type == .array) return error.UnsupportedArrayItemsType;
-    return field_type;
-}
+const field_type_map = std.StaticStringMap(types.FieldType).initComptime(primitive_type_kvs ++ .{
+    .{ "array", types.FieldType.array },
+});
 
-pub fn parseOnDelete(value: []const u8) !types.OnDelete {
-    if (std.mem.eql(u8, value, "cascade")) return .cascade;
-    if (std.mem.eql(u8, value, "restrict")) return .restrict;
-    if (std.mem.eql(u8, value, "set_null")) return .set_null;
-    return error.InvalidOnDelete;
-}
+const array_item_type_map = std.StaticStringMap(types.FieldType).initComptime(primitive_type_kvs);
 
 fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
     return std.mem.concat(allocator, u8, &.{ "\"", name, "\"" });
@@ -682,7 +673,7 @@ fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
 fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
     if (declared_type != .array) return null;
     const items_val = (json_read.getString(field_def.object, "items") catch return error.InvalidArrayItems) orelse return error.MissingArrayItems;
-    return try mapPrimitiveType(items_val);
+    return array_item_type_map.get(items_val) orelse error.UnsupportedArrayItemsType;
 }
 
 fn extractReferences(allocator: Allocator, field_def: std.json.ObjectMap) !?[]const u8 {
@@ -693,7 +684,7 @@ fn extractReferences(allocator: Allocator, field_def: std.json.ObjectMap) !?[]co
 
 fn extractOnDelete(field_def: std.json.ObjectMap, has_references: bool, required: bool) !?types.OnDelete {
     const val = (json_read.getString(field_def, "onDelete") catch return error.InvalidOnDelete) orelse return if (has_references) .restrict else null;
-    const parsed = try parseOnDelete(val);
+    const parsed = std.meta.stringToEnum(types.OnDelete, val) orelse return error.InvalidOnDelete;
     if (parsed == .set_null and required) return error.InvalidOnDelete;
     return parsed;
 }

@@ -361,14 +361,8 @@ pub const ConfigLoader = struct {
 
         const level_opt = try json_read.getString(logging_obj, "level");
         if (level_opt) |level| {
-            if (std.mem.eql(u8, level, "debug")) {
-                config.logging.level = .debug;
-            } else if (std.mem.eql(u8, level, "info")) {
-                config.logging.level = .info;
-            } else if (std.mem.eql(u8, level, "warn")) {
-                config.logging.level = .warn;
-            } else if (std.mem.eql(u8, level, "error")) {
-                config.logging.level = .@"error";
+            if (std.meta.stringToEnum(Config.LoggingConfig.LogLevel, level)) |lvl| {
+                config.logging.level = lvl;
             }
         }
 
