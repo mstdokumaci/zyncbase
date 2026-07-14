@@ -361,9 +361,7 @@ pub const ConfigLoader = struct {
 
         const level_opt = try json_read.getString(logging_obj, "level");
         if (level_opt) |level| {
-            if (std.meta.stringToEnum(Config.LoggingConfig.LogLevel, level)) |lvl| {
-                config.logging.level = lvl;
-            }
+            config.logging.level = std.meta.stringToEnum(Config.LoggingConfig.LogLevel, level) orelse return error.InvalidLogLevel;
         }
 
         const format_opt = try json_read.getString(logging_obj, "format");
@@ -372,6 +370,8 @@ pub const ConfigLoader = struct {
                 config.logging.format = .json;
             } else if (std.mem.eql(u8, format, "text")) {
                 config.logging.format = .text;
+            } else {
+                return error.InvalidLogFormat;
             }
         }
     }
