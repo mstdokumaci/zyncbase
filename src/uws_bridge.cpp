@@ -88,6 +88,7 @@ template<bool SSL>
 static void uws_ws_impl(uws_app_t *app, void *upgradeContext,
                         const char *pattern, size_t pattern_length, size_t id,
                         const uws_socket_behavior_t *behavior_) {
+    if (!behavior_) return;
     uws_socket_behavior_t behavior = *behavior_;
     using AppType = uWS::TemplatedApp<SSL>;
 
@@ -179,7 +180,7 @@ static void uws_res_upgrade_impl(
     size_t sec_web_socket_extensions_length, uws_socket_context_t *ws) {
     auto *uwsRes = (uWS::HttpResponse<SSL> *)res;
     uwsRes->template upgrade<void *>(
-        data ? std::move(data) : nullptr,
+        std::move(data),
         stringViewFromC(sec_web_socket_key,
                         sec_web_socket_key_length),
         stringViewFromC(sec_web_socket_protocol,
