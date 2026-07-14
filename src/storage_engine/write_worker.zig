@@ -236,6 +236,28 @@ pub const WriteWorker = struct {
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
 
+    /// Post-check for a delete that affected no row while a guard was present.
+    /// Distinguishes "row exists but guard didn't match" (conflict) from "row
+    /// genuinely doesn't exist" (idempotent success).
+    /// Returns true when a guard conflict is detected, false otherwise.
+    fn checkDeleteGuardConflict(
+        self: *WriteWorker,
+        table_index: usize,
+        namespace_id: i64,
+        id: DocId,
+    ) !bool {
+        const exists = getDocumentHelper(self, table_index, namespace_id, id) catch |err| {
+            const classified_err = errors.classifyError(err);
+            std.log.err("Delete guard post-check failed: {}", .{classified_err});
+            return classified_err;
+        };
+        if (exists) |r| {
+            r.deinit(self.allocator);
+            return true; // row exists but guard didn't match — conflict
+        }
+        return false; // row genuinely doesn't exist — idempotent success
+    }
+
     /// Prefetch the current record for change tracking. Returns the old record
     /// when the change queue is active (for insert-vs-update classification) or
     /// when a guard is present (to distinguish non-existent rows from guard
@@ -320,21 +342,27 @@ pub const WriteWorker = struct {
             .pending_changes = pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
-            .is_confirmed = false, // unused for WriteOp path; guard check uses op.getWriteAckInfo()
         };
 
         for (ops, 0..) |op, op_idx| {
+            const has_write_ack = op.getWriteAckInfo() != null;
             switch (op) {
                 .upsert => |iop| {
-                    if (try executeBatchUpsert(&ctx, iop, op.getWriteAckInfo() != null)) continue;
+                    const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
+                    const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
+                    if (try executeUpsertEntry(&ctx, iop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .update => |uop| {
-                    if (try executeBatchUpdate(&ctx, uop, op.getWriteAckInfo() != null)) continue;
+                    const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
+                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
+                    if (try executeUpdateEntry(&ctx, uop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .delete => |dop| {
-                    if (try executeBatchDelete(&ctx, dop, op.getWriteAckInfo() != null)) continue;
+                    const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
+                    const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
+                    if (try executeDeleteEntry(&ctx, dop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 else => unreachable,
@@ -412,78 +440,75 @@ pub const WriteWorker = struct {
         }
     }
 
-    /// Returns true if the upsert succeeded (or was a no-op without guard conflict).
-    /// Returns false if the guard rejected the operation (caller should track in guard_rejected).
-    fn executeBatchUpsert(
+    /// Unified upsert handler shared by the flush-batched write path and the
+    /// atomic batch-op path. Returns true on success (or a no-op without guard
+    /// conflict), false when the guard rejected the operation. Callers decide
+    /// how to treat rejection: the flush path tracks it in guard_rejected, the
+    /// batch path converts it to error.PermissionDenied.
+    fn executeUpsertEntry(
         ctx: *BatchCtx,
-        iop: anytype,
+        entry: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
-        const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
-        const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
-        const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
+        const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPSERT", iop, namespace_id);
+        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id);
 
-        const maybe_new_record = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatch UPSERT", err, table_metadata.name, self.allocator, old_record);
+        const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
+            return mapAndLogError("upsertEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
-        return applyWriteResult(self, ctx, iop.table_index, namespace_id, iop.id, iop.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
     }
 
-    fn executeBatchUpdate(
+    /// Unified update handler shared by both write paths. See executeUpsertEntry.
+    fn executeUpdateEntry(
         ctx: *BatchCtx,
-        uop: anytype,
+        entry: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
-        const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
-        const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPDATE", uop, namespace_id);
+        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
 
-        const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatch UPDATE", err, table_metadata.name, self.allocator, old_record);
+        const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
+            return mapAndLogError("updateEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
-        return applyWriteResult(self, ctx, uop.table_index, namespace_id, uop.id, uop.guard_values != null, has_write_ack, false, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, false, false, old_record, maybe_new_record);
     }
 
-    fn executeBatchDelete(
+    /// Unified delete handler shared by both write paths. See executeUpsertEntry.
+    fn executeDeleteEntry(
         ctx: *BatchCtx,
-        dop: anytype,
+        entry: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
-        const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-        const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
 
         // executeDelete returns the old row (for the change log) when it deleted
         // something, or null when no row matched.  We do NOT need a pre-fetch here
         // because the deleted row is returned by the SQL statement itself (RETURNING).
-        const maybe_old_record = executeDelete(self, dop, namespace_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatch DELETE", err, table_metadata.name, self.allocator, null);
+        const maybe_old_record = executeDelete(self, entry, namespace_id, table_metadata) catch |err| {
+            return mapAndLogError("deleteEntry", err, table_metadata.name, self.allocator, null);
         };
 
         // Guard semantics for delete: if the row was not affected and a guard is
-        // present, we must distinguish between "row doesn't exist" (idempotent
-        // success) and "row exists but guard condition didn't match" (conflict).
-        if (maybe_old_record == null and dop.guard_values != null and has_write_ack) {
-            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id) catch |err| {
-                const classified_err = errors.classifyError(err);
-                std.log.err("Delete guard post-check failed: {}", .{classified_err});
-                return classified_err;
-            };
-            if (exists) |r| {
-                r.deinit(self.allocator);
-                return false; // row exists but guard didn't match — conflict
-            }
-            return true; // row genuinely doesn't exist — idempotent success
+        // present, distinguish "row doesn't exist" (idempotent success) from
+        // "row exists but guard condition didn't match" (conflict).
+        if (maybe_old_record == null and entry.guard_values != null and has_write_ack) {
+            if (try self.checkDeleteGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
+            return true;
         }
 
-        return applyWriteResult(self, ctx, dop.table_index, namespace_id, dop.id, dop.guard_values != null, has_write_ack, false, true, maybe_old_record, null);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, false, true, maybe_old_record, null);
     }
 
     pub fn flushBatch(
@@ -678,7 +703,6 @@ pub const WriteWorker = struct {
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pk_inserts: *std.ArrayListUnmanaged(PkTracking),
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
-        is_confirmed: bool,
     };
 
     const OpTarget = struct {
@@ -757,7 +781,6 @@ pub const WriteWorker = struct {
             .pending_changes = &pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
-            .is_confirmed = is_confirmed,
         };
 
         for (entries, 0..) |entry, entry_idx| {
@@ -768,15 +791,19 @@ pub const WriteWorker = struct {
             };
             const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
 
-            const handle_result = switch (entry.kind) {
-                .upsert => handleUpsertEntry(&ctx, entry, namespace_id, table_metadata),
-                .update => handleUpdateEntry(&ctx, entry, namespace_id, table_metadata),
-                .delete => handleDeleteEntry(&ctx, entry, namespace_id, table_metadata),
-            };
-            handle_result catch |err| {
+            const succeeded = switch (entry.kind) {
+                .upsert => executeUpsertEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
+                .update => executeUpdateEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
+                .delete => executeDeleteEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
+            } catch |err| {
                 failed_batch_index.* = entry_idx;
                 return err;
             };
+            // Batch ops are atomic: a guard rejection fails the entire batch.
+            if (!succeeded) {
+                failed_batch_index.* = entry_idx;
+                return error.PermissionDenied;
+            }
         }
 
         try commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes);
@@ -862,75 +889,6 @@ pub const WriteWorker = struct {
         }
 
         flushPendingChanges(self, pending_changes);
-    }
-
-    fn handleUpsertEntry(
-        ctx: *BatchCtx,
-        entry: anytype,
-        namespace_id: i64,
-        table_metadata: *const schema.Table,
-    ) !void {
-        const self = ctx.self;
-        const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
-
-        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id);
-
-        const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatchOp UPSERT", err, table_metadata.name, self.allocator, old_record);
-        };
-
-        const succeeded = try applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, ctx.is_confirmed, true, false, old_record, maybe_new_record);
-        if (!succeeded) return error.PermissionDenied;
-    }
-
-    fn handleUpdateEntry(
-        ctx: *BatchCtx,
-        entry: anytype,
-        namespace_id: i64,
-        table_metadata: *const schema.Table,
-    ) !void {
-        const self = ctx.self;
-
-        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
-
-        const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatchOp UPDATE", err, table_metadata.name, self.allocator, old_record);
-        };
-
-        const succeeded = try applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, ctx.is_confirmed, false, false, old_record, maybe_new_record);
-        if (!succeeded) return error.PermissionDenied;
-    }
-
-    fn handleDeleteEntry(
-        ctx: *BatchCtx,
-        entry: anytype,
-        namespace_id: i64,
-        table_metadata: *const schema.Table,
-    ) !void {
-        const self = ctx.self;
-
-        // executeDelete returns the old row via RETURNING — no pre-fetch needed.
-        const maybe_old_record = executeDelete(self, entry, namespace_id, table_metadata) catch |err| {
-            return mapAndLogError("executeBatchOp DELETE", err, table_metadata.name, self.allocator, null);
-        };
-
-        // Guard semantics for delete: distinguish "row doesn't exist" (idempotent
-        // success) from "row exists but guard didn't match" (conflict).
-        if (maybe_old_record == null and entry.guard_values != null and ctx.is_confirmed) {
-            const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id) catch |err| {
-                const classified_err = errors.classifyError(err);
-                std.log.err("Delete guard post-check failed: {}", .{classified_err});
-                return classified_err;
-            };
-            if (exists) |r| {
-                r.deinit(self.allocator);
-                return error.PermissionDenied;
-            }
-            return; // row doesn't exist — idempotent success
-        }
-
-        const succeeded = try applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, ctx.is_confirmed, false, true, maybe_old_record, null);
-        if (!succeeded) return error.PermissionDenied;
     }
 
     fn executeResolveSessionOp(self: *WriteWorker, sop: anytype) void {

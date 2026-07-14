@@ -632,6 +632,84 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 }
 
+test "StorageEngine: mixed flush batch commits passing op and rejects guarded op independently" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-mixed-batch", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const namespace_id: i64 = 1;
+    const doc_ok: typed.DocId = 1;
+    const doc_reject: typed.DocId = 2;
+    const author_a: typed.DocId = 100;
+    const author_b: typed.DocId = 200;
+
+    // Pre-create both documents owned by author_a.
+    const seed_ok = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_ok, namespace_id, author_a, &seed_ok, null, null, null);
+    const seed_reject = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_reject, namespace_id, author_a, &seed_reject, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    // Enqueue two confirmed writes, then flush once so they share a batch:
+    // op #1 has no guard (must commit), op #2 has a rejecting guard (must fail).
+    const conn_ok: u64 = 1001;
+    const write_ok: [16]u8 = .{1} ** 16;
+    const ok_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try ctx.engine.upsertDocument(table_meta.index, doc_ok, namespace_id, author_a, ok_columns, null, conn_ok, write_ok);
+
+    const conn_reject: u64 = 1002;
+    const write_reject: [16]u8 = .{2} ** 16;
+    const reject_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try ctx.engine.upsertDocument(table_meta.index, doc_reject, namespace_id, author_a, reject_columns, &guard, conn_reject, write_reject);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+
+    try testing.expectEqual(@as(usize, 2), entries.len);
+    for (entries) |e| {
+        if (e.conn_id == conn_reject) {
+            try testing.expect(std.mem.indexOf(u8, e.data, "WriteError") != null);
+            try testing.expect(std.mem.indexOf(u8, e.data, "PERMISSION_DENIED") != null);
+        } else {
+            try testing.expectEqual(conn_ok, e.conn_id);
+            try testing.expect(std.mem.indexOf(u8, e.data, "WriteError") == null);
+        }
+    }
+
+    // The passing op committed; the rejected op left its row untouched.
+    const rec_ok = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_ok, namespace_id);
+    defer if (rec_ok) |r| r.deinit(allocator);
+    try testing.expect(rec_ok != null);
+    try testing.expectEqualStrings("updated", rec_ok.?.values[val_field_idx].scalar.text);
+
+    const rec_reject = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_reject, namespace_id);
+    defer if (rec_reject) |r| r.deinit(allocator);
+    try testing.expect(rec_reject != null);
+    try testing.expectEqualStrings("original", rec_reject.?.values[val_field_idx].scalar.text);
+}
+
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{
