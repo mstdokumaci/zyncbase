@@ -148,6 +148,25 @@ fn encodeStr(writer: anytype, v: []const u8) !void {
     try msgpack.writeMsgPackStr(writer, v);
 }
 
+/// Write a 16-byte write id as a lowercase hex msgpack string (always 32 chars -> str8).
+inline fn writeWriteIdHex(writer: anytype, write_id: [16]u8) !void {
+    var buf: [34]u8 = undefined;
+    buf[0] = 0xd9;
+    buf[1] = 32;
+    const hex = std.fmt.bytesToHex(write_id, .lower);
+    @memcpy(buf[2..34], &hex);
+    try writer.writeAll(&buf);
+}
+
+/// Write the common `{type: "ok", id: <u64>}` response prefix (raw-bytes hot path).
+inline fn writeOkResponseHeader(writer: anytype, msg_id: u64) !void {
+    var buf: [ok_id_header.len + 9]u8 = undefined;
+    @memcpy(buf[0..ok_id_header.len], &ok_id_header);
+    buf[ok_id_header.len] = 0xcf;
+    std.mem.writeInt(u64, buf[ok_id_header.len + 1 .. ok_id_header.len + 9], msg_id, .big);
+    try writer.writeAll(&buf);
+}
+
 pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
@@ -171,12 +190,7 @@ pub fn encodeOkWithSession(
 
     try msgpack.encodeMapHeader(writer, 3);
 
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.ok);
-
-    try writer.writeAll(Keys.id);
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, msg_id, .big);
+    try writeOkResponseHeader(writer, msg_id);
 
     try writer.writeAll(Keys.session);
     try msgpack.encodeMapHeader(writer, session_claims.count());
@@ -223,7 +237,7 @@ pub fn encodeError(
 
     if (wire_err.retry_after_ms) |retry_after| {
         // Slow Path: Dynamic Map
-        const map_size: usize = if (msg_id != null) 5 else 4;
+        const map_size: usize = @as(usize, 4) + @intFromBool(msg_id != null);
         try msgpack.encodeMapHeader(writer, map_size);
 
         try writer.writeAll(Keys.type);
@@ -380,7 +394,7 @@ fn encodeDeltaOp(
     try writer.writeAll(Keys.ops);
     try writer.writeByte(0x91); // fixarray(1)
 
-    const op_map_size: u8 = if (maybe_value != null) 3 else 2;
+    const op_map_size: u8 = @as(u8, 2) + @intFromBool(maybe_value != null);
     try writer.writeByte(0x80 | op_map_size);
 
     try writer.writeAll(Keys.op);
@@ -441,8 +455,7 @@ pub fn encodeWriteCommitted(allocator: Allocator, write_id: [16]u8) ![]const u8 
     const writer = list.writer(allocator);
 
     try writer.writeAll(&write_committed_header);
-    const hex_buf = std.fmt.bytesToHex(write_id, .lower);
-    try msgpack.writeMsgPackStr(writer, &hex_buf);
+    try writeWriteIdHex(writer, write_id);
 
     return list.toOwnedSlice(allocator);
 }
@@ -453,15 +466,14 @@ pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireEr
     const writer = list.writer(allocator);
 
     // 5 fixed fields + optional batchIndex
-    const map_size: usize = if (batch_index != null) 6 else 5;
+    const map_size: usize = @as(usize, 5) + @intFromBool(batch_index != null);
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.type);
     try writer.writeAll(Values.write_error);
 
     try writer.writeAll(Keys.write_id);
-    const hex_buf = std.fmt.bytesToHex(write_id, .lower);
-    try msgpack.writeMsgPackStr(writer, &hex_buf);
+    try writeWriteIdHex(writer, write_id);
 
     try writer.writeAll(Keys.code);
     try writer.writeAll(wire_err.code);
@@ -509,14 +521,7 @@ const PresenceRecord = @import("../presence.zig").PresenceRecord;
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;
     const is_join = update.is_new_user and update.patch != null;
-    const map_size: usize = blk: {
-        var size: usize = 2;
-        if (update.patch != null) {
-            size += 1;
-            if (is_join) size += 1;
-        }
-        break :blk size;
-    };
+    const map_size: usize = @as(usize, 2) + @intFromBool(update.patch != null) + @intFromBool(is_join);
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.user_id);
@@ -605,11 +610,7 @@ pub fn encodePresenceUserSnapshot(
 
     try msgpack.encodeMapHeader(writer, 4);
 
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.ok);
-
-    try writer.writeAll(Keys.id);
-    try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+    try writeOkResponseHeader(writer, msg_id);
 
     try writer.writeAll(Keys.sub_id);
     try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
@@ -648,11 +649,7 @@ pub fn encodePresenceSharedSnapshot(
 
     try msgpack.encodeMapHeader(writer, 4);
 
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.ok);
-
-    try writer.writeAll(Keys.id);
-    try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+    try writeOkResponseHeader(writer, msg_id);
 
     try writer.writeAll(Keys.sub_id);
     try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
