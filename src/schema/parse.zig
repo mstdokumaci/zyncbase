@@ -27,11 +27,9 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
 
     try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "version", "store", "metadata", "presence" }, root.object);
 
-    const version_val = root.object.get("version") orelse return error.MissingVersion;
-    if (version_val != .string) return error.InvalidVersion;
+    const version_val = (json_read.getString(root.object, "version") catch return error.InvalidVersion) orelse return error.MissingVersion;
 
-    const store_val = root.object.get("store") orelse return error.MissingStore;
-    if (store_val != .object) return error.InvalidStore;
+    const store_val = (json_read.getObject(root.object, "store") catch return error.InvalidStore) orelse return error.MissingStore;
 
     const root_metadata = if (root.object.get("metadata")) |metadata|
         try cloneMetadata(allocator, metadata)
@@ -45,7 +43,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
         declared_tables.deinit(allocator);
     }
 
-    try collectTables(allocator, store_val.object, &declared_tables);
+    try collectTables(allocator, store_val, &declared_tables);
 
     // Parse presence block if exists, else synthesize implicit minimal schema
     var presence_user_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
@@ -72,7 +70,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
 
     return initFromTables(
         allocator,
-        version_val.string,
+        version_val,
         root_metadata,
         declared_tables.items,
         presence_user_fields.items,
@@ -151,21 +149,19 @@ fn parsePresenceTier(
 ) !void {
     if (tier_val != .object) return error.InvalidSchema;
     var ctx = PresenceFieldContext{ .fields_list = fields_list };
-    try parseObjectFields(allocator, tier_val, "", PresenceFieldContext, &ctx);
+    try parseObjectFields(allocator, tier_val.object, "", PresenceFieldContext, &ctx);
 }
 
 /// Shared recursive object-field parser. Flattens nested objects using `__` prefix.
 /// Parameterized via comptime Ctx for store vs presence field logic.
 fn parseObjectFields(
     allocator: Allocator,
-    fields_value: std.json.Value,
+    fields_value: std.json.ObjectMap,
     prefix: []const u8,
     comptime Ctx: type,
     ctx: *Ctx,
 ) !void {
-    if (fields_value != .object) return error.InvalidSchema;
-
-    var it = fields_value.object.iterator();
+    var it = fields_value.iterator();
     while (it.next()) |entry| {
         const field_name = entry.key_ptr.*;
         const field_def = entry.value_ptr.*;
@@ -174,20 +170,18 @@ fn parseObjectFields(
 
         try ctx.preValidate(field_name, field_def);
 
-        const type_value = field_def.object.get("type") orelse return error.MissingFieldType;
-        if (type_value != .string) return error.InvalidFieldType;
+        const type_value = (json_read.getString(field_def.object, "type") catch return error.InvalidFieldType) orelse return error.MissingFieldType;
 
         const full_name = try field_path.join(allocator, prefix, field_name);
         errdefer allocator.free(full_name);
 
-        if (std.mem.eql(u8, type_value.string, "object")) {
+        if (std.mem.eql(u8, type_value, "object")) {
             try ctx.preObjectValidate(full_name);
-            const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;
-            if (nested_fields != .object) return error.InvalidSchema;
+            const nested_fields = (json_read.getObject(field_def.object, "fields") catch return error.InvalidSchema) orelse return error.MissingFields;
             try parseObjectFields(allocator, nested_fields, full_name, Ctx, ctx);
             allocator.free(full_name);
         } else {
-            const declared_type = try Ctx.fieldType(type_value.string);
+            const declared_type = try Ctx.fieldType(type_value);
             try ctx.emitField(allocator, full_name, declared_type, field_def);
         }
     }
@@ -223,11 +217,7 @@ const StoreFieldContext = struct {
         }
 
         const items_type = try extractArrayItemsType(declared_type, field_def);
-        const indexed_val = field_def.object.get("indexed");
-        const indexed = if (indexed_val) |v| switch (v) {
-            .bool => |b| b,
-            else => return error.InvalidFieldDefinition,
-        } else false;
+        const indexed = (json_read.getBool(field_def.object, "indexed") catch return error.InvalidFieldDefinition) orelse false;
         const references = try extractReferences(allocator, field_def.object);
         errdefer if (references) |ref| allocator.free(ref);
 
@@ -507,10 +497,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         null;
     errdefer if (table_metadata) |metadata| metadata.deinit(allocator);
 
-    const namespaced = if (table_def.object.get("namespaced")) |value| blk: {
-        if (value != .bool) return error.InvalidTableDefinition;
-        break :blk value.bool;
-    } else !is_users_table;
+    const namespaced = (json_read.getBool(table_def.object, "namespaced") catch return error.InvalidTableDefinition) orelse !is_users_table;
 
     var required_set = std.StringHashMap(bool).init(allocator);
     defer {
@@ -519,10 +506,9 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         required_set.deinit();
     }
 
-    if (table_def.object.get("required")) |required_value| {
+    if (json_read.getArray(table_def.object, "required") catch return error.InvalidTableDefinition) |required_value| {
         if (is_users_table) return error.InvalidTableDefinition;
-        if (required_value != .array) return error.InvalidTableDefinition;
-        for (required_value.array.items) |item| {
+        for (required_value.items) |item| {
             if (item != .string) return error.InvalidTableDefinition;
             const normalized = try field_path.normalizeDots(allocator, item.string);
             errdefer allocator.free(normalized);
@@ -541,7 +527,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         fields.deinit(allocator);
     }
 
-    const fields_value = table_def.object.get("fields") orelse return error.MissingFields;
+    const fields_value = (json_read.getObject(table_def.object, "fields") catch return error.InvalidSchema) orelse return error.MissingFields;
     try parseFields(allocator, fields_value, &fields, &required_set, "", is_users_table);
 
     var req_it = required_set.iterator();
@@ -561,7 +547,7 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
 
 fn parseFields(
     allocator: Allocator,
-    fields_value: std.json.Value,
+    fields_value: std.json.ObjectMap,
     fields: *std.ArrayListUnmanaged(types.Field),
     required_set: *std.StringHashMap(bool),
     prefix: []const u8,
@@ -695,22 +681,19 @@ fn quoteIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
 
 fn extractArrayItemsType(declared_type: types.FieldType, field_def: std.json.Value) !?types.FieldType {
     if (declared_type != .array) return null;
-    const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
-    if (items_val != .string) return error.InvalidArrayItems;
-    return try mapPrimitiveType(items_val.string);
+    const items_val = (json_read.getString(field_def.object, "items") catch return error.InvalidArrayItems) orelse return error.MissingArrayItems;
+    return try mapPrimitiveType(items_val);
 }
 
 fn extractReferences(allocator: Allocator, field_def: std.json.ObjectMap) !?[]const u8 {
-    const val = field_def.get("references") orelse return null;
-    if (val != .string) return error.InvalidReference;
-    if (!isValidTableIdentifier(val.string)) return error.InvalidTableName;
-    return try allocator.dupe(u8, val.string);
+    const val = (json_read.getString(field_def, "references") catch return error.InvalidReference) orelse return null;
+    if (!isValidTableIdentifier(val)) return error.InvalidTableName;
+    return try allocator.dupe(u8, val);
 }
 
 fn extractOnDelete(field_def: std.json.ObjectMap, has_references: bool, required: bool) !?types.OnDelete {
-    const val = field_def.get("onDelete") orelse return if (has_references) .restrict else null;
-    if (val != .string) return error.InvalidOnDelete;
-    const parsed = try parseOnDelete(val.string);
+    const val = (json_read.getString(field_def, "onDelete") catch return error.InvalidOnDelete) orelse return if (has_references) .restrict else null;
+    const parsed = try parseOnDelete(val);
     if (parsed == .set_null and required) return error.InvalidOnDelete;
     return parsed;
 }
