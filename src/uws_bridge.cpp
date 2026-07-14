@@ -200,17 +200,17 @@ static void uws_app_post_impl(uws_app_t *app, const char *pattern, size_t patter
 
 template<bool SSL>
 static void uws_res_write_status_impl(uws_res_t *res, const char *status, size_t status_length) {
-    ((uWS::HttpResponse<SSL> *)res)->writeStatus(std::string_view(status, status_length));
+    ((uWS::HttpResponse<SSL> *)res)->writeStatus(stringViewFromC(status, status_length));
 }
 
 template<bool SSL>
 static void uws_res_write_header_impl(uws_res_t *res, const char *key, size_t key_length, const char *value, size_t value_length) {
-    ((uWS::HttpResponse<SSL> *)res)->writeHeader(std::string_view(key, key_length), std::string_view(value, value_length));
+    ((uWS::HttpResponse<SSL> *)res)->writeHeader(stringViewFromC(key, key_length), stringViewFromC(value, value_length));
 }
 
 template<bool SSL>
 static void uws_res_end_impl(uws_res_t *res, const char *body, size_t body_length, int close_connection) {
-    ((uWS::HttpResponse<SSL> *)res)->end(std::string_view(body, body_length), close_connection ? true : false);
+    ((uWS::HttpResponse<SSL> *)res)->end(stringViewFromC(body, body_length), close_connection ? true : false);
 }
 
 template<bool SSL>
