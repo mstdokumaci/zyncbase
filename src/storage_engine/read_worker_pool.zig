@@ -248,22 +248,25 @@ pub const ReadWorker = struct {
             },
         }
 
-        // Build SQL outside the node mutex — only accesses allocator + read-only metadata
-        var rendered_guard = filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate) catch {
+        // Arena-backed guard render + concat: bulk-freed at next request reset.
+        // Guard values are bound as transient SQLite params (copied), and records
+        // are cloned onto self.allocator when cached — safe to omit deinit.
+        const arena_alloc = self.read_arena.allocator();
+        const rendered_guard = filter_sql.renderAndClause(arena_alloc, table_metadata, guard_predicate) catch {
             return .{ .record = null };
         };
-        defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
         // No-guard: use the pre-built cached string directly (zero alloc).
-        // Guard: concat base + guard fragment (one alloc, freed below).
-        const guard_fragment: ?[]const u8 = if (rendered_guard) |*rendered| rendered.sqlSlice() else null;
-        const sql_query: []const u8 = if (guard_fragment) |fragment|
-            std.mem.concat(self.allocator, u8, &.{ table_metadata.select_document_sql, fragment }) catch {
-                return .{ .record = null };
-            }
-        else
-            table_metadata.select_document_sql;
-        defer if (guard_fragment != null) self.allocator.free(sql_query);
+        // Guard: concat base + guard fragment into the arena.
+        const sql_query: []const u8 = blk: {
+            const guard_fragment = if (rendered_guard) |*rendered| rendered.sqlSlice() else null;
+            break :blk if (guard_fragment) |fragment|
+                std.mem.concat(arena_alloc, u8, &.{ table_metadata.select_document_sql, fragment }) catch {
+                    return .{ .record = null };
+                }
+            else
+                table_metadata.select_document_sql;
+        };
 
         // Snapshot writer version before the DB read to detect concurrent writes
         const seq_before = self.writer_version.load(.acquire);
@@ -331,11 +334,11 @@ pub const ReadWorker = struct {
             }
         }
 
-        // Build SQL outside the node mutex — only accesses allocator + read-only metadata
-        const query_res = read_mod.buildSelectQuery(self.allocator, table_metadata, namespace_id, filter, guard_predicate) catch {
+        // Arena-backed query build: bulk-freed at next request reset.
+        // Values are bound as transient SQLite params; records allocated via arena.
+        const query_res = read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter, guard_predicate) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
-        defer query_res.deinit(self.allocator);
 
         const sort_field_index = filter.order_by.field_index;
 
