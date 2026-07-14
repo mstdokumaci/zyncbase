@@ -28,9 +28,13 @@ pub const Jwk = struct {
     crv: ?[]const u8 = null,
     x: ?[]const u8 = null,
     y: ?[]const u8 = null,
+    /// Cached OpenSSL EVP_PKEY* built once when the JWKS is populated.
+    /// Owned by the original Jwk in the cache; clones share it via
+    /// reference counting (openssl_pkey_up_ref / openssl_pkey_free).
+    pkey: ?*anyopaque = null,
 
     pub fn clone(self: Jwk, allocator: Allocator) !Jwk {
-        return Jwk{
+        var cloned = Jwk{
             .kty = try allocator.dupe(u8, self.kty),
             .kid = try allocator.dupe(u8, self.kid),
             .alg = if (self.alg) |a| try allocator.dupe(u8, a) else null,
@@ -39,7 +43,19 @@ pub const Jwk = struct {
             .crv = if (self.crv) |crv_v| try allocator.dupe(u8, crv_v) else null,
             .x = if (self.x) |x| try allocator.dupe(u8, x) else null,
             .y = if (self.y) |y| try allocator.dupe(u8, y) else null,
+            .pkey = null,
         };
+
+        if (self.pkey) |p| {
+            if (c.openssl_pkey_up_ref(p) == 1) {
+                cloned.pkey = p;
+            } else {
+                cloned.deinit(allocator);
+                return error.PkeyRefFailed;
+            }
+        }
+
+        return cloned;
     }
 
     pub fn deinit(self: Jwk, allocator: Allocator) void {
@@ -51,6 +67,57 @@ pub const Jwk = struct {
         if (self.crv) |crv_v| allocator.free(crv_v);
         if (self.x) |x| allocator.free(x);
         if (self.y) |y| allocator.free(y);
+        if (self.pkey) |p| c.openssl_pkey_free(p);
+    }
+
+    /// Builds and caches the EVP_PKEY from the raw JWK components (eager init).
+    /// No-op if already built or if the key type does not need one (e.g. oct).
+    pub fn buildPkey(self: *Jwk, allocator: Allocator) !void {
+        if (self.pkey != null) return;
+
+        if (std.mem.eql(u8, self.kty, "RSA")) {
+            const n_b64 = self.n orelse return error.InvalidJwk;
+            const e_b64 = self.e orelse return error.InvalidJwk;
+
+            const n_bytes = try decodeBase64Url(allocator, n_b64);
+            defer allocator.free(n_bytes);
+            const e_bytes = try decodeBase64Url(allocator, e_b64);
+            defer allocator.free(e_bytes);
+
+            const pkey = c.openssl_build_rsa_pkey(
+                n_bytes.ptr,
+                n_bytes.len,
+                e_bytes.ptr,
+                e_bytes.len,
+            );
+            if (pkey == null) return error.PkeyBuildFailed;
+            self.pkey = pkey;
+        } else if (std.mem.eql(u8, self.kty, "EC")) {
+            const crv = self.crv orelse return error.InvalidJwk;
+            const x_b64 = self.x orelse return error.InvalidJwk;
+            const y_b64 = self.y orelse return error.InvalidJwk;
+
+            const curve_name: [:0]const u8 = ec_curve_name.get(crv) orelse return error.UnsupportedCurve;
+
+            const x_bytes = try decodeBase64Url(allocator, x_b64);
+            defer allocator.free(x_bytes);
+            const y_bytes = try decodeBase64Url(allocator, y_b64);
+            defer allocator.free(y_bytes);
+
+            const pkey = c.openssl_build_ec_pkey(
+                curve_name,
+                x_bytes.ptr,
+                x_bytes.len,
+                y_bytes.ptr,
+                y_bytes.len,
+            );
+            if (pkey == null) return error.PkeyBuildFailed;
+            self.pkey = pkey;
+        } else if (std.mem.eql(u8, self.kty, "oct")) {
+            return;
+        } else {
+            return error.UnsupportedKeyType;
+        }
     }
 };
 
@@ -145,12 +212,29 @@ pub const JwksCache = struct {
     }
 
     pub fn setKeys(self: *JwksCache, keys: []Jwk, timestamp: i64) !void {
+        for (keys) |*key| {
+            try key.buildPkey(self.allocator);
+        }
         const state = JwksState{
             .keys = keys,
             .last_fetched = timestamp,
         };
         try self.state_cache.update(0, state);
     }
+};
+
+/// JWK representation used purely for JSON (de)serialization. The live `Jwk`
+/// struct carries an opaque `pkey` pointer that cannot be parsed from JSON,
+/// so the wire format is read into this type and converted.
+const JwkWire = struct {
+    kty: []const u8,
+    kid: []const u8,
+    alg: ?[]const u8 = null,
+    n: ?[]const u8 = null,
+    e: ?[]const u8 = null,
+    crv: ?[]const u8 = null,
+    x: ?[]const u8 = null,
+    y: ?[]const u8 = null,
 };
 
 fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
@@ -170,7 +254,7 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
     if (result.status != .ok) return error.HttpFetchFailed;
 
     const parsed = try std.json.parseFromSlice(
-        struct { keys: []Jwk },
+        struct { keys: []JwkWire },
         allocator,
         body_writer.written(),
         .{ .ignore_unknown_fields = true },
@@ -183,9 +267,20 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
         list.deinit(allocator);
     }
     for (parsed.value.keys) |key| {
-        const cloned = try key.clone(allocator);
-        errdefer cloned.deinit(allocator);
-        try list.append(allocator, cloned);
+        var jwk = Jwk{
+            .kty = try allocator.dupe(u8, key.kty),
+            .kid = try allocator.dupe(u8, key.kid),
+            .alg = if (key.alg) |a| try allocator.dupe(u8, a) else null,
+            .n = if (key.n) |n| try allocator.dupe(u8, n) else null,
+            .e = if (key.e) |e| try allocator.dupe(u8, e) else null,
+            .crv = if (key.crv) |crv_v| try allocator.dupe(u8, crv_v) else null,
+            .x = if (key.x) |x| try allocator.dupe(u8, x) else null,
+            .y = if (key.y) |y| try allocator.dupe(u8, y) else null,
+            .pkey = null,
+        };
+        errdefer jwk.deinit(allocator);
+        try jwk.buildPkey(allocator);
+        try list.append(allocator, jwk);
     }
     return list.toOwnedSlice(allocator);
 }
@@ -211,7 +306,7 @@ pub const JwtValidator = struct {
         var decoded = try splitToken(allocator, token);
         defer decoded.deinit(allocator);
 
-        try verifyTokenSignature(self.config, allocator, decoded);
+        try verifyTokenSignature(self.config, decoded);
         try validateStandardClaims(self.config, decoded.payload);
         return try allocator.dupe(u8, (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing);
     }
@@ -241,7 +336,7 @@ pub const JwtValidator = struct {
         var decoded = try splitToken(allocator, token);
         defer decoded.deinit(allocator);
 
-        try verifyTokenSignature(self.config, allocator, decoded);
+        try verifyTokenSignature(self.config, decoded);
         try validateStandardClaims(self.config, decoded.payload);
 
         const sub = (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing;
@@ -329,7 +424,6 @@ fn splitToken(allocator: Allocator, token: []const u8) !DecodedToken {
 
 fn verifyTokenSignature(
     config: JwtValidationConfig,
-    allocator: Allocator,
     decoded: DecodedToken,
 ) !void {
     if (!std.mem.eql(u8, decoded.header_alg, config.algorithm)) {
@@ -347,7 +441,7 @@ fn verifyTokenSignature(
         const jwk = try jwks_cache.getJwk(kid);
         defer jwk.deinit(jwks_cache.allocator);
 
-        if (!try verifyAsymmetricSignature(allocator, decoded.header_alg, jwk, decoded.msg, decoded.sig_bytes)) {
+        if (!try verifyAsymmetricSignature(decoded.header_alg, jwk, decoded.msg, decoded.sig_bytes)) {
             return error.AuthFailed;
         }
     }
@@ -516,70 +610,50 @@ fn validateTimeClaims(payload: std.json.Value, current_time: i64) bool {
 }
 
 fn verifyAsymmetricSignature(
-    allocator: Allocator,
     alg: []const u8,
     jwk: Jwk,
     msg: []const u8,
     sig: []const u8,
 ) !bool {
-    if (std.mem.startsWith(u8, alg, "RS") or std.mem.startsWith(u8, alg, "PS")) {
-        const n_b64 = jwk.n orelse return error.InvalidJwk;
-        const e_b64 = jwk.e orelse return error.InvalidJwk;
+    const pkey = jwk.pkey orelse return error.PkeyNotCached;
 
-        const n_bytes = try decodeBase64Url(allocator, n_b64);
-        defer allocator.free(n_bytes);
-        const e_bytes = try decodeBase64Url(allocator, e_b64);
-        defer allocator.free(e_bytes);
-
+    if (std.mem.startsWith(u8, alg, "RS")) {
         const hash_alg: [:0]const u8 = rsa_hash_alg.get(alg) orelse return error.UnsupportedAlgorithm;
-
-        const verified = if (std.mem.startsWith(u8, alg, "PS"))
-            c.openssl_verify_rsa_pss(
-                hash_alg,
-                n_bytes.ptr,
-                n_bytes.len,
-                e_bytes.ptr,
-                e_bytes.len,
-                msg.ptr,
-                msg.len,
-                sig.ptr,
-                sig.len,
-            )
-        else
-            c.openssl_verify_rsa(
-                hash_alg,
-                n_bytes.ptr,
-                n_bytes.len,
-                e_bytes.ptr,
-                e_bytes.len,
-                msg.ptr,
-                msg.len,
-                sig.ptr,
-                sig.len,
-            );
-        return verified != 0;
-    } else if (std.mem.startsWith(u8, alg, "ES")) {
-        const crv = jwk.crv orelse return error.InvalidJwk;
-        const x_b64 = jwk.x orelse return error.InvalidJwk;
-        const y_b64 = jwk.y orelse return error.InvalidJwk;
-
-        const x_bytes = try decodeBase64Url(allocator, x_b64);
-        defer allocator.free(x_bytes);
-        const y_bytes = try decodeBase64Url(allocator, y_b64);
-        defer allocator.free(y_bytes);
-
-        const curve_name: [:0]const u8 = ec_curve_name.get(crv) orelse return error.UnsupportedCurve;
-
-        const verified = c.openssl_verify_ec(
-            curve_name,
-            x_bytes.ptr,
-            x_bytes.len,
-            y_bytes.ptr,
-            y_bytes.len,
+        const verified = c.openssl_verify_rsa_with_key(
+            pkey,
+            hash_alg,
             msg.ptr,
             msg.len,
             sig.ptr,
             sig.len,
+        );
+        return verified != 0;
+    } else if (std.mem.startsWith(u8, alg, "PS")) {
+        const hash_alg: [:0]const u8 = rsa_hash_alg.get(alg) orelse return error.UnsupportedAlgorithm;
+        const verified = c.openssl_verify_rsa_pss_with_key(
+            pkey,
+            hash_alg,
+            msg.ptr,
+            msg.len,
+            sig.ptr,
+            sig.len,
+        );
+        return verified != 0;
+    } else if (std.mem.startsWith(u8, alg, "ES")) {
+        if (sig.len % 2 != 0) return false;
+        const half_len = sig.len / 2;
+        const crv = jwk.crv orelse return error.InvalidJwk;
+        const curve_name: [:0]const u8 = ec_curve_name.get(crv) orelse return error.UnsupportedCurve;
+
+        const verified = c.openssl_verify_ec_with_key(
+            pkey,
+            curve_name,
+            msg.ptr,
+            msg.len,
+            sig.ptr,
+            half_len,
+            sig.ptr + half_len,
+            half_len,
         );
         return verified != 0;
     } else {
