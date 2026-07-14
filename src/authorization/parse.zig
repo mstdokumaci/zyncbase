@@ -20,20 +20,18 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
 
     try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "namespaces", "store" }, root.object);
 
-    const namespaces_val = root.object.get("namespaces") orelse return error.MissingNamespaces;
-    if (namespaces_val != .array) return error.InvalidAuthConfig;
+    const namespaces_val = (json_read.getArray(root.object, "namespaces") catch return error.InvalidAuthConfig) orelse return error.MissingNamespaces;
 
-    const store_val = root.object.get("store") orelse return error.MissingStore;
-    if (store_val != .array) return error.InvalidAuthConfig;
+    const store_val = (json_read.getArray(root.object, "store") catch return error.InvalidAuthConfig) orelse return error.MissingStore;
 
     var namespace_rules = std.ArrayListUnmanaged(types.NamespaceRule).empty;
     errdefer {
         for (namespace_rules.items) |*rule| rule.deinit(allocator);
         namespace_rules.deinit(allocator);
     }
-    try namespace_rules.ensureTotalCapacityPrecise(allocator, namespaces_val.array.items.len);
+    try namespace_rules.ensureTotalCapacityPrecise(allocator, namespaces_val.items.len);
 
-    for (namespaces_val.array.items) |ns_val| {
+    for (namespaces_val.items) |ns_val| {
         var rule = try parseNamespaceRule(allocator, ns_val);
         errdefer rule.deinit(allocator);
         try namespace_rules.append(allocator, rule);
@@ -44,10 +42,10 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
         for (store_rules.items) |*rule| rule.deinit(allocator);
         store_rules.deinit(allocator);
     }
-    try store_rules.ensureTotalCapacityPrecise(allocator, store_val.array.items.len);
+    try store_rules.ensureTotalCapacityPrecise(allocator, store_val.items.len);
 
     var wildcard_index: ?usize = null;
-    for (store_val.array.items) |st_val| {
+    for (store_val.items) |st_val| {
         var rule = try parseStoreRule(allocator, st_val);
         errdefer rule.deinit(allocator);
         if (rule.is_wildcard) wildcard_index = store_rules.items.len;
@@ -89,11 +87,10 @@ fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.Namesp
     const obj = value.object;
     try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "pattern", "storeFilter", "presenceRead", "presenceWrite", "presenceSharedWrite" }, obj);
 
-    const pattern_val = obj.get("pattern") orelse return error.InvalidNamespaceRule;
-    if (pattern_val != .string) return error.InvalidNamespaceRule;
-    const pattern = try allocator.dupe(u8, pattern_val.string);
+    const pattern_val = (json_read.getString(obj, "pattern") catch return error.InvalidNamespaceRule) orelse return error.InvalidNamespaceRule;
+    const pattern = try allocator.dupe(u8, pattern_val);
     errdefer allocator.free(pattern);
-    const segments = try pattern_mod.parsePattern(allocator, pattern_val.string);
+    const segments = try pattern_mod.parsePattern(allocator, pattern_val);
     errdefer {
         for (segments) |seg| seg.deinit(allocator);
         allocator.free(segments);
@@ -124,9 +121,8 @@ fn parseStoreRule(allocator: Allocator, value: std.json.Value) !types.StoreRule 
     const obj = value.object;
     try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "collection", "read", "write" }, obj);
 
-    const collection_val = obj.get("collection") orelse return error.InvalidStoreRule;
-    if (collection_val != .string) return error.InvalidStoreRule;
-    const collection = try allocator.dupe(u8, collection_val.string);
+    const collection_val = (json_read.getString(obj, "collection") catch return error.InvalidStoreRule) orelse return error.InvalidStoreRule;
+    const collection = try allocator.dupe(u8, collection_val);
     errdefer allocator.free(collection);
 
     const read = try parseCondition(allocator, obj.get("read") orelse return error.InvalidStoreRule);
@@ -136,7 +132,7 @@ fn parseStoreRule(allocator: Allocator, value: std.json.Value) !types.StoreRule 
 
     return types.StoreRule{
         .collection = collection,
-        .is_wildcard = std.mem.eql(u8, collection_val.string, "*"),
+        .is_wildcard = std.mem.eql(u8, collection_val, "*"),
         .read = read,
         .write = write,
     };
