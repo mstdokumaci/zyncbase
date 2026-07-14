@@ -162,13 +162,16 @@ test "JwksCache: getJwk looks up populated keys" {
     var cache = try JwksCache.init(allocator, "https://example.com/.well-known/jwks.json");
     defer cache.deinit();
 
-    // Populate keys manually to avoid network request
+    // Valid RSA modulus/exponent so setKeys can eagerly build the EVP_PKEY.
+    const n_b64 = "2SJJNHh5kweKQwpXL796HER09fDVdeKAn6VO9pI9JGpv_WCM4KUxfuPyoJUlMNKsNj5QQCuOvJ4lrNwNRr5wPK2wPDsYRZSwhhr3ocUNAFgXf9YeBxSRoax9WHjPSTK6ai-lPWykj_gTl0AbOcw9bgY1ZOlh6DEVu_uPUkUOo7NXLkd5kIxakCWaf4MAl0qAs4bNmnPM78Nn5PdoF8UJ-vbEZ2sYu_PYp3q-GsdIfCxLLV8F3Xj5lQLR6nfIoz1L8tHPuPSh08B_rFuDdDhtcfsW0fPF_CyYelTydwTyVD_CzZpM0vgTLr8Uuxd8f7rqEdSp3h0IzR0cNGp4jcKHHw";
+    const e_b64 = "AQAB";
+
     var keys = try allocator.alloc(Jwk, 1);
     keys[0] = Jwk{
         .kty = try allocator.dupe(u8, "RSA"),
         .kid = try allocator.dupe(u8, "key_1"),
-        .n = try allocator.dupe(u8, "modulus"),
-        .e = try allocator.dupe(u8, "exponent"),
+        .n = try allocator.dupe(u8, n_b64),
+        .e = try allocator.dupe(u8, e_b64),
     };
     try cache.setKeys(keys, std.time.timestamp());
 
@@ -178,8 +181,8 @@ test "JwksCache: getJwk looks up populated keys" {
 
     try testing.expectEqualStrings("RSA", retrieved.kty);
     try testing.expectEqualStrings("key_1", retrieved.kid);
-    try testing.expectEqualStrings("modulus", retrieved.n.?);
-    try testing.expectEqualStrings("exponent", retrieved.e.?);
+    try testing.expectEqualStrings(n_b64, retrieved.n.?);
+    try testing.expectEqualStrings(e_b64, retrieved.e.?);
 
     // Key not found triggers refresh, which fails on dummy URL (testing error behavior)
     try testing.expectError(error.HttpFetchFailed, cache.getJwk("key_2"));

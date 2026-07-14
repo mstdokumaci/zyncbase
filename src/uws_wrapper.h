@@ -118,26 +118,36 @@ void uws_res_on_data(int ssl, uws_res_t *res, uws_res_data_handler handler, void
 void uws_res_on_aborted(int ssl, uws_res_t *res, uws_res_aborted_handler handler, void *user_data);
 
 // OpenSSL signature verification helpers
-int openssl_verify_rsa(
-    const char *hash_alg,
+void* openssl_build_rsa_pkey(
     const unsigned char *n_bytes, size_t n_len,
-    const unsigned char *e_bytes, size_t e_len,
-    const unsigned char *data, size_t data_len,
-    const unsigned char *sig, size_t sig_len);
+    const unsigned char *e_bytes, size_t e_len);
 
-int openssl_verify_rsa_pss(
-    const char *hash_alg,
-    const unsigned char *n_bytes, size_t n_len,
-    const unsigned char *e_bytes, size_t e_len,
-    const unsigned char *data, size_t data_len,
-    const unsigned char *sig, size_t sig_len);
-
-int openssl_verify_ec(
+void* openssl_build_ec_pkey(
     const char *curve_name,
     const unsigned char *x_bytes, size_t x_len,
-    const unsigned char *y_bytes, size_t y_len,
+    const unsigned char *y_bytes, size_t y_len);
+
+int openssl_pkey_up_ref(void *pkey);
+void openssl_pkey_free(void *pkey);
+
+int openssl_verify_rsa_with_key(
+    void *pkey,
+    const char *hash_alg,
     const unsigned char *data, size_t data_len,
     const unsigned char *sig, size_t sig_len);
+
+int openssl_verify_rsa_pss_with_key(
+    void *pkey,
+    const char *hash_alg,
+    const unsigned char *data, size_t data_len,
+    const unsigned char *sig, size_t sig_len);
+
+int openssl_verify_ec_with_key(
+    void *pkey,
+    const char *curve_name,
+    const unsigned char *data, size_t data_len,
+    const unsigned char *r_bytes, size_t r_len,
+    const unsigned char *s_bytes, size_t s_len);
 
 #ifdef __cplusplus
 }
