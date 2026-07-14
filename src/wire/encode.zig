@@ -150,17 +150,21 @@ fn encodeStr(writer: anytype, v: []const u8) !void {
 
 /// Write a 16-byte write id as a lowercase hex msgpack string (always 32 chars -> str8).
 inline fn writeWriteIdHex(writer: anytype, write_id: [16]u8) !void {
-    const hex_buf = std.fmt.bytesToHex(write_id, .lower);
-    try writer.writeByte(0xd9);
-    try writer.writeByte(32);
-    try writer.writeAll(&hex_buf);
+    var buf: [34]u8 = undefined;
+    buf[0] = 0xd9;
+    buf[1] = 32;
+    const hex = std.fmt.bytesToHex(write_id, .lower);
+    @memcpy(buf[2..], &hex);
+    try writer.writeAll(&buf);
 }
 
 /// Write the common `{type: "ok", id: <u64>}` response prefix (raw-bytes hot path).
 inline fn writeOkResponseHeader(writer: anytype, msg_id: u64) !void {
-    try writer.writeAll(&ok_id_header);
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, msg_id, .big);
+    var buf: [ok_id_header.len + 9]u8 = undefined;
+    @memcpy(buf[0..ok_id_header.len], &ok_id_header);
+    buf[ok_id_header.len] = 0xcf;
+    std.mem.writeInt(u64, buf[ok_id_header.len + 1 .. ok_id_header.len + 9], msg_id, .big);
+    try writer.writeAll(&buf);
 }
 
 pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
