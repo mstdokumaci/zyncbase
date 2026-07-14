@@ -295,7 +295,7 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
             .y = y,
             .pkey = null,
         };
-        errdefer jwk.deinit(allocator);
+        errdefer if (jwk.pkey) |p| c.openssl_pkey_free(p);
         try jwk.buildPkey(allocator);
         try list.append(allocator, jwk);
     }
