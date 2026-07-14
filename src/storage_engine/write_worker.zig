@@ -70,7 +70,7 @@ pub const WriteWorker = struct {
     in_memory: bool,
     /// Reusable scratch buffer for streaming array-to-JSON serialization.
     /// Reset (length only) between uses; capacity is retained for steady-state reuse.
-    json_buf: std.ArrayListUnmanaged(u8) = .empty,
+    json_buf: sql.JsonBuf,
 
     pub fn beginOp(self: *WriteWorker) void {
         self.flush_wg.add(1);
@@ -192,7 +192,7 @@ pub const WriteWorker = struct {
     }
 
     pub fn deinit(self: *WriteWorker) void {
-        self.json_buf.deinit(self.allocator);
+        self.json_buf.deinit();
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
@@ -703,7 +703,7 @@ pub const WriteWorker = struct {
         values: []const typed.Value,
     ) !void {
         for (values) |val| {
-            try sql.bindValue(val, &self.conn, stmt, bind_idx.*, self.allocator, &self.json_buf);
+            try sql.bindValue(val, &self.conn, stmt, bind_idx.*, &self.json_buf);
             bind_idx.* += 1;
         }
     }

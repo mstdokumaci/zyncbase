@@ -7,6 +7,7 @@ const typed = @import("../typed.zig");
 const storage_cache = @import("cache.zig");
 const filter_sql = @import("filter_sql.zig");
 const read_mod = @import("reader.zig");
+const sql = @import("sql.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const wire = @import("../wire.zig");
@@ -58,7 +59,7 @@ pub const ReadWorker = struct {
     read_arena: *std.heap.ArenaAllocator,
     /// Reusable scratch buffer for streaming array-to-JSON serialization.
     /// Reset (length only) between uses; capacity is retained for steady-state reuse.
-    json_buf: std.ArrayListUnmanaged(u8) = .empty,
+    json_buf: sql.JsonBuf,
 
     pub fn init(
         allocator: Allocator,
@@ -84,6 +85,7 @@ pub const ReadWorker = struct {
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
             .memory_strategy = memory_strategy,
             .read_arena = try memory_strategy.acquireArena(),
+            .json_buf = sql.JsonBuf.init(allocator),
         };
     }
 
@@ -489,7 +491,7 @@ pub const ReadWorkerPool = struct {
 
     pub fn deinit(self: *ReadWorkerPool) void {
         for (self.pool.workers) |*w| {
-            w.json_buf.deinit(w.allocator);
+            w.json_buf.deinit();
             w.memory_strategy.releaseArena(w.read_arena);
         }
         self.pool.deinit();

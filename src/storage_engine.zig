@@ -173,6 +173,7 @@ pub const StorageEngine = struct {
                 .performance_config = performance_config,
                 .db_path = db_path,
                 .in_memory = options.in_memory,
+                .json_buf = sql.JsonBuf.init(allocator),
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
             // SAFETY: Initialized below
