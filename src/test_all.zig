@@ -20,6 +20,9 @@ test {
     _ = @import("sql/build_test.zig");
     _ = @import("sql/ddl_test.zig");
     _ = @import("wire/msgpack_skip_test.zig");
+    _ = @import("wire/decode_test.zig");
+    _ = @import("wire/encode_test.zig");
+    _ = @import("wire/errors_test.zig");
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
@@ -46,7 +49,6 @@ test {
     _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("queues/spsc_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
-    _ = @import("wire_test.zig");
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
 

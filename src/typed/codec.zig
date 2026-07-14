@@ -4,6 +4,7 @@ const doc_id = @import("doc_id.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema = @import("../schema.zig");
 const types = @import("types.zig");
+const json_write = @import("../json/write.zig");
 
 const ScalarValue = types.ScalarValue;
 const Value = types.Value;
@@ -40,32 +41,32 @@ fn writeScalarMsgPack(value: ScalarValue, writer: anytype) !void {
     }
 }
 
-pub fn jsonAlloc(allocator: Allocator, value: Value) ![]u8 {
-    return std.json.Stringify.valueAlloc(allocator, JsonValue{ .value = value }, .{});
+pub fn writeJsonToBuf(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, value: Value) !void {
+    var w = json_write.Writer{ .buf = buf, .allocator = allocator };
+    switch (value) {
+        .nil => try buf.appendSlice(allocator, "null"),
+        .scalar => |s| try writeScalarJsonToBuf(&w, s),
+        .array => |items| {
+            try w.beginArray();
+            for (items) |item| {
+                try writeScalarJsonToBuf(&w, item);
+            }
+            try w.endArray();
+        },
+    }
 }
 
-fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
+fn writeScalarJsonToBuf(w: *json_write.Writer, value: ScalarValue) !void {
     switch (value) {
         .doc_id => |id| {
-            var buf: [32]u8 = undefined;
-            const hex = doc_id.hexSlice(id, &buf);
-            try stream.write(hex);
+            var hex_buf: [32]u8 = undefined;
+            const hex = doc_id.hexSlice(id, &hex_buf);
+            try w.stringValue(hex);
         },
-        .integer => |v| try stream.write(v),
-        .real => |v| {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return error.WriteFailed;
-            if (std.mem.indexOfScalar(u8, s, '.') == null and
-                std.mem.indexOfScalar(u8, s, 'e') == null and
-                std.mem.indexOfScalar(u8, s, 'E') == null)
-            {
-                try stream.print("{s}.0", .{s});
-            } else {
-                try stream.print("{s}", .{s});
-            }
-        },
-        .text => |s| try stream.write(s),
-        .boolean => |b| try stream.write(b),
+        .integer => |v| try w.intValue(v),
+        .real => |v| try w.floatValue(v),
+        .text => |s| try w.stringValue(s),
+        .boolean => |b| try w.boolValue(b),
     }
 }
 
@@ -202,22 +203,6 @@ fn scalarFromJson(allocator: Allocator, ft: schema.FieldType, value: std.json.Va
         else => error.InvalidArrayElement,
     };
 }
-
-const JsonValue = struct {
-    value: Value,
-
-    pub fn jsonStringify(self: @This(), stream: anytype) !void {
-        switch (self.value) {
-            .nil => try stream.write(null),
-            .scalar => |s| try writeScalarJson(s, stream),
-            .array => |items| {
-                try stream.beginArray();
-                for (items) |item| try writeScalarJson(item, stream);
-                try stream.endArray();
-            },
-        }
-    }
-};
 
 fn jsonAsInt(value: std.json.Value) !i64 {
     return switch (value) {

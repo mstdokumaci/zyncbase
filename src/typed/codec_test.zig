@@ -6,6 +6,161 @@ const mh = @import("../msgpack_test_helpers.zig");
 const typed = @import("codec.zig");
 const doc_id = @import("doc_id.zig");
 const Value = @import("types.zig").Value;
+const ScalarValue = @import("types.zig").ScalarValue;
+
+fn jsonToOwnedSlice(allocator: std.mem.Allocator, value: Value) ![]u8 {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    errdefer buf.deinit(allocator);
+    try typed.writeJsonToBuf(&buf, allocator, value);
+    return try buf.toOwnedSlice(allocator);
+}
+
+test "writeJsonToBuf: arrays" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Integer array
+    {
+        var arr = [_]msgpack.Payload{ .{ .int = 1 }, .{ .int = 2 }, .{ .int = 3 } };
+        const tv = try typed.fromPayload(allocator, .array, .integer, .{ .arr = arr[0..] });
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, tv);
+
+        try testing.expectEqualStrings("[1,2,3]", buf.items);
+    }
+
+    // Text array with special chars (escaping + quoting)
+    {
+        const s1 = try mh.anyToPayload(allocator, "hello");
+        const s2 = try mh.anyToPayload(allocator, "world\"s\n");
+        var arr = [_]msgpack.Payload{ s1, s2 };
+        const tv = try typed.fromPayload(allocator, .array, .text, .{ .arr = arr[0..] });
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, tv);
+
+        try testing.expectEqualStrings("[\"hello\",\"world\\\"s\\n\"]", buf.items);
+    }
+
+    // Real array (100.0 -> "100.0")
+    {
+        var arr = [_]msgpack.Payload{ .{ .float = 2.5 }, .{ .float = 100.0 } };
+        const tv = try typed.fromPayload(allocator, .array, .real, .{ .arr = arr[0..] });
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, tv);
+
+        try testing.expectEqualStrings("[2.5,100.0]", buf.items);
+    }
+
+    // doc_id array (hex, quoted)
+    {
+        const id1: u128 = 0x0123456789abcdef0123456789abcdef;
+        const id2: u128 = 0xffeeddccbbaa99887766554433221100;
+        const bin1 = try msgpack.Payload.binToPayload(&doc_id.toBytes(id1), allocator);
+        defer bin1.free(allocator);
+        const bin2 = try msgpack.Payload.binToPayload(&doc_id.toBytes(id2), allocator);
+        defer bin2.free(allocator);
+        var arr = [_]msgpack.Payload{ bin1, bin2 };
+        const tv = try typed.fromPayload(allocator, .array, .doc_id, .{ .arr = arr[0..] });
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, tv);
+
+        try testing.expectEqualStrings("[\"0123456789abcdef0123456789abcdef\",\"ffeeddccbbaa99887766554433221100\"]", buf.items);
+    }
+
+    // Empty array
+    {
+        var arr = [_]msgpack.Payload{};
+        const tv = try typed.fromPayload(allocator, .array, .integer, .{ .arr = arr[0..] });
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, tv);
+
+        try testing.expectEqualStrings("[]", buf.items);
+    }
+}
+
+test "writeJsonToBuf: scalars and nil" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // nil
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .nil);
+        try testing.expectEqualStrings("null", buf.items);
+    }
+
+    // integer
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .integer = 42 } });
+        try testing.expectEqualStrings("42", buf.items);
+    }
+
+    // text
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .text = "hello" } });
+        try testing.expectEqualStrings("\"hello\"", buf.items);
+    }
+
+    // boolean
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .boolean = true } });
+        try testing.expectEqualStrings("true", buf.items);
+    }
+
+    // real
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .real = 100.0 } });
+        try testing.expectEqualStrings("100.0", buf.items);
+    }
+}
+
+test "writeJsonToBuf: buffer reuse retains capacity" {
+    const allocator = testing.allocator;
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    // First write allocates to hold the longer string
+    var first = [_]ScalarValue{.{ .text = "first" }};
+    try typed.writeJsonToBuf(&buf, allocator, .{ .array = &first });
+    const capacity_after_first = buf.capacity;
+    try testing.expect(capacity_after_first > 0);
+
+    // Reset and write a smaller value — capacity must not shrink
+    buf.clearRetainingCapacity();
+    var one = [_]ScalarValue{.{ .text = "x" }};
+    try typed.writeJsonToBuf(&buf, allocator, .{ .array = &one });
+    try testing.expectEqual(capacity_after_first, buf.capacity);
+
+    // Reset and write a larger value — capacity must grow to fit
+    buf.clearRetainingCapacity();
+    const long_string = "this is a much longer string that exceeds the previous capacity";
+    var long = [_]ScalarValue{.{ .text = long_string }};
+    try typed.writeJsonToBuf(&buf, allocator, .{ .array = &long });
+    try testing.expect(buf.capacity >= capacity_after_first);
+    try testing.expect(buf.items.len > capacity_after_first / 2);
+}
 
 test "Value: payload -> json array -> payload roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -14,7 +169,8 @@ test "Value: payload -> json array -> payload roundtrip" {
 
     const roundtripJsonValue = struct {
         fn do(alloc: std.mem.Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, tv: Value) !msgpack.Payload {
-            const json_str = try typed.jsonAlloc(alloc, tv);
+            const json_str = try jsonToOwnedSlice(alloc, tv);
+            defer alloc.free(json_str);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();
             const roundtripped = try typed.fromJson(alloc, ft, items_type, parsed.value);
@@ -185,7 +341,8 @@ test "Value: scalar roundtrips" {
 
     const roundtripJson = struct {
         fn do(alloc: std.mem.Allocator, ft: schema.FieldType, tv: Value) !Value {
-            const json_str = try typed.jsonAlloc(alloc, tv);
+            const json_str = try jsonToOwnedSlice(alloc, tv);
+            defer alloc.free(json_str);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();
             return try typed.fromJson(alloc, ft, null, parsed.value);
@@ -211,7 +368,7 @@ test "Value: scalar roundtrips" {
 
     // Real: decimal preservation and scientific notation
     {
-        const json100 = try typed.jsonAlloc(allocator, .{ .scalar = .{ .real = 100.0 } });
+        const json100 = try jsonToOwnedSlice(allocator, .{ .scalar = .{ .real = 100.0 } });
         defer allocator.free(json100);
         try testing.expectEqualStrings("100.0", json100);
 
@@ -224,7 +381,7 @@ test "Value: scalar roundtrips" {
             const tv = Value{ .scalar = .{ .real = c.input } };
             const mp = try roundtripMsgpack(allocator, tv);
             try testing.expectEqual(@as(f64, c.input), mp.float);
-            const json_str = try typed.jsonAlloc(allocator, tv);
+            const json_str = try jsonToOwnedSlice(allocator, tv);
             defer allocator.free(json_str);
             try testing.expectEqualStrings(c.json, json_str);
             const j = try roundtripJson(allocator, .real, tv);
@@ -264,7 +421,7 @@ test "Value: scalar roundtrips" {
         const mp = try roundtripMsgpack(allocator, tv);
         const expected = doc_id.toBytes(id);
         try testing.expectEqualSlices(u8, &expected, mp.bin.value());
-        const json_str = try typed.jsonAlloc(allocator, tv);
+        const json_str = try jsonToOwnedSlice(allocator, tv);
         defer allocator.free(json_str);
         try testing.expectEqual(@as(usize, 34), json_str.len);
         const j = try roundtripJson(allocator, .doc_id, tv);

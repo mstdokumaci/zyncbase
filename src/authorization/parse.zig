@@ -31,6 +31,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
         for (namespace_rules.items) |*rule| rule.deinit(allocator);
         namespace_rules.deinit(allocator);
     }
+    try namespace_rules.ensureTotalCapacityPrecise(allocator, namespaces_val.array.items.len);
 
     for (namespaces_val.array.items) |ns_val| {
         var rule = try parseNamespaceRule(allocator, ns_val);
@@ -43,6 +44,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
         for (store_rules.items) |*rule| rule.deinit(allocator);
         store_rules.deinit(allocator);
     }
+    try store_rules.ensureTotalCapacityPrecise(allocator, store_val.array.items.len);
 
     var wildcard_index: ?usize = null;
     for (store_val.array.items) |st_val| {

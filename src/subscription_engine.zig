@@ -442,7 +442,6 @@ pub const SubscriptionEngine = struct {
         };
 
         const group_ids = self.groups_by_collection.get(key) orelse return allocator.alloc(Match, 0);
-
         for (group_ids.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
 

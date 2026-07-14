@@ -190,6 +190,8 @@ pub const TicketExchange = struct {
 
         var payload_buf = std.ArrayListUnmanaged(u8).empty;
         defer payload_buf.deinit(allocator);
+        var value_json_buf = std.ArrayListUnmanaged(u8).empty;
+        defer value_json_buf.deinit(allocator);
         var w = json_write.Writer{ .buf = &payload_buf, .allocator = allocator };
 
         try w.beginObject();
@@ -202,9 +204,9 @@ pub const TicketExchange = struct {
         try w.beginObjectField("claims");
         var claims_it = claims.iterator();
         while (claims_it.next()) |entry| {
-            const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
-            defer allocator.free(value_json);
-            try w.rawField(entry.key_ptr.*, value_json);
+            value_json_buf.clearRetainingCapacity();
+            try typed.writeJsonToBuf(&value_json_buf, allocator, entry.value_ptr.*);
+            try w.rawField(entry.key_ptr.*, value_json_buf.items);
         }
         try w.endObject();
         try w.endObject();

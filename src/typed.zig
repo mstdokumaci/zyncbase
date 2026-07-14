@@ -20,6 +20,6 @@ pub const deinitValueSlice = types.deinitValueSlice;
 pub const valueFromPayload = codec.fromPayload;
 pub const valueFromJson = codec.fromJson;
 pub const valueFromDynamicJson = codec.fromDynamicJson;
-pub const jsonAlloc = codec.jsonAlloc;
+pub const writeJsonToBuf = codec.writeJsonToBuf;
 pub const validateValue = codec.validateValue;
 pub const writeMsgPack = codec.writeMsgPack;

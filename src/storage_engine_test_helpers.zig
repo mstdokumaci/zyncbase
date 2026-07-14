@@ -5,6 +5,7 @@ const storage_engine = @import("storage_engine.zig");
 const typed = @import("typed.zig");
 const tth = @import("typed_test_helpers.zig");
 const reader_mod = @import("storage_engine/reader.zig");
+const sql = @import("storage_engine/sql.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
@@ -55,7 +56,10 @@ pub fn readDoc(
     var dynamic = try node.conn.prepareDynamic(table_metadata.select_document_sql);
     defer dynamic.deinit();
 
-    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null);
+    var json_buf = sql.JsonBuf.init(allocator);
+    defer json_buf.deinit();
+
+    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null, &json_buf);
 }
 
 /// Execute a query directly from SQLite (bypasses cache and guard predicates).
@@ -80,6 +84,9 @@ pub fn queryDocs(
     var dynamic = try node.conn.prepareDynamic(query_res.sql);
     defer dynamic.deinit();
 
+    var json_buf = sql.JsonBuf.init(allocator);
+    defer json_buf.deinit();
+
     const exec_res = try reader_mod.execQuery(
         allocator,
         &node.conn,
@@ -88,6 +95,7 @@ pub fn queryDocs(
         table_metadata,
         filter.limit,
         filter.order_by.field_index,
+        &json_buf,
     );
 
     return .{

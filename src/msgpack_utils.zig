@@ -57,7 +57,7 @@ fn tightPacker(comptime W: type, comptime R: type, comptime limits: msgpack.Pars
 /// Standard wrapper for decoding MsgPack payloads with wire security limits.
 /// Rejects payloads that exceed wire_limits (depth, array/map size, string/bin/ext length).
 /// The returned Payload must be freed using `payload.free(allocator)`.
-pub fn decode(allocator: std.mem.Allocator, reader: anytype) !Payload {
+pub fn decode(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Payload {
     const tp = tightPacker(void, @TypeOf(reader), wire_limits);
     var packer = tp.init(
         // SAFETY: reader Context is provided, writer is not used for decoding
@@ -67,8 +67,27 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) !Payload {
     return packer.read(allocator);
 }
 
+/// Like `decode`, but returns the number of bytes consumed from `reader`.
+/// `reader` must be a `*std.Io.Reader` so consumption is observed via
+/// `reader.seek` after the read (the packer holds the pointer, not a copy).
+/// Enables a single-pass decode that also advances a caller's cursor, removing
+/// the need to `skipValue` first.
+pub fn decodeConsumed(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !struct { payload: Payload, consumed: usize } {
+    const tp = tightPacker(void, @TypeOf(reader), wire_limits);
+    var packer = tp.init(
+        // SAFETY: reader Context is provided, writer is not used for decoding
+        undefined,
+        .{ .reader = reader },
+    );
+    const payload = try packer.read(allocator);
+    return .{ .payload = payload, .consumed = reader.seek };
+}
+
 /// Decode with standard msgpack limits (used for internal cloning and db reads)
-pub fn decodeTrusted(allocator: std.mem.Allocator, reader: anytype) !Payload {
+pub fn decodeTrusted(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Payload {
     const tp = tightPacker(void, @TypeOf(reader), msgpack.DEFAULT_LIMITS);
     var packer = tp.init(
         // SAFETY: reader Context is provided, writer is not used for decoding

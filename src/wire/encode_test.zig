@@ -1,278 +1,16 @@
 const std = @import("std");
 const testing = std.testing;
-const wire = @import("wire.zig");
-const msgpack = @import("msgpack_utils.zig");
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const Payload = msgpack.Payload;
-const schema_helpers = @import("schema_test_helpers.zig");
-const typed = @import("typed.zig");
-const query_parser = @import("query_parser.zig");
-const tth = @import("typed_test_helpers.zig");
-const PendingUserUpdate = @import("presence/manager.zig").PresenceManager.PendingUserUpdate;
+const wire = @import("../wire.zig");
+const helpers = @import("wire_test_helpers.zig");
+const msgpack = @import("../msgpack_utils.zig");
+const msgpack_helpers = @import("../msgpack_test_helpers.zig");
+const schema_helpers = @import("../schema_test_helpers.zig");
+const typed = @import("../typed.zig");
+const query_parser = @import("../query_parser.zig");
+const tth = @import("../typed_test_helpers.zig");
+const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 
-fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.Record {
-    const values = try allocator.alloc(typed.Value, 6);
-    errdefer allocator.free(values);
-
-    values[0] = try tth.valTextOwned(allocator, id);
-    errdefer values[0].deinit(allocator);
-    values[1] = tth.valInt(1);
-    values[2] = try tth.valTextOwned(allocator, "test-owner");
-    errdefer values[2].deinit(allocator);
-    values[3] = try tth.valTextOwned(allocator, name);
-    errdefer values[3].deinit(allocator);
-    values[4] = tth.valInt(0);
-    values[5] = tth.valInt(0);
-
-    return .{ .values = values };
-}
-
-fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    defer list.deinit(allocator);
-    try msgpack.encode(payload, list.writer(allocator));
-    return list.toOwnedSlice(allocator);
-}
-
-fn writeFixStr(writer: anytype, s: []const u8) !void {
-    // Write a fixstr header + payload bytes
-    try writer.writeByte(@as(u8, @intCast(0xa0 | s.len)));
-    try writer.writeAll(s);
-}
-
-fn writeFixMapHeader(writer: anytype, n: usize) !void {
-    try writer.writeByte(@as(u8, @intCast(0x80 | n)));
-}
-
-// === Fast Decoder Tests ===
-
-test "extractEnvelopeFast: valid envelope" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
-    try map.mapPut("id", Payload.uintToPayload(42));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    const result = try wire.extractEnvelopeFast(bytes);
-    try testing.expectEqualStrings("StoreSet", result.type);
-    try testing.expectEqual(@as(u64, 42), result.id);
-}
-
-test "extractEnvelopeFast: missing type" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("id", Payload.uintToPayload(1));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractEnvelopeFast(bytes));
-}
-
-test "extractEnvelopeFast: missing id" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractEnvelopeFast(bytes));
-}
-
-test "extractEnvelopeFast: non-map payload" {
-    const bytes = &[_]u8{0x01}; // positive fixint, not a map
-    try testing.expectError(error.InvalidMessageFormat, wire.extractEnvelopeFast(bytes));
-}
-
-test "extractEnvelopeFast: wrong type for field" {
-    const allocator = testing.allocator;
-
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try writeFixMapHeader(writer, 2);
-    try writeFixStr(writer, "type");
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, 999, .big); // type as uint64 instead of string
-    try writeFixStr(writer, "id");
-    try writer.writeByte(0x01); // positive fixint 1
-
-    try testing.expectError(error.InvalidMessageFormat, wire.extractEnvelopeFast(buf.items));
-}
-
-test "extractEnvelopeFast: extra fields (lenient)" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
-    try map.mapPut("id", Payload.uintToPayload(99));
-    try map.mapPut("extra", Payload.uintToPayload(123)); // unknown field
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    const result = try wire.extractEnvelopeFast(bytes);
-    try testing.expectEqualStrings("StoreSet", result.type);
-    try testing.expectEqual(@as(u64, 99), result.id);
-}
-
-test "extractStoreSetNamespaceFast: valid" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreSetNamespace", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    try map.mapPut("namespace", try Payload.strToPayload("my-ns", allocator));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    const result = try wire.extractStoreSetNamespaceFast(bytes);
-    try testing.expectEqualStrings("my-ns", result.namespace);
-}
-
-test "extractStoreSetNamespaceFast: missing namespace" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreSetNamespace", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractStoreSetNamespaceFast(bytes));
-}
-
-test "extractStoreUnsubscribeFast: valid" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreUnsubscribe", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    try map.mapPut("subId", Payload.uintToPayload(12345));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    const result = try wire.extractStoreUnsubscribeFast(bytes);
-    try testing.expectEqual(@as(u64, 12345), result.subId);
-}
-
-test "extractStoreUnsubscribeFast: missing subId" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreUnsubscribe", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractStoreUnsubscribeFast(bytes));
-}
-
-test "extractStoreLoadMoreFast: valid" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    try map.mapPut("subId", Payload.uintToPayload(99));
-    try map.mapPut("nextCursor", try Payload.strToPayload("abc123", allocator));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    const result = try wire.extractStoreLoadMoreFast(bytes);
-    try testing.expectEqual(@as(u64, 99), result.subId);
-    try testing.expectEqualStrings("abc123", result.nextCursor);
-}
-
-test "extractStoreLoadMoreFast: missing subId" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    try map.mapPut("nextCursor", try Payload.strToPayload("abc123", allocator));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractStoreLoadMoreFast(bytes));
-}
-
-test "extractStoreLoadMoreFast: missing nextCursor" {
-    const allocator = testing.allocator;
-
-    var map = Payload.mapPayload(allocator);
-    defer map.free(allocator);
-    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
-    try map.mapPut("id", Payload.uintToPayload(1));
-    try map.mapPut("subId", Payload.uintToPayload(99));
-    const bytes = try encodePayload(allocator, map);
-    defer allocator.free(bytes);
-
-    try testing.expectError(error.MissingRequiredFields, wire.extractStoreLoadMoreFast(bytes));
-}
-
-test "extractStoreUnsubscribeFast: wrong type for subId" {
-    const allocator = testing.allocator;
-
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try writeFixMapHeader(writer, 1);
-    try writeFixStr(writer, "subId");
-    try writeFixStr(writer, "not-a-number"); // subId as string instead of u64
-
-    try testing.expectError(error.InvalidMessageFormat, wire.extractStoreUnsubscribeFast(buf.items));
-}
-
-test "extractEnvelopeFast: duplicate key, last wins" {
-    const allocator = testing.allocator;
-
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try writeFixMapHeader(writer, 3);
-    try writeFixStr(writer, "type");
-    try writeFixStr(writer, "first");
-    try writeFixStr(writer, "id");
-    try writer.writeByte(0x01); // positive fixint 1
-    try writeFixStr(writer, "type");
-    try writeFixStr(writer, "second"); // duplicate — last write should win
-
-    const result = try wire.extractEnvelopeFast(buf.items);
-    try testing.expectEqualStrings("second", result.type);
-}
-
-test "extractPresenceSetFast: duplicate data key, last wins" {
-    const allocator = testing.allocator;
-
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try writeFixMapHeader(writer, 2);
-    try writeFixStr(writer, "data");
-    try writer.writeByte(0xc0); // nil — first value
-    try writeFixStr(writer, "data");
-    try writeFixStr(writer, "hello"); // string — second value (last wins)
-
-    const result = try wire.extractPresenceSetFast(buf.items, allocator);
-    defer result.data.free(allocator);
-    try testing.expect(result.data == .str);
-    try testing.expectEqualStrings("hello", result.data.str.value());
-}
-
-// === Encode Tests (unchanged) ===
+const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
 test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
@@ -345,7 +83,7 @@ test "encodeQuery: includes subscription pagination fields" {
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
-    const parsed = try msgpack.decodeTrusted(allocator, &reader);
+    const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
     const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
@@ -441,21 +179,6 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     try testing.expect((try op_obj.mapGet("value")) == null);
 }
 
-test "getWireError: returns non-empty comptime-encoded keys" {
-    const err1 = wire.getWireError(error.UnknownTable);
-    try testing.expect(err1.code.len > 0);
-    const err2 = wire.getWireError(error.UnknownField);
-    try testing.expect(err2.code.len > 0);
-    try testing.expect(err1.code.len != err2.code.len or !std.mem.eql(u8, err1.code, err2.code));
-}
-
-test "getWireError: returns non-empty comptime-encoded messages" {
-    const err1 = wire.getWireError(error.UnknownTable);
-    try testing.expect(err1.message.len > 0);
-    const err2 = wire.getWireError(error.UnknownField);
-    try testing.expect(err2.message.len > 0);
-}
-
 test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
     const allocator = testing.allocator;
     const write_id = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
@@ -505,26 +228,6 @@ test "encodeWriteError: 6-field map includes batchIndex when set" {
     try testing.expectEqual(@as(u64, 2), batch_idx.uint);
     const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
     try testing.expectEqualStrings("write", phase_val.str.value());
-}
-
-test "getWireError: query parser errors keep distinct human messages" {
-    const allocator = testing.allocator;
-    const check = struct {
-        fn run(comptime err: anyerror, comptime expected: []const u8) !void {
-            const wire_err = wire.getWireError(err);
-            var reader: std.Io.Reader = .fixed(wire_err.message);
-            const decoded = try msgpack.decode(allocator, &reader);
-            defer decoded.free(allocator);
-            try testing.expectEqualStrings(expected, decoded.str.value());
-        }
-    }.run;
-
-    try check(error.MissingOperand, "Query operator is missing an operand");
-    try check(error.UnexpectedOperand, "Query operator does not accept an operand");
-    try check(error.InvalidInOperand, "IN and NOT IN require an array operand");
-    try check(error.NullOperandUnsupported, "Null is not allowed as a query operand");
-    try check(error.UnsupportedOperatorForFieldType, "Query operator is not supported for this field type");
-    try check(error.InvalidCursorSortValue, "Cursor sort value does not match the active sort field");
 }
 
 test "store_delta_header: decodes to StoreDelta type" {
@@ -577,11 +280,11 @@ test "encodeDeleteDeltaSuffix: with string id" {
 test "encodePresenceBroadcast - update event round-trips with correct map size" {
     const allocator = testing.allocator;
 
-    var patch = Payload{ .arr = try allocator.alloc(Payload, 1) };
+    var patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
     defer patch.free(allocator);
-    var pair = try allocator.alloc(Payload, 2);
-    pair[0] = Payload.uintToPayload(0);
-    pair[1] = Payload{ .float = 100.5 };
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = msgpack.Payload{ .float = 100.5 };
     patch.arr[0] = .{ .arr = pair };
 
     const update = PendingUserUpdate{
@@ -658,7 +361,7 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {
     const allocator = testing.allocator;
-    const schema_mod = @import("schema.zig");
+    const schema_mod = @import("../schema.zig");
 
     const schema_json =
         \\{
