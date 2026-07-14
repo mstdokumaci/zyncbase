@@ -366,13 +366,7 @@ pub const ConfigLoader = struct {
 
         const format_opt = try json_read.getString(logging_obj, "format");
         if (format_opt) |format| {
-            if (std.mem.eql(u8, format, "json")) {
-                config.logging.format = .json;
-            } else if (std.mem.eql(u8, format, "text")) {
-                config.logging.format = .text;
-            } else {
-                return error.InvalidLogFormat;
-            }
+            config.logging.format = std.meta.stringToEnum(Config.LoggingConfig.LogFormat, format) orelse return error.InvalidLogFormat;
         }
     }
 

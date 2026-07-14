@@ -262,7 +262,7 @@ const PresenceFieldContext = struct {
     fn preObjectValidate(_: *@This(), _: []const u8) !void {}
 
     fn fieldType(type_str: []const u8) !types.FieldType {
-        return array_item_type_map.get(type_str) orelse error.UnsupportedArrayItemsType;
+        return array_item_type_map.get(type_str) orelse error.UnknownFieldType;
     }
 
     fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, _: std.json.Value) !void {
