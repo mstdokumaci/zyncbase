@@ -231,7 +231,7 @@ pub fn encodeError(
 
     if (wire_err.retry_after_ms) |retry_after| {
         // Slow Path: Dynamic Map
-        const map_size: usize = 4 + @intFromBool(msg_id != null);
+        const map_size: usize = @as(usize, 4) + @intFromBool(msg_id != null);
         try msgpack.encodeMapHeader(writer, map_size);
 
         try writer.writeAll(Keys.type);
@@ -388,7 +388,7 @@ fn encodeDeltaOp(
     try writer.writeAll(Keys.ops);
     try writer.writeByte(0x91); // fixarray(1)
 
-    const op_map_size: u8 = 2 + @intFromBool(maybe_value != null);
+    const op_map_size: u8 = @as(u8, 2) + @intFromBool(maybe_value != null);
     try writer.writeByte(0x80 | op_map_size);
 
     try writer.writeAll(Keys.op);
@@ -460,7 +460,7 @@ pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireEr
     const writer = list.writer(allocator);
 
     // 5 fixed fields + optional batchIndex
-    const map_size: usize = 5 + @intFromBool(batch_index != null);
+    const map_size: usize = @as(usize, 5) + @intFromBool(batch_index != null);
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.type);
@@ -515,7 +515,7 @@ const PresenceRecord = @import("../presence.zig").PresenceRecord;
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;
     const is_join = update.is_new_user and update.patch != null;
-    const map_size: usize = 2 + @intFromBool(update.patch != null) + @intFromBool(is_join);
+    const map_size: usize = @as(usize, 2) + @intFromBool(update.patch != null) + @intFromBool(is_join);
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.user_id);
