@@ -43,8 +43,8 @@ pub fn buildSelectQuery(
     if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
     const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
 
-    // 1.. SELECT clause
-    try sql_build.appendSelectFromTableSql(allocator, &buf, table_metadata);
+    // 1.. SELECT clause (pre-built, no field iteration per query)
+    try buf.appendSlice(allocator, table_metadata.select_from_sql);
 
     // 2.. WHERE clause
     try buf.appendSlice(allocator, " WHERE ");
