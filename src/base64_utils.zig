@@ -7,7 +7,7 @@ pub fn urlDecodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
     const dest = try allocator.alloc(u8, exact_len);
     errdefer allocator.free(dest);
-    try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
+    std.base64.url_safe_no_pad.Decoder.decode(dest, stripped) catch return error.InvalidBase64;
     return dest;
 }
 
