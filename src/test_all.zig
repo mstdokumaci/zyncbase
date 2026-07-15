@@ -18,6 +18,15 @@ test {
     _ = @import("wire/decode_test.zig");
     _ = @import("wire/encode_test.zig");
     _ = @import("wire/errors_test.zig");
+    _ = @import("schema/parse_test.zig");
+    _ = @import("schema/types_test.zig");
+    _ = @import("schema/system_test.zig");
+    _ = @import("schema/field_path_test.zig");
+    _ = @import("schema/format_test.zig");
+    _ = @import("authorization/parse_test.zig");
+    _ = @import("authorization/pattern_test.zig");
+    _ = @import("authorization/evaluate_test.zig");
+    _ = @import("authorization/doc_predicate_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");
     _ = @import("queues/spsc_queue_test.zig");
@@ -44,10 +53,6 @@ test {
     _ = @import("config_loader_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
-    _ = @import("schema/parse_test.zig");
-    _ = @import("schema/index_test.zig");
-    _ = @import("schema/field_path_test.zig");
-    _ = @import("schema_property_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
@@ -75,7 +80,6 @@ test {
     _ = @import("notification_worker_pool_test.zig");
     _ = @import("notification_worker_pool_perf_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
-    _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
     _ = @import("subscription_engine_thread_safety_test.zig");
