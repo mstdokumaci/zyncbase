@@ -236,11 +236,11 @@ pub const WriteWorker = struct {
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
 
-    /// Post-check for a delete that affected no row while a guard was present.
+    /// Post-check for a write that affected no row while a guard was present.
     /// Distinguishes "row exists but guard didn't match" (conflict) from "row
     /// genuinely doesn't exist" (idempotent success).
     /// Returns true when a guard conflict is detected, false otherwise.
-    fn checkDeleteGuardConflict(
+    fn checkGuardConflict(
         self: *WriteWorker,
         table_index: usize,
         namespace_id: i64,
@@ -248,7 +248,7 @@ pub const WriteWorker = struct {
     ) !bool {
         const exists = getDocumentHelper(self, table_index, namespace_id, id) catch |err| {
             const classified_err = errors.classifyError(err);
-            std.log.err("Delete guard post-check failed: {}", .{classified_err});
+            std.log.err("Guard post-check failed: {}", .{classified_err});
             return classified_err;
         };
         if (exists) |r| {
@@ -258,17 +258,16 @@ pub const WriteWorker = struct {
         return false; // row genuinely doesn't exist — idempotent success
     }
 
-    /// Prefetch the current record for change tracking. Returns the old record
-    /// when the change queue is active (for insert-vs-update classification) or
-    /// when a guard is present (to distinguish non-existent rows from guard
-    /// conflicts in applyWriteResult). Returns null otherwise.
+    /// Pre-write snapshot used only for insert-vs-update classification in the
+    /// change-queue path. Guard conflicts are resolved post-write via
+    /// checkGuardConflict, so no prefetch happens when change_queue is null.
     fn prefetchOldRecord(
         self: *WriteWorker,
         comptime op_label: []const u8,
         entry: anytype,
         namespace_id: i64,
     ) ?Record {
-        if (self.change_queue != null or entry.guard_values != null) {
+        if (self.change_queue != null) {
             if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id)) |record| {
                 return record;
             } else |err| {
@@ -461,6 +460,12 @@ pub const WriteWorker = struct {
             return mapAndLogError("upsertEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
+        // An upsert returning no row under a guard means the row exists and the
+        // guard failed — unconditionally a conflict.
+        if (maybe_new_record == null and old_record == null and entry.guard_values != null and has_write_ack) {
+            return false;
+        }
+
         return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
     }
 
@@ -480,6 +485,13 @@ pub const WriteWorker = struct {
             return mapAndLogError("updateEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
+        // Row unaffected + guard present + write ack: probe existence to
+        // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
+        if (maybe_new_record == null and old_record == null and entry.guard_values != null and has_write_ack) {
+            if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
+            return true;
+        }
+
         return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, false, false, old_record, maybe_new_record);
     }
 
@@ -493,18 +505,16 @@ pub const WriteWorker = struct {
     ) !bool {
         const self = ctx.self;
 
-        // executeDelete returns the old row (for the change log) when it deleted
-        // something, or null when no row matched.  We do NOT need a pre-fetch here
-        // because the deleted row is returned by the SQL statement itself (RETURNING).
+        // executeDelete returns the old row via RETURNING (or null if nothing
+        // matched), so no pre-fetch is needed here.
         const maybe_old_record = executeDelete(self, entry, namespace_id, table_metadata) catch |err| {
             return mapAndLogError("deleteEntry", err, table_metadata.name, self.allocator, null);
         };
 
-        // Guard semantics for delete: if the row was not affected and a guard is
-        // present, distinguish "row doesn't exist" (idempotent success) from
-        // "row exists but guard condition didn't match" (conflict).
+        // Row unaffected + guard present + write ack: probe existence to
+        // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
         if (maybe_old_record == null and entry.guard_values != null and has_write_ack) {
-            if (try self.checkDeleteGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
+            if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
             return true;
         }
 
