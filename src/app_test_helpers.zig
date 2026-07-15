@@ -31,7 +31,7 @@ const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 const authorization = @import("authorization.zig");
 
 /// Shared atomic counter for unique connection IDs in tests

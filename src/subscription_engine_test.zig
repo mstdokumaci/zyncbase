@@ -6,7 +6,7 @@ const typed_types = @import("typed/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 const query_ast = @import("query_ast.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {

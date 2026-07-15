@@ -9,7 +9,7 @@ const schema_helpers = @import("../schema_test_helpers.zig");
 const typed_types = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const query_parser = @import("../query_parser.zig");
-const tth = @import("../typed_test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;

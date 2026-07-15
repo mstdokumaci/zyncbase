@@ -2,7 +2,7 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
 const typed_types = @import("typed/types.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 
 const Operator = query_ast.Operator;
 const ValueShape = query_ast.ValueShape;

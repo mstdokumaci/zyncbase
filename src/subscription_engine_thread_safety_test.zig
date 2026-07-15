@@ -4,7 +4,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RecordChange = @import("subscription_engine.zig").RecordChange;
 const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 
 test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
     const allocator = testing.allocator;
