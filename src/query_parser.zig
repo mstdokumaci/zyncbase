@@ -35,6 +35,7 @@ pub const ParserError = error{
     UnsupportedOperatorForFieldType,
     InvalidCursorSortValue,
     OutOfMemory,
+    ArrayTooLarge,
 };
 
 /// Decodes a Base64-encoded MessagePack cursor tuple token into a Cursor.

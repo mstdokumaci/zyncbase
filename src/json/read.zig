@@ -21,7 +21,7 @@ pub fn collectParsedArray(
     comptime T: type,
     comptime Item: type,
     items: []const Item,
-    comptime parse_fn: fn (Allocator, Item) anyerror!T,
+    comptime parse_fn: anytype,
     comptime deinit_fn: fn (*T, Allocator) void,
 ) ![]T {
     if (items.len > max_array_length) return error.ArrayTooLarge;
@@ -48,7 +48,7 @@ pub fn collectParsedArrayWithCtx(
     comptime Ctx: type,
     ctx: Ctx,
     items: []const Item,
-    comptime parse_fn: fn (Allocator, Ctx, Item) anyerror!T,
+    comptime parse_fn: anytype,
     comptime deinit_fn: fn (*T, Allocator) void,
 ) ![]T {
     if (items.len > max_array_length) return error.ArrayTooLarge;
