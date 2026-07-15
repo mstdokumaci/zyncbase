@@ -17,7 +17,7 @@ const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const authorization_types = @import("authorization/types.zig");
 const authorization_evaluate = @import("authorization/evaluate.zig");
-const schema_mod = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
@@ -32,7 +32,7 @@ pub const MessageHandler = struct {
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
     auth_config: *const authorization_types.AuthConfig,
-    schema: *const schema_mod.Schema,
+    schema: *const schema_types.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
@@ -51,7 +51,7 @@ pub const MessageHandler = struct {
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
         auth_config: *const authorization_types.AuthConfig,
-        schema: *const schema_mod.Schema,
+        schema: *const schema_types.Schema,
         jwt_validator: ?*JwtValidator,
         session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
     ) void {
@@ -281,7 +281,7 @@ pub const MessageHandler = struct {
         };
     }
 
-    fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
+    fn rejectNamespaceSwitch(schema: *const schema_types.Schema, conn: *Connection, req_namespace: []const u8) !void {
         if (schema.table("users")) |users_table| {
             if (users_table.namespaced) {
                 if (conn.getStoreNamespace() orelse

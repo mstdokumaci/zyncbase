@@ -4,7 +4,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const WireError = @import("errors.zig").WireError;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 
@@ -273,7 +273,7 @@ pub const QueryResponse = struct {
     msg_id: u64,
     sub_id: ?u64 = null,
     records: []const typed.Record,
-    table: *const schema_mod.Table,
+    table: *const schema_types.Table,
     next_cursor: ?[]const u8 = null,
 };
 
@@ -310,14 +310,14 @@ pub fn encodeQuery(
     return list.toOwnedSlice(arena_allocator);
 }
 
-fn encodeTablesArray(writer: anytype, tables: []const schema_mod.Table) !void {
+fn encodeTablesArray(writer: anytype, tables: []const schema_types.Table) !void {
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
         try msgpack.writeMsgPackStr(writer, table.name);
     }
 }
 
-fn encodeFieldsArray(writer: anytype, schema: *const schema_mod.Schema, tables: []const schema_mod.Table) !void {
+fn encodeFieldsArray(writer: anytype, schema: *const schema_types.Schema, tables: []const schema_types.Table) !void {
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
         const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
@@ -328,7 +328,7 @@ fn encodeFieldsArray(writer: anytype, schema: *const schema_mod.Schema, tables: 
     }
 }
 
-fn encodeFieldFlagsArray(writer: anytype, schema: *const schema_mod.Schema, tables: []const schema_mod.Table) !void {
+fn encodeFieldFlagsArray(writer: anytype, schema: *const schema_types.Schema, tables: []const schema_types.Table) !void {
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
         const tbl_md = schema.table(table.name) orelse return error.UnknownTable;
@@ -350,7 +350,7 @@ fn encodePresenceFieldNames(writer: anytype, names: []const []const u8) !void {
     }
 }
 
-pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) ![]const u8 {
+pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
@@ -387,7 +387,7 @@ fn encodeDeltaOp(
     comptime op: DeltaOp,
     table_index: usize,
     id_val: typed.Value,
-    maybe_value: ?struct { record: typed.Record, meta: *const schema_mod.Table },
+    maybe_value: ?struct { record: typed.Record, meta: *const schema_types.Table },
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -433,7 +433,7 @@ pub fn encodeSetDeltaSuffix(
     table_index: usize,
     id_val: typed.Value,
     new_record: typed.Record,
-    table_metadata: *const schema_mod.Table,
+    table_metadata: *const schema_types.Table,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .set, table_index, id_val, .{
         .record = new_record,
@@ -441,7 +441,7 @@ pub fn encodeSetDeltaSuffix(
     });
 }
 
-pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_mod.Table) !void {
+pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_types.Table) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeArrayHeader(writer, record.values.len);
     for (record.values, 0..) |typed_value, idx| {

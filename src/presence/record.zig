@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 
 /// Accumulated in-memory state for one user or one namespace's shared record.
@@ -51,7 +51,7 @@ pub const PresenceRecord = struct {
     pub fn mergeFromPayload(
         self: *PresenceRecord,
         allocator: Allocator,
-        fields: []const schema_mod.PresenceField,
+        fields: []const schema_types.PresenceField,
         patch: msgpack.Payload,
     ) !void {
         if (patch != .arr) return error.InvalidPayload;

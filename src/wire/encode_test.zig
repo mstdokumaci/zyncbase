@@ -5,7 +5,8 @@ const wire_errors = @import("errors.zig");
 const helpers = @import("test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
-const schema_helpers = @import("../schema_test_helpers.zig");
+const schema_parse = @import("../schema/parse.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const query_parser = @import("../query_parser.zig");
@@ -363,7 +364,6 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {
     const allocator = testing.allocator;
-    const schema_mod = @import("../schema.zig");
 
     const schema_json =
         \\{
@@ -375,7 +375,7 @@ test "encodeSchemaSync: fieldFlags match bit encoding rules" {
         \\}
     ;
 
-    var schema = try schema_mod.initSchema(allocator, schema_json);
+    var schema = try schema_parse.initFromJson(allocator, schema_json);
     defer schema.deinit();
 
     const encoded = try wire_encode.encodeSchemaSync(allocator, &schema);

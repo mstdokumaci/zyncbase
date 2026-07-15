@@ -5,7 +5,8 @@ const storage_mod = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
@@ -631,7 +632,7 @@ test "StoreService: validateFieldWrite tests" {
         const val = msgpack.Payload.intToPayload(25);
         const field = try store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val);
         try testing.expectEqualStrings("age", field.name);
-        try testing.expectEqual(schema.FieldType.integer, field.storage_type);
+        try testing.expectEqual(schema_types.FieldType.integer, field.storage_type);
     }
 }
 
@@ -930,7 +931,7 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     try testing.expect(scope_a.user_doc_id != scope_c.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_a.user_doc_id, schema.global_namespace_id);
+    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_a.user_doc_id, schema_system.global_namespace_id);
     defer if (record) |r| r.deinit(allocator);
     try testing.expect(record != null);
 }

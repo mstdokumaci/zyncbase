@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed_doc_id = @import("../typed/doc_id.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
 const Subscriber = @import("subscriber.zig").Subscriber;
@@ -15,8 +15,8 @@ pub const PresenceManager = struct {
     data_mutex: std.Thread.Mutex,
 
     // Typed schema built at startup (names + declared types)
-    user_fields: []const schema_mod.PresenceField,
-    shared_fields: []const schema_mod.PresenceField,
+    user_fields: []const schema_types.PresenceField,
+    shared_fields: []const schema_types.PresenceField,
 
     // User state: namespace_id → (users.id → PresenceRecord)
     user_state: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed_doc_id.DocId, PresenceRecord)),
@@ -55,8 +55,8 @@ pub const PresenceManager = struct {
     pub fn init(
         self: *PresenceManager,
         allocator: Allocator,
-        user_fields: []const schema_mod.PresenceField,
-        shared_fields: []const schema_mod.PresenceField,
+        user_fields: []const schema_types.PresenceField,
+        shared_fields: []const schema_types.PresenceField,
     ) void {
         self.* = .{
             .allocator = allocator,

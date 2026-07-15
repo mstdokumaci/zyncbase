@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed/types.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
@@ -60,7 +60,7 @@ pub fn appendOwnedValue(
 
 pub fn renderAndClause(
     allocator: Allocator,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     predicate: ?*const query_ast.FilterPredicate,
 ) !?RenderedPredicate {
     const pred = predicate orelse return null;
@@ -92,7 +92,7 @@ pub fn appendFilterPredicateSql(
     allocator: Allocator,
     buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     predicate: *const query_ast.FilterPredicate,
 ) !void {
     if (predicate.isAlwaysTrue()) {
@@ -126,7 +126,7 @@ pub fn appendConditionSql(
     allocator: Allocator,
     list: *SqlList,
     values: *std.ArrayListUnmanaged(Value),
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     cond: *const query_ast.Condition,
 ) !void {
     try list.maybeSep(allocator);

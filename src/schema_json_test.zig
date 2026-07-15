@@ -1,25 +1,25 @@
 const std = @import("std");
-const schema = @import("schema.zig");
+const schema_parse = @import("schema/parse.zig");
 
 test "schema_json: rejects malformed root shape" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidSchema, schema.initSchema(allocator, "[]"));
+    try std.testing.expectError(error.InvalidSchema, schema_parse.initFromJson(allocator, "[]"));
 }
 
 test "schema_json: validates root version and store" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.MissingVersion, schema.initSchema(allocator,
+    try std.testing.expectError(error.MissingVersion, schema_parse.initFromJson(allocator,
         \\{"store":{}}
     ));
-    try std.testing.expectError(error.InvalidVersion, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidVersion, schema_parse.initFromJson(allocator,
         \\{"version":1,"store":{}}
     ));
-    try std.testing.expectError(error.MissingStore, schema.initSchema(allocator,
+    try std.testing.expectError(error.MissingStore, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0"}
     ));
-    try std.testing.expectError(error.InvalidStore, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidStore, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":[]}
     ));
 }
@@ -27,7 +27,7 @@ test "schema_json: validates root version and store" {
 test "schema_json: preserves allowed metadata objects" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{
         \\  "version":"1.0.0",
         \\  "metadata":{"owner":"core"},
@@ -58,13 +58,13 @@ test "schema_json: preserves allowed metadata objects" {
 test "schema_json: rejects non-object metadata" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidMetadata, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","metadata":"core","store":{}}
     ));
-    try std.testing.expectError(error.InvalidMetadata, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"metadata":true,"fields":{}}}}
     ));
-    try std.testing.expectError(error.InvalidMetadata, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","metadata":[]}}}}}
     ));
 }
@@ -72,13 +72,13 @@ test "schema_json: rejects non-object metadata" {
 test "schema_json: rejects unknown keys outside extension points" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.UnknownSchemaKey, schema.initSchema(allocator,
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{},"owner":"core"}
     ));
-    try std.testing.expectError(error.UnknownSchemaKey, schema.initSchema(allocator,
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{},"description":"bad"}}}
     ));
-    try std.testing.expectError(error.UnknownSchemaKey, schema.initSchema(allocator,
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","nullable":false}}}}}
     ));
 }
@@ -86,7 +86,7 @@ test "schema_json: rejects unknown keys outside extension points" {
 test "schema_json: accepts planned constraint keys without enforcement" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{
         \\  "version":"1.0.0",
         \\  "store":{

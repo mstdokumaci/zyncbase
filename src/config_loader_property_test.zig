@@ -5,7 +5,7 @@ const Config = @import("config_loader.zig").Config;
 const c = @cImport({
     @cInclude("stdlib.h");
 });
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 
 // Configuration validation properties
 // Invariant: Environment variable substitution

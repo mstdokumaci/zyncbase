@@ -5,12 +5,12 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const connection_violations = @import("connection/violations.zig");
 const connection_manager = @import("connection/manager.zig");
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
@@ -329,8 +329,8 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm2 = try sth.createSchema(allocator, tables);
@@ -424,8 +424,8 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm3 = try sth.createSchema(allocator, tables);
@@ -503,8 +503,8 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm4 = try sth.createSchema(allocator, tables);

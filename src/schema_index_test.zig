@@ -1,15 +1,17 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 
 test "schema_index: direct table fixtures build lookup maps" {
     const allocator = std.testing.allocator;
 
-    var task_fields = [_]schema.Field{
+    var task_fields = [_]schema_types.Field{
         schema_helpers.makeField("title", .text),
         schema_helpers.makeField("priority", .integer),
     };
-    var tables = [_]schema.Table{
+    var tables = [_]schema_types.Table{
         schema_helpers.makeTable("tasks", &task_fields),
     };
 
@@ -28,16 +30,16 @@ test "schema_index: direct table fixtures build lookup maps" {
 test "schema_index: exposes field kinds and writable ranges" {
     const allocator = std.testing.allocator;
 
-    var fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
-    var tables = [_]schema.Table{schema_helpers.makeTable("posts", &fields)};
+    var fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
+    var tables = [_]schema_types.Table{schema_helpers.makeTable("posts", &fields)};
 
     var runtime_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer runtime_schema.deinit();
 
     const posts = runtime_schema.table("posts") orelse return error.TestExpectedValue;
-    try std.testing.expectEqual(schema.FieldKind.system, posts.fields[schema.id_field_index].kind);
-    try std.testing.expectEqual(schema.FieldKind.user, posts.fields[schema.first_user_field_index].kind);
-    try std.testing.expectEqual(schema.FieldKind.timestamp, posts.fields[posts.fields.len - 1].kind);
+    try std.testing.expectEqual(schema_types.FieldKind.system, posts.fields[schema_system.id_field_index].kind);
+    try std.testing.expectEqual(schema_types.FieldKind.user, posts.fields[schema_system.first_user_field_index].kind);
+    try std.testing.expectEqual(schema_types.FieldKind.timestamp, posts.fields[posts.fields.len - 1].kind);
     try std.testing.expectEqual(@as(usize, 1), posts.userFields().len);
     try std.testing.expectEqual(@as(usize, posts.fields.len), posts.fields.len);
 }
@@ -45,7 +47,7 @@ test "schema_index: exposes field kinds and writable ranges" {
 test "schema_index: users external_id is not indexed" {
     const allocator = std.testing.allocator;
 
-    var runtime_schema = try schema.initSchema(allocator,
+    var runtime_schema = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{}}
     );
     defer runtime_schema.deinit();

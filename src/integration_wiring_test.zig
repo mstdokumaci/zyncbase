@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 
 /// Helper to setup a ZyncBaseServer for wiring tests with a clean configuration
 fn setupTestServer(allocator: std.mem.Allocator, context: *schema_helpers.TestContext, schema_name: []const u8) !*ZyncBaseServer {

@@ -1,7 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const errors = @import("errors.zig");
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -200,7 +201,7 @@ pub fn bindDocIdNamespace(
     if (sqlite.c.sqlite3_bind_int64(stmt, index + 1, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
-pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema_types.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     return switch (col_type) {
         sqlite.c.SQLITE_BLOB => blk: {
@@ -238,7 +239,7 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
 fn decodeRecord(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
 ) !typed.Record {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return errors.StorageError.ColumnCountMismatch;
@@ -265,7 +266,7 @@ pub fn fetchRecord(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
 ) !?typed.Record {
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
@@ -347,7 +348,7 @@ pub fn resolveUserId(
 
 pub fn buildUpsertDocumentSql(
     allocator: Allocator,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
     guard_sql: ?[]const u8,
 ) ![]const u8 {
@@ -367,31 +368,31 @@ pub fn buildUpsertDocumentSql(
 fn appendInsertColumnList(
     allocator: Allocator,
     buf: *SqlBuf,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
 ) !void {
     try buf.appendSlice(allocator, "INSERT INTO ");
     try buf.appendSlice(allocator, table_metadata.name_quoted);
     try buf.appendSlice(allocator, " (");
     var list = SqlList.init(buf, ", ");
-    try list.appendItemSlice(allocator, schema.quoted_id);
-    try list.appendItemSlice(allocator, schema.quoted_namespace_id);
-    try list.appendItemSlice(allocator, schema.quoted_owner_id);
+    try list.appendItemSlice(allocator, schema_system.quoted_id);
+    try list.appendItemSlice(allocator, schema_system.quoted_namespace_id);
+    try list.appendItemSlice(allocator, schema_system.quoted_owner_id);
     if (table_metadata.is_users_table) {
-        try list.appendItemSlice(allocator, schema.quoted_external_id);
+        try list.appendItemSlice(allocator, schema_system.quoted_external_id);
     }
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         try list.appendItemSlice(allocator, field.name_quoted);
     }
-    try list.appendItemSlice(allocator, schema.quoted_created_at);
-    try list.appendItemSlice(allocator, schema.quoted_updated_at);
+    try list.appendItemSlice(allocator, schema_system.quoted_created_at);
+    try list.appendItemSlice(allocator, schema_system.quoted_updated_at);
 }
 
 fn appendValuePlaceholders(
     allocator: Allocator,
     buf: *SqlBuf,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
 ) !void {
     // Fixed leading placeholders: id, namespace_id, owner_id (+ external_id for users)
@@ -414,11 +415,11 @@ fn appendValuePlaceholders(
 fn appendOnConflictUpdateSet(
     allocator: Allocator,
     buf: *SqlBuf,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
 ) !void {
     try buf.appendSlice(allocator, " ON CONFLICT(");
-    try buf.appendSlice(allocator, schema.quoted_id);
+    try buf.appendSlice(allocator, schema_system.quoted_id);
     try buf.appendSlice(allocator, ") DO UPDATE SET ");
 
     var list = SqlList.init(buf, ", ");
@@ -431,39 +432,39 @@ fn appendOnConflictUpdateSet(
     }
     // Always update updated_at
     try list.maybeSep(allocator);
-    try buf.appendSlice(allocator, schema.quoted_updated_at);
+    try buf.appendSlice(allocator, schema_system.quoted_updated_at);
     try buf.appendSlice(allocator, " = excluded.");
-    try buf.appendSlice(allocator, schema.quoted_updated_at);
+    try buf.appendSlice(allocator, schema_system.quoted_updated_at);
 }
 
 fn appendUpsertWhereClause(
     allocator: Allocator,
     buf: *SqlBuf,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     guard_sql: ?[]const u8,
 ) !void {
     try buf.appendSlice(allocator, " WHERE ");
     try buf.appendSlice(allocator, table_metadata.name_quoted);
     try buf.appendSlice(allocator, ".");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.appendSlice(allocator, " = excluded.");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     if (guard_sql) |fragment| {
         try buf.appendSlice(allocator, fragment);
     }
 }
 
 fn getColumnField(
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     col: ColumnValue,
-) !schema.Field {
+) !schema_types.Field {
     if (col.index >= table_metadata.fields.len) return errors.StorageError.UnknownField;
     return table_metadata.fields[col.index];
 }
 
 pub fn buildUpdateDocumentSql(
     allocator: Allocator,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
     guard_sql: ?[]const u8,
 ) ![]const u8 {
@@ -485,7 +486,7 @@ pub fn buildUpdateDocumentSql(
 fn appendUpdateColumnSet(
     allocator: Allocator,
     buf: *SqlBuf,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
 ) !void {
     var list = SqlList.init(buf, ", ");
@@ -501,7 +502,7 @@ fn appendUpdateColumnSet(
         }
     }
     try list.maybeSep(allocator);
-    try buf.appendSlice(allocator, schema.quoted_updated_at);
+    try buf.appendSlice(allocator, schema_system.quoted_updated_at);
     try buf.appendSlice(allocator, " = ?");
 }
 
@@ -511,9 +512,9 @@ fn appendDocIdNamespaceWhere(
     guard_sql: ?[]const u8,
 ) !void {
     try buf.appendSlice(allocator, " WHERE ");
-    try buf.appendSlice(allocator, schema.quoted_id);
+    try buf.appendSlice(allocator, schema_system.quoted_id);
     try buf.appendSlice(allocator, "=? AND ");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.appendSlice(allocator, "=?");
     if (guard_sql) |fragment| {
         try buf.appendSlice(allocator, fragment);

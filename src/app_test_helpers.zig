@@ -19,9 +19,11 @@ const Connection = connection_state.Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const Session = connection_session.Session;
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_mod_format = @import("schema/format.zig");
+const schema_parse = @import("schema/parse.zig");
+const Schema = schema_types.Schema;
+const schema_helpers = @import("schema/test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
@@ -140,16 +142,16 @@ pub const AppTestContext = struct {
     }
 
     pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema_value: Schema) !void {
-        const json_text = try schema_mod.format(allocator, &schema_value);
+        const json_text = try schema_mod_format.format(allocator, &schema_value);
         defer allocator.free(json_text);
 
-        const schema = try schema_mod.initSchema(allocator, json_text);
+        const schema = try schema_parse.initFromJson(allocator, json_text);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
-        const schema = try schema_mod.initSchema(allocator, json);
+        const schema = try schema_parse.initFromJson(allocator, json);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
@@ -231,7 +233,7 @@ pub const AppTestContext = struct {
         std.debug.assert(self.memory_strategy.deinit() == .ok);
     }
 
-    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_types.Table {
         return self.schema.table(table_name) orelse error.UnknownTable;
     }
 

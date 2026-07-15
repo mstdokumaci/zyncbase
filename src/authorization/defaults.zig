@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const parse = @import("parse.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const AuthConfig = types.AuthConfig;
 const NamespaceRule = types.NamespaceRule;
 const StoreRule = types.StoreRule;
@@ -11,7 +11,7 @@ const PatternSegment = types.PatternSegment;
 
 /// Returns a pre-built AuthConfig from the implicit defaults.
 /// Caller owns the returned config and must call deinit().
-pub fn implicitConfig(allocator: Allocator, schema: *const schema_mod.Schema) !AuthConfig {
+pub fn implicitConfig(allocator: Allocator, schema: *const schema_types.Schema) !AuthConfig {
     const ns_rules = try allocator.alloc(NamespaceRule, 1);
     var ns_rules_len: usize = 0;
     errdefer {

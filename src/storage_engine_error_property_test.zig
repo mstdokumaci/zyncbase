@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
 
 // This property test verifies that database operations handle errors gracefully:

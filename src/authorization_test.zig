@@ -12,8 +12,8 @@ const EvalContext = authorization_evaluate.EvalContext;
 const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const query_ast = @import("query_ast.zig");
-const schema_mod = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const schema_system = @import("schema/system.zig");
 const ScalarValue = typed.ScalarValue;
 
@@ -359,7 +359,7 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    const presence_fields = [_]schema_mod.PresenceField{
+    const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "cursor_x", .declared_type = .real },
     };
     var pair = try allocator.alloc(msgpack.Payload, 2);
@@ -383,7 +383,7 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    const presence_fields = [_]schema_mod.PresenceField{
+    const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "status", .declared_type = .text },
     };
     var pair = try allocator.alloc(msgpack.Payload, 2);
@@ -406,7 +406,7 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    const presence_fields = [_]schema_mod.PresenceField{
+    const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
     var pair = try allocator.alloc(msgpack.Payload, 2);
@@ -430,7 +430,7 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    const presence_fields = [_]schema_mod.PresenceField{
+    const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
     var pair = try allocator.alloc(msgpack.Payload, 2);
@@ -1337,8 +1337,8 @@ fn implicitTestConfig(allocator: std.mem.Allocator) !AuthConfig {
     return authorization_defaults.implicitConfig(allocator, &schema);
 }
 
-fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
-    const text_types = [_]schema_mod.FieldType{.text};
+fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_types.Schema {
+    const text_types = [_]schema_types.FieldType{.text};
     return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{
         .{
             .name = "posts",

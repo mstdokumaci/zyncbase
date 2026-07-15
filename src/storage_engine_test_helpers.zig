@@ -11,14 +11,17 @@ const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
-pub const schema_mod = @import("schema.zig");
-pub const Schema = schema_mod.Schema;
-pub const Table = schema_mod.Table;
-pub const Field = schema_mod.Field;
-pub const FieldType = schema_mod.FieldType;
-pub const TableMetadata = schema_mod.Table;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_index = @import("schema/index.zig");
+pub const Schema = schema_types.Schema;
+pub const Table = schema_types.Table;
+pub const Field = schema_types.Field;
+pub const FieldType = schema_types.FieldType;
+pub const TableMetadata = schema_types.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 pub const query_ast = @import("query_ast.zig");
 pub const TestContext = schema_helpers.TestContext;
 
@@ -48,7 +51,7 @@ pub fn readDoc(
     namespace_id: i64,
 ) !?typed.Record {
     const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
     node.mutex.lock();
@@ -73,7 +76,7 @@ pub fn queryDocs(
     filter: *const query_ast.QueryFilter,
 ) !QueryResult {
     const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
     node.mutex.lock();
@@ -368,7 +371,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     }
 
     for (tables, 0..) |declared, idx| {
-        runtime_tables[built_count] = try schema_mod.buildRuntimeTable(allocator, declared, idx);
+        runtime_tables[built_count] = try schema_parse.buildRuntimeTable(allocator, declared, idx);
         built_count += 1;
     }
 
@@ -383,7 +386,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     };
     errdefer result.deinit();
 
-    try schema_mod.buildTableIndex(allocator, &result);
+    try schema_index.buildTableIndex(allocator, &result);
     return result;
 }
 

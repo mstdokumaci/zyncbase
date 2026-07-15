@@ -1,11 +1,11 @@
 const std = @import("std");
-const schema = @import("../schema.zig");
-const schema_helpers = @import("../schema_test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
 const ddl_generator = @import("ddl.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
-const Field = schema.Field;
-const FieldType = schema.FieldType;
-const OnDelete = schema.OnDelete;
+const Field = schema_types.Field;
+const FieldType = schema_types.FieldType;
+const OnDelete = schema_types.OnDelete;
 const sqlite = @import("sqlite");
 
 test "ddl_generator: generate DDL for a known table" {

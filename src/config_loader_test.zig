@@ -1,7 +1,7 @@
 const std = @import("std");
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 
 test "ConfigLoader loads defaults when file not found" {
     const allocator = std.testing.allocator;

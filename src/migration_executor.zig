@@ -1,5 +1,6 @@
 const std = @import("std");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
 const ddl_generator = @import("sql/ddl.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
@@ -122,7 +123,7 @@ pub const MigrationExecutor = struct {
         }
     }
 
-    fn recreateTable(self: *MigrationExecutor, table: schema.Table) !void {
+    fn recreateTable(self: *MigrationExecutor, table: schema_types.Table) !void {
         const name = table.name;
         const name_quoted = table.name_quoted;
         const backup_name = try std.fmt.allocPrint(self.allocator, "{s}_backup", .{name});
@@ -275,13 +276,13 @@ fn appendQuotedIdentifier(
 
 fn buildCommonColumns(
     allocator: std.mem.Allocator,
-    table: schema.Table,
+    table: schema_types.Table,
     backup_cols: []const []const u8,
 ) !std.ArrayListUnmanaged([]const u8) {
     var common: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer common.deinit(allocator);
     for (backup_cols) |bc| {
-        var in_new = schema.isSystemColumn(bc);
+        var in_new = schema_system.isSystemColumn(bc);
         if (!in_new) {
             for (table.userFields()) |f| {
                 if (std.mem.eql(u8, bc, f.name)) {

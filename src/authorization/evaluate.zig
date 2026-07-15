@@ -5,7 +5,7 @@ const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed_codec = @import("../typed/codec.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
 
@@ -17,8 +17,8 @@ pub const EvalContext = struct {
     namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
-    value_table: ?*const schema_mod.Table = null,
-    presence_fields: ?[]const schema_mod.PresenceField = null,
+    value_table: ?*const schema_types.Table = null,
+    presence_fields: ?[]const schema_types.PresenceField = null,
     doc_id: ?typed_doc_id.DocId = null,
     owner_doc_id: ?typed_doc_id.DocId = null,
 };
@@ -183,7 +183,7 @@ pub fn authorizePresenceWrite(
     session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
-    presence_fields: []const schema_mod.PresenceField,
+    presence_fields: []const schema_types.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
@@ -208,7 +208,7 @@ pub fn authorizePresenceSharedWrite(
     session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
-    presence_fields: []const schema_mod.PresenceField,
+    presence_fields: []const schema_types.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;

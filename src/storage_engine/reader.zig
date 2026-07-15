@@ -1,7 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -29,7 +30,7 @@ pub const QueryResult = struct {
 
 pub fn buildSelectQuery(
     allocator: Allocator,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     namespace_id: i64,
     filter: *const query_ast.QueryFilter,
     guard_predicate: ?*const query_ast.FilterPredicate,
@@ -79,7 +80,7 @@ fn appendWhereConditions(
     allocator: Allocator,
     buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     filter: *const query_ast.QueryFilter,
     sort_field_name_quoted: []const u8,
 ) !void {
@@ -103,11 +104,11 @@ fn appendWhereConditions(
             allocator,
             buf,
             sort_field_name_quoted,
-            filter.order_by.field_index == schema.id_field_index,
+            filter.order_by.field_index == schema_system.id_field_index,
             filter.order_by.desc,
         );
 
-        if (filter.order_by.field_index == schema.id_field_index) {
+        if (filter.order_by.field_index == schema_system.id_field_index) {
             try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
         } else {
             {
@@ -126,7 +127,7 @@ fn appendGuardPredicate(
     allocator: Allocator,
     buf: *SqlBuf,
     values: *std.ArrayListUnmanaged(Value),
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     guard_predicate: ?*const query_ast.FilterPredicate,
 ) !void {
     const predicate = guard_predicate orelse return;
@@ -142,7 +143,7 @@ pub fn execSelectDocument(
     stmt: *sqlite.c.sqlite3_stmt,
     id: DocId,
     namespace_id: i64,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     guard_values: ?[]const Value,
     json_buf: *sql.JsonBuf,
 ) !?Record {
@@ -164,7 +165,7 @@ pub fn execQuery(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     values: []const Value,
-    table_metadata: *const schema.Table,
+    table_metadata: *const schema_types.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
     json_buf: *sql.JsonBuf,
@@ -216,7 +217,7 @@ pub fn execQuery(
         if (limit > 0) {
             const last_record = owned_records[limit - 1];
             const sort_val = last_record.values[sort_field_index];
-            const id_val = last_record.values[schema.id_field_index];
+            const id_val = last_record.values[schema_system.id_field_index];
             if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
 
             const cursor = Cursor{

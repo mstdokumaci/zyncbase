@@ -13,7 +13,8 @@ const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const typed = @import("typed/types.zig");
 const wire_encode = @import("wire/encode.zig");
-const schema_mod = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
 const managedThread = @import("threading/managed_thread.zig").managedThread;
 const workerPool = @import("threading/worker_pool.zig").workerPool;
 const Notifier = @import("threading/notifier.zig").Notifier;
@@ -23,7 +24,7 @@ pub const NotificationWorkerPool = struct {
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
-    schema: *const schema_mod.Schema,
+    schema: *const schema_types.Schema,
     send_queue: *send_queue_type,
     notifier: Notifier,
     allocator: Allocator,
@@ -34,7 +35,7 @@ pub const NotificationWorkerPool = struct {
         change_queue: *ChangeQueue,
         subscription_engine: *SubscriptionEngine,
         memory_strategy: *MemoryStrategy,
-        schema: *const schema_mod.Schema,
+        schema: *const schema_types.Schema,
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
@@ -87,7 +88,7 @@ pub const NotificationWorker = struct {
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
-    schema: *const schema_mod.Schema,
+    schema: *const schema_types.Schema,
     send_queue: *send_queue_type,
     notifier: Notifier,
 
@@ -96,7 +97,7 @@ pub const NotificationWorker = struct {
         change_queue: *ChangeQueue,
         subscription_engine: *SubscriptionEngine,
         memory_strategy: *MemoryStrategy,
-        schema: *const schema_mod.Schema,
+        schema: *const schema_types.Schema,
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
@@ -154,7 +155,7 @@ pub const NotificationWorker = struct {
         };
 
         const id_val = if (change.new_record orelse change.old_record) |record|
-            if (record.values.len > schema_mod.id_field_index) record.values[schema_mod.id_field_index] else null
+            if (record.values.len > schema_system.id_field_index) record.values[schema_system.id_field_index] else null
         else
             null;
 
@@ -256,7 +257,7 @@ pub const NotificationWorker = struct {
 fn encodeDeltaSuffixes(
     matches: []const SubscriptionEngine.Match,
     change: OwnedRecordChange,
-    table_metadata: *const schema_mod.Table,
+    table_metadata: *const schema_types.Table,
     id_val_actual: typed.Value,
     alloc: std.mem.Allocator,
     set_suffix: *?[]const u8,

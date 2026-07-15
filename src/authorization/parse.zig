@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const doc_predicate = @import("doc_predicate.zig");
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed/types.zig");
 const json_read = @import("../json/read.zig");
@@ -11,7 +11,7 @@ const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 
 /// Parse authorization.json text into an AuthConfig.
-pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const schema_mod.Schema) !types.AuthConfig {
+pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const schema_types.Schema) !types.AuthConfig {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
     defer parsed.deinit();
 
@@ -64,7 +64,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
     return config;
 }
 
-pub fn validateConfig(config: *const types.AuthConfig, schema: *const schema_mod.Schema) !void {
+pub fn validateConfig(config: *const types.AuthConfig, schema: *const schema_types.Schema) !void {
     for (config.store_rules) |rule| {
         if (rule.is_wildcard) {
             for (schema.tables) |*table| {
@@ -77,7 +77,7 @@ pub fn validateConfig(config: *const types.AuthConfig, schema: *const schema_mod
     }
 }
 
-fn validateStoreRule(rule: types.StoreRule, table: *const schema_mod.Table) !void {
+fn validateStoreRule(rule: types.StoreRule, table: *const schema_types.Table) !void {
     try doc_predicate.validateDocPredicate(rule.read, table);
     try doc_predicate.validateDocPredicate(rule.write, table);
 }

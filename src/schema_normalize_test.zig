@@ -1,11 +1,12 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_types = @import("schema/types.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 
 test "schema_normalize: implicit users is canonical first table" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{}},"comments":{"fields":{}}}}
     );
     defer parsed.deinit();
@@ -21,7 +22,7 @@ test "schema_normalize: implicit users is canonical first table" {
 test "schema_normalize: explicit users moves to canonical first table" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{}},"users":{"namespaced":true,"fields":{"name":{"type":"string"}}}}}
     );
     defer parsed.deinit();
@@ -35,7 +36,7 @@ test "schema_normalize: explicit users moves to canonical first table" {
 test "schema_normalize: builds canonical field order and user range" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"done":{"type":"boolean"}}}}}
     );
     defer parsed.deinit();
@@ -57,11 +58,11 @@ test "schema_normalize: builds canonical field order and user range" {
 test "schema_normalize: users external_id is internal only" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.ReservedFieldName, schema.initSchema(allocator,
+    try std.testing.expectError(error.ReservedFieldName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"users":{"fields":{"external_id":{"type":"string"}}}}}
     ));
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"users":{"fields":{"name":{"type":"string"}}}}}
     );
     defer parsed.deinit();
@@ -74,16 +75,16 @@ test "schema_normalize: users external_id is internal only" {
 test "schema_normalize: rejects reserved names and internal table prefix" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidTableName, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidTableName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"_zync_shadow":{"fields":{}}}}
     ));
-    try std.testing.expectError(error.InvalidTableName, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidTableName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"bad__name":{"fields":{}}}}
     ));
-    try std.testing.expectError(error.InvalidFieldName, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidFieldName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"bad__name":{"type":"string"}}}}}
     ));
-    try std.testing.expectError(error.ReservedFieldName, schema.initSchema(allocator,
+    try std.testing.expectError(error.ReservedFieldName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"created_at":{"type":"integer"}}}}}
     ));
 }
@@ -91,7 +92,7 @@ test "schema_normalize: rejects reserved names and internal table prefix" {
 test "schema_normalize: flattens nested fields and resolves required leaves" {
     const allocator = std.testing.allocator;
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{
         \\  "version":"1.0.0",
         \\  "store":{
@@ -116,10 +117,10 @@ test "schema_normalize: flattens nested fields and resolves required leaves" {
 test "schema_normalize: rejects object-level and missing required paths" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidRequiredField, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"profiles":{"required":["profile"],"fields":{"profile":{"type":"object","fields":{"name":{"type":"string"}}}}}}}
     ));
-    try std.testing.expectError(error.InvalidRequiredField, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"profiles":{"required":["missing"],"fields":{"name":{"type":"string"}}}}}
     ));
 }
@@ -127,44 +128,44 @@ test "schema_normalize: rejects object-level and missing required paths" {
 test "schema_normalize: validates array items" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.MissingArrayItems, schema.initSchema(allocator,
+    try std.testing.expectError(error.MissingArrayItems, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array"}}}}}
     ));
-    try std.testing.expectError(error.UnsupportedArrayItemsType, schema.initSchema(allocator,
+    try std.testing.expectError(error.UnsupportedArrayItemsType, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"array"}}}}}
     ));
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"string"}}}}}
     );
     defer parsed.deinit();
 
     const tags = parsed.table("posts").?.field("tags") orelse return error.TestExpectedValue;
-    try std.testing.expectEqual(schema.FieldType.array, tags.declared_type);
-    try std.testing.expectEqual(schema.StorageType.array, tags.storage_type);
-    try std.testing.expectEqual(schema.FieldType.text, tags.items_type.?);
+    try std.testing.expectEqual(schema_types.FieldType.array, tags.declared_type);
+    try std.testing.expectEqual(schema_types.StorageType.array, tags.storage_type);
+    try std.testing.expectEqual(schema_types.FieldType.text, tags.items_type.?);
 }
 
 test "schema_normalize: validates references and on delete rules" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidReference, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidReference, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"author_id":{"type":"string","references":"missing"}}}}}
     ));
-    try std.testing.expectError(error.InvalidFieldType, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidFieldType, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"author_id":{"type":"integer","references":"users"}}}}}
     ));
-    try std.testing.expectError(error.InvalidOnDelete, schema.initSchema(allocator,
+    try std.testing.expectError(error.InvalidOnDelete, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"required":["author_id"],"fields":{"author_id":{"type":"string","references":"users","onDelete":"set_null"}}}}}
     ));
 
-    var parsed = try schema.initSchema(allocator,
+    var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"author_id":{"type":"string","references":"users"}}}}}
     );
     defer parsed.deinit();
 
     const author_id = parsed.table("posts").?.field("author_id") orelse return error.TestExpectedValue;
-    try std.testing.expectEqual(schema.FieldType.text, author_id.declared_type);
-    try std.testing.expectEqual(schema.StorageType.doc_id, author_id.storage_type);
-    try std.testing.expectEqual(schema.OnDelete.restrict, author_id.on_delete.?);
+    try std.testing.expectEqual(schema_types.FieldType.text, author_id.declared_type);
+    try std.testing.expectEqual(schema_types.StorageType.doc_id, author_id.storage_type);
+    try std.testing.expectEqual(schema_types.OnDelete.restrict, author_id.on_delete.?);
 }

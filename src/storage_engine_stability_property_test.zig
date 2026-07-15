@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
-const schema_mod = sth.schema_mod;
+const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -21,7 +21,7 @@ const schema_mod = sth.schema_mod;
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_mod.Field{schema_helpers.makeField("val", .text)};
+    var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;

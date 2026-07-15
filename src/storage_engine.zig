@@ -5,8 +5,9 @@ const write_worker_mod = @import("storage_engine/write_worker.zig");
 const WriteWorker = write_worker_mod.WriteWorker;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
 const connection = @import("storage_engine/connection.zig");
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const Schema = schema_types.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed_doc_id = @import("typed/doc_id.zig");
@@ -561,7 +562,7 @@ pub const StorageEngine = struct {
     // ─── Storage methods ──────────────────────────────────────────────────
 
     const WriteResources = struct {
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         effective_namespace_id: i64,
         rendered_guard: ?filter_sql.RenderedPredicate,
 
@@ -587,7 +588,7 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
     ) !WriteResources {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
         const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         return .{
             .table_metadata = table_metadata,

@@ -1,6 +1,6 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const ddl_generator = @import("sql/ddl.zig");
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
@@ -38,7 +38,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     var gen = ddl_generator.DDLGenerator.init(allocator);
 
     // Create table with [title TEXT, status TEXT]
-    var initial_fields = [_]schema.Field{
+    var initial_fields = [_]schema_types.Field{
         schema_helpers.makeField("title", .text),
         schema_helpers.makeField("status", .text),
     };
@@ -51,11 +51,11 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, owner_id, title, status, created_at, updated_at) VALUES (zeroblob(16), 1, zeroblob(16), 'My Task', 'open', 0, 0)");
 
     // Target schema: status is now INTEGER
-    var target_fields = [_]schema.Field{
+    var target_fields = [_]schema_types.Field{
         schema_helpers.makeField("title", .text),
         schema_helpers.makeField("status", .integer),
     };
-    var target_tables = [_]schema.Table{schema_helpers.makeTable("tasks", &target_fields)};
+    var target_tables = [_]schema_types.Table{schema_helpers.makeTable("tasks", &target_fields)};
     const target_version = "1.0.0";
 
     // Build change_type migration: status TEXT -> INTEGER
@@ -109,11 +109,11 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
 
     // No schema_meta, no tables - start fresh
     // Build a create_table plan
-    var target_fields = [_]schema.Field{
+    var target_fields = [_]schema_types.Field{
         schema_helpers.makeField("username", .text),
         schema_helpers.makeField("email", .text),
     };
-    var target_tables = [_]schema.Table{schema_helpers.makeTable("users", &target_fields)};
+    var target_tables = [_]schema_types.Table{schema_helpers.makeTable("users", &target_fields)};
     const target_version = "1.0.0";
 
     const changes = try allocator.alloc(migration_detector.Change, 1);
@@ -174,17 +174,17 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
 
     // Build a simple add_column plan (non-destructive so it won't be refused for that reason)
     // We need a table to exist first
-    var fields = [_]schema.Field{schema_helpers.makeField("data", .text)};
+    var fields = [_]schema_types.Field{schema_helpers.makeField("data", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
 
-    var target_fields = [_]schema.Field{
+    var target_fields = [_]schema_types.Field{
         schema_helpers.makeField("data", .text),
         schema_helpers.makeField("extra", .text),
     };
-    var target_tables = [_]schema.Table{schema_helpers.makeTable("docs", &target_fields)};
+    var target_tables = [_]schema_types.Table{schema_helpers.makeTable("docs", &target_fields)};
     const target_version = "1.0.0";
 
     const changes = try allocator.alloc(migration_detector.Change, 1);

@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
-const schema_mod = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_system = @import("schema/system.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
@@ -21,7 +23,7 @@ const DocId = typed_doc_id.DocId;
 /// Wire protocol: duplicate field index → last-wins (reverse scan, skip seen).
 fn decodeColumnsFromPairs(
     allocator: Allocator,
-    table: *const schema_mod.Table,
+    table: *const schema_types.Table,
     value: msgpack.Payload,
 ) !std.ArrayListUnmanaged(storage_mod.ColumnValue) {
     var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
@@ -30,14 +32,14 @@ fn decodeColumnsFromPairs(
         columns.deinit(allocator);
     }
 
-    var seen = std.StaticBitSet(schema_mod.max_store_fields).initEmpty();
+    var seen = std.StaticBitSet(schema_parse.max_store_fields).initEmpty();
     var pair_i: usize = value.arr.len;
     while (pair_i > 0) {
         pair_i -= 1;
         const pair_payload = value.arr[pair_i];
         if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
         const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
-        if (f_idx < schema_mod.max_store_fields) {
+        if (f_idx < schema_parse.max_store_fields) {
             if (seen.isSet(f_idx)) continue;
             seen.set(f_idx);
         }
@@ -60,15 +62,15 @@ fn decodeColumnsFromPairs(
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
-    tbl_md: *const schema_mod.Table,
+    tbl_md: *const schema_types.Table,
     field_index: usize,
     value: msgpack.Payload,
-) !schema_mod.Field {
+) !schema_types.Field {
     if (field_index >= tbl_md.fields.len) return StorageError.UnknownField;
 
     // Leading system columns and trailing timestamps are immutable.
     // The last two fields are created_at and updated_at, which are also immutable by the client.
-    if (field_index < schema_mod.first_user_field_index or
+    if (field_index < schema_system.first_user_field_index or
         field_index >= tbl_md.fields.len - 2) return StorageError.ImmutableField;
     const field = tbl_md.fields[field_index];
 
@@ -92,11 +94,11 @@ pub fn validateFieldWrite(
 }
 
 fn validateRequiredFieldsForCreate(
-    table: *const schema_mod.Table,
+    table: *const schema_types.Table,
     columns: []const storage_mod.ColumnValue,
 ) !void {
-    const user_fields = table.fields[schema_mod.first_user_field_index .. table.fields.len - schema_mod.trailing_system_field_count];
-    for (user_fields, schema_mod.first_user_field_index..) |f, f_idx| {
+    const user_fields = table.fields[schema_system.first_user_field_index .. table.fields.len - schema_system.trailing_system_field_count];
+    for (user_fields, schema_system.first_user_field_index..) |f, f_idx| {
         if (!f.required) continue;
         const present = for (columns) |col| {
             if (col.index == f_idx) break true;
@@ -110,10 +112,10 @@ fn validateRequiredFieldsForCreate(
 pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
-    schema: *const schema_mod.Schema,
+    schema: *const schema_types.Schema,
     auth_config: *const authorization_types.AuthConfig,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_mod.Schema, auth_config: *const authorization_types.AuthConfig) StoreService {
+    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_types.Schema, auth_config: *const authorization_types.AuthConfig) StoreService {
         return .{
             .allocator = allocator,
             .storage_engine = storage_engine,
@@ -153,7 +155,7 @@ pub const StoreService = struct {
 
     const StorePath = struct {
         table_index: usize,
-        table: *const schema_mod.Table,
+        table: *const schema_types.Table,
         doc_id: DocId,
     };
 
@@ -163,7 +165,7 @@ pub const StoreService = struct {
 
         const namespace_id = self.storage_engine.cachedNamespaceId(namespace) orelse return null;
         const users_table = self.schema.table("users") orelse return error.UnknownTable;
-        const identity_namespace_id = if (users_table.namespaced) namespace_id else schema_mod.global_namespace_id;
+        const identity_namespace_id = if (users_table.namespaced) namespace_id else schema_system.global_namespace_id;
         const user_doc_id = self.storage_engine.cachedUserId(identity_namespace_id, external_user_id) orelse return null;
 
         return .{

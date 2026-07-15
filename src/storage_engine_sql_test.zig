@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const schema_mod = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const query_ast = @import("query_ast.zig");
@@ -16,15 +17,15 @@ const sqlite = @import("sqlite");
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("from", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
     const columns = [_]ColumnValue{
-        .{ .index = schema_mod.first_user_field_index, .value = undefined },
+        .{ .index = schema_system.first_user_field_index, .value = undefined },
     };
 
     const insert_sql = try sql.buildUpsertDocumentSql(allocator, table_metadata, &columns, null);
@@ -39,9 +40,9 @@ test "filter SQL render cleans up all allocation failures" {
 }
 
 fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("name", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("name", .text)};
     const table = schema_helpers.makeTable("people", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("people") orelse return error.TestExpectedValue;

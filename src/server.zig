@@ -21,8 +21,10 @@ const connection_session = @import("connection/session.zig");
 const SessionResolver = connection_session_resolver.SessionResolver;
 const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_parse = @import("schema/parse.zig");
+const Schema = schema_types.Schema;
 const authorization_types = @import("authorization/types.zig");
 const authorization_defaults = @import("authorization/defaults.zig");
 const authorization_parse = @import("authorization/parse.zig");
@@ -411,7 +413,7 @@ pub const ZyncBaseServer = struct {
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
-                    break :blk schema_mod.implicit_users_schema_json;
+                    break :blk schema_system.implicit_users_schema_json;
                 }
                 std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
                 return err;
@@ -420,13 +422,13 @@ pub const ZyncBaseServer = struct {
         };
         const schema_source: SchemaSource = if (config.schema_content != null)
             .borrowed_config
-        else if (json_text.ptr == schema_mod.implicit_users_schema_json.ptr)
+        else if (json_text.ptr == schema_system.implicit_users_schema_json.ptr)
             .borrowed_builtin
         else
             .owned_file_read;
         defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
 
-        self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
+        self.schema = try schema_parse.initFromJson(self.memory_strategy.generalAllocator(), json_text);
     }
 
     fn loadAuthConfig(self: *ZyncBaseServer, config: *const Config) !void {

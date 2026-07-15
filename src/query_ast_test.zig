@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 const query_ast = @import("query_ast.zig");
 const typed = @import("typed/types.zig");
 const tth = @import("typed/test_helpers.zig");
@@ -14,7 +14,7 @@ test "operatorExpectsValueShape op x field-type matrix" {
     // that both the query parser and the authorization validator derive from,
     // so a regression here means parse/validate can diverge again.
 
-    const scalar_types = [_]schema.FieldType{ .text, .integer, .real, .boolean, .doc_id };
+    const scalar_types = [_]schema_types.FieldType{ .text, .integer, .real, .boolean, .doc_id };
 
     for (scalar_types) |ft| {
         try expectShape(Operator.eq, ft, .scalar);
@@ -45,7 +45,7 @@ test "operatorExpectsValueShape op x field-type matrix" {
 
     // Array fields: eq/ne expect an array of element scalars; comparison,
     // membership, and contains-on-array are unsupported.
-    const array_ft: schema.FieldType = .array;
+    const array_ft: schema_types.FieldType = .array;
     try expectShape(Operator.eq, array_ft, .array_field);
     try expectShape(Operator.ne, array_ft, .array_field);
     try expectUnsupported(Operator.gt, array_ft);
@@ -67,12 +67,12 @@ test "operatorExpectsValueShape op x field-type matrix" {
     try expectShape(Operator.isNotNull, array_ft, .nullary);
 }
 
-fn expectShape(op: Operator, field_type: schema.FieldType, expected: ValueShape) !void {
+fn expectShape(op: Operator, field_type: schema_types.FieldType, expected: ValueShape) !void {
     const actual = try query_ast.operatorExpectsValueShape(op, field_type);
     try std.testing.expectEqual(expected, actual);
 }
 
-fn expectUnsupported(op: Operator, field_type: schema.FieldType) !void {
+fn expectUnsupported(op: Operator, field_type: schema_types.FieldType) !void {
     const result = query_ast.operatorExpectsValueShape(op, field_type);
     try std.testing.expectError(error.UnsupportedOperatorForFieldType, result);
 }

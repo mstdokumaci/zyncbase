@@ -1,7 +1,7 @@
 const std = @import("std");
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 
 pub fn createStoreSetMessageWithPayload(
@@ -154,7 +154,7 @@ pub fn createInvalidStoreSetMessageMissingId(
 /// Creates a MsgPack Payload representing a document as a pair-array based on schema.
 /// Translates string field names to numeric indices using table metadata.
 /// Returns a pair-array: [[field_index, value], ...]
-pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema.Table, fields: anytype) !msgpack_utils.Payload {
+pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_types.Table, fields: anytype) !msgpack_utils.Payload {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(allocator);
     const writer = buf.writer(allocator);

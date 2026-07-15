@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("types.zig");
 
 pub const global_namespace_id: i64 = 0;
-pub const global_namespace_name = "$global";
 
 pub const implicit_users_schema_json =
     \\{"version":"1.0.0","store":{"users":{"namespaced":false,"fields":{}}}}
@@ -16,7 +15,6 @@ pub const quoted_created_at = "\"created_at\"";
 pub const quoted_updated_at = "\"updated_at\"";
 
 pub const id_field_index: usize = 0;
-pub const namespace_id_field_index: usize = 1;
 pub const owner_id_field_index: usize = 2;
 pub const first_user_field_index: usize = 3;
 pub const leading_system_field_count: usize = 3;
@@ -45,10 +43,6 @@ pub fn getSystemColumn(name: []const u8) ?types.Field {
 
 pub fn isSystemColumn(name: []const u8) bool {
     return getSystemColumn(name) != null;
-}
-
-pub fn effectiveNamespaceLabel(table: *const types.Table, namespace: []const u8) []const u8 {
-    return if (table.namespaced) namespace else global_namespace_name;
 }
 
 pub fn isInternalTableName(name: []const u8) bool {

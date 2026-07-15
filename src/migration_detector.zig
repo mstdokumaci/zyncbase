@@ -1,13 +1,14 @@
 const std = @import("std");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
 const sqlite = @import("sqlite");
 
 pub const ChangeKind = enum { create_table, add_column, change_type, remove_column };
 
 pub const Change = struct {
     kind: ChangeKind,
-    table: *const schema.Table,
-    field: ?schema.Field,
+    table: *const schema_types.Table,
+    field: ?schema_types.Field,
 };
 
 pub const MigrationPlan = struct {
@@ -15,27 +16,27 @@ pub const MigrationPlan = struct {
     is_destructive: bool,
 };
 
-fn typesMatch(target: schema.StorageType, db_type: []const u8) bool {
+fn typesMatch(target: schema_types.StorageType, db_type: []const u8) bool {
     const sql_type = target.toSqlType();
     if (std.mem.eql(u8, sql_type, db_type)) return true;
     return false;
 }
 
-fn isManagedColumn(table: schema.Table, name: []const u8) bool {
-    return schema.isSystemColumn(name) or
+fn isManagedColumn(table: schema_types.Table, name: []const u8) bool {
+    return schema_system.isSystemColumn(name) or
         (table.is_users_table and std.mem.eql(u8, name, "external_id"));
 }
 
 pub const MigrationDetector = struct {
     allocator: std.mem.Allocator,
     db: *sqlite.Db,
-    current_schema: *const schema.Schema,
+    current_schema: *const schema_types.Schema,
 
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_schema: *const schema.Schema) MigrationDetector {
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_schema: *const schema_types.Schema) MigrationDetector {
         return .{ .allocator = allocator, .db = db, .current_schema = current_schema };
     }
 
-    pub fn detectChanges(self: *MigrationDetector, target: *const schema.Schema) !MigrationPlan {
+    pub fn detectChanges(self: *MigrationDetector, target: *const schema_types.Schema) !MigrationPlan {
         var changes: std.ArrayListUnmanaged(Change) = .empty;
         errdefer {
             for (changes.items) |c| self.freeChange(c);
@@ -85,7 +86,7 @@ pub const MigrationDetector = struct {
         table_exists: bool,
     };
 
-    fn queryExistingColumns(self: *MigrationDetector, table: *const schema.Table) !ExistingColumns {
+    fn queryExistingColumns(self: *MigrationDetector, table: *const schema_types.Table) !ExistingColumns {
         var existing = std.StringHashMap([]const u8).init(self.allocator);
         errdefer {
             var it = existing.iterator();
@@ -135,7 +136,7 @@ pub const MigrationDetector = struct {
     fn detectColumnChanges(
         self: *MigrationDetector,
         changes: *std.ArrayListUnmanaged(Change),
-        table: *const schema.Table,
+        table: *const schema_types.Table,
         existing: *const std.StringHashMap([]const u8),
     ) !void {
         for (table.userFields()) |field| {
@@ -165,7 +166,7 @@ pub const MigrationDetector = struct {
     fn detectRemovedColumns(
         self: *MigrationDetector,
         changes: *std.ArrayListUnmanaged(Change),
-        table: *const schema.Table,
+        table: *const schema_types.Table,
         existing: *const std.StringHashMap([]const u8),
     ) !void {
         var ex_it = existing.iterator();
@@ -180,7 +181,7 @@ pub const MigrationDetector = struct {
             }
             if (!found_in_target) {
                 // SAFETY: assigned via clone() before use; guard-checked by found_in_current
-                var current_field: schema.Field = undefined;
+                var current_field: schema_types.Field = undefined;
                 var found_in_current = false;
                 outer: for (self.current_schema.tables) |ct| {
                     if (std.mem.eql(u8, ct.name, table.name)) {

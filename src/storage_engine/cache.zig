@@ -3,7 +3,8 @@ const Allocator = std.mem.Allocator;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const query_ast = @import("../query_ast.zig");
 const filter_eval = @import("../filter_eval.zig");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 
@@ -45,8 +46,8 @@ pub fn identityCacheKey(identity_namespace_id: i64, external_user_id: []const u8
     return hasher.final();
 }
 
-pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: typed_doc_id.DocId) MetadataCacheKey {
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+pub fn getCacheKey(table_metadata: *const schema_types.Table, namespace_id: i64, id: typed_doc_id.DocId) MetadataCacheKey {
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
     return MetadataCacheKey{
         .namespace_id = effective_namespace_id,
         .table_index = table_metadata.index,

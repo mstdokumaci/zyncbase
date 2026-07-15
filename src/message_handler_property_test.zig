@@ -7,7 +7,7 @@ const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },
@@ -201,7 +201,7 @@ test "message: concurrent routed requests release response allocations" {
     const ThreadContext = struct {
         app: *AppTestContext,
         table_index: usize,
-        table: *const schema.Table,
+        table: *const schema_types.Table,
         thread_index: usize,
         iterations: usize,
         failure: ?anyerror = null,

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const testing = std.testing;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // For any initialized component, calling init() then deinit() should leave no memory leaks
