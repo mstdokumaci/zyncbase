@@ -1,12 +1,12 @@
 const std = @import("std");
 const schema = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const tth = @import("typed/test_helpers.zig");
 
 const Operator = query_ast.Operator;
 const ValueShape = query_ast.ValueShape;
-const Value = typed_types.Value;
+const Value = typed.Value;
 
 test "operatorExpectsValueShape op x field-type matrix" {
     // Every (op, field_type) combination resolves to a single expected shape,
@@ -89,11 +89,11 @@ test "Operator.compare semantics" {
     const int_5a = tth.valInt(5);
     const int_5b = tth.valInt(5);
 
-    const arr_abc = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+    const arr_abc = try tth.valArray(allocator, &[_]typed.ScalarValue{
         .{ .text = "a" }, .{ .text = "b" }, .{ .text = "c" },
     });
     defer arr_abc.deinit(allocator);
-    const arr_empty = try tth.valArray(allocator, &[_]typed_types.ScalarValue{});
+    const arr_empty = try tth.valArray(allocator, &[_]typed.ScalarValue{});
     defer arr_empty.deinit(allocator);
 
     // eq / ne
@@ -145,7 +145,7 @@ test "Operator.compareNullary semantics" {
 test "FilterPredicate.normalize collapses in/notIn empty sets" {
     const allocator = std.testing.allocator;
 
-    const empty = try tth.valArray(allocator, &[_]typed_types.ScalarValue{});
+    const empty = try tth.valArray(allocator, &[_]typed.ScalarValue{});
     defer empty.deinit(allocator);
 
     // `in` with an empty array is trivially false -> whole AND predicate is match_none.

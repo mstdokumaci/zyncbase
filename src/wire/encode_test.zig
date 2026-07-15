@@ -6,7 +6,7 @@ const helpers = @import("test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
 const schema_helpers = @import("../schema_test_helpers.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const query_parser = @import("../query_parser.zig");
 const tth = @import("../typed/test_helpers.zig");
@@ -61,14 +61,14 @@ test "encodeQuery: includes subscription pagination fields" {
     defer schema.deinit();
 
     const table_metadata = schema.table("users") orelse return error.UnknownTable;
-    const records = try allocator.alloc(typed_types.Record, 1);
+    const records = try allocator.alloc(typed.Record, 1);
     records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
         records[0].deinit(allocator);
         allocator.free(records);
     }
 
-    const cursor = typed_types.Cursor{
+    const cursor = typed.Cursor{
         .sort_value = tth.valInt(10),
         .id = 1,
     };

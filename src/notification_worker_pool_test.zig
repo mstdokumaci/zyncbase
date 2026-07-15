@@ -7,7 +7,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const typed_doc_id = @import("typed/doc_id.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -59,7 +59,7 @@ const TestContext = struct {
     }
 };
 
-fn makeRecordWithId(allocator: std.mem.Allocator, id: typed_doc_id.DocId, status: []const u8) !typed_types.Record {
+fn makeRecordWithId(allocator: std.mem.Allocator, id: typed_doc_id.DocId, status: []const u8) !typed.Record {
     var record = try tth.recordFromValues(allocator, &.{tth.valText(status)});
     // Set the id field at index 0
     record.values[0].deinit(allocator);

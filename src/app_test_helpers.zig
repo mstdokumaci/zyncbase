@@ -11,7 +11,7 @@ const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const typed_doc_id = @import("typed/doc_id.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const SessionResolutionResult = connection_resolution_buffer.SessionResolutionResult;
 const SessionResolver = connection_session_resolver.SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
@@ -269,7 +269,7 @@ pub const AppTestContext = struct {
         id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: typed_types.Value,
+        value: typed.Value,
     ) !void {
         const tbl = try self.table(table_name);
         try tbl.insertField(id, namespace_id, field, value);

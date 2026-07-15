@@ -7,7 +7,7 @@ const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const typed_codec = @import("typed/codec.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const authorization_types = @import("authorization/types.zig");
 const authorization_read_auth = @import("authorization/read_auth.zig");
 const authorization_write_auth = @import("authorization/write_auth.zig");
@@ -130,7 +130,7 @@ pub const StoreService = struct {
         owner_doc_id: DocId,
         session_user_id: DocId,
         session_external_id: ?[]const u8 = null,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value) = null,
+        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     };
@@ -140,7 +140,7 @@ pub const StoreService = struct {
         msg_id: u64,
         session_user_id: DocId,
         session_external_id: ?[]const u8,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
+        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
         namespace: []const u8,
         namespace_id: i64,
         allocator: Allocator,

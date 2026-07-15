@@ -11,7 +11,7 @@ const ArenaHandle = @import("memory_strategy.zig").ArenaHandle;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const wire_encode = @import("wire/encode.zig");
 const schema_mod = @import("schema.zig");
 const managedThread = @import("threading/managed_thread.zig").managedThread;
@@ -257,7 +257,7 @@ fn encodeDeltaSuffixes(
     matches: []const SubscriptionEngine.Match,
     change: OwnedRecordChange,
     table_metadata: *const schema_mod.Table,
-    id_val_actual: typed_types.Value,
+    id_val_actual: typed.Value,
     alloc: std.mem.Allocator,
     set_suffix: *?[]const u8,
     remove_suffix: *?[]const u8,

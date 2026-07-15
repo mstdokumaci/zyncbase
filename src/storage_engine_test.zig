@@ -7,6 +7,11 @@ const tth = @import("typed/test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const SessionResolutionResult = @import("connection/resolution_buffer.zig").SessionResolutionResult;
+const query_ast = @import("query_ast.zig");
+const typed = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const send_queue_mod = @import("send_queue.zig");
+const send_queue_entry = send_queue_mod.Entry;
 
 const BatchOpForTest = struct {
     entries: []storage_mod.BatchEntry,
@@ -560,12 +565,6 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
     try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
 }
 
-const query_ast = @import("query_ast.zig");
-const typed_types = @import("typed/types.zig");
-const typed_doc_id = @import("typed/doc_id.zig");
-const send_queue_mod = @import("send_queue.zig");
-const send_queue_entry = send_queue_mod.Entry;
-
 fn drainOutcomes(sq: *send_queue_mod.send_queue) []send_queue_entry {
     var entries = std.ArrayListUnmanaged(send_queue_entry).empty;
     while (sq.pop()) |entry| {
@@ -574,7 +573,7 @@ fn drainOutcomes(sq: *send_queue_mod.send_queue) []send_queue_entry {
     return entries.toOwnedSlice(std.testing.allocator) catch &[_]send_queue_entry{};
 }
 
-fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed_types.Value) !query_ast.FilterPredicate {
+fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
     const conditions = try allocator.alloc(query_ast.Condition, 1);
     conditions[0] = .{
         .field_index = field_index,

@@ -5,7 +5,7 @@ const query_ast = @import("../query_ast.zig");
 const filter_eval = @import("../filter_eval.zig");
 const schema = @import("../schema.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 
 pub const MetadataCacheKey = struct {
     namespace_id: i64,
@@ -13,7 +13,7 @@ pub const MetadataCacheKey = struct {
     id: typed_doc_id.DocId,
 };
 
-pub const metadata_cache_type = lockFreeCache(typed_types.Record, MetadataCacheKey);
+pub const metadata_cache_type = lockFreeCache(typed.Record, MetadataCacheKey);
 
 pub const NamespaceCacheKey = u64;
 pub const IdentityCacheKey = u64;
@@ -55,7 +55,7 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: t
 }
 
 pub const CacheHit = struct {
-    record: *typed_types.Record,
+    record: *typed.Record,
     handle: metadata_cache_type.Handle,
 };
 

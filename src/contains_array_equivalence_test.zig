@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const schema = @import("schema.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
@@ -10,7 +10,7 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
 const query_ast = @import("query_ast.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed_types.Record, metadata: *const schema.Table) !std.AutoHashMap(typed_doc_id.DocId, void) {
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metadata: *const schema.Table) !std.AutoHashMap(typed_doc_id.DocId, void) {
     var ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {

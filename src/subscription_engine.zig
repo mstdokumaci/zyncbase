@@ -4,9 +4,9 @@ const query_ast = @import("query_ast.zig");
 const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const typed_types = @import("typed/types.zig");
-const Record = typed_types.Record;
-const Value = typed_types.Value;
+const typed = @import("typed/types.zig");
+const Record = typed.Record;
+const Value = typed.Value;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -119,7 +119,7 @@ pub const CanonicalFilterContext = struct {
         }
     }
 
-    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed_types.ScalarValue) void {
+    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
         std.hash.autoHash(hasher, std.meta.activeTag(s));
         switch (s) {
             .text => |t| hasher.update(t),
@@ -147,7 +147,7 @@ fn eqlValue(a: Value, b: Value) bool {
     };
 }
 
-fn eqlScalarValue(a: typed_types.ScalarValue, b: typed_types.ScalarValue) bool {
+fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
     const tag = std.meta.activeTag(a);
     if (tag != std.meta.activeTag(b)) return false;
     return switch (a) {

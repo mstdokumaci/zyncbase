@@ -1,12 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 
 pub const Session = struct {
     external_id: []const u8,
     is_anonymous: bool,
     token_expires_at: i64,
-    claims: std.StringHashMapUnmanaged(typed_types.Value) = .{},
+    claims: std.StringHashMapUnmanaged(typed.Value) = .{},
 
     pub fn deinit(self: *Session, allocator: Allocator) void {
         allocator.free(self.external_id);
@@ -18,8 +18,8 @@ pub const Session = struct {
         self.claims.deinit(allocator);
     }
 
-    pub fn cloneClaims(source: std.StringHashMapUnmanaged(typed_types.Value), allocator: Allocator) !std.StringHashMapUnmanaged(typed_types.Value) {
-        var result: std.StringHashMapUnmanaged(typed_types.Value) = .{};
+    pub fn cloneClaims(source: std.StringHashMapUnmanaged(typed.Value), allocator: Allocator) !std.StringHashMapUnmanaged(typed.Value) {
+        var result: std.StringHashMapUnmanaged(typed.Value) = .{};
         errdefer {
             var it = result.iterator();
             while (it.next()) |entry| {

@@ -1,9 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const spmcBlockingQueue = @import("queues/spmc_blocking_queue.zig").spmcBlockingQueue;
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const Record = typed_types.Record;
+const Record = typed.Record;
 
 pub const OwnedRecordChange = struct {
     table_index: usize,

@@ -4,7 +4,7 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const schema_mod = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const storage_cache = @import("cache.zig");
 const filter_sql = @import("filter_sql.zig");
 const read_mod = @import("reader.zig");
@@ -18,7 +18,7 @@ const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 
 const DocId = typed_doc_id.DocId;
-const Record = typed_types.Record;
+const Record = typed.Record;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const req_queue_type = read_buffer.read_request_queue;
 const ReadRequest = read_buffer.ReadRequest;

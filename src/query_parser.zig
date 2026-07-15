@@ -3,13 +3,13 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const typed_codec = @import("typed/codec.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const typedValueFromPayload = typed_codec.fromPayload;
 const writeValueMsgPack = typed_codec.writeMsgPack;
-const ScalarValue = typed_types.ScalarValue;
-const Value = typed_types.Value;
-const Cursor = typed_types.Cursor;
+const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
+const Cursor = typed.Cursor;
 
 const query_ast = @import("query_ast.zig");
 const Operator = query_ast.Operator;

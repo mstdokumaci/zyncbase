@@ -5,7 +5,7 @@ const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
 const storage_cache = @import("cache.zig");
@@ -26,7 +26,7 @@ const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 
 const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
-const Record = typed_types.Record;
+const Record = typed.Record;
 const BatchEntry = write_queue.BatchEntry;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
@@ -736,7 +736,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         stmt: *sqlite.c.sqlite3_stmt,
         bind_idx: *c_int,
-        values: []const typed_types.Value,
+        values: []const typed.Value,
     ) !void {
         for (values) |val| {
             try sql.bindValue(val, &self.conn, stmt, bind_idx.*, &self.json_buf);

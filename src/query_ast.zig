@@ -1,9 +1,9 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-const typed_types = @import("typed/types.zig");
-const Value = typed_types.Value;
-const ScalarValue = typed_types.ScalarValue;
-const Cursor = typed_types.Cursor;
+const typed = @import("typed/types.zig");
+const Value = typed.Value;
+const ScalarValue = typed.ScalarValue;
+const Cursor = typed.Cursor;
 
 pub const Operator = enum(u8) {
     eq = 0,

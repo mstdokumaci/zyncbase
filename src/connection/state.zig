@@ -1,12 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const uws = @import("../uwebsockets_wrapper.zig");
 const Session = @import("session.zig").Session;
 const WebSocket = uws.WebSocket;
 
-const empty_claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
+const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 
 // Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
 const outbox_capacity = 16;
@@ -171,7 +171,7 @@ pub const Connection = struct {
         self.resetPresenceScopeLocked();
     }
 
-    pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed_types.Value), token_expires_at: i64) void {
+    pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed.Value), token_expires_at: i64) void {
         std.debug.assert(self.session != null);
         const sess = &self.session.?;
         var it = sess.claims.iterator();
@@ -194,7 +194,7 @@ pub const Connection = struct {
         return null;
     }
 
-    pub fn getSessionClaimsPtr(self: *Connection) *const std.StringHashMapUnmanaged(typed_types.Value) {
+    pub fn getSessionClaimsPtr(self: *Connection) *const std.StringHashMapUnmanaged(typed.Value) {
         if (self.session) |*sess| return &sess.claims;
         return &empty_claims;
     }

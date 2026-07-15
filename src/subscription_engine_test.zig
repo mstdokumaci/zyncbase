@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const subscription_engine = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_engine.SubscriptionEngine;
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -225,11 +225,11 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
         var engine = SubscriptionEngine.init(allocator);
         defer engine.deinit();
 
-        const in_val_1 = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .text = "a" },
         });
         defer in_val_1.deinit(allocator);
-        const in_val_2 = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .text = "b" },
         });
         defer in_val_2.deinit(allocator);
@@ -261,13 +261,13 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
         var engine = SubscriptionEngine.init(allocator);
         defer engine.deinit();
 
-        const in_val_1 = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .integer = 1 },
             .{ .integer = 2 },
             .{ .integer = 3 },
         });
         defer in_val_1.deinit(allocator);
-        const in_val_2 = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const in_val_2 = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .integer = 3 },
             .{ .integer = 1 },
             .{ .integer = 2 },
@@ -513,7 +513,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
         var engine = SubscriptionEngine.init(allocator);
         defer engine.deinit();
 
-        const in_val = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .text = "admin" },
             .{ .text = "editor" },
         });
@@ -554,7 +554,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
         var engine = SubscriptionEngine.init(allocator);
         defer engine.deinit();
 
-        const not_in_val = try tth.valArray(allocator, &[_]typed_types.ScalarValue{
+        const not_in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
             .{ .text = "guest" },
             .{ .text = "banned" },
         });

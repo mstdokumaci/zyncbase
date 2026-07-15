@@ -5,7 +5,7 @@ const types = @import("types.zig");
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const pattern_mod = @import("pattern.zig");
 const evaluate_mod = @import("evaluate.zig");
 const doc_predicate_mod = @import("doc_predicate.zig");
@@ -15,7 +15,7 @@ pub const WriteAuthInput = struct {
     table: *const schema.Table,
     session_user_id: typed_doc_id.DocId,
     session_external_id: ?[]const u8 = null,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value) = null,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
     namespace: []const u8,
     doc_id: typed_doc_id.DocId,
     value: ?*const msgpack.Payload = null,

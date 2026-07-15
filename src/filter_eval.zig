@@ -1,9 +1,9 @@
 const query_ast = @import("query_ast.zig");
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
-const Record = typed_types.Record;
+const Record = typed.Record;
 
 pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Record) !bool {
     switch (predicate.state) {

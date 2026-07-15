@@ -5,16 +5,16 @@ const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const sql = @import("sql.zig");
 const sql_build = @import("../sql/build.zig");
 const filter_sql = @import("filter_sql.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 
 const DocId = typed_doc_id.DocId;
-const Cursor = typed_types.Cursor;
-const Record = typed_types.Record;
-const Value = typed_types.Value;
+const Cursor = typed.Cursor;
+const Record = typed.Record;
+const Value = typed.Value;
 
 pub const QueryResult = struct {
     sql: []const u8,

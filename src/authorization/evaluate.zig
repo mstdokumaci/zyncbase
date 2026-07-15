@@ -2,18 +2,18 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed_codec = @import("../typed/codec.zig");
 const schema_mod = @import("../schema.zig");
 const Allocator = std.mem.Allocator;
-const Value = typed_types.Value;
+const Value = typed.Value;
 
 pub const EvalContext = struct {
     allocator: Allocator,
     session_user_id: ?typed_doc_id.DocId = null,
     session_external_id: ?[]const u8 = null,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value) = null,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
     namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
@@ -159,7 +159,7 @@ pub fn authorizeNamespace(
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
     is_presence: bool,
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
@@ -182,7 +182,7 @@ pub fn authorizePresenceWrite(
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
     presence_fields: []const schema_mod.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {
@@ -207,7 +207,7 @@ pub fn authorizePresenceSharedWrite(
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
     presence_fields: []const schema_mod.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {

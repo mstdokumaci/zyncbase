@@ -9,13 +9,13 @@ const authorization_parse = @import("authorization/parse.zig");
 const authorization_defaults = @import("authorization/defaults.zig");
 const AuthConfig = authorization_types.AuthConfig;
 const EvalContext = authorization_evaluate.EvalContext;
-const typed_types = @import("typed/types.zig");
+const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const query_ast = @import("query_ast.zig");
 const schema_mod = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema_system = @import("schema/system.zig");
-const ScalarValue = typed_types.ScalarValue;
+const ScalarValue = typed.ScalarValue;
 
 // ─── Parser Tests ───────────────────────────────────────────────────────────
 

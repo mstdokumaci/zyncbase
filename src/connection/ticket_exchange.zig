@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const JwtValidator = @import("../jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
@@ -131,7 +131,7 @@ pub const TicketExchange = struct {
         const external_id_slice = extracted.external_id orelse extracted.sub;
         const external_id = try allocator.dupe(u8, external_id_slice);
 
-        var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
         errdefer {
             allocator.free(external_id);
             var it = claims.iterator();
@@ -183,7 +183,7 @@ pub const TicketExchange = struct {
         allocator: Allocator,
         subject: []const u8,
         is_anonymous: bool,
-        claims: *const std.StringHashMapUnmanaged(typed_types.Value),
+        claims: *const std.StringHashMapUnmanaged(typed.Value),
     ) ![]const u8 {
         const exp = std.time.timestamp() + self.ttl_seconds;
         var jti_bytes: [16]u8 = undefined;
@@ -234,7 +234,7 @@ pub const TicketExchange = struct {
         // SAFETY: subject is always assigned before use in the if/else branches below
         var subject: []const u8 = undefined;
         var is_anonymous = false;
-        var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
         defer {
             var it = claims.iterator();
             while (it.next()) |entry| {
@@ -543,8 +543,8 @@ fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64:
     }
 }
 
-fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed_types.Value) {
-    var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
+fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed.Value) {
+    var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
     errdefer {
         var it = claims.iterator();
         while (it.next()) |entry| {

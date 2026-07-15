@@ -2,11 +2,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
-const typed_types = @import("../typed/types.zig");
+const typed = @import("../typed/types.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const SqlList = @import("../sql/buf.zig").SqlList;
 
-const Value = typed_types.Value;
+const Value = typed.Value;
 
 pub const RenderedPredicate = struct {
     sql: ?[]const u8,
@@ -14,7 +14,7 @@ pub const RenderedPredicate = struct {
 
     pub fn deinit(self: *RenderedPredicate, allocator: Allocator) void {
         if (self.values) |values| {
-            typed_types.deinitValueSlice(allocator, values);
+            typed.deinitValueSlice(allocator, values);
         }
         if (self.sql) |sql| {
             allocator.free(sql);
