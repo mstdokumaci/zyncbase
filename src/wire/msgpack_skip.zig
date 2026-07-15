@@ -77,16 +77,9 @@ fn skipPayload(bytes: []const u8, pos: *usize, len: usize) SkipError!void {
     pos.* += len;
 }
 
-/// Skips a MsgPack str value (already past the marker is not supported — this
-/// reads the marker). Handles fixstr (0xa0..0xbf), str8, str16, str32.
-pub fn skipStr(bytes: []const u8, pos: *usize) SkipError!void {
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
-    if (m >= 0xa0 and m <= 0xbf) {
-        try skipPayload(bytes, pos, m & 0x1f);
-        return;
-    }
+// Skips a str given its already-read marker `m` (fixstr 0xa0..0xbf, str8/16/32).
+inline fn skipStr(bytes: []const u8, pos: *usize, m: u8) SkipError!void {
+    if (m >= 0xa0 and m <= 0xbf) return skipPayload(bytes, pos, m & 0x1f);
     const len: usize = switch (m) {
         0xd9 => try readLen(bytes, pos, 1),
         0xda => try readLen(bytes, pos, 2),
@@ -96,11 +89,8 @@ pub fn skipStr(bytes: []const u8, pos: *usize) SkipError!void {
     try skipPayload(bytes, pos, len);
 }
 
-/// Skips a MsgPack bin value. Handles bin8, bin16, bin32.
-pub fn skipBin(bytes: []const u8, pos: *usize) SkipError!void {
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
+// Skips a bin given its already-read marker `m` (bin8/16/32).
+inline fn skipBin(bytes: []const u8, pos: *usize, m: u8) SkipError!void {
     const len: usize = switch (m) {
         0xc4 => try readLen(bytes, pos, 1),
         0xc5 => try readLen(bytes, pos, 2),
@@ -110,12 +100,8 @@ pub fn skipBin(bytes: []const u8, pos: *usize) SkipError!void {
     try skipPayload(bytes, pos, len);
 }
 
-/// Skips a MsgPack array value (header + `count` elements). Handles fixarray,
-/// array16, array32.
-pub fn skipArray(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
+// Skips an array given its already-read marker `m` (fixarray, array16/32).
+inline fn skipArray(bytes: []const u8, pos: *usize, depth: u32, m: u8) SkipError!void {
     const count: usize = switch (m) {
         0x90...0x9f => @intCast(m & 0x0f),
         0xdc => try readLen(bytes, pos, 2),
@@ -126,12 +112,8 @@ pub fn skipArray(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
     for (0..count) |_| try skipValueDepth(bytes, pos, depth + 1);
 }
 
-/// Skips a MsgPack map value (header + `count * 2` elements). Handles fixmap,
-/// map16, map32.
-pub fn skipMap(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
+// Skips a map given its already-read marker `m` (fixmap, map16/32).
+inline fn skipMap(bytes: []const u8, pos: *usize, depth: u32, m: u8) SkipError!void {
     const count: usize = switch (m) {
         0x80...0x8f => @intCast(m & 0x0f),
         0xde => try readLen(bytes, pos, 2),
@@ -142,12 +124,8 @@ pub fn skipMap(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
     for (0..count * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
 }
 
-/// Skips a MsgPack ext value (type byte + payload). Handles ext8, ext16, ext32
-/// (fixext is handled by the fixed-length entries in `marker_table`).
-pub fn skipExt(bytes: []const u8, pos: *usize) SkipError!void {
-    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
-    const m = bytes[pos.*];
-    pos.* += 1;
+// Skips an ext given its already-read marker `m` (ext8/16/32).
+inline fn skipExt(bytes: []const u8, pos: *usize, m: u8) SkipError!void {
     const len: usize = switch (m) {
         0xc7 => try readLen(bytes, pos, 1),
         0xc8 => try readLen(bytes, pos, 2),
@@ -158,26 +136,24 @@ pub fn skipExt(bytes: []const u8, pos: *usize) SkipError!void {
     try skipPayload(bytes, pos, len + 1);
 }
 
-/// Skips an arbitrary MsgPack value at `bytes[*pos..]`, advancing `pos` past
-/// it. Bounds-checks at every step. `depth` guards against stack overflow on
-/// pathologically nested structures.
+/// Skips a MsgPack value at `bytes[*pos..]`, advancing `pos`. `depth` guards
+/// against stack overflow. The marker is read once and passed to the inline
+/// helpers, eliminating redundant re-reads.
 pub fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) SkipError!void {
     if (depth > 32) return error.MaxDepthExceeded;
     if (pos.* >= bytes.len) return error.InvalidMessageFormat;
     const m = bytes[pos.*];
+    pos.* += 1;
 
     switch (marker_table[m]) {
         .invalid => return error.InvalidMessageFormat,
-        .immediate => pos.* += 1,
-        .fixed => |len| {
-            pos.* += 1;
-            try skipPayload(bytes, pos, len);
-        },
-        .str => try skipStr(bytes, pos),
-        .bin => try skipBin(bytes, pos),
-        .array => try skipArray(bytes, pos, depth),
-        .map => try skipMap(bytes, pos, depth),
-        .ext => try skipExt(bytes, pos),
+        .immediate => {},
+        .fixed => |len| try skipPayload(bytes, pos, len),
+        .str => try skipStr(bytes, pos, m),
+        .bin => try skipBin(bytes, pos, m),
+        .array => try skipArray(bytes, pos, depth, m),
+        .map => try skipMap(bytes, pos, depth, m),
+        .ext => try skipExt(bytes, pos, m),
     }
 }
 
