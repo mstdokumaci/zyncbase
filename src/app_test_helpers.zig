@@ -10,7 +10,8 @@ const connection_session = @import("connection/session.zig");
 const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed_types = @import("typed/types.zig");
 const SessionResolutionResult = connection_resolution_buffer.SessionResolutionResult;
 const SessionResolver = connection_session_resolver.SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
@@ -253,7 +254,7 @@ pub const AppTestContext = struct {
     pub fn insertNamed(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -264,10 +265,10 @@ pub const AppTestContext = struct {
     pub fn insertField(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: typed.Value,
+        value: typed_types.Value,
     ) !void {
         const tbl = try self.table(table_name);
         try tbl.insertField(id, namespace_id, field, value);
@@ -276,7 +277,7 @@ pub const AppTestContext = struct {
     pub fn insertText(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -287,7 +288,7 @@ pub const AppTestContext = struct {
     pub fn insertInt(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,

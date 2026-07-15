@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
-const DocId = typed.DocId;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const DocId = typed_doc_id.DocId;
 
 pub const SessionResolutionResult = struct {
     conn_id: u64,

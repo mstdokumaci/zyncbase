@@ -2,23 +2,25 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed_codec = @import("../typed/codec.zig");
 const schema_mod = @import("../schema.zig");
 const Allocator = std.mem.Allocator;
-const Value = typed.Value;
+const Value = typed_types.Value;
 
 pub const EvalContext = struct {
     allocator: Allocator,
-    session_user_id: ?typed.DocId = null,
+    session_user_id: ?typed_doc_id.DocId = null,
     session_external_id: ?[]const u8 = null,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value) = null,
     namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
     value_table: ?*const schema_mod.Table = null,
     presence_fields: ?[]const schema_mod.PresenceField = null,
-    doc_id: ?typed.DocId = null,
-    owner_doc_id: ?typed.DocId = null,
+    doc_id: ?typed_doc_id.DocId = null,
+    owner_doc_id: ?typed_doc_id.DocId = null,
 };
 
 pub const EvalResult = enum {
@@ -155,9 +157,9 @@ pub fn authorizeNamespace(
     allocator: Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
-    session_user_id: typed.DocId,
+    session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
     is_presence: bool,
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
@@ -178,9 +180,9 @@ pub fn authorizePresenceWrite(
     allocator: Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
-    session_user_id: typed.DocId,
+    session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
     presence_fields: []const schema_mod.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {
@@ -203,9 +205,9 @@ pub fn authorizePresenceSharedWrite(
     allocator: Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
-    session_user_id: typed.DocId,
+    session_user_id: typed_doc_id.DocId,
     session_external_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
     presence_fields: []const schema_mod.PresenceField,
     data_payload: *const msgpack.Payload,
 ) !void {
@@ -323,7 +325,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
 
         // Wire protocol: duplicate field index in one pair-array → last-wins.
         const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
-        const value = typed.valueFromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+        const value = typed_codec.fromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
         return ResolvedAuthValue.fromOwned(value);
     }
 
@@ -334,7 +336,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
 
     // Wire protocol: duplicate field index in one pair-array → last-wins.
     const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
-    const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+    const value = typed_codec.fromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
     return ResolvedAuthValue.fromOwned(value);
 }
 

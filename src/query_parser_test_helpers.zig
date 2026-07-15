@@ -1,7 +1,7 @@
 const std = @import("std");
 const query_ast = @import("query_ast.zig");
 const schema = @import("schema.zig");
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_ast.QueryFilter;
@@ -137,7 +137,7 @@ fn anyToFieldPayload(allocator: std.mem.Allocator, field_type: FieldType, value:
     if (field_type == .doc_id) {
         switch (@typeInfo(@TypeOf(value))) {
             .int, .comptime_int => {
-                const bytes = typed.docIdToBytes(@intCast(value));
+                const bytes = typed_doc_id.toBytes(@intCast(value));
                 return Payload.binToPayload(&bytes, allocator);
             },
             else => {},

@@ -2,12 +2,14 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
-const typed = @import("typed.zig");
-const typedValueFromPayload = typed.valueFromPayload;
-const writeValueMsgPack = typed.writeMsgPack;
-const ScalarValue = typed.ScalarValue;
-const Value = typed.Value;
-const Cursor = typed.Cursor;
+const typed_codec = @import("typed/codec.zig");
+const typed_types = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typedValueFromPayload = typed_codec.fromPayload;
+const writeValueMsgPack = typed_codec.writeMsgPack;
+const ScalarValue = typed_types.ScalarValue;
+const Value = typed_types.Value;
+const Cursor = typed_types.Cursor;
 
 const query_ast = @import("query_ast.zig");
 const Operator = query_ast.Operator;
@@ -63,7 +65,7 @@ pub fn decodeCursorToken(
 
     return Cursor{
         .sort_value = sort_value,
-        .id = typed.docIdFromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
+        .id = typed_doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
     };
 }
 
@@ -75,7 +77,7 @@ pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: Cursor) ![]const 
     const writer = buf.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
     try writeValueMsgPack(cursor.sort_value, writer);
-    const id_bytes = typed.docIdToBytes(cursor.id);
+    const id_bytes = typed_doc_id.toBytes(cursor.id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
     const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
     const encoded = try allocator.alloc(u8, encoded_len);

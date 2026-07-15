@@ -4,15 +4,16 @@ const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const query_ast = @import("../query_ast.zig");
 const filter_eval = @import("../filter_eval.zig");
 const schema = @import("../schema.zig");
-const typed = @import("../typed.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed_types = @import("../typed/types.zig");
 
 pub const MetadataCacheKey = struct {
     namespace_id: i64,
     table_index: usize,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
 };
 
-pub const metadata_cache_type = lockFreeCache(typed.Record, MetadataCacheKey);
+pub const metadata_cache_type = lockFreeCache(typed_types.Record, MetadataCacheKey);
 
 pub const NamespaceCacheKey = u64;
 pub const IdentityCacheKey = u64;
@@ -24,7 +25,7 @@ pub const NamespaceCacheValue = struct {
 };
 
 pub const IdentityCacheValue = struct {
-    user_doc_id: typed.DocId,
+    user_doc_id: typed_doc_id.DocId,
 
     pub fn deinit(_: IdentityCacheValue, _: Allocator) void {}
 };
@@ -44,7 +45,7 @@ pub fn identityCacheKey(identity_namespace_id: i64, external_user_id: []const u8
     return hasher.final();
 }
 
-pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: typed.DocId) MetadataCacheKey {
+pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: typed_doc_id.DocId) MetadataCacheKey {
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
     return MetadataCacheKey{
         .namespace_id = effective_namespace_id,
@@ -54,7 +55,7 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: t
 }
 
 pub const CacheHit = struct {
-    record: *typed.Record,
+    record: *typed_types.Record,
     handle: metadata_cache_type.Handle,
 };
 

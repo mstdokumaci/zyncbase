@@ -6,7 +6,8 @@ const helpers = @import("test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
 const schema_helpers = @import("../schema_test_helpers.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const query_parser = @import("../query_parser.zig");
 const tth = @import("../typed_test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
@@ -60,14 +61,14 @@ test "encodeQuery: includes subscription pagination fields" {
     defer schema.deinit();
 
     const table_metadata = schema.table("users") orelse return error.UnknownTable;
-    const records = try allocator.alloc(typed.Record, 1);
+    const records = try allocator.alloc(typed_types.Record, 1);
     records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
         records[0].deinit(allocator);
         allocator.free(records);
     }
 
-    const cursor = typed.Cursor{
+    const cursor = typed_types.Cursor{
         .sort_value = tth.valInt(10),
         .id = 1,
     };
@@ -290,7 +291,7 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
-        .user_id = typed.zeroDocId,
+        .user_id = typed_doc_id.zero,
         .patch = patch,
         .is_new_user = false,
         .joined_at = 0,
@@ -332,7 +333,7 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
-        .user_id = typed.zeroDocId,
+        .user_id = typed_doc_id.zero,
         .patch = null,
         .is_new_user = false,
         .joined_at = 0,

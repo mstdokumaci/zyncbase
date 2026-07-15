@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const typed = @import("typed.zig");
+const typed_types = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const schema = @import("schema.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
@@ -9,8 +10,8 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_ast = @import("query_ast.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metadata: *const schema.Table) !std.AutoHashMap(typed.DocId, void) {
-    var ids = std.AutoHashMap(typed.DocId, void).init(allocator);
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed_types.Record, metadata: *const schema.Table) !std.AutoHashMap(typed_doc_id.DocId, void) {
+    var ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
         const id = sth.getFieldDocIdOrNull(row, metadata, "id") orelse continue;
@@ -104,7 +105,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     const all_res = try sth.queryDocs(allocator, engine, items_md.index, ns, &all_filter);
     defer all_res.deinit(allocator);
 
-    var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
+    var mem_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {
@@ -205,7 +206,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     const all_res = try sth.queryDocs(allocator, engine, players_md.index, ns, &all_filter);
     defer all_res.deinit(allocator);
 
-    var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
+    var mem_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {

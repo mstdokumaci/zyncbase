@@ -1,8 +1,8 @@
 const std = @import("std");
-const typed = @import("typed.zig");
-const Value = typed.Value;
-const Record = typed.Record;
-const ScalarValue = typed.ScalarValue;
+const typed_types = @import("typed/types.zig");
+const Value = typed_types.Value;
+const Record = typed_types.Record;
+const ScalarValue = typed_types.ScalarValue;
 
 pub fn valText(t: []const u8) Value {
     return .{ .scalar = .{ .text = t } };

@@ -1,19 +1,20 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_codec = @import("../typed/codec.zig");
 const schema_mod = @import("../schema.zig");
 const msgpack = @import("../msgpack_utils.zig");
 
 /// Accumulated in-memory state for one user or one namespace's shared record.
-/// A dense array indexed by field position, mirroring `typed.Record` but with
+/// A dense array indexed by field position, mirroring `typed_types.Record` but with
 /// optional slots (`null` = field not yet set). Allocated once when the record
 /// is created, mutated in place via merge.
 pub const PresenceRecord = struct {
-    values: []?typed.Value,
+    values: []?typed_types.Value,
 
     /// Allocate a new record with all-null slots.
     pub fn init(allocator: Allocator, field_count: usize) !PresenceRecord {
-        const values = try allocator.alloc(?typed.Value, field_count);
+        const values = try allocator.alloc(?typed_types.Value, field_count);
         @memset(values, null);
         return .{ .values = values };
     }
@@ -28,7 +29,7 @@ pub const PresenceRecord = struct {
 
     /// Deep-clone the record for snapshot/broadcast use.
     pub fn clone(self: *const PresenceRecord, allocator: Allocator) !PresenceRecord {
-        const cloned = try allocator.alloc(?typed.Value, self.values.len);
+        const cloned = try allocator.alloc(?typed_types.Value, self.values.len);
         var i: usize = 0;
         errdefer {
             for (cloned[0..i]) |*slot| {
@@ -45,7 +46,7 @@ pub const PresenceRecord = struct {
 
     /// Iterate only the sparse entries in the wire Payload patch.
     /// Validates field index bounds and value types against the schema via
-    /// `typed.valueFromPayload`. Decodes all fields first into a temporary
+    /// `typed_codec.fromPayload`. Decodes all fields first into a temporary
     /// buffer, then applies them atomically to avoid partial mutation on error.
     pub fn mergeFromPayload(
         self: *PresenceRecord,
@@ -57,7 +58,7 @@ pub const PresenceRecord = struct {
 
         const TempUpdate = struct {
             idx: usize,
-            value: typed.Value,
+            value: typed_types.Value,
         };
         var temp_updates = std.ArrayListUnmanaged(TempUpdate).empty;
         defer {
@@ -72,7 +73,7 @@ pub const PresenceRecord = struct {
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
-            const new_value = typed.valueFromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
+            const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,
             };

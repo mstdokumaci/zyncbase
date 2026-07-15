@@ -4,7 +4,8 @@ const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
-const typed = @import("../typed.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed_types = @import("../typed/types.zig");
 const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
 const storage_cache = @import("cache.zig");
@@ -23,9 +24,9 @@ const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 
-const DocId = typed.DocId;
+const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
-const Record = typed.Record;
+const Record = typed_types.Record;
 const BatchEntry = write_queue.BatchEntry;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
@@ -394,7 +395,7 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         table_index: usize,
         namespace_id: i64,
-        doc_id: typed.DocId,
+        doc_id: typed_doc_id.DocId,
         has_guard: bool,
         has_write_ack: bool,
         pk_insert: bool,
@@ -735,7 +736,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         stmt: *sqlite.c.sqlite3_stmt,
         bind_idx: *c_int,
-        values: []const typed.Value,
+        values: []const typed_types.Value,
     ) !void {
         for (values) |val| {
             try sql.bindValue(val, &self.conn, stmt, bind_idx.*, &self.json_buf);
@@ -908,7 +909,7 @@ pub const WriteWorker = struct {
             .msg_id = sop.msg_id,
             .scope_seq = sop.scope_seq,
             .namespace_id = 0,
-            .user_doc_id = typed.zeroDocId,
+            .user_doc_id = typed_doc_id.zero,
             .err = null,
             .is_presence = sop.is_presence,
         };
@@ -1009,12 +1010,12 @@ pub const WriteWorker = struct {
         var bind_idx: c_int = 1;
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
-        const owner_id_bytes = typed.docIdToBytes(owner_id);
+        const owner_id_bytes = typed_doc_id.toBytes(owner_id);
         if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (table_metadata.is_users_table) {
             var external_id_buf: [32]u8 = undefined;
-            const external_id = typed.docIdHexSlice(op.id, &external_id_buf);
+            const external_id = typed_doc_id.hexSlice(op.id, &external_id_buf);
             if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
             bind_idx += 1;
         }

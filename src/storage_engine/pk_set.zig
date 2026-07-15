@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const DocId = @import("../typed.zig").DocId;
+const DocId = @import("../typed/doc_id.zig").DocId;
 
 pub const PkSet = struct {
     set: std.AutoHashMapUnmanaged(DocId, void),

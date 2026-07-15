@@ -6,7 +6,7 @@ const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const schema = @import("schema.zig");
 
 const table_defs = [_]helpers.TableDef{
@@ -174,7 +174,7 @@ test "message: repeated routed requests release per-message allocations" {
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         const msg_id: u64 = @intCast(i + 1);
-        const doc_id: typed.DocId = @intCast(i + 1);
+        const doc_id: typed_doc_id.DocId = @intCast(i + 1);
         const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
             .{ "value", "value-c" },
         });
@@ -222,7 +222,7 @@ test "message: concurrent routed requests release response allocations" {
             while (i < ctx.iterations) : (i += 1) {
                 const raw_id = ctx.thread_index * 1000 + i + 1;
                 const msg_id: u64 = @intCast(raw_id);
-                const doc_id: typed.DocId = @intCast(raw_id);
+                const doc_id: typed_doc_id.DocId = @intCast(raw_id);
 
                 const val = try store_helpers.createDocumentMapPayload(thread_allocator, ctx.table, .{
                     .{ "value", "value-d" },

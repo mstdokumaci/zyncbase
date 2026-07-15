@@ -3,7 +3,8 @@ const Allocator = std.mem.Allocator;
 const JwtValidator = @import("../jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_codec = @import("../typed/codec.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
 const json_iterate = @import("../json/iterate.zig");
@@ -130,7 +131,7 @@ pub const TicketExchange = struct {
         const external_id_slice = extracted.external_id orelse extracted.sub;
         const external_id = try allocator.dupe(u8, external_id_slice);
 
-        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
         errdefer {
             allocator.free(external_id);
             var it = claims.iterator();
@@ -182,7 +183,7 @@ pub const TicketExchange = struct {
         allocator: Allocator,
         subject: []const u8,
         is_anonymous: bool,
-        claims: *const std.StringHashMapUnmanaged(typed.Value),
+        claims: *const std.StringHashMapUnmanaged(typed_types.Value),
     ) ![]const u8 {
         const exp = std.time.timestamp() + self.ttl_seconds;
         var jti_bytes: [16]u8 = undefined;
@@ -206,7 +207,7 @@ pub const TicketExchange = struct {
         var claims_it = claims.iterator();
         while (claims_it.next()) |entry| {
             value_json_buf.clearRetainingCapacity();
-            try typed.writeJsonToBuf(&value_json_buf, allocator, entry.value_ptr.*);
+            try typed_codec.writeJsonToBuf(&value_json_buf, allocator, entry.value_ptr.*);
             try w.rawField(entry.key_ptr.*, value_json_buf.items);
         }
         try w.endObject();
@@ -233,7 +234,7 @@ pub const TicketExchange = struct {
         // SAFETY: subject is always assigned before use in the if/else branches below
         var subject: []const u8 = undefined;
         var is_anonymous = false;
-        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
         defer {
             var it = claims.iterator();
             while (it.next()) |entry| {
@@ -542,8 +543,8 @@ fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64:
     }
 }
 
-fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed.Value) {
-    var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed_types.Value) {
+    var claims: std.StringHashMapUnmanaged(typed_types.Value) = .{};
     errdefer {
         var it = claims.iterator();
         while (it.next()) |entry| {
@@ -564,7 +565,7 @@ fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashM
         while (claims_it.next()) |entry| {
             const key = try allocator.dupe(u8, entry.key_ptr.*);
             errdefer allocator.free(key);
-            const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
+            const val = try typed_codec.fromDynamicJson(allocator, entry.value_ptr.*);
             errdefer val.deinit(allocator);
 
             const gop = try claims.getOrPut(allocator, key);

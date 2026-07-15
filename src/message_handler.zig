@@ -17,7 +17,7 @@ const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -765,7 +765,7 @@ pub const MessageHandler = struct {
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
-    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed.DocId } {
+    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed_doc_id.DocId } {
         if (!conn.presence_ready) return error.SessionNotReady;
         if (conn.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
         return .{

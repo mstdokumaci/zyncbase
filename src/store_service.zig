@@ -5,13 +5,15 @@ const schema_mod = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed_codec = @import("typed/codec.zig");
+const typed_types = @import("typed/types.zig");
 const authorization = @import("authorization.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const ReadKind = storage_mod.ReadKind;
 const ReadRequest = storage_mod.ReadRequest;
-const DocId = typed.DocId;
+const DocId = typed_doc_id.DocId;
 
 /// Decode a pair-array payload into a deduplicated list of column values.
 /// Wire protocol: duplicate field index → last-wins (reverse scan, skip seen).
@@ -39,7 +41,7 @@ fn decodeColumnsFromPairs(
         }
 
         const field = try validateFieldWrite(table, f_idx, pair_payload.arr[1]);
-        const typed_value = try typed.valueFromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
+        const typed_value = try typed_codec.fromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
 
         columns.append(allocator, .{
             .index = f_idx,
@@ -71,12 +73,12 @@ pub fn validateFieldWrite(
     if (field.required and value == .nil) return StorageError.NullNotAllowed;
 
     if (value != .nil) {
-        try typed.validateValue(field.storage_type, value);
+        try typed_codec.validateValue(field.storage_type, value);
 
         if (field.storage_type == .array) {
             if (field.items_type) |items_type| {
                 for (value.arr) |item| {
-                    typed.validateValue(items_type, item) catch {
+                    typed_codec.validateValue(items_type, item) catch {
                         return StorageError.InvalidArrayElement;
                     };
                 }
@@ -126,7 +128,7 @@ pub const StoreService = struct {
         owner_doc_id: DocId,
         session_user_id: DocId,
         session_external_id: ?[]const u8 = null,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
+        session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value) = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     };
@@ -136,7 +138,7 @@ pub const StoreService = struct {
         msg_id: u64,
         session_user_id: DocId,
         session_external_id: ?[]const u8,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+        session_claims: ?*const std.StringHashMapUnmanaged(typed_types.Value),
         namespace: []const u8,
         namespace_id: i64,
         allocator: Allocator,
@@ -387,7 +389,7 @@ pub const StoreService = struct {
         const table = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (path[1] != .bin) return error.InvalidMessageFormat;
-        const parsed_doc_id = try typed.docIdFromBytes(path[1].bin.value());
+        const parsed_doc_id = try typed_doc_id.fromBytes(path[1].bin.value());
 
         return .{
             .table_index = table_index,

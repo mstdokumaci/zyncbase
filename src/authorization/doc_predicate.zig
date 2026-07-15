@@ -3,11 +3,11 @@ const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
 const evaluate_mod = @import("evaluate.zig");
 
 const EvalContext = evaluate_mod.EvalContext;
-const Value = typed.Value;
+const Value = typed_types.Value;
 
 pub const DocPredicateError = error{
     InvalidFieldName,
@@ -218,7 +218,7 @@ fn comparisonToQueryCondition(
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field_meta = table.fields[field_index];
 
-    const value: ?typed.Value = if (comp.rhs) |rhs| blk: {
+    const value: ?typed_types.Value = if (comp.rhs) |rhs| blk: {
         var rhs_value = evaluate_mod.resolveOperand(rhs, ctx) orelse return error.InvalidValue;
         defer rhs_value.deinit(allocator);
         break :blk try rhs_value.intoOwned(allocator);
@@ -433,13 +433,13 @@ fn validateItemsType(expected_items_type: schema.FieldType, actual_items_type: ?
     if (actual_items_type == null or actual_items_type.? != expected_items_type) return error.InvalidValue;
 }
 
-fn validateScalarItems(expected_items_type: schema.FieldType, items: []const typed.ScalarValue) DocPredicateError!void {
+fn validateScalarItems(expected_items_type: schema.FieldType, items: []const typed_types.ScalarValue) DocPredicateError!void {
     for (items) |item| {
         try validateScalarType(expected_items_type, item);
     }
 }
 
-fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) DocPredicateError!void {
+fn validateScalarType(field_type: schema.FieldType, scalar: typed_types.ScalarValue) DocPredicateError!void {
     switch (field_type) {
         .text => if (scalar != .text) return error.InvalidValue,
         .integer => if (scalar != .integer) return error.InvalidValue,

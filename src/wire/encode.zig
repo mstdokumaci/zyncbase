@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_codec = @import("../typed/codec.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const schema_mod = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
@@ -182,7 +184,7 @@ pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
 pub fn encodeOkWithSession(
     msgpack_allocator: Allocator,
     msg_id: u64,
-    session_claims: *const std.StringHashMapUnmanaged(typed.Value),
+    session_claims: *const std.StringHashMapUnmanaged(typed_types.Value),
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
@@ -197,7 +199,7 @@ pub fn encodeOkWithSession(
     var it = session_claims.iterator();
     while (it.next()) |entry| {
         try msgpack.writeMsgPackStr(writer, entry.key_ptr.*);
-        try typed.writeMsgPack(entry.value_ptr.*, writer);
+        try typed_codec.writeMsgPack(entry.value_ptr.*, writer);
     }
 
     return list.toOwnedSlice(msgpack_allocator);
@@ -270,7 +272,7 @@ pub fn encodeError(
 pub const QueryResponse = struct {
     msg_id: u64,
     sub_id: ?u64 = null,
-    records: []const typed.Record,
+    records: []const typed_types.Record,
     table: *const schema_mod.Table,
     next_cursor: ?[]const u8 = null,
 };
@@ -384,8 +386,8 @@ fn encodeDeltaOp(
     allocator: Allocator,
     comptime op: DeltaOp,
     table_index: usize,
-    id_val: typed.Value,
-    maybe_value: ?struct { record: typed.Record, meta: *const schema_mod.Table },
+    id_val: typed_types.Value,
+    maybe_value: ?struct { record: typed_types.Record, meta: *const schema_mod.Table },
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -406,7 +408,7 @@ fn encodeDeltaOp(
     try writer.writeAll(Keys.path);
     try writer.writeByte(0x92); // fixarray(2)
     try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
-    try typed.writeMsgPack(id_val, writer);
+    try typed_codec.writeMsgPack(id_val, writer);
 
     if (maybe_value) |v| {
         try writer.writeAll(Keys.value);
@@ -421,7 +423,7 @@ pub const DeltaOp = enum { remove, set };
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: typed.Value,
+    id_val: typed_types.Value,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .remove, table_index, id_val, null);
 }
@@ -429,8 +431,8 @@ pub fn encodeDeleteDeltaSuffix(
 pub fn encodeSetDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: typed.Value,
-    new_record: typed.Record,
+    id_val: typed_types.Value,
+    new_record: typed_types.Record,
     table_metadata: *const schema_mod.Table,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .set, table_index, id_val, .{
@@ -439,13 +441,13 @@ pub fn encodeSetDeltaSuffix(
     });
 }
 
-pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_mod.Table) !void {
+pub inline fn encodeRecord(writer: anytype, record: typed_types.Record, table_metadata: *const schema_mod.Table) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeArrayHeader(writer, record.values.len);
     for (record.values, 0..) |typed_value, idx| {
         try msgpack.encodeArrayHeader(writer, 2);
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
-        try typed.writeMsgPack(typed_value, writer);
+        try typed_codec.writeMsgPack(typed_value, writer);
     }
 }
 
@@ -525,7 +527,7 @@ fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) 
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.user_id);
-    const id_bytes = typed.docIdToBytes(update.user_id);
+    const id_bytes = typed_doc_id.toBytes(update.user_id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
 
     try writer.writeAll(Keys.event);
@@ -623,7 +625,7 @@ pub fn encodePresenceUserSnapshot(
         try msgpack.encodeMapHeader(writer, 3);
 
         try writer.writeAll(Keys.user_id);
-        const id_bytes = typed.docIdToBytes(user.user_id);
+        const id_bytes = typed_doc_id.toBytes(user.user_id);
         try msgpack.writeMsgPackBin(writer, &id_bytes);
 
         try writer.writeAll(Keys.data);
@@ -676,7 +678,7 @@ fn encodePresenceRecord(writer: anytype, record: PresenceRecord) !void {
         if (slot) |value| {
             try msgpack.encodeArrayHeader(writer, 2);
             try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
-            try typed.writeMsgPack(value, writer);
+            try typed_codec.writeMsgPack(value, writer);
         }
     }
 }

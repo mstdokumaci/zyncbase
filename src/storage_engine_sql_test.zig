@@ -6,8 +6,10 @@ const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const query_ast = @import("query_ast.zig");
 const ColumnValue = @import("storage_engine.zig").ColumnValue;
-const typed = @import("typed.zig");
-const Value = typed.Value;
+const typed_types = @import("typed/types.zig");
+const typed_codec = @import("typed/codec.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const Value = typed_types.Value;
 const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
 const sqlite = @import("sqlite");
@@ -96,7 +98,7 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
             var out_list = std.ArrayListUnmanaged(u8).empty;
             defer out_list.deinit(alloc);
-            try typed.writeMsgPack(tv, out_list.writer(alloc));
+            try typed_codec.writeMsgPack(tv, out_list.writer(alloc));
             var reader: std.Io.Reader = .fixed(out_list.items);
             const decoded = try msgpack.decode(alloc, &reader);
             return decoded;
@@ -126,11 +128,11 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
     const arr_payload = msgpack.Payload{ .arr = array_payload_items[0..] };
     const doc_id_value: u128 = 0x00112233445566778899aabbccddeeff;
 
-    const tv_int = try typed.valueFromPayload(allocator, .integer, null, int_payload);
-    const tv_real = try typed.valueFromPayload(allocator, .real, null, real_payload);
-    const tv_text = try typed.valueFromPayload(allocator, .text, null, text_payload);
-    const tv_bool = try typed.valueFromPayload(allocator, .boolean, null, bool_payload);
-    const tv_arr = try typed.valueFromPayload(allocator, .array, .integer, arr_payload);
+    const tv_int = try typed_codec.fromPayload(allocator, .integer, null, int_payload);
+    const tv_real = try typed_codec.fromPayload(allocator, .real, null, real_payload);
+    const tv_text = try typed_codec.fromPayload(allocator, .text, null, text_payload);
+    const tv_bool = try typed_codec.fromPayload(allocator, .boolean, null, bool_payload);
+    const tv_arr = try typed_codec.fromPayload(allocator, .array, .integer, arr_payload);
     const tv_doc_id = Value{ .scalar = .{ .doc_id = doc_id_value } };
 
     var json_buf = sql.JsonBuf.init(allocator);
@@ -185,6 +187,6 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
     try testing.expectEqual(@as(u64, 20), final_arr_payload.arr[1].uint);
 
     try testing.expect(final_doc_id_payload == .bin);
-    const expected_doc_id_bytes = typed.docIdToBytes(doc_id_value);
+    const expected_doc_id_bytes = typed_doc_id.toBytes(doc_id_value);
     try testing.expectEqualSlices(u8, &expected_doc_id_bytes, final_doc_id_payload.bin.value());
 }

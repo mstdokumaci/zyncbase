@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
 const wire_encode = @import("../wire/encode.zig");
@@ -21,7 +21,7 @@ pub const PresenceOp = struct {
     pub const Op = union(enum) {
         set_user: struct {
             namespace_id: i64,
-            user_id: typed.DocId,
+            user_id: typed_doc_id.DocId,
             patch: msgpack.Payload,
         },
         set_shared: struct {
@@ -31,7 +31,7 @@ pub const PresenceOp = struct {
         },
         remove_user: struct {
             namespace_id: i64,
-            user_id: typed.DocId,
+            user_id: typed_doc_id.DocId,
         },
         subscribe_user: struct {
             namespace_id: i64,
@@ -55,7 +55,7 @@ pub const PresenceOp = struct {
         },
         remove_all_for_connection: struct {
             namespace_id: i64,
-            user_id: typed.DocId,
+            user_id: typed_doc_id.DocId,
             conn_id: u64,
         },
     };

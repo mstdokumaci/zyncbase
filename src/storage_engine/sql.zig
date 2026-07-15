@@ -3,7 +3,9 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const errors = @import("errors.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed_codec = @import("../typed/codec.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const SqlList = @import("../sql/buf.zig").SqlList;
 const build = @import("../sql/build.zig");
@@ -11,7 +13,7 @@ const build = @import("../sql/build.zig");
 /// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
     index: usize,
-    value: typed.Value,
+    value: typed_types.Value,
 };
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
@@ -162,11 +164,11 @@ pub const JsonBuf = struct {
     }
 };
 
-pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, json_buf: *JsonBuf) !void {
+pub fn bindValue(typed_value: typed_types.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, json_buf: *JsonBuf) !void {
     const rc = switch (typed_value) {
         .scalar => |s| switch (s) {
             .doc_id => |id| blk: {
-                const bytes = typed.docIdToBytes(id);
+                const bytes = typed_doc_id.toBytes(id);
                 break :blk bindBlobTransient(stmt, index, &bytes);
             },
             .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
@@ -177,7 +179,7 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
         .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         .array => |items| blk: {
             json_buf.buf.clearRetainingCapacity();
-            try typed.writeJsonToBuf(&json_buf.buf, json_buf.allocator, .{ .array = items });
+            try typed_codec.writeJsonToBuf(&json_buf.buf, json_buf.allocator, .{ .array = items });
             break :blk bindTextTransient(stmt, index, json_buf.buf.items);
         },
     };
@@ -190,15 +192,15 @@ pub fn bindDocIdNamespace(
     stmt: *sqlite.c.sqlite3_stmt,
     db: *sqlite.Db,
     index: c_int,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
     namespace_id: i64,
 ) !void {
-    const id_bytes = typed.docIdToBytes(id);
+    const id_bytes = typed_doc_id.toBytes(id);
     if (bindBlobTransient(stmt, index, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, index + 1, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
-pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed_types.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     return switch (col_type) {
         sqlite.c.SQLITE_BLOB => blk: {
@@ -206,16 +208,16 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
             const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-            break :blk typed.Value{ .scalar = .{ .doc_id = try typed.docIdFromBytes(bytes) } };
+            break :blk typed_types.Value{ .scalar = .{ .doc_id = try typed_doc_id.fromBytes(bytes) } };
         },
         sqlite.c.SQLITE_INTEGER => {
             const val = sqlite.c.sqlite3_column_int64(stmt, i);
             if (field.storage_type == .boolean) {
-                return typed.Value{ .scalar = .{ .boolean = val != 0 } };
+                return typed_types.Value{ .scalar = .{ .boolean = val != 0 } };
             }
-            return typed.Value{ .scalar = .{ .integer = val } };
+            return typed_types.Value{ .scalar = .{ .integer = val } };
         },
-        sqlite.c.SQLITE_FLOAT => typed.Value{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+        sqlite.c.SQLITE_FLOAT => typed_types.Value{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
         sqlite.c.SQLITE_TEXT => blk: {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
@@ -223,10 +225,10 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
                 const s = if (ptr != null) ptr[0..len] else "[]";
                 const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
                 defer parsed.deinit();
-                break :blk typed.valueFromJson(allocator, field.storage_type, field.items_type, parsed.value);
+                break :blk typed_codec.fromJson(allocator, field.storage_type, field.items_type, parsed.value);
             } else {
                 const s = if (ptr != null) ptr[0..len] else "";
-                break :blk typed.Value{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+                break :blk typed_types.Value{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
             }
         },
         else => .nil,
@@ -237,11 +239,11 @@ fn decodeRecord(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema.Table,
-) !typed.Record {
+) !typed_types.Record {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return errors.StorageError.ColumnCountMismatch;
 
-    var values = try allocator.alloc(typed.Value, col_count);
+    var values = try allocator.alloc(typed_types.Value, col_count);
     var i: usize = 0;
     errdefer {
         for (values[0..i]) |value| value.deinit(allocator);
@@ -254,7 +256,7 @@ fn decodeRecord(
         errdefer val.deinit(allocator);
         values[i] = val;
     }
-    return typed.Record{
+    return typed_types.Record{
         .values = values,
     };
 }
@@ -264,7 +266,7 @@ pub fn fetchRecord(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema.Table,
-) !?typed.Record {
+) !?typed_types.Record {
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) return try decodeRecord(allocator, stmt, table_metadata);
     if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
@@ -313,9 +315,9 @@ pub fn resolveUserId(
     namespace_id: i64,
     external_id: []const u8,
     timestamp: i64,
-) !typed.DocId {
-    const new_user_id = typed.generateUuidV7();
-    const id_bytes = typed.docIdToBytes(new_user_id);
+) !typed_doc_id.DocId {
+    const new_user_id = typed_doc_id.generateUuidV7();
+    const id_bytes = typed_doc_id.toBytes(new_user_id);
     const sql_text =
         \\INSERT INTO "users" ("id", "namespace_id", "owner_id", "external_id", "created_at", "updated_at")
         \\VALUES (?, ?, ?, ?, ?, ?)
@@ -337,7 +339,7 @@ pub fn resolveUserId(
         const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
         const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-        return typed.docIdFromBytes(bytes) catch return errors.StorageError.TypeMismatch;
+        return typed_doc_id.fromBytes(bytes) catch return errors.StorageError.TypeMismatch;
     }
     if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
     return errors.StorageError.InvalidOperation;

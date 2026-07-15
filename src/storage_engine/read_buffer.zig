@@ -2,10 +2,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const schema_mod = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
 const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 
-const Record = typed.Record;
+const Record = typed_types.Record;
 
 pub const ReadKind = enum { query, subscribe, load_more };
 

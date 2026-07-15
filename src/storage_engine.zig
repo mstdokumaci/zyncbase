@@ -9,7 +9,8 @@ const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed_types = @import("typed/types.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
 const pk_set_mod = @import("storage_engine/pk_set.zig");
@@ -38,8 +39,8 @@ pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
 pub const ReadKind = read_buffer.ReadKind;
-const DocId = typed.DocId;
-const Value = typed.Value;
+const DocId = typed_doc_id.DocId;
+const Value = typed_types.Value;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
@@ -437,7 +438,7 @@ pub const StorageEngine = struct {
                 const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
                 const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-                const doc_id = try typed.docIdFromBytes(bytes);
+                const doc_id = try typed_doc_id.fromBytes(bytes);
 
                 self.pk_sets[table_index].insert(self.allocator, doc_id);
             }
@@ -617,7 +618,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
         };
 
         const values = try self.cloneColumnValues(columns);
@@ -666,7 +667,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
         };
 
         const values = try self.cloneColumnValues(columns);
@@ -746,7 +747,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
 
         const values = try self.cloneColumnValues(columns);
         errdefer {
@@ -783,7 +784,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
 
         const values = try self.cloneColumnValues(columns);
         errdefer {
@@ -796,7 +797,7 @@ pub const StorageEngine = struct {
             .table_index = table_index,
             .id = id,
             .namespace_id = res.effective_namespace_id,
-            .owner_doc_id = typed.zeroDocId,
+            .owner_doc_id = typed_doc_id.zero,
             .sql = sql_string,
             .values = values,
             .guard_values = guard_values,
@@ -833,7 +834,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(sql_string);
 
         const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+        errdefer if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
 
         return .{
             .kind = .delete,
@@ -896,7 +897,7 @@ pub const StorageEngine = struct {
 
         const guard_values = res.takeGuardValues();
         errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
+            if (guard_values) |values| typed_types.deinitValueSlice(self.allocator, values);
         };
 
         const op = WriteOp{

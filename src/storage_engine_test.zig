@@ -561,7 +561,8 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
 }
 
 const query_ast = @import("query_ast.zig");
-const typed = @import("typed.zig");
+const typed_types = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const send_queue_mod = @import("send_queue.zig");
 const send_queue_entry = send_queue_mod.Entry;
 
@@ -573,7 +574,7 @@ fn drainOutcomes(sq: *send_queue_mod.send_queue) []send_queue_entry {
     return entries.toOwnedSlice(std.testing.allocator) catch &[_]send_queue_entry{};
 }
 
-fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
+fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed_types.Value) !query_ast.FilterPredicate {
     const conditions = try allocator.alloc(query_ast.Condition, 1);
     conditions[0] = .{
         .field_index = field_index,
@@ -599,10 +600,10 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_a: typed.DocId = 100;
-    const author_b: typed.DocId = 200;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
 
     const columns = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
@@ -647,10 +648,10 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
     const namespace_id: i64 = 1;
-    const doc_ok: typed.DocId = 1;
-    const doc_reject: typed.DocId = 2;
-    const author_a: typed.DocId = 100;
-    const author_b: typed.DocId = 200;
+    const doc_ok: typed_doc_id.DocId = 1;
+    const doc_reject: typed_doc_id.DocId = 2;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
 
     // Pre-create both documents owned by author_a.
     const seed_ok = [_]sth.ColumnValue{
@@ -724,10 +725,10 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_a: typed.DocId = 100;
-    const author_b: typed.DocId = 200;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
 
     const columns = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
@@ -771,10 +772,10 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_a: typed.DocId = 100;
-    const author_b: typed.DocId = 200;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
 
     const columns = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
@@ -819,9 +820,9 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
 
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
-    const doc_id: typed.DocId = 999;
+    const doc_id: typed_doc_id.DocId = 999;
     const namespace_id: i64 = 1;
-    const author_b: typed.DocId = 200;
+    const author_b: typed_doc_id.DocId = 200;
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
@@ -855,9 +856,9 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_b: typed.DocId = 200;
+    const author_b: typed_doc_id.DocId = 200;
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
@@ -893,9 +894,9 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_a: typed.DocId = 100;
+    const author_a: typed_doc_id.DocId = 100;
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_a } });
     defer guard.deinit(allocator);
@@ -940,10 +941,10 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
     const table_meta = try ctx.tableMetadata("items");
     const author_field_idx = table_meta.fieldIndex("author_id").?;
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const namespace_id: i64 = 1;
-    const author_a: typed.DocId = 100;
-    const author_b: typed.DocId = 200;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
 
     const columns = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },

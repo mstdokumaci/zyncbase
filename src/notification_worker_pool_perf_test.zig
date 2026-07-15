@@ -12,7 +12,7 @@ const NotificationWorker = @import("notification_worker_pool.zig").NotificationW
 const wire_encode = @import("wire/encode.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const schema_mod = @import("schema.zig");
 
 const TestContext = struct {
@@ -111,7 +111,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         &ctx.notifier_called,
     );
 
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     var new_record = try tth.recordFromValues(allocator, &.{tth.valInt(0)});
     defer new_record.deinit(allocator);
     new_record.values[0].deinit(allocator);

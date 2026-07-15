@@ -1,8 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
+const typed_types = @import("../typed/types.zig");
 const query_ast = @import("../query_ast.zig");
-const Value = typed.Value;
+const Value = typed_types.Value;
 
 /// Result of matching namespace against pattern.
 /// Lifetime: borrows capture keys from `AuthConfig` segments and values from namespace (do not use after either is freed).
