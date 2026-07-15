@@ -15,7 +15,8 @@ const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
 const wire_errors = @import("wire/errors.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
-const authorization = @import("authorization.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_evaluate = @import("authorization/evaluate.zig");
 const schema_mod = @import("schema.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
@@ -30,7 +31,7 @@ pub const MessageHandler = struct {
     presence_manager: *PresenceManager,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
-    auth_config: *const authorization.AuthConfig,
+    auth_config: *const authorization_types.AuthConfig,
     schema: *const schema_mod.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
@@ -49,7 +50,7 @@ pub const MessageHandler = struct {
         presence_manager: *PresenceManager,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
-        auth_config: *const authorization.AuthConfig,
+        auth_config: *const authorization_types.AuthConfig,
         schema: *const schema_mod.Schema,
         jwt_validator: ?*JwtValidator,
         session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
@@ -314,7 +315,7 @@ pub const MessageHandler = struct {
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, false);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
+            try authorization_evaluate.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
                 return try wire_encode.encodeSuccess(arena_allocator, msg_id);
             }
@@ -572,7 +573,7 @@ pub const MessageHandler = struct {
         errdefer _ = conn.resetScopeIfSeq(scope_seq, true);
 
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeNamespace(
+            try authorization_evaluate.authorizeNamespace(
                 arena_allocator,
                 self.auth_config,
                 req.namespace,
@@ -604,7 +605,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization.authorizePresenceWrite(
+        try authorization_evaluate.authorizePresenceWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,
@@ -637,7 +638,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization.authorizePresenceSharedWrite(
+        try authorization_evaluate.authorizePresenceSharedWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,

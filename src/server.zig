@@ -23,7 +23,9 @@ const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
-const authorization = @import("authorization.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
+const authorization_parse = @import("authorization/parse.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
@@ -67,7 +69,7 @@ pub const ZyncBaseServer = struct {
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
-    auth_config: authorization.AuthConfig,
+    auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
     jwks_cache: ?*JwksCache = null,
     jwt_validator: ?JwtValidator = null,
@@ -436,15 +438,15 @@ pub const ZyncBaseServer = struct {
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
-                    self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+                    self.auth_config = try authorization_defaults.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
                     return;
                 }
                 return err;
             };
             defer self.memory_strategy.generalAllocator().free(auth_json);
-            self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
+            self.auth_config = try authorization_parse.initFromJson(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
         } else {
-            self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+            self.auth_config = try authorization_defaults.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
         }
     }
 

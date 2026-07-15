@@ -9,7 +9,7 @@ const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
-const authorization = @import("../authorization.zig");
+const authorization_evaluate = @import("../authorization/evaluate.zig");
 
 pub const SessionResolver = struct {
     resolution_buffer: *SessionResolutionBuffer,
@@ -114,7 +114,7 @@ pub const SessionResolver = struct {
             return;
         };
 
-        authorization.authorizeNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), result.is_presence) catch |err| {
+        authorization_evaluate.authorizeNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), result.is_presence) catch |err| {
             _ = conn.resetScopeIfSeq(result.scope_seq, result.is_presence);
             self.sendError(conn, result.msg_id, err);
             return;

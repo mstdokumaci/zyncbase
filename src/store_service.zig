@@ -8,7 +8,9 @@ const query_ast = @import("query_ast.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const typed_codec = @import("typed/codec.zig");
 const typed_types = @import("typed/types.zig");
-const authorization = @import("authorization.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_read_auth = @import("authorization/read_auth.zig");
+const authorization_write_auth = @import("authorization/write_auth.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const ReadKind = storage_mod.ReadKind;
@@ -109,9 +111,9 @@ pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
     schema: *const schema_mod.Schema,
-    auth_config: *const authorization.AuthConfig,
+    auth_config: *const authorization_types.AuthConfig,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_mod.Schema, auth_config: *const authorization.AuthConfig) StoreService {
+    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_mod.Schema, auth_config: *const authorization_types.AuthConfig) StoreService {
         return .{
             .allocator = allocator,
             .storage_engine = storage_engine,
@@ -227,7 +229,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+        var read_auth = try authorization_read_auth.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -266,7 +268,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization.authorizeStoreRead(ctx.allocator, .{
+        var read_auth = try authorization_read_auth.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -318,7 +320,7 @@ pub const StoreService = struct {
     ) !void {
         const parsed = try self.parseStorePath(path);
 
-        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = parsed.table,
             .session_user_id = ctx.session_user_id,
@@ -416,7 +418,7 @@ pub const StoreService = struct {
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
-        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,
@@ -458,7 +460,7 @@ pub const StoreService = struct {
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
-        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,
@@ -502,7 +504,7 @@ pub const StoreService = struct {
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload);
 
-        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,

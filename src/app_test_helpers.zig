@@ -32,7 +32,8 @@ const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
-const authorization = @import("authorization.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -124,7 +125,7 @@ pub const AppTestContext = struct {
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema: Schema,
-    auth_config: authorization.AuthConfig,
+    auth_config: authorization_types.AuthConfig,
     test_context: schema_helpers.TestContext,
     test_resolution_mutex: std.Thread.Mutex,
     empty_claims: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -185,7 +186,7 @@ pub const AppTestContext = struct {
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization.implicitConfig(gpa, &self.schema);
+        self.auth_config = try authorization_defaults.implicitConfig(gpa, &self.schema);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service

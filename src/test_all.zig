@@ -8,11 +8,6 @@ test {
     _ = @import("typed/codec_test.zig");
     _ = @import("typed/doc_id_test.zig");
     _ = @import("typed/types_test.zig");
-    _ = @import("threading/managed_thread_test.zig");
-    _ = @import("threading/worker_pool_test.zig");
-    _ = @import("threading/notifier_test.zig");
-    _ = @import("threading/wait_group_test.zig");
-    _ = @import("threading/latch_test.zig");
     _ = @import("json/read_test.zig");
     _ = @import("json/write_test.zig");
     _ = @import("json/iterate_test.zig");
@@ -23,6 +18,21 @@ test {
     _ = @import("wire/decode_test.zig");
     _ = @import("wire/encode_test.zig");
     _ = @import("wire/errors_test.zig");
+    _ = @import("queues/mpsc_queue_test.zig");
+    _ = @import("queues/spmc_blocking_queue_test.zig");
+    _ = @import("queues/spsc_queue_test.zig");
+    _ = @import("queues/mpsc_queue_thread_safety_test.zig");
+    _ = @import("queues/spmc_blocking_queue_thread_safety_test.zig");
+    _ = @import("threading/managed_thread_test.zig");
+    _ = @import("threading/worker_pool_test.zig");
+    _ = @import("threading/notifier_test.zig");
+    _ = @import("threading/wait_group_test.zig");
+    _ = @import("threading/latch_test.zig");
+    _ = @import("connection/manager_test.zig");
+    _ = @import("connection/state_test.zig");
+    _ = @import("presence/record_test.zig");
+    _ = @import("presence/manager_test.zig");
+    _ = @import("presence/worker_test.zig");
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
@@ -32,29 +42,21 @@ test {
     _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("config_loader_test.zig");
-    _ = @import("connection/manager_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
     _ = @import("schema_json_test.zig");
     _ = @import("schema_normalize_test.zig");
     _ = @import("schema_index_test.zig");
     _ = @import("schema_field_path_test.zig");
-
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
     _ = @import("query_ast_test.zig");
     _ = @import("filter_eval_test.zig");
-    _ = @import("queues/mpsc_queue_test.zig");
-    _ = @import("queues/spmc_blocking_queue_test.zig");
-    _ = @import("queues/spsc_queue_test.zig");
     _ = @import("session_resolution_buffer_test.zig");
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
-
-    // Property tests
     _ = @import("message_handler_property_test.zig");
-    _ = @import("connection/state_test.zig");
     _ = @import("config_loader_property_test.zig");
     _ = @import("checkpoint_worker_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
@@ -66,7 +68,6 @@ test {
     _ = @import("memory_safety_property_test.zig");
     _ = @import("msgpack_utils_property_test.zig");
     _ = @import("schema_property_test.zig");
-
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
     _ = @import("query_parser_property_test.zig");
@@ -78,14 +79,7 @@ test {
     _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
-    _ = @import("presence/record_test.zig");
-    _ = @import("presence/manager_test.zig");
-    _ = @import("presence/worker_test.zig");
-
-    // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");
-    _ = @import("queues/mpsc_queue_thread_safety_test.zig");
-    _ = @import("queues/spmc_blocking_queue_thread_safety_test.zig");
 
     // Integration tests
     _ = @import("integration_wiring_test.zig");

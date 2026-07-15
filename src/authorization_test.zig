@@ -1,10 +1,14 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const testing = std.testing;
-const authorization = @import("authorization.zig");
-const evaluate_mod = @import("authorization/evaluate.zig");
-const AuthConfig = authorization.AuthConfig;
-const EvalContext = authorization.EvalContext;
+const authorization_types = @import("authorization/types.zig");
+const authorization_evaluate = @import("authorization/evaluate.zig");
+const authorization_pattern = @import("authorization/pattern.zig");
+const authorization_doc_predicate = @import("authorization/doc_predicate.zig");
+const authorization_parse = @import("authorization/parse.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
+const AuthConfig = authorization_types.AuthConfig;
+const EvalContext = authorization_evaluate.EvalContext;
 const typed_types = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const query_ast = @import("query_ast.zig");
@@ -97,7 +101,7 @@ test "AuthConfig parses empty boolean and float array literals" {
 
 test "parsePattern splits literals and captures" {
     const allocator = testing.allocator;
-    const segments = try authorization.parsePattern(allocator, "tenant:{tenant_id}");
+    const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
         allocator.free(segments);
@@ -112,13 +116,13 @@ test "parsePattern splits literals and captures" {
 
 test "matchNamespace matches exact literals and extracts captures" {
     const allocator = testing.allocator;
-    const segments = try authorization.parsePattern(allocator, "tenant:{tenant_id}:user:{user_id}");
+    const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}:user:{user_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
         allocator.free(segments);
     }
 
-    const match_opt = try authorization.matchNamespace(allocator, segments, "tenant:acme:user:123");
+    const match_opt = try authorization_pattern.matchNamespace(allocator, segments, "tenant:acme:user:123");
     try testing.expect(match_opt != null);
     var match = match_opt.?;
     defer match.deinit(allocator);
@@ -129,30 +133,30 @@ test "matchNamespace matches exact literals and extracts captures" {
 
 test "matchNamespace returns null on mismatch" {
     const allocator = testing.allocator;
-    const segments = try authorization.parsePattern(allocator, "tenant:{tenant_id}");
+    const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
         allocator.free(segments);
     }
 
-    const match = try authorization.matchNamespace(allocator, segments, "org:acme");
+    const match = try authorization_pattern.matchNamespace(allocator, segments, "org:acme");
     try testing.expect(match == null);
 }
 
 test "matchNamespace wildcard matches one segment" {
     const allocator = testing.allocator;
-    const segments = try authorization.parsePattern(allocator, "*");
+    const segments = try authorization_pattern.parsePattern(allocator, "*");
     defer {
         for (segments) |seg| seg.deinit(allocator);
         allocator.free(segments);
     }
 
-    const match = try authorization.matchNamespace(allocator, segments, "default");
+    const match = try authorization_pattern.matchNamespace(allocator, segments, "default");
     try testing.expect(match != null);
     var matched = match orelse return error.TestExpectedValue;
     matched.deinit(allocator);
 
-    const nested = try authorization.matchNamespace(allocator, segments, "tenant:acme");
+    const nested = try authorization_pattern.matchNamespace(allocator, segments, "tenant:acme");
     try testing.expect(nested == null);
 }
 
@@ -162,7 +166,7 @@ test "evaluateCondition boolean true allows" {
     var config = try implicitTestConfig(testing.allocator);
     defer config.deinit();
 
-    const result = authorization.evaluateCondition(.{ .boolean = true }, .{ .allocator = testing.allocator });
+    const result = authorization_evaluate.evaluateCondition(.{ .boolean = true }, .{ .allocator = testing.allocator });
     try testing.expect(result == .allow);
 }
 
@@ -170,26 +174,26 @@ test "evaluateCondition boolean false denies" {
     var config = try implicitTestConfig(testing.allocator);
     defer config.deinit();
 
-    const result = authorization.evaluateCondition(.{ .boolean = false }, .{ .allocator = testing.allocator });
+    const result = authorization_evaluate.evaluateCondition(.{ .boolean = false }, .{ .allocator = testing.allocator });
     try testing.expect(result == .deny);
 }
 
 test "evaluateCondition $doc reference returns needs_doc_predicate" {
     const allocator = testing.allocator;
-    const cond = authorization.Condition{ .comparison = .{
+    const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "owner_id") },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "test") } } },
     } };
     defer cond.deinit(allocator);
 
-    const result = authorization.evaluateCondition(cond, .{ .allocator = allocator });
+    const result = authorization_evaluate.evaluateCondition(cond, .{ .allocator = allocator });
     try testing.expect(result == .needs_doc_predicate);
 }
 
 test "evaluateCondition $session.userId comparison" {
     const allocator = testing.allocator;
-    const cond = authorization.Condition{ .comparison = .{
+    const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = try allocator.dupe(u8, "userId") },
         .op = .eq,
         .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "userId") } },
@@ -201,13 +205,13 @@ test "evaluateCondition $session.userId comparison" {
         .allocator = allocator,
         .session_user_id = test_id,
     };
-    const result = authorization.evaluateCondition(cond, ctx);
+    const result = authorization_evaluate.evaluateCondition(cond, ctx);
     try testing.expect(result == .allow);
 }
 
 test "evaluateCondition $namespace capture lookup" {
     const allocator = testing.allocator;
-    const cond = authorization.Condition{ .comparison = .{
+    const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try allocator.dupe(u8, "tenant_id") },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "acme") } } },
@@ -222,33 +226,33 @@ test "evaluateCondition $namespace capture lookup" {
         .allocator = allocator,
         .namespace_captures = &captures,
     };
-    const result = authorization.evaluateCondition(cond, ctx);
+    const result = authorization_evaluate.evaluateCondition(cond, ctx);
     try testing.expect(result == .allow);
 }
 
 test "evaluateCondition logical_and short-circuits on deny" {
     const allocator = testing.allocator;
-    const conds = try allocator.alloc(authorization.Condition, 2);
+    const conds = try allocator.alloc(authorization_types.Condition, 2);
     conds[0] = .{ .boolean = true };
     conds[1] = .{ .boolean = false };
 
-    const cond = authorization.Condition{ .logical_and = conds };
+    const cond = authorization_types.Condition{ .logical_and = conds };
     defer cond.deinit(allocator);
 
-    const result = authorization.evaluateCondition(cond, .{ .allocator = allocator });
+    const result = authorization_evaluate.evaluateCondition(cond, .{ .allocator = allocator });
     try testing.expect(result == .deny);
 }
 
 test "evaluateCondition logical_or short-circuits on allow" {
     const allocator = testing.allocator;
-    const conds = try allocator.alloc(authorization.Condition, 2);
+    const conds = try allocator.alloc(authorization_types.Condition, 2);
     conds[0] = .{ .boolean = false };
     conds[1] = .{ .boolean = true };
 
-    const cond = authorization.Condition{ .logical_or = conds };
+    const cond = authorization_types.Condition{ .logical_or = conds };
     defer cond.deinit(allocator);
 
-    const result = authorization.evaluateCondition(cond, .{ .allocator = allocator });
+    const result = authorization_evaluate.evaluateCondition(cond, .{ .allocator = allocator });
     try testing.expect(result == .allow);
 }
 
@@ -262,7 +266,7 @@ test "evaluateCondition in works with array" {
     arr[0] = .{ .text = try arena_allocator.dupe(u8, "acme") };
     arr[1] = .{ .text = try arena_allocator.dupe(u8, "globex") };
 
-    const cond = authorization.Condition{ .comparison = .{
+    const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try arena_allocator.dupe(u8, "tenant_id") },
         .op = .in,
         .rhs = .{ .literal = .{ .array = arr } },
@@ -277,7 +281,7 @@ test "evaluateCondition in works with array" {
         .allocator = arena_allocator,
         .namespace_captures = &captures,
     };
-    const result = authorization.evaluateCondition(cond, ctx);
+    const result = authorization_evaluate.evaluateCondition(cond, ctx);
     try testing.expect(result == .allow);
 }
 
@@ -291,7 +295,7 @@ test "namespaceRuleFor finds matching rule with captures" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var match = try authorization.matchNamespaceRule(allocator, &config, "tenant:acme");
+    var match = try authorization_pattern.matchNamespaceRule(allocator, &config, "tenant:acme");
     try testing.expect(match != null);
     try testing.expect(std.mem.eql(u8, match.?.rule.pattern, "tenant:{tenant_id}"));
     try testing.expect(std.mem.eql(u8, match.?.captures.get("tenant_id").?, "acme"));
@@ -303,7 +307,7 @@ test "namespaceRuleFor returns null when no match" {
     var config = try implicitTestConfig(allocator);
     defer config.deinit();
 
-    const match = try authorization.matchNamespaceRule(allocator, &config, "unknown:something");
+    const match = try authorization_pattern.matchNamespaceRule(allocator, &config, "unknown:something");
     try testing.expect(match == null);
 }
 
@@ -316,9 +320,9 @@ test "authorizeNamespace enforces storeFilter" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    try authorization.authorizeNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null, false);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null, false));
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "public", user_id, "external-1", null, false));
+    try authorization_evaluate.authorizeNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null, false);
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null, false));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "public", user_id, "external-1", null, false));
 }
 
 test "authorizeNamespace enforces presenceRead" {
@@ -330,8 +334,8 @@ test "authorizeNamespace enforces presenceRead" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    try authorization.authorizeNamespace(allocator, &config, "room:lobby", user_id, "external-1", null, true);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null, true));
+    try authorization_evaluate.authorizeNamespace(allocator, &config, "room:lobby", user_id, "external-1", null, true);
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null, true));
 }
 
 test "authorizeNamespace denies when presenceRead is false" {
@@ -343,7 +347,7 @@ test "authorizeNamespace denies when presenceRead is false" {
     defer config.deinit();
 
     const user_id = typed_doc_id.generateUuidV7();
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeNamespace(allocator, &config, "private:secret", user_id, "external-1", null, true));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "private:secret", user_id, "external-1", null, true));
 }
 
 test "authorizePresenceWrite enforces presenceWrite condition" {
@@ -366,8 +370,8 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
     var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
 
-    try authorization.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+    try authorization_evaluate.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
 }
 
 test "authorizePresenceWrite denies when presenceWrite is false" {
@@ -390,7 +394,7 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
     var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
 
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch));
 }
 
 test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
@@ -413,8 +417,8 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
 
-    try authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+    try authorization_evaluate.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizePresenceSharedWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
 }
 
 test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
@@ -437,7 +441,7 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
     var patch = msgpack.Payload{ .arr = pairs };
     defer patch.free(allocator);
 
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch));
 }
 
 // ─── Doc Predicate Tests ────────────────────────────────────────────────────
@@ -459,7 +463,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
         .session_user_id = test_id,
     };
 
-    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions != null);
@@ -485,7 +489,7 @@ test "buildDocPredicate returns null for RAM-only allow" {
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
-    const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    const predicate = try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
     try testing.expect(predicate == null);
 }
 
@@ -502,7 +506,7 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     });
     defer table.deinit(allocator);
 
-    const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    const predicate = try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
     try testing.expect(predicate == null);
 }
 
@@ -519,7 +523,7 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
     });
     defer table.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.isAlwaysFalse());
@@ -532,7 +536,7 @@ test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
 
     const text = try allocator.dupe(u8, "private");
     const original_ptr = text.ptr;
-    var resolved = evaluate_mod.ResolvedAuthValue.fromOwned(.{ .scalar = .{ .text = text } });
+    var resolved = authorization_evaluate.ResolvedAuthValue.fromOwned(.{ .scalar = .{ .text = text } });
 
     var owned_value = try resolved.intoOwned(allocator);
     defer owned_value.deinit(allocator);
@@ -540,7 +544,7 @@ test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
     try testing.expect(owned_value == .scalar);
     try testing.expect(owned_value.scalar == .text);
     try testing.expect(owned_value.scalar.text.ptr == original_ptr);
-    try testing.expectEqual(std.meta.activeTag(evaluate_mod.ResolvedAuthValue{ .borrowed = .nil }), std.meta.activeTag(resolved));
+    try testing.expectEqual(std.meta.activeTag(authorization_evaluate.ResolvedAuthValue{ .borrowed = .nil }), std.meta.activeTag(resolved));
 
     resolved.deinit(allocator);
 }
@@ -558,7 +562,7 @@ test "buildDocPredicate clones borrowed literal RHS into predicate" {
     });
     defer table.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     const literal_text = (config.store_rules[0].write.comparison.rhs orelse return error.TestExpectedValue).literal.scalar.text;
@@ -600,7 +604,7 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
         .value_table = &table,
     };
 
-    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     const conditions = predicate.conditions orelse return error.TestExpectedValue;
@@ -622,14 +626,14 @@ test "validateDocPredicate rejects array literal items with wrong type" {
 
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .integer = 42 };
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
         .op = .eq,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);
 
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
 }
 
 test "validateDocPredicate rejects $value array item type mismatch" {
@@ -641,14 +645,14 @@ test "validateDocPredicate rejects $value array item type mismatch" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
         .op = .eq,
         .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "scores") } },
     } };
     defer condition.deinit(allocator);
 
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
 }
 
 test "validateDocPredicate validates context variable shape by operator" {
@@ -661,29 +665,29 @@ test "validateDocPredicate validates context variable shape by operator" {
     });
     defer table.deinit(allocator);
 
-    var valid_in = authorization.Condition{ .comparison = .{
+    var valid_in = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
         .op = .in,
         .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } },
     } };
     defer valid_in.deinit(allocator);
-    try authorization.validateDocPredicate(valid_in, &table);
+    try authorization_doc_predicate.validateDocPredicate(valid_in, &table);
 
-    var scalar_in = authorization.Condition{ .comparison = .{
+    var scalar_in = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
         .op = .in,
         .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } },
     } };
     defer scalar_in.deinit(allocator);
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(scalar_in, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(scalar_in, &table));
 
-    var array_contains_array = authorization.Condition{ .comparison = .{
+    var array_contains_array = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
         .op = .contains,
         .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "tags") } },
     } };
     defer array_contains_array.deinit(allocator);
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(array_contains_array, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(array_contains_array, &table));
 }
 
 test "buildDocPredicate preserves logical_or predicate" {
@@ -705,7 +709,7 @@ test "buildDocPredicate preserves logical_or predicate" {
         .session_user_id = test_id,
     };
 
-    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions == null);
@@ -735,7 +739,7 @@ test "evaluateConditionWithDoc allows $doc.owner_id == $session.userId when owne
         .owner_doc_id = test_id,
     };
 
-    const result = authorization.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
     try testing.expect(result);
 }
 
@@ -755,7 +759,7 @@ test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owne
         .owner_doc_id = other_id,
     };
 
-    const result = authorization.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
     try testing.expect(!result);
 }
 
@@ -768,7 +772,7 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
     defer table.deinit(allocator);
 
     const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = status_field },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
@@ -787,7 +791,7 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
         .value_table = &table,
     };
 
-    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(condition, ctx);
     try testing.expect(!result);
 }
 
@@ -800,7 +804,7 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
     defer table.deinit(allocator);
 
     const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = status_field },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
@@ -825,7 +829,7 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
         .value_table = &table,
     };
 
-    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(condition, ctx);
     try testing.expect(result);
 }
 
@@ -838,7 +842,7 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
     defer table.deinit(allocator);
 
     const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = status_field },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
@@ -863,7 +867,7 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
         .value_table = &table,
     };
 
-    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(condition, ctx);
     try testing.expect(!result);
 }
 
@@ -876,7 +880,7 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
     defer table.deinit(allocator);
 
     const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = status_field },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
@@ -901,7 +905,7 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
         .value_table = &table,
     };
 
-    const result = authorization.authorizeWriteCondition(condition, ctx, &table, true);
+    const result = authorization_doc_predicate.authorizeWriteCondition(condition, ctx, &table, true);
     try testing.expectError(error.AccessDenied, result);
 }
 
@@ -925,7 +929,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
         .value_table = &table,
     };
 
-    var predicate = try authorization.authorizeWriteCondition(config.store_rules[0].write, ctx, &table, true);
+    var predicate = try authorization_doc_predicate.authorizeWriteCondition(config.store_rules[0].write, ctx, &table, true);
     if (predicate) |*p| {
         defer p.deinit(allocator);
     }
@@ -958,7 +962,7 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 
     // Condition: $value.status == "second" (should pass with last-wins)
     const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .value, .field = status_field },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "second") } } },
@@ -974,7 +978,7 @@ test "duplicate field index in value pair-array resolves to last-wins" {
         .value_table = &table,
     };
 
-    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    const result = authorization_evaluate.evaluateConditionWithDoc(condition, ctx);
     try testing.expect(result);
 }
 
@@ -995,14 +999,14 @@ test "validateLiteralValue in with valid array of text scalars passes" {
     const items = try allocator.alloc(ScalarValue, 2);
     items[0] = .{ .text = try allocator.dupe(u8, "active") };
     items[1] = .{ .text = try allocator.dupe(u8, "pending") };
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
         .op = .in,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);
 
-    try authorization.validateDocPredicate(condition, &table);
+    try authorization_doc_predicate.validateDocPredicate(condition, &table);
 }
 
 test "validateLiteralValue in with non-array value returns error.InvalidValue" {
@@ -1013,14 +1017,14 @@ test "validateLiteralValue in with non-array value returns error.InvalidValue" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
         .op = .in,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "active") } } },
     } };
     defer condition.deinit(allocator);
 
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
 }
 
 test "validateLiteralValue notIn with valid array of text scalars passes" {
@@ -1033,14 +1037,14 @@ test "validateLiteralValue notIn with valid array of text scalars passes" {
 
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .text = try allocator.dupe(u8, "banned") };
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
         .op = .notIn,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);
 
-    try authorization.validateDocPredicate(condition, &table);
+    try authorization_doc_predicate.validateDocPredicate(condition, &table);
 }
 
 test "validateLiteralValue contains with array field and scalar value passes" {
@@ -1051,14 +1055,14 @@ test "validateLiteralValue contains with array field and scalar value passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
         .op = .contains,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "zig") } } },
     } };
     defer condition.deinit(allocator);
 
-    try authorization.validateDocPredicate(condition, &table);
+    try authorization_doc_predicate.validateDocPredicate(condition, &table);
 }
 
 test "validateLiteralValue contains with text field and text scalar passes" {
@@ -1069,14 +1073,14 @@ test "validateLiteralValue contains with text field and text scalar passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "description") },
         .op = .contains,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "hello") } } },
     } };
     defer condition.deinit(allocator);
 
-    try authorization.validateDocPredicate(condition, &table);
+    try authorization_doc_predicate.validateDocPredicate(condition, &table);
 }
 
 test "validateLiteralValue contains with non-scalar value returns error.InvalidValue" {
@@ -1090,14 +1094,14 @@ test "validateLiteralValue contains with non-scalar value returns error.InvalidV
     // Passing an array where a scalar is required
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .text = try allocator.dupe(u8, "zig") };
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
         .op = .contains,
         .rhs = .{ .literal = .{ .array = items } },
     } };
     defer condition.deinit(allocator);
 
-    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+    try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
 }
 
 test "validateLiteralValue generic eq operator with scalar value passes" {
@@ -1108,14 +1112,14 @@ test "validateLiteralValue generic eq operator with scalar value passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
         .op = .eq,
         .rhs = .{ .literal = .{ .scalar = .{ .integer = 42 } } },
     } };
     defer condition.deinit(allocator);
 
-    try authorization.validateDocPredicate(condition, &table);
+    try authorization_doc_predicate.validateDocPredicate(condition, &table);
 }
 
 // ─── New operator tests ───────────────────────────────────────────────────────
@@ -1187,42 +1191,42 @@ test "parse accepts endsWith for $doc text field" {
 test "evaluateCondition: isNull allows when session field is absent" {
     const allocator = testing.allocator;
 
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
         .op = .isNull,
         .rhs = null,
     } };
 
     const ctx = EvalContext{ .allocator = allocator, .session_user_id = null };
-    try testing.expectEqual(.allow, authorization.evaluateCondition(condition, ctx));
+    try testing.expectEqual(.allow, authorization_evaluate.evaluateCondition(condition, ctx));
 }
 
 test "evaluateCondition: isNull denies when session field is present" {
     const allocator = testing.allocator;
 
     const test_id = typed_doc_id.generateUuidV7();
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
         .op = .isNull,
         .rhs = null,
     } };
 
     const ctx = EvalContext{ .allocator = allocator, .session_user_id = test_id };
-    try testing.expectEqual(.deny, authorization.evaluateCondition(condition, ctx));
+    try testing.expectEqual(.deny, authorization_evaluate.evaluateCondition(condition, ctx));
 }
 
 test "evaluateCondition: isNotNull allows when session field is present" {
     const allocator = testing.allocator;
 
     const test_id = typed_doc_id.generateUuidV7();
-    const condition = authorization.Condition{ .comparison = .{
+    const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
         .op = .isNotNull,
         .rhs = null,
     } };
 
     const ctx = EvalContext{ .allocator = allocator, .session_user_id = test_id };
-    try testing.expectEqual(.allow, authorization.evaluateCondition(condition, ctx));
+    try testing.expectEqual(.allow, authorization_evaluate.evaluateCondition(condition, ctx));
 }
 
 test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
@@ -1233,14 +1237,14 @@ test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
         .op = .isNull,
         .rhs = null,
     } };
     defer condition.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions != null);
@@ -1258,14 +1262,14 @@ test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value"
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
         .op = .isNotNull,
         .rhs = null,
     } };
     defer condition.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions != null);
@@ -1282,14 +1286,14 @@ test "buildDocPredicate lowers startsWith to query_ast.Condition with text value
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
         .op = .startsWith,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "pub") } } },
     } };
     defer condition.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions != null);
@@ -1309,14 +1313,14 @@ test "validateDocPredicate rejects startsWith on non-text field" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization.Condition{ .comparison = .{
+    var condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
         .op = .startsWith,
         .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "prefix") } } },
     } };
     defer condition.deinit(allocator);
 
-    try testing.expectError(error.UnsupportedOperatorForFieldType, authorization.validateDocPredicate(condition, &table));
+    try testing.expectError(error.UnsupportedOperatorForFieldType, authorization_doc_predicate.validateDocPredicate(condition, &table));
 }
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────
@@ -1324,13 +1328,13 @@ test "validateDocPredicate rejects startsWith on non-text field" {
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
     var schema = try makeAuthTestSchema(allocator);
     defer schema.deinit();
-    return authorization.initAuthConfig(allocator, json, &schema);
+    return authorization_parse.initFromJson(allocator, json, &schema);
 }
 
 fn implicitTestConfig(allocator: std.mem.Allocator) !AuthConfig {
     var schema = try makeAuthTestSchema(allocator);
     defer schema.deinit();
-    return authorization.implicitConfig(allocator, &schema);
+    return authorization_defaults.implicitConfig(allocator, &schema);
 }
 
 fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
