@@ -19,7 +19,7 @@ pub fn urlEncodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return dest;
 }
 
-fn stripBase64Padding(input: []const u8) []const u8 {
+pub fn stripBase64Padding(input: []const u8) []const u8 {
     var end = input.len;
     while (end > 0 and input[end - 1] == '=') {
         end -= 1;

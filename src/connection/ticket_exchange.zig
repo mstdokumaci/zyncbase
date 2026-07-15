@@ -531,11 +531,7 @@ fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64:
     std.crypto.auth.hmac.sha2.HmacSha256.create(&computed_sig, payload_b64, ticket_secret);
 
     var sig_bytes_stack: [48]u8 = undefined;
-    var end = sig_b64.len;
-    while (end > 0 and sig_b64[end - 1] == '=') {
-        end -= 1;
-    }
-    const sig_stripped = sig_b64[0..end];
+    const sig_stripped = base64_utils.stripBase64Padding(sig_b64);
     const sig_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(sig_stripped) catch return error.InvalidBase64;
     if (sig_len != 32) return error.InvalidBase64;
     const sig_bytes = sig_bytes_stack[0..sig_len];
