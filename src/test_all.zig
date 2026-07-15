@@ -32,7 +32,7 @@ test {
     _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("config_loader_test.zig");
-    _ = @import("connection_manager_test.zig");
+    _ = @import("connection/manager_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
     _ = @import("schema_json_test.zig");
@@ -54,11 +54,10 @@ test {
 
     // Property tests
     _ = @import("message_handler_property_test.zig");
-    _ = @import("connection_manager_property_test.zig");
+    _ = @import("connection/state_test.zig");
     _ = @import("config_loader_property_test.zig");
     _ = @import("checkpoint_worker_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
-    _ = @import("connection_state_property_test.zig");
     _ = @import("storage_engine_property_test.zig");
     _ = @import("server_init_property_test.zig");
     _ = @import("uwebsockets_wrapper_property_test.zig");
@@ -79,8 +78,9 @@ test {
     _ = @import("authorization_test.zig");
     _ = @import("jwt_validator_test.zig");
     _ = @import("ticket_exchange_test.zig");
-    _ = @import("presence_test.zig");
-    _ = @import("presence_worker_test.zig");
+    _ = @import("presence/record_test.zig");
+    _ = @import("presence/manager_test.zig");
+    _ = @import("presence/worker_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

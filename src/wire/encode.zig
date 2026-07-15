@@ -515,8 +515,8 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 
 // === Presence encoding ===
 
-const PresenceManager = @import("../presence.zig").PresenceManager;
-const PresenceRecord = @import("../presence.zig").PresenceRecord;
+const PresenceManager = @import("../presence/manager.zig").PresenceManager;
+const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;
@@ -602,7 +602,7 @@ pub fn encodePresenceUserSnapshot(
     allocator: Allocator,
     msg_id: u64,
     sub_id: u64,
-    users: []const @import("../presence.zig").UserEntry,
+    users: []const @import("../presence/manager.zig").UserEntry,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);

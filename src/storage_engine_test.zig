@@ -6,7 +6,7 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
-const SessionResolutionResult = @import("connection.zig").SessionResolutionResult;
+const SessionResolutionResult = @import("connection/resolution_buffer.zig").SessionResolutionResult;
 
 const BatchOpForTest = struct {
     entries: []storage_mod.BatchEntry,

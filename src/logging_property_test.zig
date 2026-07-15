@@ -11,13 +11,14 @@ const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const schema_helpers = @import("schema_test_helpers.zig");
-const connection = @import("connection.zig");
-const ViolationTracker = connection.ConnectionViolationTracker;
+const connection_violations = @import("connection/violations.zig");
+const connection_manager = @import("connection/manager.zig");
+const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const ConnectionManager = connection.ConnectionManager;
+const ConnectionManager = connection_manager.ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence.zig").PresenceManager;
+const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const authorization = @import("authorization.zig");
 
 // Custom log handler to capture log messages for testing
