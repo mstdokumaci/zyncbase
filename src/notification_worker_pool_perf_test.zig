@@ -9,7 +9,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const NotificationWorker = @import("notification_worker_pool.zig").NotificationWorker;
-const wire = @import("wire.zig");
+const wire_encode = @import("wire/encode.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const typed = @import("typed.zig");
@@ -138,7 +138,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         const alloc = handle.allocator();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
         const id_val = new_record.values[schema_mod.id_field_index];
-        const set_suffix = try wire.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
         while (ctx.send_queue.pop()) |entry| {
@@ -161,7 +161,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
 
         const id_val = new_record.values[schema_mod.id_field_index];
         t = try std.time.Timer.start();
-        const set_suffix = try wire.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         total_b += t.read();
 
         t = try std.time.Timer.start();

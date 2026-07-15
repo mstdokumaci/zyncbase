@@ -1,20 +1,20 @@
 const std = @import("std");
 const testing = std.testing;
-const wire = @import("../wire.zig");
+const wire_errors = @import("errors.zig");
 const msgpack = @import("../msgpack_utils.zig");
 
 test "getWireError: returns non-empty comptime-encoded keys" {
-    const err1 = wire.getWireError(error.UnknownTable);
+    const err1 = wire_errors.getWireError(error.UnknownTable);
     try testing.expect(err1.code.len > 0);
-    const err2 = wire.getWireError(error.UnknownField);
+    const err2 = wire_errors.getWireError(error.UnknownField);
     try testing.expect(err2.code.len > 0);
     try testing.expect(err1.code.len != err2.code.len or !std.mem.eql(u8, err1.code, err2.code));
 }
 
 test "getWireError: returns non-empty comptime-encoded messages" {
-    const err1 = wire.getWireError(error.UnknownTable);
+    const err1 = wire_errors.getWireError(error.UnknownTable);
     try testing.expect(err1.message.len > 0);
-    const err2 = wire.getWireError(error.UnknownField);
+    const err2 = wire_errors.getWireError(error.UnknownField);
     try testing.expect(err2.message.len > 0);
 }
 
@@ -22,7 +22,7 @@ test "getWireError: query parser errors keep distinct human messages" {
     const allocator = testing.allocator;
     const check = struct {
         fn run(comptime err: anyerror, comptime expected: []const u8) !void {
-            const wire_err = wire.getWireError(err);
+            const wire_err = wire_errors.getWireError(err);
             var reader: std.Io.Reader = .fixed(wire_err.message);
             const decoded = try msgpack.decode(allocator, &reader);
             defer decoded.free(allocator);

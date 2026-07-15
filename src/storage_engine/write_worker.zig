@@ -14,7 +14,8 @@ const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const ChangeQueue = change_queue_mod.ChangeQueue;
 const SessionResolutionBuffer = @import("../connection/resolution_buffer.zig").SessionResolutionBuffer;
 const SessionResolutionResult = @import("../connection/resolution_buffer.zig").SessionResolutionResult;
-const wire = @import("../wire.zig");
+const wire_errors = @import("../wire/errors.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
@@ -127,13 +128,13 @@ pub const WriteWorker = struct {
         defer handle.release();
 
         const msg = if (err) |e| blk: {
-            const wire_err = wire.getWireError(e);
-            break :blk wire.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
+            const wire_err = wire_errors.getWireError(e);
+            break :blk wire_encode.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
                 return;
             };
         } else blk: {
-            break :blk wire.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
+            break :blk wire_encode.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
                 return;
             };

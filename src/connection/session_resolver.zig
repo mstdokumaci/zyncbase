@@ -7,7 +7,8 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const session_resolution = @import("resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
-const wire = @import("../wire.zig");
+const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
 const authorization = @import("../authorization.zig");
 
 pub const SessionResolver = struct {
@@ -51,7 +52,7 @@ pub const SessionResolver = struct {
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const msg = wire.encodeError(arena.allocator(), msg_id, wire.getWireError(error.RequestSuperseded)) catch |encode_err| {
+        const msg = wire_encode.encodeError(arena.allocator(), msg_id, wire_errors.getWireError(error.RequestSuperseded)) catch |encode_err| {
             std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
             return;
         };
@@ -68,7 +69,7 @@ pub const SessionResolver = struct {
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const msg = wire.encodeError(arena.allocator(), msg_id, wire.getWireError(err)) catch |encode_err| {
+        const msg = wire_encode.encodeError(arena.allocator(), msg_id, wire_errors.getWireError(err)) catch |encode_err| {
             std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
             return;
         };
@@ -124,7 +125,7 @@ pub const SessionResolver = struct {
             return;
         }
 
-        const msg = wire.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {
+        const msg = wire_encode.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {
             std.log.err("SessionResolver failed to encode success response: {}", .{encode_err});
             return;
         };

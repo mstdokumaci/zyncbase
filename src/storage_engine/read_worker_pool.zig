@@ -10,7 +10,7 @@ const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
-const wire = @import("../wire.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const workerPool = @import("../threading/worker_pool.zig").workerPool;
@@ -113,7 +113,7 @@ pub const ReadWorker = struct {
 
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
-                const encoded = wire.encodeError(handle.allocator(), msg_id, .{
+                const encoded = wire_encode.encodeError(handle.allocator(), msg_id, .{
                     .code = "STORE_QUERY",
                     .message = @errorName(err),
                 }) catch {
@@ -128,7 +128,7 @@ pub const ReadWorker = struct {
                 };
                 self.notifier.notify();
             } else {
-                const encoded = wire.encodeQuery(handle.allocator(), .{
+                const encoded = wire_encode.encodeQuery(handle.allocator(), .{
                     .msg_id = response.msg_id,
                     .sub_id = response.sub_id,
                     .records = response.records,
@@ -157,7 +157,7 @@ pub const ReadWorker = struct {
             };
             defer handle.release();
 
-            const shutdown_encoded = wire.encodeError(handle.allocator(), request.msg_id, .{
+            const shutdown_encoded = wire_encode.encodeError(handle.allocator(), request.msg_id, .{
                 .code = "STORE_QUERY",
                 .message = "shutdown",
             }) catch |err| {

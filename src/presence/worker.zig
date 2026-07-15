@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const typed = @import("../typed.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
-const wire = @import("../wire.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
@@ -209,7 +209,7 @@ pub const PresenceWorker = struct {
         };
         defer handle.release();
 
-        const msg = wire.encodePresenceUserSnapshot(handle.allocator(), sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
+        const msg = wire_encode.encodePresenceUserSnapshot(handle.allocator(), sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
             std.log.err("PresenceWorker encodePresenceUserSnapshot failed: {}", .{err});
             self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
             return;
@@ -231,7 +231,7 @@ pub const PresenceWorker = struct {
         };
         defer handle.release();
 
-        const msg = wire.encodePresenceSharedSnapshot(
+        const msg = wire_encode.encodePresenceSharedSnapshot(
             handle.allocator(),
             sub.msg_id,
             sub.sub_id,
@@ -261,7 +261,7 @@ pub const PresenceWorker = struct {
         };
         defer handle.release();
 
-        const err_msg = wire.encodeError(handle.allocator(), msg_id, .{
+        const err_msg = wire_encode.encodeError(handle.allocator(), msg_id, .{
             .code = code,
             .message = message,
         }) catch return;
@@ -304,8 +304,8 @@ pub const PresenceWorker = struct {
 
         if (user_batches.items.len == 0 and shared_batches.items.len == 0) return;
 
-        const pushed_user = self.dispatchBatches(user_batches.items, wire.encodePresenceBroadcast, "user");
-        const pushed_shared = self.dispatchBatches(shared_batches.items, wire.encodeSharedStateBroadcast, "shared");
+        const pushed_user = self.dispatchBatches(user_batches.items, wire_encode.encodePresenceBroadcast, "user");
+        const pushed_shared = self.dispatchBatches(shared_batches.items, wire_encode.encodeSharedStateBroadcast, "shared");
 
         if (pushed_user or pushed_shared) {
             self.notifier.notify();

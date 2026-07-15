@@ -12,7 +12,7 @@ const send_queue_type = @import("send_queue.zig").send_queue;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const typed = @import("typed.zig");
-const wire = @import("wire.zig");
+const wire_encode = @import("wire/encode.zig");
 const schema_mod = @import("schema.zig");
 const managedThread = @import("threading/managed_thread.zig").managedThread;
 const workerPool = @import("threading/worker_pool.zig").workerPool;
@@ -207,7 +207,7 @@ pub const NotificationWorker = struct {
             out.clearRetainingCapacity();
             const writer = out.writer(alloc);
 
-            out.appendSlice(alloc, &wire.store_delta_header) catch |err| {
+            out.appendSlice(alloc, &wire_encode.store_delta_header) catch |err| {
                 std.log.err("NotificationWorker failed to write header: {}", .{err});
                 continue;
             };
@@ -268,7 +268,7 @@ fn encodeDeltaSuffixes(
                 std.log.err("NotificationWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
                 return false;
             };
-            set_suffix.* = wire.encodeSetDeltaSuffix(
+            set_suffix.* = wire_encode.encodeSetDeltaSuffix(
                 alloc,
                 table_metadata.index,
                 id_val_actual,
@@ -280,7 +280,7 @@ fn encodeDeltaSuffixes(
             };
         }
         if (remove_suffix.* == null and match.op == MatchOp.remove) {
-            remove_suffix.* = wire.encodeDeleteDeltaSuffix(
+            remove_suffix.* = wire_encode.encodeDeleteDeltaSuffix(
                 alloc,
                 table_metadata.index,
                 id_val_actual,

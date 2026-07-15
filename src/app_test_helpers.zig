@@ -26,7 +26,9 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
-const wire = @import("wire.zig");
+const wire_decode = @import("wire/decode.zig");
+const wire_encode = @import("wire/encode.zig");
+const wire_errors = @import("wire/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const authorization = @import("authorization.zig");
@@ -70,13 +72,13 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// Returns null for async (deferred) responses. The caller is responsible for freeing the returned []u8.
 pub fn routeWithArenaOptional(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) !?[]u8 {
-    const envelope = try wire.extractEnvelopeFast(bytes);
+    const envelope = try wire_decode.extractEnvelopeFast(bytes);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
     const result = (handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
-        const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
+        const error_msg = try wire_encode.encodeError(arena_allocator, envelope.id, wire_errors.getWireError(err));
         return try allocator.dupe(u8, error_msg);
     }) orelse return null;
 
