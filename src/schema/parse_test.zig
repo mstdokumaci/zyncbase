@@ -1,9 +1,121 @@
 const std = @import("std");
-const schema_parse = @import("schema/parse.zig");
-const schema_types = @import("schema/types.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
+const schema_parse = @import("parse.zig");
+const schema_types = @import("types.zig");
+const schema_helpers = @import("test_helpers.zig");
 
-test "schema_normalize: implicit users is canonical first table" {
+test "schema_parse: rejects malformed root shape" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.InvalidSchema, schema_parse.initFromJson(allocator, "[]"));
+}
+
+test "schema_parse: validates root version and store" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.MissingVersion, schema_parse.initFromJson(allocator,
+        \\{"store":{}}
+    ));
+    try std.testing.expectError(error.InvalidVersion, schema_parse.initFromJson(allocator,
+        \\{"version":1,"store":{}}
+    ));
+    try std.testing.expectError(error.MissingStore, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0"}
+    ));
+    try std.testing.expectError(error.InvalidStore, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":[]}
+    ));
+}
+
+test "schema_parse: preserves allowed metadata objects" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{
+        \\  "version":"1.0.0",
+        \\  "metadata":{"owner":"core"},
+        \\  "store":{
+        \\    "posts":{
+        \\      "metadata":{"displayName":"Posts"},
+        \\      "fields":{
+        \\        "title":{"type":"string","metadata":{"ui":{"widget":"textarea"}}}
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.metadata != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed.metadata.?.json, "\"owner\":\"core\"") != null);
+
+    const posts = parsed.table("posts") orelse return error.TestExpectedValue;
+    try std.testing.expect(posts.metadata != null);
+    try std.testing.expect(std.mem.indexOf(u8, posts.metadata.?.json, "\"displayName\":\"Posts\"") != null);
+
+    const title = posts.field("title") orelse return error.TestExpectedValue;
+    try std.testing.expect(title.metadata != null);
+    try std.testing.expect(std.mem.indexOf(u8, title.metadata.?.json, "\"widget\":\"textarea\"") != null);
+}
+
+test "schema_parse: rejects non-object metadata" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","metadata":"core","store":{}}
+    ));
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"metadata":true,"fields":{}}}}
+    ));
+    try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","metadata":[]}}}}}
+    ));
+}
+
+test "schema_parse: rejects unknown keys outside extension points" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"owner":"core"}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{},"description":"bad"}}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","nullable":false}}}}}
+    ));
+}
+
+test "schema_parse: accepts planned constraint keys without enforcement" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{
+        \\    "posts":{
+        \\      "fields":{
+        \\        "title":{
+        \\          "type":"string",
+        \\          "enum":["a","b"],
+        \\          "pattern":"^[a-z]+$",
+        \\          "format":"email",
+        \\          "minLength":1,
+        \\          "maxLength":30,
+        \\          "minimum":0,
+        \\          "maximum":100
+        \\        }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    );
+    defer parsed.deinit();
+
+    const posts = parsed.table("posts") orelse return error.TestExpectedValue;
+    try std.testing.expect(posts.field("title") != null);
+}
+
+test "schema_parse: implicit users is canonical first table" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -19,7 +131,7 @@ test "schema_normalize: implicit users is canonical first table" {
     try std.testing.expect(parsed.tables[1].namespaced);
 }
 
-test "schema_normalize: explicit users moves to canonical first table" {
+test "schema_parse: explicit users moves to canonical first table" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -33,7 +145,7 @@ test "schema_normalize: explicit users moves to canonical first table" {
     try std.testing.expectEqual(@as(usize, 1), parsed.table("posts").?.index);
 }
 
-test "schema_normalize: builds canonical field order and user range" {
+test "schema_parse: builds canonical field order and user range" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -55,7 +167,7 @@ test "schema_normalize: builds canonical field order and user range" {
     try std.testing.expect(!schema_helpers.isClientWritableFieldIndex(tasks, 6));
 }
 
-test "schema_normalize: users external_id is internal only" {
+test "schema_parse: users external_id is internal only" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.ReservedFieldName, schema_parse.initFromJson(allocator,
@@ -72,7 +184,7 @@ test "schema_normalize: users external_id is internal only" {
     try std.testing.expect(users.fieldIndex("external_id") == null);
 }
 
-test "schema_normalize: rejects reserved names and internal table prefix" {
+test "schema_parse: rejects reserved names and internal table prefix" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidTableName, schema_parse.initFromJson(allocator,
@@ -89,7 +201,7 @@ test "schema_normalize: rejects reserved names and internal table prefix" {
     ));
 }
 
-test "schema_normalize: flattens nested fields and resolves required leaves" {
+test "schema_parse: flattens nested fields and resolves required leaves" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -114,7 +226,7 @@ test "schema_normalize: flattens nested fields and resolves required leaves" {
     try std.testing.expect(!age.required);
 }
 
-test "schema_normalize: rejects object-level and missing required paths" {
+test "schema_parse: rejects object-level and missing required paths" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
@@ -125,7 +237,7 @@ test "schema_normalize: rejects object-level and missing required paths" {
     ));
 }
 
-test "schema_normalize: validates array items" {
+test "schema_parse: validates array items" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.MissingArrayItems, schema_parse.initFromJson(allocator,
@@ -146,7 +258,7 @@ test "schema_normalize: validates array items" {
     try std.testing.expectEqual(schema_types.FieldType.text, tags.items_type.?);
 }
 
-test "schema_normalize: validates references and on delete rules" {
+test "schema_parse: validates references and on delete rules" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidReference, schema_parse.initFromJson(allocator,

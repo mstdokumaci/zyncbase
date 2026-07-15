@@ -44,10 +44,10 @@ test {
     _ = @import("config_loader_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
-    _ = @import("schema_json_test.zig");
-    _ = @import("schema_normalize_test.zig");
-    _ = @import("schema_index_test.zig");
-    _ = @import("schema_field_path_test.zig");
+    _ = @import("schema/parse_test.zig");
+    _ = @import("schema/index_test.zig");
+    _ = @import("schema/field_path_test.zig");
+    _ = @import("schema_property_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
@@ -67,7 +67,6 @@ test {
     _ = @import("logging_property_test.zig");
     _ = @import("memory_safety_property_test.zig");
     _ = @import("msgpack_utils_property_test.zig");
-    _ = @import("schema_property_test.zig");
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
     _ = @import("query_parser_property_test.zig");

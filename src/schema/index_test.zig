@@ -1,8 +1,8 @@
 const std = @import("std");
-const schema_types = @import("schema/types.zig");
-const schema_system = @import("schema/system.zig");
-const schema_parse = @import("schema/parse.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("types.zig");
+const schema_system = @import("system.zig");
+const schema_parse = @import("parse.zig");
+const schema_helpers = @import("test_helpers.zig");
 
 test "schema_index: direct table fixtures build lookup maps" {
     const allocator = std.testing.allocator;
