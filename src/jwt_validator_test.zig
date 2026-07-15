@@ -6,13 +6,7 @@ const JwtValidator = jwt_validator.JwtValidator;
 const JwksCache = jwt_validator.JwksCache;
 const Jwk = jwt_validator.Jwk;
 const json_write = @import("json/write.zig");
-
-fn encodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
-    const len = std.base64.url_safe_no_pad.Encoder.calcSize(input.len);
-    const dest = try allocator.alloc(u8, len);
-    _ = std.base64.url_safe_no_pad.Encoder.encode(dest, input);
-    return dest;
-}
+const base64_utils = @import("base64_utils.zig");
 
 fn createHmacJwt(
     allocator: Allocator,
@@ -24,7 +18,7 @@ fn createHmacJwt(
 ) ![]const u8 {
     // 1. Header
     const header_json = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
-    const header_b64 = try encodeBase64Url(allocator, header_json);
+    const header_b64 = try base64_utils.urlEncodeAlloc(allocator, header_json);
     defer allocator.free(header_b64);
 
     // 2. Payload
@@ -41,7 +35,7 @@ fn createHmacJwt(
         try w.field("aud", a);
     }
     try w.endObject();
-    const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
+    const payload_b64 = try base64_utils.urlEncodeAlloc(allocator, payload_buf.items);
     defer allocator.free(payload_b64);
 
     // 3. MSG
@@ -51,7 +45,7 @@ fn createHmacJwt(
     // 4. Sign
     var sig_bytes: [32]u8 = undefined;
     std.crypto.auth.hmac.sha2.HmacSha256.create(&sig_bytes, msg, secret);
-    const sig_b64 = try encodeBase64Url(allocator, &sig_bytes);
+    const sig_b64 = try base64_utils.urlEncodeAlloc(allocator, &sig_bytes);
     defer allocator.free(sig_b64);
 
     return try std.fmt.allocPrint(allocator, "{s}.{s}.{s}", .{ header_b64, payload_b64, sig_b64 });

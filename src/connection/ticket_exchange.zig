@@ -8,6 +8,7 @@ const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
 const json_iterate = @import("../json/iterate.zig");
 const json_write = @import("../json/write.zig");
+const base64_utils = @import("../base64_utils.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,
@@ -114,7 +115,7 @@ pub const TicketExchange = struct {
 
         try verifyTicketHmac(self.ticket_secret[0..], parts.payload_b64, parts.sig_b64);
 
-        const payload_json = try decodeBase64Url(allocator, parts.payload_b64);
+        const payload_json = try base64_utils.urlDecodeAlloc(allocator, parts.payload_b64);
         defer allocator.free(payload_json);
 
         const extracted = extractTicketPayloadFast(payload_json) orelse return error.InvalidTicket;
@@ -212,7 +213,7 @@ pub const TicketExchange = struct {
         try w.endObject();
         try w.endObject();
 
-        const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
+        const payload_b64 = try base64_utils.urlEncodeAlloc(allocator, payload_buf.items);
         defer allocator.free(payload_b64);
 
         var sig_bytes: [32]u8 = undefined;
@@ -324,29 +325,7 @@ pub const RequestContext = struct {
     aborted: bool,
 };
 
-fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
-    const stripped = stripBase64Padding(input);
-    const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
-    const dest = try allocator.alloc(u8, exact_len);
-    errdefer allocator.free(dest);
-    try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
-    return dest;
-}
 
-fn stripBase64Padding(input: []const u8) []const u8 {
-    var end = input.len;
-    while (end > 0 and input[end - 1] == '=') {
-        end -= 1;
-    }
-    return input[0..end];
-}
-
-fn encodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
-    const len = std.base64.url_safe_no_pad.Encoder.calcSize(input.len);
-    const dest = try allocator.alloc(u8, len);
-    _ = std.base64.url_safe_no_pad.Encoder.encode(dest, input);
-    return dest;
-}
 
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
     if (user_data == null) return;
@@ -554,7 +533,11 @@ fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64:
     std.crypto.auth.hmac.sha2.HmacSha256.create(&computed_sig, payload_b64, ticket_secret);
 
     var sig_bytes_stack: [48]u8 = undefined;
-    const sig_stripped = stripBase64Padding(sig_b64);
+    var end = sig_b64.len;
+    while (end > 0 and sig_b64[end - 1] == '=') {
+        end -= 1;
+    }
+    const sig_stripped = sig_b64[0..end];
     const sig_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(sig_stripped) catch return error.InvalidBase64;
     if (sig_len != 32) return error.InvalidBase64;
     const sig_bytes = sig_bytes_stack[0..sig_len];
