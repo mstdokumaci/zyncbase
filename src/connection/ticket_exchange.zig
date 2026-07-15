@@ -325,8 +325,6 @@ pub const RequestContext = struct {
     aborted: bool,
 };
 
-
-
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
     if (user_data == null) return;
     const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
