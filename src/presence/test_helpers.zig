@@ -17,21 +17,32 @@ pub fn freeTestFields(allocator: std.mem.Allocator, fields: []const schema_types
 
 pub fn makeTestSharedFields(allocator: std.mem.Allocator) ![]const schema_types.PresenceField {
     const fields = try allocator.alloc(schema_types.PresenceField, 2);
+    errdefer allocator.free(fields);
     fields[0] = .{ .name = try allocator.dupe(u8, "slide"), .declared_type = .integer };
+    errdefer allocator.free(fields[0].name);
     fields[1] = .{ .name = try allocator.dupe(u8, "playing"), .declared_type = .boolean };
     return fields;
 }
 
 pub fn makeTestSharedSingleField(allocator: std.mem.Allocator) ![]const schema_types.PresenceField {
     const fields = try allocator.alloc(schema_types.PresenceField, 1);
+    errdefer allocator.free(fields);
     fields[0] = .{ .name = try allocator.dupe(u8, "slide"), .declared_type = .integer };
     return fields;
 }
 
 pub fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    var pairs = try allocator.alloc(msgpack.Payload, entries.len);
-    for (entries, 0..) |entry, i| {
-        var pair = try allocator.alloc(msgpack.Payload, 2);
+    const pairs = try allocator.alloc(msgpack.Payload, entries.len);
+    errdefer allocator.free(pairs);
+    var i: usize = 0;
+    errdefer {
+        for (pairs[0..i]) |p| {
+            allocator.free(p.arr);
+        }
+    }
+    while (i < entries.len) : (i += 1) {
+        const entry = entries[i];
+        const pair = try allocator.alloc(msgpack.Payload, 2);
         pair[0] = msgpack.Payload.uintToPayload(entry.idx);
         pair[1] = entry.value;
         pairs[i] = .{ .arr = pair };
