@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const decode = @import("decode.zig");
 const msgpack = @import("../msgpack_utils.zig");
-const helpers = @import("wire_test_helpers.zig");
+const helpers = @import("test_helpers.zig");
 
 const encodePayload = helpers.encodePayload;
 const writeFixStr = helpers.writeFixStr;
