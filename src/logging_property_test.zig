@@ -5,20 +5,21 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
-const schema_helpers = @import("schema_test_helpers.zig");
-const connection = @import("connection.zig");
-const ViolationTracker = connection.ConnectionViolationTracker;
+const schema_helpers = @import("schema/test_helpers.zig");
+const connection_violations = @import("connection/violations.zig");
+const connection_manager = @import("connection/manager.zig");
+const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const ConnectionManager = connection.ConnectionManager;
+const ConnectionManager = connection_manager.ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence.zig").PresenceManager;
-const authorization = @import("authorization.zig");
+const PresenceManager = @import("presence/manager.zig").PresenceManager;
+const authorization_defaults = @import("authorization/defaults.zig");
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -328,8 +329,8 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm2 = try sth.createSchema(allocator, tables);
@@ -342,7 +343,7 @@ test "logging: level filtering" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config = try authorization.implicitConfig(allocator, &sm2);
+        var auth_config = try authorization_defaults.implicitConfig(allocator, &sm2);
         defer auth_config.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm2, &auth_config);
@@ -423,8 +424,8 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm3 = try sth.createSchema(allocator, tables);
@@ -437,7 +438,7 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config2 = try authorization.implicitConfig(allocator, &sm3);
+        var auth_config2 = try authorization_defaults.implicitConfig(allocator, &sm3);
         defer auth_config2.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm3, &auth_config2);
@@ -502,8 +503,8 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema.Table, 1);
+        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
+        var tables = try allocator.alloc(schema_types.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_helpers.makeTable("test", &fields);
         var sm4 = try sth.createSchema(allocator, tables);
@@ -516,7 +517,7 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config3 = try authorization.implicitConfig(allocator, &sm4);
+        var auth_config3 = try authorization_defaults.implicitConfig(allocator, &sm4);
         defer auth_config3.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm4, &auth_config3);

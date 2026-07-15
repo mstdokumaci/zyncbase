@@ -2,22 +2,26 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
-const typed = @import("typed.zig");
-const tth = @import("typed_test_helpers.zig");
+const typed = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const tth = @import("typed/test_helpers.zig");
 const reader_mod = @import("storage_engine/reader.zig");
 const sql = @import("storage_engine/sql.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
-pub const schema_mod = @import("schema.zig");
-pub const Schema = schema_mod.Schema;
-pub const Table = schema_mod.Table;
-pub const Field = schema_mod.Field;
-pub const FieldType = schema_mod.FieldType;
-pub const TableMetadata = schema_mod.Table;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_index = @import("schema/index.zig");
+pub const Schema = schema_types.Schema;
+pub const Table = schema_types.Table;
+pub const Field = schema_types.Field;
+pub const FieldType = schema_types.FieldType;
+pub const TableMetadata = schema_types.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 pub const query_ast = @import("query_ast.zig");
 pub const TestContext = schema_helpers.TestContext;
 
@@ -43,11 +47,11 @@ pub fn readDoc(
     allocator: Allocator,
     engine: *StorageEngine,
     table_index: usize,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
     namespace_id: i64,
 ) !?typed.Record {
     const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
     node.mutex.lock();
@@ -72,7 +76,7 @@ pub fn queryDocs(
     filter: *const query_ast.QueryFilter,
 ) !QueryResult {
     const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
-    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
     node.mutex.lock();
@@ -114,7 +118,7 @@ pub const TableFixture = struct {
 
     pub fn insertNamed(
         self: TableFixture,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -123,7 +127,7 @@ pub const TableFixture = struct {
 
     pub fn insertField(
         self: TableFixture,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: typed.Value,
@@ -133,7 +137,7 @@ pub const TableFixture = struct {
 
     pub fn insertText(
         self: TableFixture,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -143,7 +147,7 @@ pub const TableFixture = struct {
 
     pub fn insertInt(
         self: TableFixture,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,
@@ -158,7 +162,7 @@ pub const TableFixture = struct {
     pub fn readDoc(
         self: TableFixture,
         allocator: Allocator,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
     ) !?typed.Record {
         return Helpers.readDoc(allocator, self.engine, self.metadata.index, id, namespace_id);
@@ -175,7 +179,7 @@ pub const TableFixture = struct {
 
     pub fn deleteDocument(
         self: TableFixture,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
     ) !void {
         return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null, null, null);
@@ -184,7 +188,7 @@ pub const TableFixture = struct {
     pub fn getOne(
         self: TableFixture,
         allocator: Allocator,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
     ) !ManagedDocument {
         const record = try self.readDoc(allocator, id, namespace_id) orelse return error.NotFound;
@@ -201,7 +205,7 @@ pub const ManagedDocument = struct {
         self.record.deinit(self.allocator);
     }
 
-    pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed.DocId {
+    pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed_doc_id.DocId {
         return Helpers.getFieldDocIdOrNull(self.record, self.fixture.metadata, key);
     }
 
@@ -221,7 +225,7 @@ pub const ManagedDocument = struct {
         return Helpers.expectFieldString(self.record, self.fixture.metadata, key, expected);
     }
 
-    pub fn expectFieldDocId(self: *const ManagedDocument, key: []const u8, expected: typed.DocId) !typed.DocId {
+    pub fn expectFieldDocId(self: *const ManagedDocument, key: []const u8, expected: typed_doc_id.DocId) !typed_doc_id.DocId {
         return Helpers.expectFieldDocId(self.record, self.fixture.metadata, key, expected);
     }
 
@@ -296,7 +300,7 @@ pub const EngineTestContext = struct {
     pub fn insertNamed(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -307,7 +311,7 @@ pub const EngineTestContext = struct {
     pub fn insertField(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: typed.Value,
@@ -318,7 +322,7 @@ pub const EngineTestContext = struct {
     pub fn insertText(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -329,7 +333,7 @@ pub const EngineTestContext = struct {
     pub fn insertInt(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,
@@ -367,7 +371,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     }
 
     for (tables, 0..) |declared, idx| {
-        runtime_tables[built_count] = try schema_mod.buildRuntimeTable(allocator, declared, idx);
+        runtime_tables[built_count] = try schema_parse.buildRuntimeTable(allocator, declared, idx);
         built_count += 1;
     }
 
@@ -382,7 +386,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     };
     errdefer result.deinit();
 
-    try schema_mod.buildTableIndex(allocator, &result);
+    try schema_index.buildTableIndex(allocator, &result);
     return result;
 }
 
@@ -464,13 +468,13 @@ fn fillNamedColumns(
 fn insertNamedWithMetadata(
     engine: *StorageEngine,
     table_metadata: *const TableMetadata,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
     namespace_id: i64,
     columns: anytype,
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.upsertDocument(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null, null, null);
+    try engine.upsertDocument(table_metadata.index, id, namespace_id, typed_doc_id.zero, &resolved, null, null, null);
 }
 
 // ─── Record field accessors (module-level, for callers with raw Record + metadata) ───
@@ -481,7 +485,7 @@ fn getRecordField(doc: typed.Record, metadata: *const TableMetadata, key: []cons
     return doc.values[idx];
 }
 
-pub fn getFieldDocIdOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?typed.DocId {
+pub fn getFieldDocIdOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?typed_doc_id.DocId {
     const val = getRecordField(doc, metadata, key) orelse return null;
     if (val != .scalar or val.scalar != .doc_id) return null;
     return val.scalar.doc_id;
@@ -493,7 +497,7 @@ pub fn getFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []con
     return error.TypeMismatch;
 }
 
-pub fn getFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) !typed.DocId {
+pub fn getFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) !typed_doc_id.DocId {
     const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .doc_id) return error.TypeMismatch;
     return val.scalar.doc_id;
@@ -520,7 +524,7 @@ pub fn expectFieldString(doc: typed.Record, metadata: *const TableMetadata, key:
     return val;
 }
 
-pub fn expectFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: typed.DocId) !typed.DocId {
+pub fn expectFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: typed_doc_id.DocId) !typed_doc_id.DocId {
     const actual = try getFieldDocId(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;

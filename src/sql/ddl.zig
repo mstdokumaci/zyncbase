@@ -1,5 +1,6 @@
 const std = @import("std");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const SqlBuf = @import("buf.zig").SqlBuf;
 
 pub const DDLGenerator = struct {
@@ -12,7 +13,7 @@ pub const DDLGenerator = struct {
     /// Generate DDL for a table: CREATE TABLE IF NOT EXISTS + CREATE INDEX statements.
     /// Returns a single string with all statements separated by ";\n".
     /// Caller owns the returned slice.
-    pub fn generateDDL(self: *DDLGenerator, table: schema.Table) ![]const u8 {
+    pub fn generateDDL(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
         var buf = SqlBuf.init();
         defer buf.deinit(self.allocator);
 
@@ -28,7 +29,7 @@ pub const DDLGenerator = struct {
     }
 };
 
-fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     try buf.appendSlice(allocator, "CREATE TABLE IF NOT EXISTS ");
     try buf.appendSlice(allocator, table.name_quoted);
     try buf.appendSlice(allocator, " (\n");
@@ -41,27 +42,27 @@ fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Tab
     try buf.appendSlice(allocator, "\n)");
 }
 
-fn emitFixedLeadingColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitFixedLeadingColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     try buf.appendSlice(allocator, "  ");
-    try buf.appendSlice(allocator, schema.quoted_id);
+    try buf.appendSlice(allocator, schema_system.quoted_id);
     try buf.appendSlice(allocator, " BLOB NOT NULL CHECK(length(");
-    try buf.appendSlice(allocator, schema.quoted_id);
+    try buf.appendSlice(allocator, schema_system.quoted_id);
     try buf.appendSlice(allocator, ") = 16),\n");
     try buf.appendSlice(allocator, "  ");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.appendSlice(allocator, " INTEGER NOT NULL,\n  ");
-    try buf.appendSlice(allocator, schema.quoted_owner_id);
+    try buf.appendSlice(allocator, schema_system.quoted_owner_id);
     try buf.appendSlice(allocator, " BLOB NOT NULL CHECK(length(");
-    try buf.appendSlice(allocator, schema.quoted_owner_id);
+    try buf.appendSlice(allocator, schema_system.quoted_owner_id);
     try buf.appendSlice(allocator, ") = 16)");
     if (table.is_users_table) {
         try buf.appendSlice(allocator, ",\n  ");
-        try buf.appendSlice(allocator, schema.quoted_external_id);
+        try buf.appendSlice(allocator, schema_system.quoted_external_id);
         try buf.appendSlice(allocator, " TEXT NOT NULL");
     }
 }
 
-fn emitUserColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitUserColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     for (table.userFields()) |field| {
         try buf.appendSlice(allocator, ",\n  ");
         try buf.appendSlice(allocator, field.name_quoted);
@@ -80,17 +81,17 @@ fn emitUserColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Tab
 
 fn emitFixedTrailingColumns(allocator: std.mem.Allocator, buf: *SqlBuf) !void {
     try buf.appendSlice(allocator, ",\n  ");
-    try buf.appendSlice(allocator, schema.quoted_created_at);
+    try buf.appendSlice(allocator, schema_system.quoted_created_at);
     try buf.appendSlice(allocator, " INTEGER NOT NULL");
     try buf.appendSlice(allocator, ",\n  ");
-    try buf.appendSlice(allocator, schema.quoted_updated_at);
+    try buf.appendSlice(allocator, schema_system.quoted_updated_at);
     try buf.appendSlice(allocator, " INTEGER NOT NULL");
     try buf.appendSlice(allocator, ",\n  PRIMARY KEY (");
-    try buf.appendSlice(allocator, schema.quoted_id);
+    try buf.appendSlice(allocator, schema_system.quoted_id);
     try buf.append(allocator, ')');
 }
 
-fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     for (table.userFields()) |field| {
         if (field.references) |ref| {
             try buf.appendSlice(allocator, ",\n  FOREIGN KEY (");
@@ -98,7 +99,7 @@ fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Tab
             try buf.appendSlice(allocator, ") REFERENCES ");
             try buf.appendQuoted(allocator, ref);
             try buf.appendSlice(allocator, "(");
-            try buf.appendSlice(allocator, schema.quoted_id);
+            try buf.appendSlice(allocator, schema_system.quoted_id);
             try buf.append(allocator, ')');
             if (field.on_delete) |od| {
                 try emitOnDelete(allocator, buf, od);
@@ -107,7 +108,7 @@ fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Tab
     }
 }
 
-fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema.OnDelete) !void {
+fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema_types.OnDelete) !void {
     const fragment: []const u8 = switch (od) {
         .cascade => " ON DELETE CASCADE",
         .restrict => " ON DELETE RESTRICT",
@@ -116,40 +117,40 @@ fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema.OnDelete)
     try buf.appendSlice(allocator, fragment);
 }
 
-fn emitNamespaceIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitNamespaceIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     try buf.appendSlice(allocator, ";\nCREATE INDEX IF NOT EXISTS ");
     try buf.appendIndexName(allocator, table.name, "namespace_id");
     try buf.appendSlice(allocator, " ON ");
     try buf.appendSlice(allocator, table.name_quoted);
     try buf.appendSlice(allocator, "(");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.append(allocator, ')');
 }
 
-fn emitOwnerIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitOwnerIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     try buf.appendSlice(allocator, ";\nCREATE INDEX IF NOT EXISTS ");
     try buf.appendIndexName(allocator, table.name, "owner_id");
     try buf.appendSlice(allocator, " ON ");
     try buf.appendSlice(allocator, table.name_quoted);
     try buf.appendSlice(allocator, "(");
-    try buf.appendSlice(allocator, schema.quoted_owner_id);
+    try buf.appendSlice(allocator, schema_system.quoted_owner_id);
     try buf.append(allocator, ')');
 }
 
-fn emitUsersUniqueIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitUsersUniqueIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     if (!table.is_users_table) return;
     try buf.appendSlice(allocator, ";\nCREATE UNIQUE INDEX IF NOT EXISTS ");
     try buf.appendIndexName(allocator, table.name, "namespace_external_id");
     try buf.appendSlice(allocator, " ON ");
     try buf.appendSlice(allocator, table.name_quoted);
     try buf.appendSlice(allocator, "(");
-    try buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.appendSlice(allocator, ", ");
-    try buf.appendSlice(allocator, schema.quoted_external_id);
+    try buf.appendSlice(allocator, schema_system.quoted_external_id);
     try buf.append(allocator, ')');
 }
 
-fn emitFieldIndexes(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema.Table) !void {
+fn emitFieldIndexes(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     for (table.userFields()) |field| {
         if (field.indexed) {
             try buf.appendSlice(allocator, ";\nCREATE INDEX IF NOT EXISTS ");

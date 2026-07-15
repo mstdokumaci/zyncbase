@@ -5,19 +5,20 @@ const storage_mod = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 const StorageError = storage_mod.StorageError;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .namespace_id = namespace_id,
         .namespace = "public",
-        .owner_doc_id = typed.zeroDocId,
-        .session_user_id = typed.zeroDocId,
+        .owner_doc_id = typed_doc_id.zero,
+        .session_user_id = typed_doc_id.zero,
     };
 }
 
@@ -25,7 +26,7 @@ fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
     return .{
         .conn_id = 1,
         .msg_id = 1,
-        .session_user_id = typed.zeroDocId,
+        .session_user_id = typed_doc_id.zero,
         .session_external_id = null,
         .session_claims = null,
         .namespace = "public",
@@ -34,18 +35,18 @@ fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
     };
 }
 
-fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId) !msgpack.Payload {
+fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed_doc_id.DocId) !msgpack.Payload {
     const arr = try allocator.alloc(msgpack.Payload, 2);
     errdefer allocator.free(arr);
 
     arr[0] = msgpack.Payload.uintToPayload(table_index);
-    const id_bytes = typed.docIdToBytes(id);
+    const id_bytes = typed_doc_id.toBytes(id);
     arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
 
     return .{ .arr = arr };
 }
 
-fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId) !msgpack.Payload {
+fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed_doc_id.DocId) !msgpack.Payload {
     return storePath(allocator, table_index, id);
 }
 
@@ -204,7 +205,7 @@ test "StoreService: setPath path validation" {
     {
         const arr = try allocator.alloc(msgpack.Payload, 3);
         arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
-        const id_bytes = typed.docIdToBytes(1);
+        const id_bytes = typed_doc_id.toBytes(1);
         arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
         arr[2] = msgpack.Payload.uintToPayload(999);
         const path = msgpack.Payload{ .arr = arr };
@@ -248,7 +249,7 @@ test "StoreService: remove" {
     {
         const arr = try allocator.alloc(msgpack.Payload, 3);
         arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("people"));
-        const id_bytes = typed.docIdToBytes(1);
+        const id_bytes = typed_doc_id.toBytes(1);
         arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
         arr[2] = msgpack.Payload.uintToPayload(app.fieldIndex("people", "name"));
         const path = msgpack.Payload{ .arr = arr };
@@ -567,8 +568,8 @@ test "StoreService: queryMore - pagination" {
     // Encode a synthetic cursor for the load-more request.
     // Default order_by is the id field (doc_id type), so sort_value must be a doc_id.
     const cursor_token = try query_parser.encodeCursorToken(allocator, .{
-        .sort_value = .{ .scalar = .{ .doc_id = typed.zeroDocId } },
-        .id = typed.zeroDocId,
+        .sort_value = .{ .scalar = .{ .doc_id = typed_doc_id.zero } },
+        .id = typed_doc_id.zero,
     });
     defer allocator.free(cursor_token);
 
@@ -631,7 +632,7 @@ test "StoreService: validateFieldWrite tests" {
         const val = msgpack.Payload.intToPayload(25);
         const field = try store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val);
         try testing.expectEqualStrings("age", field.name);
-        try testing.expectEqual(schema.FieldType.integer, field.storage_type);
+        try testing.expectEqual(schema_types.FieldType.integer, field.storage_type);
     }
 }
 
@@ -641,7 +642,7 @@ test "StoreService: validateFieldWrite tests" {
 fn batchSetTuple(
     allocator: std.mem.Allocator,
     table_index: usize,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
     value: msgpack.Payload,
 ) !msgpack.Payload {
     const path = try documentPath(allocator, table_index, id);
@@ -664,7 +665,7 @@ fn batchSetTuple(
 fn batchRemoveTuple(
     allocator: std.mem.Allocator,
     table_index: usize,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
 ) !msgpack.Payload {
     const path = try documentPath(allocator, table_index, id);
     errdefer path.free(allocator);
@@ -930,7 +931,7 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     try testing.expect(scope_a.user_doc_id != scope_c.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_a.user_doc_id, schema.global_namespace_id);
+    const record = try sth.readDoc(allocator, &app.storage_engine, users.index, scope_a.user_doc_id, schema_system.global_namespace_id);
     defer if (record) |r| r.deinit(allocator);
     try testing.expect(record != null);
 }
@@ -988,7 +989,7 @@ test "StoreService: create requires all required fields but update does not" {
 
     const service = &app.store_service;
     const items = try app.table("items");
-    const doc_id: typed.DocId = 1;
+    const doc_id: typed_doc_id.DocId = 1;
 
     // 1. Create without required field 'status' should fail
     {

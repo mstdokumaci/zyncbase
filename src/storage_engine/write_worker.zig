@@ -4,17 +4,20 @@ const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
-const typed = @import("../typed.zig");
-const schema = @import("../schema.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const sql = @import("sql.zig");
 const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
 const change_queue_mod = @import("../change_queue.zig");
 const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const ChangeQueue = change_queue_mod.ChangeQueue;
-const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
-const SessionResolutionResult = @import("../connection.zig").SessionResolutionResult;
-const wire = @import("../wire.zig");
+const SessionResolutionBuffer = @import("../connection/resolution_buffer.zig").SessionResolutionBuffer;
+const SessionResolutionResult = @import("../connection/resolution_buffer.zig").SessionResolutionResult;
+const wire_errors = @import("../wire/errors.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
@@ -22,7 +25,7 @@ const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 
-const DocId = typed.DocId;
+const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
 const BatchEntry = write_queue.BatchEntry;
@@ -62,7 +65,7 @@ pub const WriteWorker = struct {
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
     pk_sets: []@import("pk_set.zig").PkSet,
-    schema: *const schema.Schema,
+    schema: *const schema_types.Schema,
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
     performance_config: PerformanceConfig,
@@ -127,13 +130,13 @@ pub const WriteWorker = struct {
         defer handle.release();
 
         const msg = if (err) |e| blk: {
-            const wire_err = wire.getWireError(e);
-            break :blk wire.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
+            const wire_err = wire_errors.getWireError(e);
+            break :blk wire_encode.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
                 return;
             };
         } else blk: {
-            break :blk wire.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
+            break :blk wire_encode.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
                 return;
             };
@@ -348,19 +351,19 @@ pub const WriteWorker = struct {
             switch (op) {
                 .upsert => |iop| {
                     const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
-                    const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
+                    const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema_system.global_namespace_id;
                     if (try executeUpsertEntry(&ctx, iop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .update => |uop| {
                     const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
-                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
+                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema_system.global_namespace_id;
                     if (try executeUpdateEntry(&ctx, uop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .delete => |dop| {
                     const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-                    const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
+                    const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema_system.global_namespace_id;
                     if (try executeDeleteEntry(&ctx, dop, namespace_id, table_metadata, has_write_ack)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
@@ -393,7 +396,7 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         table_index: usize,
         namespace_id: i64,
-        doc_id: typed.DocId,
+        doc_id: typed_doc_id.DocId,
         has_guard: bool,
         has_write_ack: bool,
         pk_insert: bool,
@@ -448,7 +451,7 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         entry: anytype,
         namespace_id: i64,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
@@ -474,7 +477,7 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         entry: anytype,
         namespace_id: i64,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
@@ -500,7 +503,7 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         entry: anytype,
         namespace_id: i64,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
         has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
@@ -799,7 +802,7 @@ pub const WriteWorker = struct {
                 failed_batch_index.* = entry_idx;
                 return StorageError.UnknownTable;
             };
-            const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
+            const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema_system.global_namespace_id;
 
             const succeeded = switch (entry.kind) {
                 .upsert => executeUpsertEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
@@ -907,7 +910,7 @@ pub const WriteWorker = struct {
             .msg_id = sop.msg_id,
             .scope_seq = sop.scope_seq,
             .namespace_id = 0,
-            .user_doc_id = typed.zeroDocId,
+            .user_doc_id = typed_doc_id.zero,
             .err = null,
             .is_presence = sop.is_presence,
         };
@@ -930,7 +933,7 @@ pub const WriteWorker = struct {
                 self.notifyChanges();
                 return;
             };
-            const identity_namespace_id = if (users_table.namespaced) namespace_id else schema.global_namespace_id;
+            const identity_namespace_id = if (users_table.namespaced) namespace_id else schema_system.global_namespace_id;
 
             if (sql.resolveUserId(
                 self.allocator,
@@ -998,7 +1001,7 @@ pub const WriteWorker = struct {
         op: anytype,
         namespace_id: i64,
         owner_id: DocId,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
     ) !?Record {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
@@ -1008,12 +1011,12 @@ pub const WriteWorker = struct {
         var bind_idx: c_int = 1;
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
-        const owner_id_bytes = typed.docIdToBytes(owner_id);
+        const owner_id_bytes = typed_doc_id.toBytes(owner_id);
         if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (table_metadata.is_users_table) {
             var external_id_buf: [32]u8 = undefined;
-            const external_id = typed.docIdHexSlice(op.id, &external_id_buf);
+            const external_id = typed_doc_id.hexSlice(op.id, &external_id_buf);
             if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
             bind_idx += 1;
         }
@@ -1042,7 +1045,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         op: anytype,
         namespace_id: i64,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
     ) !?Record {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
@@ -1076,7 +1079,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         op: anytype,
         namespace_id: i64,
-        table_metadata: *const schema.Table,
+        table_metadata: *const schema_types.Table,
     ) !?Record {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);

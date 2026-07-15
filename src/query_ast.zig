@@ -1,6 +1,6 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const typed = @import("typed.zig");
+const schema_types = @import("schema/types.zig");
+const typed = @import("typed/types.zig");
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
@@ -121,7 +121,7 @@ pub const ValueShape = enum {
 /// `UnsupportedOperatorForFieldType` when the combination is not permitted.
 pub fn operatorExpectsValueShape(
     op: Operator,
-    field_type: schema.FieldType,
+    field_type: schema_types.FieldType,
 ) error{UnsupportedOperatorForFieldType}!ValueShape {
     switch (op) {
         .isNull, .isNotNull => return .nullary,
@@ -153,8 +153,8 @@ pub const Condition = struct {
     field_index: usize,
     op: Operator,
     value: ?Value,
-    field_type: schema.FieldType,
-    items_type: ?schema.FieldType,
+    field_type: schema_types.FieldType,
+    items_type: ?schema_types.FieldType,
 
     pub fn deinit(self: *Condition, allocator: std.mem.Allocator) void {
         if (self.value) |v| v.deinit(allocator);
@@ -199,8 +199,8 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field_index: usize,
     desc: bool,
-    field_type: schema.FieldType,
-    items_type: ?schema.FieldType,
+    field_type: schema_types.FieldType,
+    items_type: ?schema_types.FieldType,
 };
 
 pub const PredicateState = enum(u8) {

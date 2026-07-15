@@ -1,15 +1,15 @@
 const std = @import("std");
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
-const schema = @import("schema.zig");
-const typed = @import("typed.zig");
+const schema_types = @import("schema/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 
 pub fn createStoreSetMessageWithPayload(
     allocator: std.mem.Allocator,
     id: u64,
     _namespace_id: i64,
     table_index: usize,
-    doc_id_value: typed.DocId,
+    doc_id_value: typed_doc_id.DocId,
     value: msgpack_utils.Payload,
 ) ![]u8 {
     _ = _namespace_id;
@@ -33,7 +33,7 @@ pub fn createStoreSetMessageWithPayload(
     try writer.writeInt(u64, table_index, .big);
 
     // 2. Doc ID
-    const doc_id_bytes = typed.docIdToBytes(doc_id_value);
+    const doc_id_bytes = typed_doc_id.toBytes(doc_id_value);
     try msgpack_utils.writeMsgPackBin(writer, &doc_id_bytes);
 
     try msgpack_utils.writeMsgPackStr(writer, "value");
@@ -154,7 +154,7 @@ pub fn createInvalidStoreSetMessageMissingId(
 /// Creates a MsgPack Payload representing a document as a pair-array based on schema.
 /// Translates string field names to numeric indices using table metadata.
 /// Returns a pair-array: [[field_index, value], ...]
-pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema.Table, fields: anytype) !msgpack_utils.Payload {
+pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_types.Table, fields: anytype) !msgpack_utils.Payload {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(allocator);
     const writer = buf.writer(allocator);

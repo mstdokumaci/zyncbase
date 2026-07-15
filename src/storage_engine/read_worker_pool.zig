@@ -1,22 +1,24 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
 const storage_cache = @import("cache.zig");
 const filter_sql = @import("filter_sql.zig");
 const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
-const wire = @import("../wire.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 
-const DocId = typed.DocId;
+const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const req_queue_type = read_buffer.read_request_queue;
@@ -48,7 +50,7 @@ pub const ReadWorker = struct {
     node: *ReaderNode,
     request_queue: *req_queue_type,
     send_queue: *send_queue_type,
-    schema: *const schema_mod.Schema,
+    schema: *const schema_types.Schema,
     metadata_cache: *metadata_cache_type,
     writer_version: *std.atomic.Value(u64),
     allocator: Allocator,
@@ -67,7 +69,7 @@ pub const ReadWorker = struct {
         node: *ReaderNode,
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
-        schema: *const schema_mod.Schema,
+        schema: *const schema_types.Schema,
         metadata_cache: *metadata_cache_type,
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
@@ -113,7 +115,7 @@ pub const ReadWorker = struct {
 
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
-                const encoded = wire.encodeError(handle.allocator(), msg_id, .{
+                const encoded = wire_encode.encodeError(handle.allocator(), msg_id, .{
                     .code = "STORE_QUERY",
                     .message = @errorName(err),
                 }) catch {
@@ -128,7 +130,7 @@ pub const ReadWorker = struct {
                 };
                 self.notifier.notify();
             } else {
-                const encoded = wire.encodeQuery(handle.allocator(), .{
+                const encoded = wire_encode.encodeQuery(handle.allocator(), .{
                     .msg_id = response.msg_id,
                     .sub_id = response.sub_id,
                     .records = response.records,
@@ -157,7 +159,7 @@ pub const ReadWorker = struct {
             };
             defer handle.release();
 
-            const shutdown_encoded = wire.encodeError(handle.allocator(), request.msg_id, .{
+            const shutdown_encoded = wire_encode.encodeError(handle.allocator(), request.msg_id, .{
                 .code = "STORE_QUERY",
                 .message = "shutdown",
             }) catch |err| {
@@ -195,11 +197,11 @@ pub const ReadWorker = struct {
         const effective_namespace_id = if (table_metadata.namespaced)
             req.namespace_id
         else
-            schema_mod.global_namespace_id;
+            schema_system.global_namespace_id;
 
         const auth_pred = if (req.auth_predicate) |*p| p else null;
 
-        if (isPointLookup(&req.filter, schema_mod.id_field_index)) |id| {
+        if (isPointLookup(&req.filter, schema_system.id_field_index)) |id| {
             const result = self.executeSelectDocument(
                 table_metadata,
                 id,
@@ -226,7 +228,7 @@ pub const ReadWorker = struct {
 
     fn executeSelectDocument(
         self: *ReadWorker,
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         id: DocId,
         namespace_id: i64,
         guard_predicate: ?*const query_ast.FilterPredicate,
@@ -320,7 +322,7 @@ pub const ReadWorker = struct {
 
     fn executeSelectQuery(
         self: *ReadWorker,
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         namespace_id: i64,
         filter: *const query_ast.QueryFilter,
         guard_predicate: ?*const query_ast.FilterPredicate,
@@ -374,7 +376,7 @@ pub const ReadWorker = struct {
     fn buildResponse(
         self: *ReadWorker,
         request: ReadRequest,
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         result: SelectDocumentResult,
     ) ReadResponse {
         if (result.record) |record| {
@@ -411,7 +413,7 @@ pub const ReadWorker = struct {
     fn buildQueryResponse(
         self: *ReadWorker,
         request: ReadRequest,
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         result: SelectQueryResult,
     ) ReadResponse {
         _ = self;
@@ -438,7 +440,7 @@ pub const ReadWorkerPool = struct {
         reader_nodes: []ReaderNode,
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
-        schema: *const schema_mod.Schema,
+        schema: *const schema_types.Schema,
         metadata_cache: *metadata_cache_type,
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,

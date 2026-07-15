@@ -6,11 +6,12 @@ const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed = @import("typed/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 const query_ast = @import("query_ast.zig");
 
 const TestContext = struct {
@@ -58,7 +59,7 @@ const TestContext = struct {
     }
 };
 
-fn makeRecordWithId(allocator: std.mem.Allocator, id: typed.DocId, status: []const u8) !typed.Record {
+fn makeRecordWithId(allocator: std.mem.Allocator, id: typed_doc_id.DocId, status: []const u8) !typed.Record {
     var record = try tth.recordFromValues(allocator, &.{tth.valText(status)});
     // Set the id field at index 0
     record.values[0].deinit(allocator);
@@ -100,7 +101,7 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
     try pool.start();
 
     // Push a matching change (status = "active")
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     const new_record = try makeRecordWithId(allocator, doc_id, "active");
 
     const change = OwnedRecordChange{
@@ -160,7 +161,7 @@ test "NotificationWorkerPool: non-matching change does not push to send_queue" {
     try pool.start();
 
     // Push a non-matching change (status = "inactive")
-    const doc_id: typed.DocId = 43;
+    const doc_id: typed_doc_id.DocId = 43;
     const new_record = try makeRecordWithId(allocator, doc_id, "inactive");
 
     const change = OwnedRecordChange{

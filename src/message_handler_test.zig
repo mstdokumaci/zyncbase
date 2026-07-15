@@ -264,7 +264,7 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     try buf.append(allocator, 0x92); // fixarray(2)
     try buf.append(allocator, 0xcf);
     try writer.writeInt(u64, table.index, .big);
-    const doc_id_bytes = @import("typed.zig").docIdToBytes(1);
+    const doc_id_bytes = @import("typed/doc_id.zig").toBytes(1);
     try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
     try msgpack.writeMsgPackStr(writer, "value");
     try msgpack.writeMsgPackStr(writer, "hello");

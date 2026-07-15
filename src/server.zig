@@ -13,25 +13,33 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationWorkerPool = @import("notification_worker_pool.zig").NotificationWorkerPool;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const connection = @import("connection.zig");
-const SessionResolver = connection.SessionResolver;
-const ConnectionManager = connection.ConnectionManager;
-const ViolationTracker = connection.ConnectionViolationTracker;
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
-const authorization = @import("authorization.zig");
+const connection_session_resolver = @import("connection/session_resolver.zig");
+const connection_manager = @import("connection/manager.zig");
+const connection_violations = @import("connection/violations.zig");
+const connection_ticket_exchange = @import("connection/ticket_exchange.zig");
+const connection_session = @import("connection/session.zig");
+const SessionResolver = connection_session_resolver.SessionResolver;
+const ConnectionManager = connection_manager.ConnectionManager;
+const ViolationTracker = connection_violations.ConnectionViolationTracker;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_parse = @import("schema/parse.zig");
+const Schema = schema_types.Schema;
+const authorization_types = @import("authorization/types.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
+const authorization_parse = @import("authorization/parse.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence.zig").PresenceManager;
-const PresenceWorker = @import("presence.zig").PresenceWorker;
+const PresenceManager = @import("presence/manager.zig").PresenceManager;
+const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
 const send_queue_type = @import("send_queue.zig").send_queue;
-const TicketExchange = connection.TicketExchange;
+const TicketExchange = connection_ticket_exchange.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwksCache = @import("jwt_validator.zig").JwksCache;
-const Session = connection.Session;
+const Session = connection_session.Session;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
@@ -63,7 +71,7 @@ pub const ZyncBaseServer = struct {
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
-    auth_config: authorization.AuthConfig,
+    auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
     jwks_cache: ?*JwksCache = null,
     jwt_validator: ?JwtValidator = null,
@@ -405,7 +413,7 @@ pub const ZyncBaseServer = struct {
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
-                    break :blk schema_mod.implicit_users_schema_json;
+                    break :blk schema_system.implicit_users_schema_json;
                 }
                 std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
                 return err;
@@ -414,13 +422,13 @@ pub const ZyncBaseServer = struct {
         };
         const schema_source: SchemaSource = if (config.schema_content != null)
             .borrowed_config
-        else if (json_text.ptr == schema_mod.implicit_users_schema_json.ptr)
+        else if (json_text.ptr == schema_system.implicit_users_schema_json.ptr)
             .borrowed_builtin
         else
             .owned_file_read;
         defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
 
-        self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
+        self.schema = try schema_parse.initFromJson(self.memory_strategy.generalAllocator(), json_text);
     }
 
     fn loadAuthConfig(self: *ZyncBaseServer, config: *const Config) !void {
@@ -432,15 +440,15 @@ pub const ZyncBaseServer = struct {
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
-                    self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+                    self.auth_config = try authorization_defaults.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
                     return;
                 }
                 return err;
             };
             defer self.memory_strategy.generalAllocator().free(auth_json);
-            self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
+            self.auth_config = try authorization_parse.initFromJson(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
         } else {
-            self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
+            self.auth_config = try authorization_defaults.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
         }
     }
 
@@ -489,7 +497,7 @@ pub const ZyncBaseServer = struct {
 
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
-            self.websocket_server.post("/auth/ticket", te, connection.handleAuthTicket);
+            self.websocket_server.post("/auth/ticket", te, connection_ticket_exchange.handleAuthTicket);
         }
 
         // Register WebSocket handlers with server as user data

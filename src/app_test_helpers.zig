@@ -1,30 +1,41 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const connection = @import("connection.zig");
-const ConnectionManager = connection.ConnectionManager;
-const ViolationTracker = connection.ConnectionViolationTracker;
+const connection_manager = @import("connection/manager.zig");
+const connection_violations = @import("connection/violations.zig");
+const connection_resolution_buffer = @import("connection/resolution_buffer.zig");
+const connection_session_resolver = @import("connection/session_resolver.zig");
+const connection_state = @import("connection/state.zig");
+const connection_session = @import("connection/session.zig");
+const ConnectionManager = connection_manager.ConnectionManager;
+const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const typed = @import("typed.zig");
-const SessionResolutionResult = connection.SessionResolutionResult;
-const SessionResolver = connection.SessionResolver;
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed = @import("typed/types.zig");
+const SessionResolutionResult = connection_resolution_buffer.SessionResolutionResult;
+const SessionResolver = connection_session_resolver.SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const Connection = connection.Connection;
+const Connection = connection_state.Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const Session = connection.Session;
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
-const schema_helpers = @import("schema_test_helpers.zig");
+const Session = connection_session.Session;
+const schema_types = @import("schema/types.zig");
+const schema_mod_format = @import("schema/format.zig");
+const schema_parse = @import("schema/parse.zig");
+const Schema = schema_types.Schema;
+const schema_helpers = @import("schema/test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence.zig").PresenceManager;
-const wire = @import("wire.zig");
+const PresenceManager = @import("presence/manager.zig").PresenceManager;
+const wire_decode = @import("wire/decode.zig");
+const wire_encode = @import("wire/encode.zig");
+const wire_errors = @import("wire/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
-const authorization = @import("authorization.zig");
+const tth = @import("typed/test_helpers.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -65,13 +76,13 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// Returns null for async (deferred) responses. The caller is responsible for freeing the returned []u8.
 pub fn routeWithArenaOptional(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) !?[]u8 {
-    const envelope = try wire.extractEnvelopeFast(bytes);
+    const envelope = try wire_decode.extractEnvelopeFast(bytes);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
     const result = (handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
-        const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
+        const error_msg = try wire_encode.encodeError(arena_allocator, envelope.id, wire_errors.getWireError(err));
         return try allocator.dupe(u8, error_msg);
     }) orelse return null;
 
@@ -116,7 +127,7 @@ pub const AppTestContext = struct {
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema: Schema,
-    auth_config: authorization.AuthConfig,
+    auth_config: authorization_types.AuthConfig,
     test_context: schema_helpers.TestContext,
     test_resolution_mutex: std.Thread.Mutex,
     empty_claims: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -131,16 +142,16 @@ pub const AppTestContext = struct {
     }
 
     pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema_value: Schema) !void {
-        const json_text = try schema_mod.format(allocator, &schema_value);
+        const json_text = try schema_mod_format.format(allocator, &schema_value);
         defer allocator.free(json_text);
 
-        const schema = try schema_mod.initSchema(allocator, json_text);
+        const schema = try schema_parse.initFromJson(allocator, json_text);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
-        const schema = try schema_mod.initSchema(allocator, json);
+        const schema = try schema_parse.initFromJson(allocator, json);
         // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
@@ -177,7 +188,7 @@ pub const AppTestContext = struct {
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization.implicitConfig(gpa, &self.schema);
+        self.auth_config = try authorization_defaults.implicitConfig(gpa, &self.schema);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service
@@ -222,7 +233,7 @@ pub const AppTestContext = struct {
         std.debug.assert(self.memory_strategy.deinit() == .ok);
     }
 
-    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_types.Table {
         return self.schema.table(table_name) orelse error.UnknownTable;
     }
 
@@ -246,7 +257,7 @@ pub const AppTestContext = struct {
     pub fn insertNamed(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -257,7 +268,7 @@ pub const AppTestContext = struct {
     pub fn insertField(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: typed.Value,
@@ -269,7 +280,7 @@ pub const AppTestContext = struct {
     pub fn insertText(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -280,7 +291,7 @@ pub const AppTestContext = struct {
     pub fn insertInt(
         self: *AppTestContext,
         table_name: []const u8,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,

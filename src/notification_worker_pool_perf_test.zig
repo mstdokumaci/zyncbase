@@ -4,16 +4,16 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RecordChange = @import("subscription_engine.zig").RecordChange;
 const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const NotificationWorker = @import("notification_worker_pool.zig").NotificationWorker;
-const wire = @import("wire.zig");
+const wire_encode = @import("wire/encode.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
-const typed = @import("typed.zig");
-const schema_mod = @import("schema.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const schema_system = @import("schema/system.zig");
 
 const TestContext = struct {
     allocator: std.mem.Allocator,
@@ -111,7 +111,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         &ctx.notifier_called,
     );
 
-    const doc_id: typed.DocId = 42;
+    const doc_id: typed_doc_id.DocId = 42;
     var new_record = try tth.recordFromValues(allocator, &.{tth.valInt(0)});
     defer new_record.deinit(allocator);
     new_record.values[0].deinit(allocator);
@@ -137,8 +137,8 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         const handle = try ctx.memory_strategy.acquireArenaDeferred();
         const alloc = handle.allocator();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
-        const id_val = new_record.values[schema_mod.id_field_index];
-        const set_suffix = try wire.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const id_val = new_record.values[schema_system.id_field_index];
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
         while (ctx.send_queue.pop()) |entry| {
@@ -159,9 +159,9 @@ test "NotificationWorkerPool: dispatch fanout performance" {
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
         total_a += t.read();
 
-        const id_val = new_record.values[schema_mod.id_field_index];
+        const id_val = new_record.values[schema_system.id_field_index];
         t = try std.time.Timer.start();
-        const set_suffix = try wire.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         total_b += t.read();
 
         t = try std.time.Timer.start();

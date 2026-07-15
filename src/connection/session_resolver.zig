@@ -7,8 +7,9 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const session_resolution = @import("resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
-const wire = @import("../wire.zig");
-const authorization = @import("../authorization.zig");
+const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
+const authorization_evaluate = @import("../authorization/evaluate.zig");
 
 pub const SessionResolver = struct {
     resolution_buffer: *SessionResolutionBuffer,
@@ -51,7 +52,7 @@ pub const SessionResolver = struct {
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const msg = wire.encodeError(arena.allocator(), msg_id, wire.getWireError(error.RequestSuperseded)) catch |encode_err| {
+        const msg = wire_encode.encodeError(arena.allocator(), msg_id, wire_errors.getWireError(error.RequestSuperseded)) catch |encode_err| {
             std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
             return;
         };
@@ -68,7 +69,7 @@ pub const SessionResolver = struct {
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const msg = wire.encodeError(arena.allocator(), msg_id, wire.getWireError(err)) catch |encode_err| {
+        const msg = wire_encode.encodeError(arena.allocator(), msg_id, wire_errors.getWireError(err)) catch |encode_err| {
             std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
             return;
         };
@@ -113,7 +114,7 @@ pub const SessionResolver = struct {
             return;
         };
 
-        authorization.authorizeNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), result.is_presence) catch |err| {
+        authorization_evaluate.authorizeNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), result.is_presence) catch |err| {
             _ = conn.resetScopeIfSeq(result.scope_seq, result.is_presence);
             self.sendError(conn, result.msg_id, err);
             return;
@@ -124,7 +125,7 @@ pub const SessionResolver = struct {
             return;
         }
 
-        const msg = wire.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {
+        const msg = wire_encode.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {
             std.log.err("SessionResolver failed to encode success response: {}", .{encode_err});
             return;
         };

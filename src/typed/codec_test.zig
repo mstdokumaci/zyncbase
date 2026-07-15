@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const mh = @import("../msgpack_test_helpers.zig");
 const typed = @import("codec.zig");
@@ -168,7 +168,7 @@ test "Value: payload -> json array -> payload roundtrip" {
     const allocator = arena.allocator();
 
     const roundtripJsonValue = struct {
-        fn do(alloc: std.mem.Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, tv: Value) !msgpack.Payload {
+        fn do(alloc: std.mem.Allocator, ft: schema_types.FieldType, items_type: ?schema_types.FieldType, tv: Value) !msgpack.Payload {
             const json_str = try jsonToOwnedSlice(alloc, tv);
             defer alloc.free(json_str);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
@@ -248,7 +248,7 @@ test "Value: payload -> json array -> payload roundtrip" {
 
 test "validateValue: exhaustive type matrix" {
     const allocator = testing.allocator;
-    const Ft = schema.FieldType;
+    const Ft = schema_types.FieldType;
 
     const bin_payload = try msgpack.Payload.binToPayload(&([_]u8{0} ** 16), allocator);
     defer bin_payload.free(allocator);
@@ -340,7 +340,7 @@ test "Value: scalar roundtrips" {
     }.do;
 
     const roundtripJson = struct {
-        fn do(alloc: std.mem.Allocator, ft: schema.FieldType, tv: Value) !Value {
+        fn do(alloc: std.mem.Allocator, ft: schema_types.FieldType, tv: Value) !Value {
             const json_str = try jsonToOwnedSlice(alloc, tv);
             defer alloc.free(json_str);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});

@@ -1,20 +1,23 @@
 const std = @import("std");
 const testing = std.testing;
-const wire = @import("../wire.zig");
+const wire_encode = @import("encode.zig");
+const wire_errors = @import("errors.zig");
 const helpers = @import("test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
-const schema_helpers = @import("../schema_test_helpers.zig");
-const typed = @import("../typed.zig");
+const schema_parse = @import("../schema/parse.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
+const typed = @import("../typed/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const query_parser = @import("../query_parser.zig");
-const tth = @import("../typed_test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
 test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const response = try wire.encodeSuccess(allocator, 12345);
+    const response = try wire_encode.encodeSuccess(allocator, 12345);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -30,8 +33,8 @@ test "encodeSuccess: produces valid MsgPack" {
 
 test "encodeError: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const wire_err = wire.getWireError(error.UnknownTable);
-    const response = try wire.encodeError(allocator, 999, wire_err);
+    const wire_err = wire_errors.getWireError(error.UnknownTable);
+    const response = try wire_encode.encodeError(allocator, 999, wire_err);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -73,7 +76,7 @@ test "encodeQuery: includes subscription pagination fields" {
     const next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(next_cursor_str);
 
-    const response = try wire.encodeQuery(allocator, .{
+    const response = try wire_encode.encodeQuery(allocator, .{
         .msg_id = 44,
         .sub_id = 7,
         .records = records,
@@ -119,7 +122,7 @@ test "encodeSetDeltaSuffix: set operation" {
     const record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer record.deinit(allocator);
 
-    const suffix = try wire.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), record, table_metadata);
+    const suffix = try wire_encode.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), record, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -156,7 +159,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(999);
-    const suffix = try wire.encodeDeleteDeltaSuffix(allocator, 0, id_val);
+    const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 0, id_val);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -182,7 +185,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
 test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
     const allocator = testing.allocator;
     const write_id = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-    const msg = try wire.encodeWriteCommitted(allocator, write_id);
+    const msg = try wire_encode.encodeWriteCommitted(allocator, write_id);
     defer allocator.free(msg);
 
     var reader: std.Io.Reader = .fixed(msg);
@@ -198,8 +201,8 @@ test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
 test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
     const allocator = testing.allocator;
     const write_id = [_]u8{0} ** 16;
-    const wire_err = wire.getWireError(error.PermissionDenied);
-    const msg = try wire.encodeWriteError(allocator, write_id, wire_err, null);
+    const wire_err = wire_errors.getWireError(error.PermissionDenied);
+    const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, null);
     defer allocator.free(msg);
 
     var reader: std.Io.Reader = .fixed(msg);
@@ -216,8 +219,8 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
 test "encodeWriteError: 6-field map includes batchIndex when set" {
     const allocator = testing.allocator;
     const write_id = [_]u8{0} ** 16;
-    const wire_err = wire.getWireError(error.PermissionDenied);
-    const msg = try wire.encodeWriteError(allocator, write_id, wire_err, 2);
+    const wire_err = wire_errors.getWireError(error.PermissionDenied);
+    const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, 2);
     defer allocator.free(msg);
 
     var reader: std.Io.Reader = .fixed(msg);
@@ -235,7 +238,7 @@ test "store_delta_header: decodes to StoreDelta type" {
 
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(allocator);
-    try buf.appendSlice(allocator, &wire.store_delta_header);
+    try buf.appendSlice(allocator, &wire_encode.store_delta_header);
     try buf.append(allocator, 0xcf);
     try buf.writer(allocator).writeInt(u64, 42, .big);
     try msgpack.writeMsgPackStr(buf.writer(allocator), "ops");
@@ -256,7 +259,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
     const id_val = tth.valText("doc-abc-123");
-    const suffix = try wire.encodeDeleteDeltaSuffix(allocator, 1, id_val);
+    const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 1, id_val);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -289,14 +292,14 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
-        .user_id = typed.zeroDocId,
+        .user_id = typed_doc_id.zero,
         .patch = patch,
         .is_new_user = false,
         .joined_at = 0,
         .is_leave = false,
     };
 
-    const bytes = try wire.encodePresenceBroadcast(allocator, 42, &.{update});
+    const bytes = try wire_encode.encodePresenceBroadcast(allocator, 42, &.{update});
     defer allocator.free(bytes);
 
     var reader: std.Io.Reader = .fixed(bytes);
@@ -331,14 +334,14 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
-        .user_id = typed.zeroDocId,
+        .user_id = typed_doc_id.zero,
         .patch = null,
         .is_new_user = false,
         .joined_at = 0,
         .is_leave = true,
     };
 
-    const bytes = try wire.encodePresenceBroadcast(allocator, 7, &.{update});
+    const bytes = try wire_encode.encodePresenceBroadcast(allocator, 7, &.{update});
     defer allocator.free(bytes);
 
     var reader: std.Io.Reader = .fixed(bytes);
@@ -361,7 +364,6 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {
     const allocator = testing.allocator;
-    const schema_mod = @import("../schema.zig");
 
     const schema_json =
         \\{
@@ -373,10 +375,10 @@ test "encodeSchemaSync: fieldFlags match bit encoding rules" {
         \\}
     ;
 
-    var schema = try schema_mod.initSchema(allocator, schema_json);
+    var schema = try schema_parse.initFromJson(allocator, schema_json);
     defer schema.deinit();
 
-    const encoded = try wire.encodeSchemaSync(allocator, &schema);
+    const encoded = try wire_encode.encodeSchemaSync(allocator, &schema);
     defer allocator.free(encoded);
 
     var reader: std.Io.Reader = .fixed(encoded);

@@ -5,11 +5,13 @@ const write_worker_mod = @import("storage_engine/write_worker.zig");
 const WriteWorker = write_worker_mod.WriteWorker;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
 const connection = @import("storage_engine/connection.zig");
-const schema_mod = @import("schema.zig");
-const Schema = schema_mod.Schema;
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const Schema = schema_types.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const typed = @import("typed/types.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
 const pk_set_mod = @import("storage_engine/pk_set.zig");
@@ -18,7 +20,7 @@ const sql = @import("storage_engine/sql.zig");
 const sql_build = @import("sql/build.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const SessionResolutionBuffer = @import("connection.zig").SessionResolutionBuffer;
+const SessionResolutionBuffer = @import("connection/resolution_buffer.zig").SessionResolutionBuffer;
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const read_worker_pool_mod = @import("storage_engine/read_worker_pool.zig");
 const send_queue_type = @import("send_queue.zig").send_queue;
@@ -38,7 +40,7 @@ pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
 pub const ReadKind = read_buffer.ReadKind;
-const DocId = typed.DocId;
+const DocId = typed_doc_id.DocId;
 const Value = typed.Value;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
@@ -437,7 +439,7 @@ pub const StorageEngine = struct {
                 const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
                 const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-                const doc_id = try typed.docIdFromBytes(bytes);
+                const doc_id = try typed_doc_id.fromBytes(bytes);
 
                 self.pk_sets[table_index].insert(self.allocator, doc_id);
             }
@@ -560,7 +562,7 @@ pub const StorageEngine = struct {
     // ─── Storage methods ──────────────────────────────────────────────────
 
     const WriteResources = struct {
-        table_metadata: *const schema_mod.Table,
+        table_metadata: *const schema_types.Table,
         effective_namespace_id: i64,
         rendered_guard: ?filter_sql.RenderedPredicate,
 
@@ -586,7 +588,7 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
     ) !WriteResources {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
         const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         return .{
             .table_metadata = table_metadata,
@@ -796,7 +798,7 @@ pub const StorageEngine = struct {
             .table_index = table_index,
             .id = id,
             .namespace_id = res.effective_namespace_id,
-            .owner_doc_id = typed.zeroDocId,
+            .owner_doc_id = typed_doc_id.zero,
             .sql = sql_string,
             .values = values,
             .guard_values = guard_values,

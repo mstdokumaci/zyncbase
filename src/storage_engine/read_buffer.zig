@@ -1,8 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const schema_mod = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed = @import("../typed/types.zig");
 const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 
 const Record = typed.Record;
@@ -29,7 +29,7 @@ pub const ReadRequest = struct {
 pub const ReadResponse = struct {
     conn_id: u64,
     msg_id: u64,
-    table: *const schema_mod.Table,
+    table: *const schema_types.Table,
     records: []Record,
     next_cursor_str: ?[]const u8,
     sub_id: ?u64 = null,

@@ -1,12 +1,15 @@
 const std = @import("std");
 const testing = std.testing;
-const schema_mod = @import("schema.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const schema_system = @import("schema/system.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const query_ast = @import("query_ast.zig");
 const ColumnValue = @import("storage_engine.zig").ColumnValue;
-const typed = @import("typed.zig");
+const typed = @import("typed/types.zig");
+const typed_codec = @import("typed/codec.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const Value = typed.Value;
 const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
@@ -14,15 +17,15 @@ const sqlite = @import("sqlite");
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("from", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
 
     const columns = [_]ColumnValue{
-        .{ .index = schema_mod.first_user_field_index, .value = undefined },
+        .{ .index = schema_system.first_user_field_index, .value = undefined },
     };
 
     const insert_sql = try sql.buildUpsertDocumentSql(allocator, table_metadata, &columns, null);
@@ -37,9 +40,9 @@ test "filter SQL render cleans up all allocation failures" {
 }
 
 fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("name", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("name", .text)};
     const table = schema_helpers.makeTable("people", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("people") orelse return error.TestExpectedValue;
@@ -96,7 +99,7 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
             var out_list = std.ArrayListUnmanaged(u8).empty;
             defer out_list.deinit(alloc);
-            try typed.writeMsgPack(tv, out_list.writer(alloc));
+            try typed_codec.writeMsgPack(tv, out_list.writer(alloc));
             var reader: std.Io.Reader = .fixed(out_list.items);
             const decoded = try msgpack.decode(alloc, &reader);
             return decoded;
@@ -126,11 +129,11 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
     const arr_payload = msgpack.Payload{ .arr = array_payload_items[0..] };
     const doc_id_value: u128 = 0x00112233445566778899aabbccddeeff;
 
-    const tv_int = try typed.valueFromPayload(allocator, .integer, null, int_payload);
-    const tv_real = try typed.valueFromPayload(allocator, .real, null, real_payload);
-    const tv_text = try typed.valueFromPayload(allocator, .text, null, text_payload);
-    const tv_bool = try typed.valueFromPayload(allocator, .boolean, null, bool_payload);
-    const tv_arr = try typed.valueFromPayload(allocator, .array, .integer, arr_payload);
+    const tv_int = try typed_codec.fromPayload(allocator, .integer, null, int_payload);
+    const tv_real = try typed_codec.fromPayload(allocator, .real, null, real_payload);
+    const tv_text = try typed_codec.fromPayload(allocator, .text, null, text_payload);
+    const tv_bool = try typed_codec.fromPayload(allocator, .boolean, null, bool_payload);
+    const tv_arr = try typed_codec.fromPayload(allocator, .array, .integer, arr_payload);
     const tv_doc_id = Value{ .scalar = .{ .doc_id = doc_id_value } };
 
     var json_buf = sql.JsonBuf.init(allocator);
@@ -185,6 +188,6 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
     try testing.expectEqual(@as(u64, 20), final_arr_payload.arr[1].uint);
 
     try testing.expect(final_doc_id_payload == .bin);
-    const expected_doc_id_bytes = typed.docIdToBytes(doc_id_value);
+    const expected_doc_id_bytes = typed_doc_id.toBytes(doc_id_value);
     try testing.expectEqualSlices(u8, &expected_doc_id_bytes, final_doc_id_payload.bin.value());
 }

@@ -1,8 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const SessionResolutionBuffer = @import("../connection.zig").SessionResolutionBuffer;
-const typed = @import("../typed.zig");
+const SessionResolutionBuffer = @import("../connection/resolution_buffer.zig").SessionResolutionBuffer;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
 
@@ -47,9 +48,9 @@ pub const ReconnectionConfig = struct {
 pub const BatchEntry = struct {
     kind: enum { upsert, update, delete },
     table_index: usize,
-    id: typed.DocId,
+    id: typed_doc_id.DocId,
     namespace_id: i64,
-    owner_doc_id: typed.DocId,
+    owner_doc_id: typed_doc_id.DocId,
     sql: []const u8,
     values: ?[]typed.Value,
     guard_values: ?[]typed.Value = null,
@@ -66,9 +67,9 @@ pub const WriteOp = union(enum) {
     checkpoint: struct { mode: CheckpointMode, latch: *CheckpointLatch },
     upsert: struct {
         table_index: usize,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
-        owner_doc_id: typed.DocId,
+        owner_doc_id: typed_doc_id.DocId,
         sql: []const u8,
         values: []typed.Value,
         guard_values: ?[]typed.Value = null,
@@ -78,7 +79,7 @@ pub const WriteOp = union(enum) {
     },
     update: struct {
         table_index: usize,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         sql: []const u8,
         values: []typed.Value,
@@ -89,7 +90,7 @@ pub const WriteOp = union(enum) {
     },
     delete: struct {
         table_index: usize,
-        id: typed.DocId,
+        id: typed_doc_id.DocId,
         namespace_id: i64,
         sql: []const u8,
         guard_values: ?[]typed.Value = null,

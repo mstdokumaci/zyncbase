@@ -2,21 +2,22 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
 const pattern_mod = @import("pattern.zig");
 const evaluate_mod = @import("evaluate.zig");
 const doc_predicate_mod = @import("doc_predicate.zig");
 
 pub const WriteAuthInput = struct {
     config: *const types.AuthConfig,
-    table: *const schema.Table,
-    session_user_id: typed.DocId,
+    table: *const schema_types.Table,
+    session_user_id: typed_doc_id.DocId,
     session_external_id: ?[]const u8 = null,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
     namespace: []const u8,
-    doc_id: typed.DocId,
+    doc_id: typed_doc_id.DocId,
     value: ?*const msgpack.Payload = null,
     is_create: bool,
 };

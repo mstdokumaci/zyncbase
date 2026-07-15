@@ -2,9 +2,9 @@ const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
 const msgpack = @import("msgpack_utils.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
-const schema_mod = @import("schema.zig");
-const typed = @import("typed.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const typed = @import("typed/types.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
 
@@ -14,7 +14,7 @@ test "basic query filter parsing" {
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "age", "status" },
-        .types = &[_]schema_mod.FieldType{ .integer, .text },
+        .types = &[_]schema_types.FieldType{ .integer, .text },
     }});
     defer schema.deinit();
 
@@ -77,7 +77,7 @@ test "query with orderBy and after" {
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"val"},
-        .types = &[_]schema_mod.FieldType{.text},
+        .types = &[_]schema_types.FieldType{.text},
     }});
     defer schema.deinit();
 
@@ -231,7 +231,7 @@ test "query normalization drops AND notIn empty set" {
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "role", "age" },
-        .types = &[_]schema_mod.FieldType{ .text, .integer },
+        .types = &[_]schema_types.FieldType{ .text, .integer },
     }});
     defer schema.deinit();
 
@@ -310,7 +310,7 @@ test "contains on array field parses using element type" {
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"tags"},
-        .types = &[_]schema_mod.FieldType{.array},
+        .types = &[_]schema_types.FieldType{.array},
     }});
     defer schema.deinit();
 
@@ -325,7 +325,7 @@ test "contains on array field parses using element type" {
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(schema_mod.FieldType.array, filter.predicate.conditions.?[0].field_type);
+    try testing.expectEqual(schema_types.FieldType.array, filter.predicate.conditions.?[0].field_type);
     try testing.expectEqualStrings("urgent", filter.predicate.conditions.?[0].value.?.scalar.text);
 }
 
@@ -355,7 +355,7 @@ test "isNull with operand is rejected" {
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"deleted_at"},
-        .types = &[_]schema_mod.FieldType{.integer},
+        .types = &[_]schema_types.FieldType{.integer},
     }});
     defer schema.deinit();
 

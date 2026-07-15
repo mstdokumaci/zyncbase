@@ -1,16 +1,18 @@
 const std = @import("std");
-const schema_mod = @import("schema.zig");
-const parse = @import("schema/parse.zig");
-const Schema = schema_mod.Schema;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const ddl_generator = @import("sql/ddl.zig");
-const migration_detector = @import("migration_detector.zig");
-const migration_executor = @import("migration_executor.zig");
+const schema_types = @import("types.zig");
+const schema_parse = @import("parse.zig");
+const schema_index = @import("index.zig");
+const schema_mod_format = @import("format.zig");
+const Schema = schema_types.Schema;
+const StorageEngine = @import("../storage_engine.zig").StorageEngine;
+const ddl_generator = @import("../sql/ddl.zig");
+const migration_detector = @import("../migration_detector.zig");
+const migration_executor = @import("../migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const send_queue_mod = @import("send_queue.zig");
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const send_queue_mod = @import("../send_queue.zig");
 const send_queue_type = send_queue_mod.send_queue;
-const ChangeQueue = @import("change_queue.zig").ChangeQueue;
+const ChangeQueue = @import("../change_queue.zig").ChangeQueue;
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
@@ -18,11 +20,11 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 fn initField(
     name: []const u8,
     name_quoted: []const u8,
-    field_type: schema_mod.FieldType,
-    items_type: ?schema_mod.FieldType,
+    field_type: schema_types.FieldType,
+    items_type: ?schema_types.FieldType,
     required: bool,
     indexed: bool,
-) schema_mod.Field {
+) schema_types.Field {
     return .{
         .name = name,
         .name_quoted = name_quoted,
@@ -38,22 +40,22 @@ fn initField(
 
 /// Comptime field builder — auto-computes name_quoted at compile time.
 /// For runtime names, use makeFieldAlloc.
-pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+pub fn makeField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
     return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, false);
 }
 
 /// Comptime indexed field builder.
-pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
     return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, true);
 }
 
 /// Comptime required field builder.
-pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
+pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
     return initField(name, "\"" ++ name ++ "\"", sql_type, null, true, false);
 }
 
 /// Comptime table builder — auto-computes name_quoted at compile time.
-pub fn makeTable(comptime name: []const u8, fields: []const schema_mod.Field) schema_mod.Table {
+pub fn makeTable(comptime name: []const u8, fields: []const schema_types.Field) schema_types.Table {
     return .{
         .name = name,
         .name_quoted = "\"" ++ name ++ "\"",
@@ -63,14 +65,14 @@ pub fn makeTable(comptime name: []const u8, fields: []const schema_mod.Field) sc
     };
 }
 
-pub fn isClientWritableFieldIndex(table: *const schema_mod.Table, index: usize) bool {
+pub fn isClientWritableFieldIndex(table: *const schema_types.Table, index: usize) bool {
     if (!table.canonical_fields) return index < table.fields.len;
     return index >= table.user_field_start and index < table.user_field_end;
 }
 
 /// Runtime field builder (for property tests with randomized names).
 /// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
-pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_mod.FieldType) !schema_mod.Field {
+pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_types.FieldType) !schema_types.Field {
     return initField(
         try allocator.dupe(u8, name),
         try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
@@ -83,7 +85,7 @@ pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: 
 
 /// Runtime table builder with auto-computed name_quoted.
 /// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
-pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema_mod.Field) !schema_mod.Table {
+pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema_types.Field) !schema_types.Table {
     return .{
         .name = try allocator.dupe(u8, name),
         .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
@@ -95,12 +97,12 @@ pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []
 
 pub const TestFieldDef = struct {
     name: []const u8,
-    field_type: schema_mod.FieldType,
-    items_type: ?schema_mod.FieldType = null,
+    field_type: schema_types.FieldType,
+    items_type: ?schema_types.FieldType = null,
 };
 
-pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef, table_index: usize) schema_mod.Table {
-    var declared_fields = allocator.alloc(schema_mod.Field, fields.len) catch @panic("oom"); // zwanzig-disable-line: store-violations-engine
+pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef, table_index: usize) schema_types.Table {
+    var declared_fields = allocator.alloc(schema_types.Field, fields.len) catch @panic("oom"); // zwanzig-disable-line: store-violations-engine
     for (fields, 0..) |field_def, built| {
         declared_fields[built] = initField(
             allocator.dupe(u8, field_def.name) catch @panic("oom"),
@@ -112,7 +114,7 @@ pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: 
         );
     }
 
-    var declared = schema_mod.Table{
+    var declared = schema_types.Table{
         .name = allocator.dupe(u8, name) catch @panic("oom"),
         .name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom"),
         .fields = declared_fields,
@@ -121,21 +123,21 @@ pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: 
     };
     defer declared.deinit(allocator);
 
-    return schema_mod.buildRuntimeTable(allocator, declared, table_index) catch |err| @panic(@errorName(err));
+    return schema_parse.buildRuntimeTable(allocator, declared, table_index) catch |err| @panic(@errorName(err));
 }
 
-pub fn makeSingleRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
+pub fn makeSingleRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_types.Table {
     return makeRuntimeTable(allocator, name, fields, 0);
 }
 
-pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const schema_mod.Table) !Schema {
-    return parse.initFromTables(
+pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const schema_types.Table) !Schema {
+    return schema_parse.initFromTables(
         allocator,
         version,
         null,
         tables,
-        &[_]schema_mod.PresenceField{},
-        &[_]schema_mod.PresenceField{},
+        &[_]schema_types.PresenceField{},
+        &[_]schema_types.PresenceField{},
         &[_][]const u8{},
         &[_][]const u8{},
     );
@@ -144,14 +146,14 @@ pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, t
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
-    types: ?[]const schema_mod.FieldType = null,
+    types: ?[]const schema_types.FieldType = null,
 };
 
 fn tableDefToTestFieldDefs(allocator: std.mem.Allocator, td: TableDef) ![]TestFieldDef {
-    const types = td.types orelse &[_]schema_mod.FieldType{};
+    const types = td.types orelse &[_]schema_types.FieldType{};
     const fields = try allocator.alloc(TestFieldDef, td.fields.len);
     for (td.fields, 0..) |field_name, j| {
-        const field_type: schema_mod.FieldType = if (j < types.len) types[j] else .text;
+        const field_type: schema_types.FieldType = if (j < types.len) types[j] else .text;
         fields[j] = .{
             .name = field_name,
             .field_type = field_type,
@@ -169,7 +171,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     };
 
     const runtime_len = tables_def.len + @intFromBool(!has_users);
-    var runtime_tables = try allocator.alloc(schema_mod.Table, runtime_len);
+    var runtime_tables = try allocator.alloc(schema_types.Table, runtime_len);
     var built_count: usize = 0;
     errdefer {
         for (runtime_tables[0..built_count]) |*t| t.deinit(allocator);
@@ -210,7 +212,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     };
     errdefer result.deinit();
 
-    try schema_mod.buildTableIndex(allocator, &result);
+    try schema_index.buildTableIndex(allocator, &result);
     return result;
 }
 
@@ -219,7 +221,7 @@ pub fn deinitTestSchema(_: std.mem.Allocator, schema_value: *Schema) void {
 }
 
 pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Schema, path: []const u8) !void {
-    const json_text = try schema_mod.format(allocator, schema_value);
+    const json_text = try schema_mod_format.format(allocator, schema_value);
     defer allocator.free(json_text);
 
     // Ensure directory exists

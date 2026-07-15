@@ -1,14 +1,14 @@
 const std = @import("std");
-const schema_mod = @import("../schema.zig");
-const schema_helpers = @import("../schema_test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
 const buf_mod = @import("buf.zig");
 const build = @import("build.zig");
 
 test "appendProjectedColumnsSql projects all fields with proper quoting" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("from", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
@@ -24,9 +24,9 @@ test "appendProjectedColumnsSql projects all fields with proper quoting" {
 
 test "appendSelectFromTableSql builds SELECT ... FROM with quoted identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("from", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
@@ -42,9 +42,9 @@ test "appendSelectFromTableSql builds SELECT ... FROM with quoted identifiers" {
 
 test "append helpers compose into a complete SELECT query" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("from", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("select") orelse return error.TestExpectedValue;
@@ -66,9 +66,9 @@ test "append helpers compose into a complete SELECT query" {
 
 test "buildSelectDocumentSql builds no-guard SELECT document query" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("title", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("docs") orelse return error.TestExpectedValue;
@@ -95,9 +95,9 @@ test "buildSelectAllIdsSql builds simple id projection" {
 
 test "buildDeleteDocumentSqlPrefix builds delete prefix" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("title", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("docs") orelse return error.TestExpectedValue;
@@ -112,9 +112,9 @@ test "buildDeleteDocumentSqlPrefix builds delete prefix" {
 
 test "buildDeleteDocumentSqlSuffix builds returning clause" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_mod.Field{schema_helpers.makeField("title", .text)};
+    const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
-    var tables = [_]schema_mod.Table{table};
+    var tables = [_]schema_types.Table{table};
     var schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer schema.deinit();
     const table_metadata = schema.table("docs") orelse return error.TestExpectedValue;

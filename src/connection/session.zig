@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
+const typed = @import("../typed/types.zig");
 
 pub const Session = struct {
     external_id: []const u8,

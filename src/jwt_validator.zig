@@ -2,7 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("uwebsockets_wrapper.zig").c;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
-const typed = @import("typed.zig");
+const typed = @import("typed/types.zig");
+const typed_codec = @import("typed/codec.zig");
 const json_read = @import("json/read.zig");
 const base64_utils = @import("base64_utils.zig");
 
@@ -531,7 +532,7 @@ fn extractClaimsFromPayload(
 
         const claim_value = obj.get(jwt_claim_name) orelse continue;
 
-        const typed_val = try typed.valueFromDynamicJson(allocator, claim_value);
+        const typed_val = try typed_codec.fromDynamicJson(allocator, claim_value);
         errdefer typed_val.deinit(allocator);
 
         const key = try allocator.dupe(u8, session_var_name);

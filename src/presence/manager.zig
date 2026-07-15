@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed = @import("../typed.zig");
-const schema_mod = @import("../schema.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const schema_types = @import("../schema/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
 const Subscriber = @import("subscriber.zig").Subscriber;
@@ -15,14 +15,14 @@ pub const PresenceManager = struct {
     data_mutex: std.Thread.Mutex,
 
     // Typed schema built at startup (names + declared types)
-    user_fields: []const schema_mod.PresenceField,
-    shared_fields: []const schema_mod.PresenceField,
+    user_fields: []const schema_types.PresenceField,
+    shared_fields: []const schema_types.PresenceField,
 
     // User state: namespace_id → (users.id → PresenceRecord)
-    user_state: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed.DocId, PresenceRecord)),
+    user_state: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed_doc_id.DocId, PresenceRecord)),
 
     // User join timestamps: namespace_id → (users.id → joined_at_ms)
-    user_joined_at: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed.DocId, i64)),
+    user_joined_at: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed_doc_id.DocId, i64)),
 
     // Shared state: namespace_id → PresenceRecord
     shared_state: std.AutoHashMapUnmanaged(i64, PresenceRecord),
@@ -39,7 +39,7 @@ pub const PresenceManager = struct {
 
     pub const PendingUserUpdate = struct {
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
         patch: ?msgpack.Payload, // null = leave (or transferred to batch)
         is_new_user: bool, // true = join event, false = update event
         joined_at: i64, // actual join timestamp (0 for non-join)
@@ -55,8 +55,8 @@ pub const PresenceManager = struct {
     pub fn init(
         self: *PresenceManager,
         allocator: Allocator,
-        user_fields: []const schema_mod.PresenceField,
-        shared_fields: []const schema_mod.PresenceField,
+        user_fields: []const schema_types.PresenceField,
+        shared_fields: []const schema_types.PresenceField,
     ) void {
         self.* = .{
             .allocator = allocator,
@@ -124,7 +124,7 @@ pub const PresenceManager = struct {
     pub fn setUser(
         self: *PresenceManager,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
         patch: msgpack.Payload,
     ) !void {
         self.data_mutex.lock();
@@ -195,7 +195,7 @@ pub const PresenceManager = struct {
         ns_result: anytype,
         user_result: anytype,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
         ns_created: bool,
         now: i64,
     ) !void {
@@ -299,7 +299,7 @@ pub const PresenceManager = struct {
     pub fn removeUser(
         self: *PresenceManager,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
@@ -365,7 +365,7 @@ pub const PresenceManager = struct {
     fn findPendingUserUpdateIndex(
         self: *PresenceManager,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
     ) ?usize {
         var i: usize = 0;
         while (i < self.pending_user_updates.items.len) {
@@ -380,7 +380,7 @@ pub const PresenceManager = struct {
     fn findPendingUserUpdate(
         self: *PresenceManager,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
     ) ?*PendingUserUpdate {
         for (self.pending_user_updates.items) |*update| {
             if (update.namespace_id == namespace_id and update.user_id == user_id) return update;
@@ -543,7 +543,7 @@ pub const PresenceManager = struct {
     pub fn removeAllForConnection(
         self: *PresenceManager,
         namespace_id: i64,
-        user_id: typed.DocId,
+        user_id: typed_doc_id.DocId,
         conn_id: u64,
     ) !void {
         try self.removeUser(namespace_id, user_id);
@@ -747,7 +747,7 @@ pub const UserSnapshot = struct {
 };
 
 pub const UserEntry = struct {
-    user_id: typed.DocId,
+    user_id: typed_doc_id.DocId,
     data: PresenceRecord,
     joined_at: i64,
 };

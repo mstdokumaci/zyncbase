@@ -1,5 +1,5 @@
 const std = @import("std");
-const typed = @import("typed.zig");
+const typed = @import("types.zig");
 const Value = typed.Value;
 const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;

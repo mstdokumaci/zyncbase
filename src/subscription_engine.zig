@@ -4,7 +4,7 @@ const query_ast = @import("query_ast.zig");
 const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const typed = @import("typed.zig");
+const typed = @import("typed/types.zig");
 const Record = typed.Record;
 const Value = typed.Value;
 

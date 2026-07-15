@@ -2,14 +2,14 @@ const std = @import("std");
 const testing = std.testing;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
-const typed = @import("typed.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 
 test "ChangeQueue: computeShard determinism and range" {
     const alloc = testing.allocator;
     var queue = try ChangeQueue.init(alloc, 8);
     defer queue.deinit();
 
-    const doc_id: typed.DocId = 12345;
+    const doc_id: typed_doc_id.DocId = 12345;
     const namespace_id: i64 = 42;
     const table_index: usize = 0;
 
@@ -82,7 +82,7 @@ test "ChangeQueue: push routes to correct shard" {
     var queue = try ChangeQueue.init(alloc, 4);
     defer queue.deinit();
 
-    const doc_id: typed.DocId = 999;
+    const doc_id: typed_doc_id.DocId = 999;
     const namespace_id: i64 = 100;
     const table_index: usize = 2;
 

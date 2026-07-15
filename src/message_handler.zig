@@ -9,13 +9,16 @@ const connection_mod = @import("connection/state.zig");
 const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence.zig").PresenceManager;
+const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceOp = @import("presence/worker.zig").PresenceOp;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
-const wire = @import("wire.zig");
-const authorization = @import("authorization.zig");
-const schema_mod = @import("schema.zig");
-const typed = @import("typed.zig");
+const wire_errors = @import("wire/errors.zig");
+const wire_decode = @import("wire/decode.zig");
+const wire_encode = @import("wire/encode.zig");
+const authorization_types = @import("authorization/types.zig");
+const authorization_evaluate = @import("authorization/evaluate.zig");
+const schema_types = @import("schema/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -28,8 +31,8 @@ pub const MessageHandler = struct {
     presence_manager: *PresenceManager,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
-    auth_config: *const authorization.AuthConfig,
-    schema: *const schema_mod.Schema,
+    auth_config: *const authorization_types.AuthConfig,
+    schema: *const schema_types.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
@@ -47,8 +50,8 @@ pub const MessageHandler = struct {
         presence_manager: *PresenceManager,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
-        auth_config: *const authorization.AuthConfig,
-        schema: *const schema_mod.Schema,
+        auth_config: *const authorization_types.AuthConfig,
+        schema: *const schema_types.Schema,
         jwt_validator: ?*JwtValidator,
         session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
     ) void {
@@ -132,7 +135,7 @@ pub const MessageHandler = struct {
                 });
                 const rate: u64 = self.security_config.max_messages_per_second;
                 const ms_until_token: u64 = (1000 + rate - 1) / rate;
-                var err = wire.getWireError(error.RateLimited);
+                var err = wire_errors.getWireError(error.RateLimited);
                 err.retry_after_ms = ms_until_token;
                 try self.sendError(self.allocator, conn, null, err);
                 return;
@@ -140,7 +143,7 @@ pub const MessageHandler = struct {
         }
 
         // 2. Extract envelope from raw bytes (zero-alloc)
-        const envelope = wire.extractEnvelopeFast(message) catch |err| {
+        const envelope = wire_decode.extractEnvelopeFast(message) catch |err| {
             std.log.warn("Failed to extract envelope from connection {}: {}", .{ conn_id, err });
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
@@ -149,7 +152,7 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-            try self.sendError(self.allocator, conn, null, wire.getWireError(err));
+            try self.sendError(self.allocator, conn, null, wire_errors.getWireError(err));
             return;
         };
 
@@ -167,7 +170,7 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-            const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
+            const response_err = try wire_encode.encodeError(arena_allocator, envelope.id, wire_errors.getWireError(err));
             conn.send(response_err) catch {
                 std.log.warn("Connection {}: dropped while sending error response, closing", .{conn_id});
                 ws.close();
@@ -188,7 +191,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
-        envelope: wire.Envelope,
+        envelope: wire_decode.Envelope,
         message: []const u8,
     ) !?[]const u8 {
         const msg_type = classifyMsgType(envelope.type) orelse return error.UnknownMessageType;
@@ -235,8 +238,8 @@ pub const MessageHandler = struct {
         }
     }
 
-    pub fn sendError(_: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire.WireError) !void {
-        const error_msg = try wire.encodeError(allocator, msg_id, wire_err);
+    pub fn sendError(_: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire_errors.WireError) !void {
+        const error_msg = try wire_encode.encodeError(allocator, msg_id, wire_err);
         defer allocator.free(error_msg);
         conn.send(error_msg) catch {
             std.log.warn("Connection {}: dropped while sending error, closing", .{conn.id});
@@ -278,7 +281,7 @@ pub const MessageHandler = struct {
         };
     }
 
-    fn rejectNamespaceSwitch(schema: *const schema_mod.Schema, conn: *Connection, req_namespace: []const u8) !void {
+    fn rejectNamespaceSwitch(schema: *const schema_types.Schema, conn: *Connection, req_namespace: []const u8) !void {
         if (schema.table("users")) |users_table| {
             if (users_table.namespaced) {
                 if (conn.getStoreNamespace() orelse
@@ -303,7 +306,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = try wire.extractStoreSetNamespaceFast(message);
+        const req = try wire_decode.extractStoreSetNamespaceFast(message);
 
         try rejectNamespaceSwitch(self.schema, conn, req.namespace);
 
@@ -312,9 +315,9 @@ pub const MessageHandler = struct {
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, false);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
+            try authorization_evaluate.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
-                return try wire.encodeSuccess(arena_allocator, msg_id);
+                return try wire_encode.encodeSuccess(arena_allocator, msg_id);
             }
             return error.RequestSuperseded;
         }
@@ -330,12 +333,12 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        const req = try wire.extractStoreUnsubscribeFast(message);
+        const req = try wire_decode.extractStoreUnsubscribeFast(message);
 
         self.subscription_engine.unsubscribe(conn.id, req.subId);
         conn.removeSubscription(req.subId);
 
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreLoadMore(
@@ -345,7 +348,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = try wire.extractStoreLoadMoreFast(message);
+        const req = try wire_decode.extractStoreLoadMoreFast(message);
 
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
             .connection_id = conn.id,
@@ -380,7 +383,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
+        const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
         const value = payloads.value orelse return error.MissingRequiredFields;
         const session = try requireStoreSession(conn);
 
@@ -392,7 +395,7 @@ pub const MessageHandler = struct {
             value,
         );
 
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreRemove(
@@ -402,7 +405,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
+        const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
 
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
@@ -412,7 +415,7 @@ pub const MessageHandler = struct {
             payloads.path,
         );
 
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreBatch(
@@ -422,7 +425,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        const payloads = try wire.extractStoreBatchPayloads(message, arena_allocator);
+        const payloads = try wire_decode.extractStoreBatchPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
@@ -431,7 +434,7 @@ pub const MessageHandler = struct {
             payloads.ops,
         );
 
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreSubscribe(
@@ -514,7 +517,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const token = wire.extractAuthRefreshFast(message) catch {
+        const token = wire_decode.extractAuthRefreshFast(message) catch {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
             return null;
         };
@@ -547,7 +550,7 @@ pub const MessageHandler = struct {
         validated.deinit(conn.allocator);
         conn.updateSessionClaims(claims, expires_at);
 
-        return try wire.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
+        return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }
 
     // === Presence message handlers ===
@@ -559,7 +562,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = wire.extractPresenceSetNamespaceFast(message) catch {
+        const req = wire_decode.extractPresenceSetNamespaceFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -570,7 +573,7 @@ pub const MessageHandler = struct {
         errdefer _ = conn.resetScopeIfSeq(scope_seq, true);
 
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeNamespace(
+            try authorization_evaluate.authorizeNamespace(
                 arena_allocator,
                 self.auth_config,
                 req.namespace,
@@ -580,7 +583,7 @@ pub const MessageHandler = struct {
                 true,
             );
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, true)) {
-                return try wire.encodeSuccess(arena_allocator, msg_id);
+                return try wire_encode.encodeSuccess(arena_allocator, msg_id);
             }
             return error.RequestSuperseded;
         }
@@ -596,13 +599,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = wire.extractPresenceSetFast(message, arena_allocator) catch {
+        const req = wire_decode.extractPresenceSetFast(message, arena_allocator) catch {
             return error.InvalidMessageFormat;
         };
 
         const session = try requirePresenceSession(conn);
 
-        try authorization.authorizePresenceWrite(
+        try authorization_evaluate.authorizePresenceWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,
@@ -619,7 +622,7 @@ pub const MessageHandler = struct {
             .user_id = session.user_doc_id,
             .patch = cloned_patch,
         } });
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceSetShared(
@@ -629,13 +632,13 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = wire.extractPresenceSetSharedFast(message, arena_allocator) catch {
+        const req = wire_decode.extractPresenceSetSharedFast(message, arena_allocator) catch {
             return error.InvalidMessageFormat;
         };
 
         const session = try requirePresenceSession(conn);
 
-        try authorization.authorizePresenceSharedWrite(
+        try authorization_evaluate.authorizePresenceSharedWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,
@@ -652,7 +655,7 @@ pub const MessageHandler = struct {
             .patch = cloned_patch,
             .source_conn = conn.id,
         } });
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceSubscribe(
@@ -662,7 +665,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        _ = wire.extractPresenceSubscribeFast(message) catch {
+        _ = wire_decode.extractPresenceSubscribeFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -685,7 +688,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = wire.extractPresenceUnsubscribeFast(message) catch {
+        const req = wire_decode.extractPresenceUnsubscribeFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -696,7 +699,7 @@ pub const MessageHandler = struct {
             .namespace_id = session.namespace_id,
             .conn_id = conn.id,
         } });
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceSubscribeShared(
@@ -706,7 +709,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        _ = wire.extractPresenceSubscribeSharedFast(message) catch {
+        _ = wire_decode.extractPresenceSubscribeSharedFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -729,7 +732,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        const req = wire.extractPresenceUnsubscribeSharedFast(message) catch {
+        const req = wire_decode.extractPresenceUnsubscribeSharedFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -740,7 +743,7 @@ pub const MessageHandler = struct {
             .namespace_id = session.namespace_id,
             .conn_id = conn.id,
         } });
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handlePresenceRemove(
@@ -750,7 +753,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) !?[]const u8 {
-        _ = wire.extractPresenceRemoveFast(message) catch {
+        _ = wire_decode.extractPresenceRemoveFast(message) catch {
             return error.InvalidMessageFormat;
         };
 
@@ -760,10 +763,10 @@ pub const MessageHandler = struct {
             .namespace_id = session.namespace_id,
             .user_id = session.user_doc_id,
         } });
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
-    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed.DocId } {
+    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed_doc_id.DocId } {
         if (!conn.presence_ready) return error.SessionNotReady;
         if (conn.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
         return .{
@@ -798,7 +801,7 @@ pub const MessageHandler = struct {
     }
 
     fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) !void {
-        const disconnect_msg = wire.encodeServerDisconnect(self.allocator, code, msg) catch return;
+        const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         conn.send(disconnect_msg) catch |err| {
             std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });

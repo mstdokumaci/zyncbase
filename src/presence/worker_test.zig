@@ -1,41 +1,15 @@
 const std = @import("std");
 const testing = std.testing;
-const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
-const PresenceManager = @import("presence/manager.zig").PresenceManager;
-const schema_mod = @import("schema.zig");
-const msgpack = @import("msgpack_utils.zig");
-const send_queue_type = @import("send_queue.zig").send_queue;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const typed = @import("typed.zig");
-
-fn makeTestUserFields(allocator: std.mem.Allocator) ![]const schema_mod.PresenceField {
-    const fields = try allocator.alloc(schema_mod.PresenceField, 2);
-    fields[0] = .{ .name = try allocator.dupe(u8, "cursor__x"), .declared_type = .real };
-    fields[1] = .{ .name = try allocator.dupe(u8, "status"), .declared_type = .text };
-    return fields;
-}
-
-fn freeTestFields(allocator: std.mem.Allocator, fields: []const schema_mod.PresenceField) void {
-    for (fields) |f| f.deinit(allocator);
-    allocator.free(fields);
-}
-
-fn makeTestSharedFields(allocator: std.mem.Allocator) ![]const schema_mod.PresenceField {
-    const fields = try allocator.alloc(schema_mod.PresenceField, 1);
-    fields[0] = .{ .name = try allocator.dupe(u8, "slide"), .declared_type = .integer };
-    return fields;
-}
-
-fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    var pairs = try allocator.alloc(msgpack.Payload, entries.len);
-    for (entries, 0..) |entry, i| {
-        var pair = try allocator.alloc(msgpack.Payload, 2);
-        pair[0] = msgpack.Payload.uintToPayload(entry.idx);
-        pair[1] = entry.value;
-        pairs[i] = .{ .arr = pair };
-    }
-    return .{ .arr = pairs };
-}
+const th = @import("test_helpers.zig");
+const makeTestUserFields = th.makeTestUserFields;
+const freeTestFields = th.freeTestFields;
+const makePresencePatch = th.makePresencePatch;
+const makeTestSharedSingleField = th.makeTestSharedSingleField;
+const PresenceWorker = @import("worker.zig").PresenceWorker;
+const PresenceManager = @import("manager.zig").PresenceManager;
+const typed = @import("../typed/doc_id.zig");
+const send_queue_type = @import("../send_queue.zig").send_queue;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 
 fn notifierFn(ctx: ?*anyopaque) void {
     const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(ctx));
@@ -59,7 +33,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
-    const shared_fields = try makeTestSharedFields(allocator);
+    const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
@@ -133,7 +107,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
-    const shared_fields = try makeTestSharedFields(allocator);
+    const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
@@ -185,7 +159,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
-    const shared_fields = try makeTestSharedFields(allocator);
+    const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
@@ -248,7 +222,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
-    const shared_fields = try makeTestSharedFields(allocator);
+    const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;

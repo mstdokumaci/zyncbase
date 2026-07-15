@@ -1,13 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const spmcBlockingQueue = @import("queues/spmc_blocking_queue.zig").spmcBlockingQueue;
-const typed = @import("typed.zig");
+const typed = @import("typed/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const Record = typed.Record;
 
 pub const OwnedRecordChange = struct {
     table_index: usize,
     namespace_id: i64,
-    doc_id: typed.DocId,
+    doc_id: typed_doc_id.DocId,
     operation: Operation,
     old_record: ?Record,
     new_record: ?Record,
@@ -75,7 +76,7 @@ pub const ChangeQueue = struct {
     }
 };
 
-fn computeShard(namespace_id: i64, table_index: usize, doc_id: typed.DocId, num_shards: usize) usize {
+fn computeShard(namespace_id: i64, table_index: usize, doc_id: typed_doc_id.DocId, num_shards: usize) usize {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(std.mem.asBytes(&namespace_id));
     hasher.update(std.mem.asBytes(&table_index));

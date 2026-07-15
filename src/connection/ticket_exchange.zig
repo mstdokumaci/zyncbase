@@ -3,7 +3,8 @@ const Allocator = std.mem.Allocator;
 const JwtValidator = @import("../jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("../jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
-const typed = @import("../typed.zig");
+const typed = @import("../typed/types.zig");
+const typed_codec = @import("../typed/codec.zig");
 const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
 const json_iterate = @import("../json/iterate.zig");
@@ -206,7 +207,7 @@ pub const TicketExchange = struct {
         var claims_it = claims.iterator();
         while (claims_it.next()) |entry| {
             value_json_buf.clearRetainingCapacity();
-            try typed.writeJsonToBuf(&value_json_buf, allocator, entry.value_ptr.*);
+            try typed_codec.writeJsonToBuf(&value_json_buf, allocator, entry.value_ptr.*);
             try w.rawField(entry.key_ptr.*, value_json_buf.items);
         }
         try w.endObject();
@@ -564,7 +565,7 @@ fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashM
         while (claims_it.next()) |entry| {
             const key = try allocator.dupe(u8, entry.key_ptr.*);
             errdefer allocator.free(key);
-            const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
+            const val = try typed_codec.fromDynamicJson(allocator, entry.value_ptr.*);
             errdefer val.deinit(allocator);
 
             const gop = try claims.getOrPut(allocator, key);

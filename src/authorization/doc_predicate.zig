@@ -1,9 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
-const schema = @import("../schema.zig");
+const schema_types = @import("../schema/types.zig");
 const query_ast = @import("../query_ast.zig");
-const typed = @import("../typed.zig");
+const typed = @import("../typed/types.zig");
 const evaluate_mod = @import("evaluate.zig");
 
 const EvalContext = evaluate_mod.EvalContext;
@@ -50,14 +50,14 @@ const Shape = struct {
     }
 };
 
-pub fn validateDocPredicate(condition: types.Condition, table: *const schema.Table) !void {
+pub fn validateDocPredicate(condition: types.Condition, table: *const schema_types.Table) !void {
     _ = try validateShape(condition, table);
 }
 
 pub fn buildDocPredicate(
     condition: types.Condition,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) !?query_ast.FilterPredicate {
     const allocator = ctx.allocator;
     var result = try lowerCondition(condition, ctx, table);
@@ -82,7 +82,7 @@ pub fn buildDocPredicate(
 pub fn authorizeWriteCondition(
     condition: types.Condition,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
     is_create: bool,
 ) !?query_ast.FilterPredicate {
     if (is_create) {
@@ -96,7 +96,7 @@ pub fn authorizeWriteCondition(
 fn lowerCondition(
     condition: types.Condition,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!LowerResult {
     return switch (condition) {
         .boolean => |b| if (b) .allow else .deny,
@@ -117,7 +117,7 @@ fn lowerCondition(
 fn lowerAnd(
     conds: []const types.Condition,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var builder = PredicateBuilder{};
@@ -144,7 +144,7 @@ fn lowerAnd(
 fn lowerOr(
     conds: []const types.Condition,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var first_filter: ?query_ast.FilterPredicate = null;
@@ -198,7 +198,7 @@ fn lowerOr(
 fn comparisonToFilter(
     comp: types.Comparison,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!query_ast.FilterPredicate {
     const allocator = ctx.allocator;
     var condition = try comparisonToQueryCondition(comp, ctx, table);
@@ -212,7 +212,7 @@ fn comparisonToFilter(
 fn comparisonToQueryCondition(
     comp: types.Comparison,
     ctx: EvalContext,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!query_ast.Condition {
     const allocator = ctx.allocator;
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
@@ -233,7 +233,7 @@ fn comparisonToQueryCondition(
     };
 }
 
-fn validateShape(condition: types.Condition, table: *const schema.Table) DocPredicateError!Shape {
+fn validateShape(condition: types.Condition, table: *const schema_types.Table) DocPredicateError!Shape {
     return switch (condition) {
         .boolean => .{},
         .logical_and => |conds| validateAndShape(conds, table),
@@ -246,7 +246,7 @@ fn validateShape(condition: types.Condition, table: *const schema.Table) DocPred
     };
 }
 
-fn validateAndShape(conds: []const types.Condition, table: *const schema.Table) DocPredicateError!Shape {
+fn validateAndShape(conds: []const types.Condition, table: *const schema_types.Table) DocPredicateError!Shape {
     var out = Shape{};
     for (conds) |condition| {
         const child = try validateShape(condition, table);
@@ -259,7 +259,7 @@ fn validateAndShape(conds: []const types.Condition, table: *const schema.Table) 
     return out;
 }
 
-fn validateOrShape(conds: []const types.Condition, table: *const schema.Table) DocPredicateError!Shape {
+fn validateOrShape(conds: []const types.Condition, table: *const schema_types.Table) DocPredicateError!Shape {
     var first: ?Shape = null;
     var or_terms: usize = 0;
 
@@ -289,7 +289,7 @@ fn shapeAsOrTermCount(shape: Shape) DocPredicateError!usize {
     return error.UnsupportedAuthorizationPredicate;
 }
 
-fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) DocPredicateError!void {
+fn validateDocComparison(comp: types.Comparison, table: *const schema_types.Table) DocPredicateError!void {
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field = table.fields[field_index];
     const lhs_type = ValueType.fromField(field);
@@ -306,26 +306,26 @@ fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) Doc
 }
 
 const ValueType = struct {
-    storage_type: schema.FieldType,
-    items_type: ?schema.FieldType = null,
+    storage_type: schema_types.FieldType,
+    items_type: ?schema_types.FieldType = null,
 
-    fn scalar(storage_type: schema.FieldType) ValueType {
+    fn scalar(storage_type: schema_types.FieldType) ValueType {
         return .{ .storage_type = storage_type };
     }
 
-    fn fromField(field: schema.Field) ValueType {
+    fn fromField(field: schema_types.Field) ValueType {
         return .{
             .storage_type = field.storage_type,
             .items_type = field.items_type,
         };
     }
 
-    fn arrayItemsType(self: ValueType) !schema.FieldType {
+    fn arrayItemsType(self: ValueType) !schema_types.FieldType {
         if (self.storage_type != .array) return error.InvalidValue;
         return self.items_type orelse error.InvalidValue;
     }
 
-    fn membershipItemsType(self: ValueType) !schema.FieldType {
+    fn membershipItemsType(self: ValueType) !schema_types.FieldType {
         return if (self.storage_type == .array) try self.arrayItemsType() else self.storage_type;
     }
 };
@@ -365,13 +365,13 @@ fn validateContextVarValue(
     op: query_ast.Operator,
     lhs_type: ValueType,
     ctx_var: types.ContextVar,
-    table: *const schema.Table,
+    table: *const schema_types.Table,
 ) DocPredicateError!void {
     const rhs_type = try resolveContextVarType(ctx_var, table);
     try validateRhsType(op, lhs_type, rhs_type);
 }
 
-fn resolveContextVarType(ctx_var: types.ContextVar, table: *const schema.Table) DocPredicateError!ValueType {
+fn resolveContextVarType(ctx_var: types.ContextVar, table: *const schema_types.Table) DocPredicateError!ValueType {
     return switch (ctx_var.scope) {
         .session => {
             if (std.mem.eql(u8, ctx_var.field, "userId")) {
@@ -429,17 +429,17 @@ fn validateMatchingValueType(lhs_type: ValueType, rhs_type: ValueType) DocPredic
     if (rhs_type.storage_type != lhs_type.storage_type) return error.InvalidValue;
 }
 
-fn validateItemsType(expected_items_type: schema.FieldType, actual_items_type: ?schema.FieldType) DocPredicateError!void {
+fn validateItemsType(expected_items_type: schema_types.FieldType, actual_items_type: ?schema_types.FieldType) DocPredicateError!void {
     if (actual_items_type == null or actual_items_type.? != expected_items_type) return error.InvalidValue;
 }
 
-fn validateScalarItems(expected_items_type: schema.FieldType, items: []const typed.ScalarValue) DocPredicateError!void {
+fn validateScalarItems(expected_items_type: schema_types.FieldType, items: []const typed.ScalarValue) DocPredicateError!void {
     for (items) |item| {
         try validateScalarType(expected_items_type, item);
     }
 }
 
-fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) DocPredicateError!void {
+fn validateScalarType(field_type: schema_types.FieldType, scalar: typed.ScalarValue) DocPredicateError!void {
     switch (field_type) {
         .text => if (scalar != .text) return error.InvalidValue,
         .integer => if (scalar != .integer) return error.InvalidValue,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const Connection = @import("connection.zig").Connection;
+const Connection = @import("connection/state.zig").Connection;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "memory: safety and pool invariants" {

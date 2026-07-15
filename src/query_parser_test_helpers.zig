@@ -1,12 +1,12 @@
 const std = @import("std");
 const query_ast = @import("query_ast.zig");
-const schema = @import("schema.zig");
-const typed = @import("typed.zig");
+const schema_types = @import("schema/types.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const FieldType = schema.FieldType;
+const FieldType = schema_types.FieldType;
 const Payload = msgpack_utils.Payload;
 
 /// Creates a QueryFilter with a default order_by = "id" ASC.
@@ -63,7 +63,7 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
 /// tbl_md is used to resolve field names to indices if strings are provided in params.
 pub fn createQueryFilterPayload(
     allocator: std.mem.Allocator,
-    tbl_md: *const schema.Table,
+    tbl_md: *const schema_types.Table,
     params: anytype,
 ) !Payload {
     var filter_map = msgpack_utils.Payload.mapPayload(allocator);
@@ -137,7 +137,7 @@ fn anyToFieldPayload(allocator: std.mem.Allocator, field_type: FieldType, value:
     if (field_type == .doc_id) {
         switch (@typeInfo(@TypeOf(value))) {
             .int, .comptime_int => {
-                const bytes = typed.docIdToBytes(@intCast(value));
+                const bytes = typed_doc_id.toBytes(@intCast(value));
                 return Payload.binToPayload(&bytes, allocator);
             },
             else => {},

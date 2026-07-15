@@ -1,5 +1,5 @@
 const query_ast = @import("query_ast.zig");
-const typed = @import("typed.zig");
+const typed = @import("typed/types.zig");
 
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;

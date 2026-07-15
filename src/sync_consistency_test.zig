@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const tth = @import("typed_test_helpers.zig");
+const tth = @import("typed/test_helpers.zig");
 
 const sub_eng = @import("subscription_engine.zig");
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;

@@ -3,9 +3,10 @@ const Allocator = std.mem.Allocator;
 const Connection = @import("state.zig").Connection;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
-const Schema = @import("../schema.zig").Schema;
+const Schema = @import("../schema/types.zig").Schema;
 const send_queue_type = @import("../send_queue.zig").send_queue;
-const wire = @import("../wire.zig");
+const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 
@@ -37,7 +38,7 @@ pub const ConnectionManager = struct {
         max_connections: usize,
     ) !void {
         // Pre-build SchemaSync message once at startup
-        const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema);
+        const schema_sync_msg = try wire_encode.encodeSchemaSync(allocator, schema);
 
         self.* = .{
             .allocator = allocator,
@@ -120,7 +121,7 @@ pub const ConnectionManager = struct {
         conn.setSession(sess);
         sess_transferred = true;
 
-        const connected_msg = try wire.encodeConnected(self.allocator, conn.getExternalUserId());
+        const connected_msg = try wire_encode.encodeConnected(self.allocator, conn.getExternalUserId());
         defer self.allocator.free(connected_msg);
 
         try self.map.put(self.allocator, conn_id, conn);
@@ -147,7 +148,7 @@ pub const ConnectionManager = struct {
         // ZyncBase uses binary MessagePack for all communications.
         if (msg_type != .binary) {
             std.log.warn("Rejected non-binary (text) message from connection {}", .{conn_id});
-            if (wire.encodeError(self.allocator, null, wire.getWireError(error.InvalidMessageType))) |error_msg| {
+            if (wire_encode.encodeError(self.allocator, null, wire_errors.getWireError(error.InvalidMessageType))) |error_msg| {
                 defer self.allocator.free(error_msg);
                 switch (ws.send(error_msg, .binary)) {
                     .success, .backpressure => {},
@@ -282,7 +283,7 @@ pub const ConnectionManager = struct {
 
     /// Send ServerDisconnect message to all active connections and initiate socket close
     pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8) void {
-        const msg = wire.encodeServerDisconnect(self.allocator, code, message) catch |err| {
+        const msg = wire_encode.encodeServerDisconnect(self.allocator, code, message) catch |err| {
             std.log.err("Failed to encode ServerDisconnect: {}", .{err});
             return;
         };
@@ -344,7 +345,7 @@ pub const ConnectionManager = struct {
         self.mutex.unlock();
 
         for (to_close.items) |conn| {
-            const msg = wire.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {
+            const msg = wire_encode.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {
                 std.log.err("Failed to encode TOKEN_EXPIRED: {}", .{err});
                 conn.ws.close();
                 if (conn.release()) {

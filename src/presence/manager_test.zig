@@ -1,157 +1,15 @@
 const std = @import("std");
 const testing = std.testing;
-const PresenceRecord = @import("presence/record.zig").PresenceRecord;
-const PresenceManager = @import("presence/manager.zig").PresenceManager;
-const schema_mod = @import("schema.zig");
-const msgpack = @import("msgpack_utils.zig");
-const typed = @import("typed.zig");
-
-fn makeTestUserFields(allocator: std.mem.Allocator) ![]const schema_mod.PresenceField {
-    const fields = try allocator.alloc(schema_mod.PresenceField, 3);
-    fields[0] = .{ .name = try allocator.dupe(u8, "cursor__x"), .declared_type = .real };
-    fields[1] = .{ .name = try allocator.dupe(u8, "cursor__y"), .declared_type = .real };
-    fields[2] = .{ .name = try allocator.dupe(u8, "status"), .declared_type = .text };
-    return fields;
-}
-
-fn freeTestFields(allocator: std.mem.Allocator, fields: []const schema_mod.PresenceField) void {
-    for (fields) |f| f.deinit(allocator);
-    allocator.free(fields);
-}
-
-fn makeTestSharedFields(allocator: std.mem.Allocator) ![]const schema_mod.PresenceField {
-    const fields = try allocator.alloc(schema_mod.PresenceField, 2);
-    fields[0] = .{ .name = try allocator.dupe(u8, "slide"), .declared_type = .integer };
-    fields[1] = .{ .name = try allocator.dupe(u8, "playing"), .declared_type = .boolean };
-    return fields;
-}
-
-fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    var pairs = try allocator.alloc(msgpack.Payload, entries.len);
-    for (entries, 0..) |entry, i| {
-        var pair = try allocator.alloc(msgpack.Payload, 2);
-        pair[0] = msgpack.Payload.uintToPayload(entry.idx);
-        pair[1] = entry.value;
-        pairs[i] = .{ .arr = pair };
-    }
-    return .{ .arr = pairs };
-}
-
-// ─── PresenceRecord tests ─────────────────────────────────────────────────────
-
-test "PresenceRecord - init creates all-null slots" {
-    const allocator = testing.allocator;
-    var record = try PresenceRecord.init(allocator, 3);
-    defer record.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 3), record.values.len);
-    for (record.values) |slot| {
-        try testing.expect(slot == null);
-    }
-}
-
-test "PresenceRecord - mergeFromPayload applies sparse patch" {
-    const allocator = testing.allocator;
-    const fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, fields);
-
-    var record = try PresenceRecord.init(allocator, fields.len);
-    defer record.deinit(allocator);
-
-    var patch = try makePresencePatch(allocator, &.{
-        .{ .idx = 0, .value = .{ .float = 42.5 } },
-        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("active", allocator) },
-    });
-    defer patch.free(allocator);
-
-    try record.mergeFromPayload(allocator, fields, patch);
-
-    try testing.expect(record.values[0] != null);
-    try testing.expect(record.values[1] == null);
-    try testing.expect(record.values[2] != null);
-
-    try testing.expectEqual(.scalar, std.meta.activeTag(record.values[0].?));
-    try testing.expectEqual(@as(f64, 42.5), record.values[0].?.scalar.real);
-
-    try testing.expectEqual(.scalar, std.meta.activeTag(record.values[2].?));
-    try testing.expectEqualStrings("active", record.values[2].?.scalar.text);
-}
-
-test "PresenceRecord - mergeFromPayload rejects out-of-bounds field index" {
-    const allocator = testing.allocator;
-    const fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, fields);
-
-    var record = try PresenceRecord.init(allocator, fields.len);
-    defer record.deinit(allocator);
-
-    var patch = try makePresencePatch(allocator, &.{
-        .{ .idx = 99, .value = .{ .float = 1.0 } },
-    });
-    defer patch.free(allocator);
-
-    try testing.expectError(error.InvalidFieldIndex, record.mergeFromPayload(allocator, fields, patch));
-}
-
-test "PresenceRecord - mergeFromPayload rejects non-map payload" {
-    const allocator = testing.allocator;
-    const fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, fields);
-
-    var record = try PresenceRecord.init(allocator, fields.len);
-    defer record.deinit(allocator);
-
-    const bad_patch = msgpack.Payload{ .int = 42 };
-    try testing.expectError(error.InvalidPayload, record.mergeFromPayload(allocator, fields, bad_patch));
-}
-
-test "PresenceRecord - clone deep copies values" {
-    const allocator = testing.allocator;
-    const fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, fields);
-
-    var record = try PresenceRecord.init(allocator, fields.len);
-    defer record.deinit(allocator);
-
-    var patch = try makePresencePatch(allocator, &.{
-        .{ .idx = 0, .value = .{ .float = 10.0 } },
-    });
-    defer patch.free(allocator);
-    try record.mergeFromPayload(allocator, fields, patch);
-
-    var cloned = try record.clone(allocator);
-    defer cloned.deinit(allocator);
-
-    try testing.expectEqual(record.values.len, cloned.values.len);
-    try testing.expect(cloned.values[0] != null);
-    try testing.expectEqual(@as(f64, 10.0), cloned.values[0].?.scalar.real);
-    try testing.expect(cloned.values[1] == null);
-}
-
-test "PresenceRecord - mergeFromPayload overwrites existing value" {
-    const allocator = testing.allocator;
-    const fields = try makeTestUserFields(allocator);
-    defer freeTestFields(allocator, fields);
-
-    var record = try PresenceRecord.init(allocator, fields.len);
-    defer record.deinit(allocator);
-
-    var patch1 = try makePresencePatch(allocator, &.{
-        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("idle", allocator) },
-    });
-    defer patch1.free(allocator);
-    try record.mergeFromPayload(allocator, fields, patch1);
-
-    var patch2 = try makePresencePatch(allocator, &.{
-        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("active", allocator) },
-    });
-    defer patch2.free(allocator);
-    try record.mergeFromPayload(allocator, fields, patch2);
-
-    try testing.expectEqualStrings("active", record.values[2].?.scalar.text);
-}
-
-// ─── PresenceManager tests ────────────────────────────────────────────────────
+const th = @import("test_helpers.zig");
+const makeTestUserFields = th.makeTestUserFields;
+const freeTestFields = th.freeTestFields;
+const makePresencePatch = th.makePresencePatch;
+const makeTestSharedFields = th.makeTestSharedFields;
+const PresenceManager = @import("manager.zig").PresenceManager;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const zeroDocId = typed_doc_id.zero;
+const docIdFromBytes = typed_doc_id.fromBytes;
+const msgpack = @import("../msgpack_utils.zig");
 
 test "PresenceManager - setUser creates record and queues pending update" {
     const allocator = testing.allocator;
@@ -164,7 +22,7 @@ test "PresenceManager - setUser creates record and queues pending update" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
@@ -211,7 +69,7 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch1 = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .uint = 1 } },
     });
@@ -269,7 +127,7 @@ test "PresenceManager - removeUser cleans up and queues leave" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
 
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 1.0 } },
@@ -298,7 +156,7 @@ test "PresenceManager - removeUser on nonexistent namespace is no-op" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    try manager.removeUser(999, typed.zeroDocId);
+    try manager.removeUser(999, zeroDocId);
 
     try testing.expectEqual(@as(usize, 0), manager.pending_user_updates.items.len);
 }
@@ -314,7 +172,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
@@ -414,7 +272,7 @@ test "PresenceManager - setUser cancels grace period" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 1.0 } },
     });
@@ -444,9 +302,9 @@ test "PresenceManager - multiple users in same namespace" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_a = typed.zeroDocId;
+    const user_a = zeroDocId;
     var user_b_bytes = [_]u8{1} ** 16;
-    const user_b = try typed.docIdFromBytes(&user_b_bytes);
+    const user_b = try docIdFromBytes(&user_b_bytes);
 
     var patch_a = try makePresencePatch(allocator, &.{
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("a", allocator) },
@@ -479,7 +337,7 @@ test "PresenceManager - setUser tracks joined_at timestamp" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
@@ -516,7 +374,7 @@ test "PresenceManager - removeUser cleans up joined_at" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
@@ -546,7 +404,7 @@ test "PresenceManager - is_new_user flag set correctly" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
 
     // First setUser should mark is_new_user = true
     var patch1 = try makePresencePatch(allocator, &.{
@@ -581,7 +439,7 @@ test "PresenceManager - snapshot includes joined_at" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
     var patch = try makePresencePatch(allocator, &.{
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
@@ -606,7 +464,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
 
     // Join user
     var patch = try makePresencePatch(allocator, &.{
@@ -689,7 +547,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
 
     // Join user
     var patch = try makePresencePatch(allocator, &.{
@@ -781,7 +639,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const user_id = typed.zeroDocId;
+    const user_id = zeroDocId;
 
     // Join user
     var patch = try makePresencePatch(allocator, &.{
