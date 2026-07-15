@@ -4,8 +4,11 @@ const schema_types = @import("../schema/types.zig");
 
 pub fn makeTestUserFields(allocator: std.mem.Allocator) ![]const schema_types.PresenceField {
     const fields = try allocator.alloc(schema_types.PresenceField, 3);
+    errdefer allocator.free(fields);
     fields[0] = .{ .name = try allocator.dupe(u8, "cursor__x"), .declared_type = .real };
+    errdefer allocator.free(fields[0].name);
     fields[1] = .{ .name = try allocator.dupe(u8, "cursor__y"), .declared_type = .real };
+    errdefer allocator.free(fields[1].name);
     fields[2] = .{ .name = try allocator.dupe(u8, "status"), .declared_type = .text };
     return fields;
 }
