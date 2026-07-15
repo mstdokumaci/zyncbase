@@ -6,8 +6,64 @@ const ObjectMap = std.json.ObjectMap;
 // High-level parsing helpers
 // ---------------------------------------------------------------------------
 
+/// Max array elements parsed by `collectParsedArray` (guards unbounded alloc).
+pub const max_array_length: usize = 1000;
+
 pub fn parseValue(allocator: Allocator, json_text: []const u8) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
+}
+
+/// Parses `items` into an owned `[]T`, calling `parse_fn(allocator, item)` per
+/// element. On error, parsed elements are cleaned up via `deinit_fn` and freed
+/// — no manual initialized-counter needed. Enforces `max_array_length`.
+pub fn collectParsedArray(
+    allocator: Allocator,
+    comptime T: type,
+    comptime Item: type,
+    items: []const Item,
+    comptime parse_fn: fn (Allocator, Item) anyerror!T,
+    comptime deinit_fn: fn (*T, Allocator) void,
+) ![]T {
+    if (items.len > max_array_length) return error.ArrayTooLarge;
+
+    const result = try allocator.alloc(T, items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (result[0..initialized]) |*item| deinit_fn(item, allocator);
+        allocator.free(result);
+    }
+    for (items, 0..) |item, i| {
+        result[i] = try parse_fn(allocator, item);
+        initialized += 1;
+    }
+    return result;
+}
+
+/// Like `collectParsedArray` but forwards `ctx` as the second argument to
+/// `parse_fn`: `parse_fn(allocator, ctx, item)`. Enforces `max_array_length`.
+pub fn collectParsedArrayWithCtx(
+    allocator: Allocator,
+    comptime T: type,
+    comptime Item: type,
+    comptime Ctx: type,
+    ctx: Ctx,
+    items: []const Item,
+    comptime parse_fn: fn (Allocator, Ctx, Item) anyerror!T,
+    comptime deinit_fn: fn (*T, Allocator) void,
+) ![]T {
+    if (items.len > max_array_length) return error.ArrayTooLarge;
+
+    const result = try allocator.alloc(T, items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (result[0..initialized]) |*item| deinit_fn(item, allocator);
+        allocator.free(result);
+    }
+    for (items, 0..) |item, i| {
+        result[i] = try parse_fn(allocator, ctx, item);
+        initialized += 1;
+    }
+    return result;
 }
 
 // ---------------------------------------------------------------------------

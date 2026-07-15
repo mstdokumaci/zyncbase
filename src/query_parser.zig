@@ -10,6 +10,7 @@ const Value = typed.Value;
 const Cursor = typed.Cursor;
 
 const query_ast = @import("query_ast.zig");
+const json_read = @import("json/read.zig");
 const Operator = query_ast.Operator;
 const Condition = query_ast.Condition;
 const SortDescriptor = query_ast.SortDescriptor;
@@ -350,19 +351,16 @@ fn parseConditions(
     payload: msgpack.Payload,
 ) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
-    const arr = payload.arr;
-    const result = try allocator.alloc(Condition, arr.len);
-    var count: usize = 0;
-    errdefer {
-        for (result[0..count]) |*c| c.deinit(allocator);
-        allocator.free(result);
-    }
-
-    for (arr) |item| {
-        result[count] = try parseCondition(allocator, table_metadata, item);
-        count += 1;
-    }
-    return result;
+    return json_read.collectParsedArrayWithCtx(
+        allocator,
+        Condition,
+        msgpack.Payload,
+        *const schema_mod.Table,
+        table_metadata,
+        payload.arr,
+        parseCondition,
+        Condition.deinit,
+    );
 }
 
 fn parseCondition(

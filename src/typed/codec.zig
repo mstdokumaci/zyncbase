@@ -5,6 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema = @import("../schema.zig");
 const types = @import("types.zig");
 const json_write = @import("../json/write.zig");
+const json_read = @import("../json/read.zig");
 
 const ScalarValue = types.ScalarValue;
 const Value = types.Value;
@@ -146,6 +147,10 @@ fn scalarFromDynamicJsonItem(allocator: Allocator, item: std.json.Value) !Scalar
     };
 }
 
+fn deinitScalarValue(v: *ScalarValue, allocator: Allocator) void {
+    v.deinit(allocator);
+}
+
 pub fn fromDynamicJson(allocator: Allocator, value: std.json.Value) !Value {
     return switch (value) {
         .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
@@ -154,17 +159,14 @@ pub fn fromDynamicJson(allocator: Allocator, value: std.json.Value) !Value {
         .bool => |b| .{ .scalar = .{ .boolean = b } },
         .array => |arr| blk: {
             if (arr.items.len > 1000) return error.ClaimArrayTooLarge;
-            const items = try allocator.alloc(ScalarValue, arr.items.len);
-            var initialized: usize = 0;
-            errdefer {
-                for (items[0..initialized]) |*item| item.deinit(allocator);
-                allocator.free(items);
-            }
-            for (arr.items, 0..) |item, i| {
-                items[i] = try scalarFromDynamicJsonItem(allocator, item);
-                initialized += 1;
-            }
-            break :blk .{ .array = items };
+            break :blk .{ .array = try json_read.collectParsedArray(
+                allocator,
+                ScalarValue,
+                std.json.Value,
+                arr.items,
+                scalarFromDynamicJsonItem,
+                deinitScalarValue,
+            ) };
         },
         else => return error.UnsupportedClaimType,
     };

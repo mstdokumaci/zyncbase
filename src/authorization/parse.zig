@@ -24,18 +24,14 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
 
     const store_val = (json_read.getArray(root.object, "store") catch return error.InvalidAuthConfig) orelse return error.MissingStore;
 
-    var namespace_rules = std.ArrayListUnmanaged(types.NamespaceRule).empty;
-    errdefer {
-        for (namespace_rules.items) |*rule| rule.deinit(allocator);
-        namespace_rules.deinit(allocator);
-    }
-    try namespace_rules.ensureTotalCapacityPrecise(allocator, namespaces_val.items.len);
-
-    for (namespaces_val.items) |ns_val| {
-        var rule = try parseNamespaceRule(allocator, ns_val);
-        errdefer rule.deinit(allocator);
-        try namespace_rules.append(allocator, rule);
-    }
+    const namespace_rules = try json_read.collectParsedArray(
+        allocator,
+        types.NamespaceRule,
+        std.json.Value,
+        namespaces_val.items,
+        parseNamespaceRule,
+        types.NamespaceRule.deinit,
+    );
 
     var store_rules = std.ArrayListUnmanaged(types.StoreRule).empty;
     errdefer {
@@ -54,7 +50,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
 
     var config = types.AuthConfig{
         .allocator = allocator,
-        .namespace_rules = try namespace_rules.toOwnedSlice(allocator),
+        .namespace_rules = namespace_rules,
         .store_rules = try store_rules.toOwnedSlice(allocator),
         .wildcard_store_index = wildcard_index,
     };
@@ -170,22 +166,22 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
     }
 }
 
-// anyerror breaks mutual recursion with parseCondition
+fn deinitAuthCondition(c: *types.Condition, allocator: Allocator) void {
+    c.deinit(allocator);
+}
+
 fn parseLogicalOpArray(allocator: Allocator, val: std.json.Value) anyerror![]types.Condition {
     if (val != .array) return error.InvalidCondition;
     const arr = val.array.items;
     if (arr.len == 0) return error.InvalidCondition;
-    const conds = try allocator.alloc(types.Condition, arr.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (conds[0..initialized]) |*cond| cond.deinit(allocator);
-        allocator.free(conds);
-    }
-    for (arr, 0..) |item, i| {
-        conds[i] = try parseCondition(allocator, item);
-        initialized += 1;
-    }
-    return conds;
+    return json_read.collectParsedArray(
+        allocator,
+        types.Condition,
+        std.json.Value,
+        arr,
+        parseCondition,
+        deinitAuthCondition,
+    );
 }
 
 fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.Value) !types.Condition {
