@@ -87,16 +87,27 @@ pub fn appendOrderBySql(
     try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
 }
 
-/// Builds `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`.
-/// No guard fragment — this is the cacheable, pure-per-table form.
-pub fn buildSelectDocumentSql(allocator: Allocator, table: *const types.Table) ![]const u8 {
+/// Builds `SELECT <cols> FROM "<table>"`. Pre-built once per table.
+pub fn buildSelectFromSql(allocator: Allocator, table: *const types.Table) ![]const u8 {
     var buf = SqlBuf.init();
     defer buf.deinit(allocator);
 
     try appendSelectFromTableSql(allocator, &buf, table);
-    try appendDocIdNamespaceWhere(allocator, &buf);
 
     return buf.toOwnedSlice(allocator);
+}
+
+/// Builds `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`.
+/// Takes the pre-built `select_from_sql` (see buildSelectFromSql).
+pub fn buildSelectDocumentSql(allocator: Allocator, select_from_sql: []const u8) ![]const u8 {
+    return std.mem.concat(allocator, u8, &.{
+        select_from_sql,
+        " WHERE ",
+        system.quoted_id,
+        "=? AND ",
+        system.quoted_namespace_id,
+        "=?",
+    });
 }
 
 /// Builds `SELECT "id" FROM "<table>"`.

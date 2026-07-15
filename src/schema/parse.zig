@@ -624,7 +624,8 @@ pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_inde
 
     try index.buildFieldIndex(allocator, &table);
 
-    table.select_document_sql = try sql_strings.buildSelectDocumentSql(allocator, &table);
+    table.select_from_sql = try sql_strings.buildSelectFromSql(allocator, &table);
+    table.select_document_sql = try sql_strings.buildSelectDocumentSql(allocator, table.select_from_sql);
     table.delete_document_sql_prefix = try sql_strings.buildDeleteDocumentSqlPrefix(allocator, &table);
     table.delete_document_sql_suffix = try sql_strings.buildDeleteDocumentSqlSuffix(allocator, &table);
 

@@ -73,7 +73,9 @@ test "buildSelectDocumentSql builds no-guard SELECT document query" {
     defer schema.deinit();
     const table_metadata = schema.table("docs") orelse return error.TestExpectedValue;
 
-    const sql = try build.buildSelectDocumentSql(allocator, table_metadata);
+    const select_from_sql = try build.buildSelectFromSql(allocator, table_metadata);
+    defer allocator.free(select_from_sql);
+    const sql = try build.buildSelectDocumentSql(allocator, select_from_sql);
     defer allocator.free(sql);
     try std.testing.expectEqualStrings(
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"title\", \"created_at\", \"updated_at\" FROM \"docs\" WHERE \"id\"=? AND \"namespace_id\"=?",
