@@ -460,11 +460,10 @@ pub const WriteWorker = struct {
             return mapAndLogError("upsertEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
-        // Row unaffected + guard present + write ack: probe existence to
-        // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
+        // An upsert returning no row under a guard means the row exists and the
+        // guard failed — unconditionally a conflict.
         if (maybe_new_record == null and old_record == null and entry.guard_values != null and has_write_ack) {
-            if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
-            return true;
+            return false;
         }
 
         return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
