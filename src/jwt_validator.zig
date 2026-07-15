@@ -4,6 +4,7 @@ const c = @import("uwebsockets_wrapper.zig").c;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const typed = @import("typed.zig");
 const json_read = @import("json/read.zig");
+const base64_utils = @import("base64_utils.zig");
 
 /// Maps JWT RSA/PSS algorithm names to their OpenSSL hash digest names.
 const rsa_hash_alg = std.StaticStringMap([:0]const u8).initComptime(.{
@@ -79,9 +80,9 @@ pub const Jwk = struct {
             const n_b64 = self.n orelse return error.InvalidJwk;
             const e_b64 = self.e orelse return error.InvalidJwk;
 
-            const n_bytes = try decodeBase64Url(allocator, n_b64);
+            const n_bytes = try base64_utils.urlDecodeAlloc(allocator, n_b64);
             defer allocator.free(n_bytes);
-            const e_bytes = try decodeBase64Url(allocator, e_b64);
+            const e_bytes = try base64_utils.urlDecodeAlloc(allocator, e_b64);
             defer allocator.free(e_bytes);
 
             const pkey = c.openssl_build_rsa_pkey(
@@ -99,9 +100,9 @@ pub const Jwk = struct {
 
             const curve_name: [:0]const u8 = ec_curve_name.get(crv) orelse return error.UnsupportedCurve;
 
-            const x_bytes = try decodeBase64Url(allocator, x_b64);
+            const x_bytes = try base64_utils.urlDecodeAlloc(allocator, x_b64);
             defer allocator.free(x_bytes);
-            const y_bytes = try decodeBase64Url(allocator, y_b64);
+            const y_bytes = try base64_utils.urlDecodeAlloc(allocator, y_b64);
             defer allocator.free(y_bytes);
 
             const pkey = c.openssl_build_ec_pkey(
@@ -409,13 +410,13 @@ fn splitToken(allocator: Allocator, token: []const u8) !DecodedToken {
 
     const msg = token[0..(header_b64.len + 1 + payload_b64.len)];
 
-    const header_bytes = try decodeBase64Url(allocator, header_b64);
+    const header_bytes = try base64_utils.urlDecodeAlloc(allocator, header_b64);
     errdefer allocator.free(header_bytes);
 
-    const payload_bytes = try decodeBase64Url(allocator, payload_b64);
+    const payload_bytes = try base64_utils.urlDecodeAlloc(allocator, payload_b64);
     errdefer allocator.free(payload_bytes);
 
-    const sig_bytes = try decodeBase64Url(allocator, sig_b64);
+    const sig_bytes = try base64_utils.urlDecodeAlloc(allocator, sig_b64);
     errdefer allocator.free(sig_bytes);
 
     const header_parsed = try std.json.parseFromSlice(Header, allocator, header_bytes, .{ .ignore_unknown_fields = true });
@@ -557,19 +558,6 @@ fn extractExp(payload: std.json.Value) i64 {
         };
     }
     return 0;
-}
-
-fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
-    var end = input.len;
-    while (end > 0 and input[end - 1] == '=') {
-        end -= 1;
-    }
-    const stripped = input[0..end];
-    const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
-    const dest = try allocator.alloc(u8, exact_len);
-    errdefer allocator.free(dest);
-    try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
-    return dest;
 }
 
 fn validateAudience(payload: std.json.Value, expected_aud: []const u8) bool {
