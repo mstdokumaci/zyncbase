@@ -23,7 +23,7 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SessionResolver = @import("authorization/session_resolver.zig").SessionResolver;
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const read_worker_pool_mod = @import("storage_engine/read_worker_pool.zig");
-const send_queue_type = @import("send_queue.zig").send_queue;
+const send_queue_type = @import("connection/send_queue.zig").send_queue;
 
 pub const StorageError = storage_errors.StorageError;
 pub const PkSet = pk_set_mod.PkSet;

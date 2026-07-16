@@ -9,7 +9,7 @@ const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const query_ast = @import("query_ast.zig");
 const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const send_queue_mod = @import("send_queue.zig");
+const send_queue_mod = @import("connection/send_queue.zig");
 const SendQueueEntry = send_queue_mod.Entry;
 
 const BatchOpForTest = struct {
