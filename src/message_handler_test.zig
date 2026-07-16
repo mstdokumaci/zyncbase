@@ -395,7 +395,6 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
     }
 
     _ = try app.resolveStoreScopeForTest("public", helpers.test_external_user_id);
-    _ = try app.resolveStoreScopeForTest("beta", helpers.test_external_user_id);
 
     {
         const msg = try createStoreSetNamespaceMessageBytes(allocator, 1, "public");

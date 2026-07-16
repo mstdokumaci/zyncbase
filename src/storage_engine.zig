@@ -20,7 +20,7 @@ const sql = @import("storage_engine/sql.zig");
 const sql_build = @import("sql/build.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const SessionResolutionBuffer = @import("connection/resolution_buffer.zig").SessionResolutionBuffer;
+const SessionResolver = @import("connection/session_resolver.zig").SessionResolver;
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const read_worker_pool_mod = @import("storage_engine/read_worker_pool.zig");
 const send_queue_type = @import("send_queue.zig").send_queue;
@@ -52,18 +52,6 @@ pub const StorageEngine = struct {
     pub const Options = struct {
         in_memory: bool = false,
         reader_pool_size: usize = 0,
-    };
-
-    const Buffers = struct {
-        session_resolution_buffer: SessionResolutionBuffer,
-
-        fn init(allocator: Allocator) !Buffers {
-            var srb = try SessionResolutionBuffer.init(allocator);
-            errdefer srb.deinit();
-            return .{
-                .session_resolution_buffer = srb,
-            };
-        }
     };
 
     pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
@@ -126,8 +114,6 @@ pub const StorageEngine = struct {
         const reader_nodes = try createReaderPool(allocator, db_path, options, performance_config);
         errdefer destroyReaderPool(allocator, reader_nodes);
 
-        const buffers = try Buffers.init(allocator);
-
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,
@@ -157,7 +143,7 @@ pub const StorageEngine = struct {
                 .thread = managedThread(WriteWorker).init(),
                 .flush_wg = .{},
                 .change_queue = null,
-                .session_resolution_buffer = buffers.session_resolution_buffer,
+                .session_resolver = null,
                 .send_queue = null,
                 .notifier = .{ .callback = event_loop_notifier, .ctx = notifier_ctx },
                 // SAFETY: Set after metadata_cache init below
@@ -419,7 +405,12 @@ pub const StorageEngine = struct {
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
     /// Once called, the schema is locked and only data operations are permitted.
-    pub fn start(self: *StorageEngine, send_queue: *send_queue_type, change_queue: ?*ChangeQueue) !void {
+    pub fn start(
+        self: *StorageEngine,
+        send_queue: *send_queue_type,
+        change_queue: ?*ChangeQueue,
+        session_resolver: ?*SessionResolver,
+    ) !void {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
         }
@@ -450,6 +441,7 @@ pub const StorageEngine = struct {
 
         self.write_worker.send_queue = send_queue;
         self.write_worker.change_queue = change_queue;
+        self.write_worker.session_resolver = session_resolver;
 
         // Initialize and start the reader thread pool
         var rp = try read_worker_pool_mod.ReadWorkerPool.init(
@@ -474,6 +466,10 @@ pub const StorageEngine = struct {
         self.state.store(.running, .release);
 
         std.log.info("Storage engine started (Runtime Phase)", .{});
+    }
+
+    pub fn setSessionResolver(self: *StorageEngine, session_resolver: *SessionResolver) void {
+        self.write_worker.session_resolver = session_resolver;
     }
 
     pub fn enqueueRead(self: *StorageEngine, request: ReadRequest) !void {
@@ -504,10 +500,6 @@ pub const StorageEngine = struct {
     pub fn nextReaderNode(self: *StorageEngine) *ReaderNode {
         const idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
         return &self.reader_nodes[idx];
-    }
-
-    pub fn sessionResolutionBuffer(self: *StorageEngine) *SessionResolutionBuffer {
-        return &self.write_worker.session_resolution_buffer;
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
@@ -547,7 +539,6 @@ pub const StorageEngine = struct {
                 .namespace = namespace_owned,
                 .external_user_id = external_user_id_owned,
                 .timestamp = std.time.timestamp(),
-                .result_buffer = self.sessionResolutionBuffer(),
                 .is_presence = is_presence,
             },
         };

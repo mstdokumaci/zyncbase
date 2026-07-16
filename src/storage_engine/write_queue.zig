@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const SessionResolutionBuffer = @import("../connection/resolution_buffer.zig").SessionResolutionBuffer;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
@@ -104,7 +103,6 @@ pub const WriteOp = union(enum) {
         namespace: []const u8,
         external_user_id: []const u8,
         timestamp: i64,
-        result_buffer: *SessionResolutionBuffer,
         is_presence: bool = false,
     },
     batch: struct {

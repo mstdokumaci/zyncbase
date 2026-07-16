@@ -353,5 +353,5 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
     context.change_queue = try ChangeQueue.init(allocator, 1);
     errdefer context.change_queue.?.deinit();
 
-    try engine.start(&context.send_queue.?, &context.change_queue.?);
+    try engine.start(&context.send_queue.?, &context.change_queue.?, null);
 }

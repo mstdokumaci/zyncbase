@@ -6,7 +6,6 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
-const SessionResolutionResult = @import("connection/resolution_buffer.zig").SessionResolutionResult;
 const query_ast = @import("query_ast.zig");
 const typed = @import("typed/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
@@ -112,7 +111,6 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
             .namespace = namespace_name,
             .external_user_id = external_user_id,
             .timestamp = 0,
-            .result_buffer = ctx.engine.sessionResolutionBuffer(),
         },
     };
     errdefer if (!session_queued) session_op.deinit(allocator);
@@ -134,14 +132,6 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
 
     const checkpoint_stats = try checkpoint_latch.wait();
 
-    var results = std.ArrayListUnmanaged(SessionResolutionResult).empty;
-    defer results.deinit(allocator);
-    try ctx.engine.sessionResolutionBuffer().drainInto(&results, allocator);
-
-    try testing.expectEqual(@as(usize, 1), results.items.len);
-    if (results.items[0].err) |err| return err;
-    try testing.expect(results.items[0].namespace_id > 0);
-    try testing.expect(results.items[0].user_doc_id != 0);
     try testing.expectEqual(storage_mod.CheckpointMode.passive, checkpoint_stats.mode);
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
 }

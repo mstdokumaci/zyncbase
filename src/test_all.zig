@@ -59,7 +59,7 @@ test {
     _ = @import("query_parser_test.zig");
     _ = @import("query_ast_test.zig");
     _ = @import("filter_eval_test.zig");
-    _ = @import("session_resolution_buffer_test.zig");
+
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("message_handler_property_test.zig");

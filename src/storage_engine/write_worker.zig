@@ -14,8 +14,7 @@ const write_queue = @import("write_queue.zig");
 const change_queue_mod = @import("../change_queue.zig");
 const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const ChangeQueue = change_queue_mod.ChangeQueue;
-const SessionResolutionBuffer = @import("../connection/resolution_buffer.zig").SessionResolutionBuffer;
-const SessionResolutionResult = @import("../connection/resolution_buffer.zig").SessionResolutionResult;
+const SessionResolver = @import("../connection/session_resolver.zig").SessionResolver;
 const wire_errors = @import("../wire/errors.zig");
 const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../send_queue.zig").send_queue;
@@ -58,7 +57,7 @@ pub const WriteWorker = struct {
     thread: managedThread(WriteWorker),
     flush_wg: WaitGroup,
     change_queue: ?*ChangeQueue,
-    session_resolution_buffer: SessionResolutionBuffer,
+    session_resolver: ?*SessionResolver,
     send_queue: ?*send_queue_type,
     notifier: Notifier,
     metadata_cache: *storage_cache.metadata_cache_type,
@@ -203,7 +202,6 @@ pub const WriteWorker = struct {
             op.deinit(self.allocator);
         }
         self.queue.deinit();
-        self.session_resolution_buffer.deinit();
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -905,35 +903,27 @@ pub const WriteWorker = struct {
     }
 
     fn executeResolveSessionOp(self: *WriteWorker, sop: anytype) void {
-        var result = SessionResolutionResult{
-            .conn_id = sop.conn_id,
-            .msg_id = sop.msg_id,
-            .scope_seq = sop.scope_seq,
-            .namespace_id = 0,
-            .user_doc_id = typed_doc_id.zero,
-            .err = null,
-            .is_presence = sop.is_presence,
-        };
+        var namespace_id: i64 = 0;
+        var user_doc_id = typed_doc_id.zero;
+        var resolution_err: ?anyerror = null;
 
-        if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |namespace_id| {
-            result.namespace_id = namespace_id;
+        if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |ns_id| {
+            namespace_id = ns_id;
 
             self.namespace_cache.update(
                 storage_cache.namespaceCacheKey(sop.namespace),
-                .{ .namespace_id = namespace_id },
+                .{ .namespace_id = ns_id },
             ) catch |err| {
                 std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
             };
 
             const users_table = self.schema.table("users") orelse {
-                result.err = error.UnknownTable;
-                sop.result_buffer.push(result) catch |err| {
-                    std.log.err("Failed to queue session resolution result: {}", .{err});
-                };
+                resolution_err = error.UnknownTable;
+                self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
                 self.notifyChanges();
                 return;
             };
-            const identity_namespace_id = if (users_table.namespaced) namespace_id else schema_system.global_namespace_id;
+            const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
 
             if (sql.resolveUserId(
                 self.allocator,
@@ -942,25 +932,48 @@ pub const WriteWorker = struct {
                 identity_namespace_id,
                 sop.external_user_id,
                 sop.timestamp,
-            )) |user_doc_id| {
-                result.user_doc_id = user_doc_id;
+            )) |uid| {
+                user_doc_id = uid;
                 self.identity_cache.update(
                     storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
-                    .{ .user_doc_id = user_doc_id },
+                    .{ .user_doc_id = uid },
                 ) catch |err| {
                     std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
                 };
             } else |err| {
-                result.err = errors.classifyError(err);
+                resolution_err = errors.classifyError(err);
             }
         } else |err| {
-            result.err = errors.classifyError(err);
+            resolution_err = errors.classifyError(err);
         }
 
-        sop.result_buffer.push(result) catch |err| {
-            std.log.err("Failed to queue session resolution result: {}", .{err});
-        };
+        self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
         self.notifyChanges();
+    }
+
+    fn dispatchResolution(
+        self: *WriteWorker,
+        conn_id: u64,
+        msg_id: u64,
+        scope_seq: u64,
+        namespace_id: i64,
+        user_doc_id: typed_doc_id.DocId,
+        resolution_err: ?anyerror,
+        is_presence: bool,
+    ) void {
+        const sr = self.session_resolver orelse {
+            std.log.warn("WriteWorker: session_resolver not set, dropping resolution for conn_id={d}", .{conn_id});
+            return;
+        };
+        const sq = self.send_queue orelse {
+            std.log.warn("WriteWorker: send_queue not set, dropping resolution for conn_id={d}", .{conn_id});
+            return;
+        };
+        const outcome = sr.processResolution(conn_id, msg_id, scope_seq, namespace_id, user_doc_id, resolution_err, is_presence) orelse return;
+        sq.push(.{ .conn_id = outcome.conn_id, .data = outcome.data, .arena = outcome.arena }) catch |err| {
+            std.log.err("WriteWorker: failed to push session resolution to send_queue: {}", .{err});
+            outcome.arena.release();
+        };
     }
 
     fn executeImmediateOp(
