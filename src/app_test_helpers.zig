@@ -351,8 +351,14 @@ pub const AppTestContext = struct {
         });
         external_id_transferred = true;
 
-        try self.connection_manager.registerForTest(mock_conn);
-        defer self.connection_manager.unregisterForTest(mock_conn.id);
+        self.connection_manager.mutex.lock();
+        try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
+        self.connection_manager.mutex.unlock();
+        defer {
+            self.connection_manager.mutex.lock();
+            _ = self.connection_manager.map.remove(mock_conn.id);
+            self.connection_manager.mutex.unlock();
+        }
 
         // Dupe namespace using mock_conn.allocator since beginStoreScopeResolutionLocked
         // will store the pointer and resetStoreScopeLocked will free it later.

@@ -364,17 +364,6 @@ pub const ConnectionManager = struct {
         }
     }
 
-    pub fn registerForTest(self: *ConnectionManager, conn: *Connection) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        try self.map.put(self.allocator, conn.id, conn);
-    }
-
-    pub fn unregisterForTest(self: *ConnectionManager, id: u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        _ = self.map.remove(id);
-    }
 };
 
 // Default send-broadcast helper used by other modules (e.g. presence manager).
