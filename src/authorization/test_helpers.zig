@@ -60,11 +60,9 @@ fn makeWildcardNamespaceRule(allocator: Allocator) !NamespaceRule {
 
     const segments = try allocator.alloc(PatternSegment, 1);
     errdefer allocator.free(segments);
-    segments[0] = .{ .literal = try allocator.dupe(u8, "*") };
-    errdefer switch (segments[0]) {
-        .literal => |s| allocator.free(s),
-        .capture => |s| allocator.free(s),
-    };
+    const literal_str = try allocator.dupe(u8, "*");
+    errdefer allocator.free(literal_str);
+    segments[0] = .{ .literal = literal_str };
 
     return .{
         .pattern = pattern,
