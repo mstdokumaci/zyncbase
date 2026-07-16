@@ -46,7 +46,7 @@ test {
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
-    _ = @import("violation_tracker_test.zig");
+    _ = @import("connection/violations_test.zig");
     _ = @import("lock_free_cache_test.zig");
     _ = @import("lock_free_cache_leak_test.zig");
     _ = @import("memory_strategy_test.zig");
@@ -81,8 +81,8 @@ test {
     _ = @import("notification_worker_pool_test.zig");
     _ = @import("notification_worker_pool_perf_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
-    _ = @import("jwt_validator_test.zig");
-    _ = @import("ticket_exchange_test.zig");
+    _ = @import("authentication/jwt_validator_test.zig");
+    _ = @import("authentication/ticket_exchange_test.zig");
     _ = @import("subscription_engine_thread_safety_test.zig");
 
     // Integration tests
