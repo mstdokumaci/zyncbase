@@ -10,7 +10,7 @@ const migration_detector = @import("../migration_detector.zig");
 const migration_executor = @import("../migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const send_queue_mod = @import("../send_queue.zig");
+const send_queue_mod = @import("../connection/send_queue.zig");
 const send_queue_type = send_queue_mod.send_queue;
 const ChangeQueue = @import("../change_queue.zig").ChangeQueue;
 

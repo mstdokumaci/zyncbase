@@ -1,5 +1,5 @@
-const mpscQueue = @import("queues/mpsc_queue.zig").mpscQueue;
-const memory_strategy = @import("memory_strategy.zig");
+const mpscQueue = @import("../queues/mpsc_queue.zig").mpscQueue;
+const memory_strategy = @import("../memory_strategy.zig");
 const ArenaHandle = memory_strategy.ArenaHandle;
 
 pub const Entry = struct {

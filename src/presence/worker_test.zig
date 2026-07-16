@@ -8,7 +8,7 @@ const makeTestSharedSingleField = th.makeTestSharedSingleField;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 const PresenceManager = @import("manager.zig").PresenceManager;
 const typed = @import("../typed/doc_id.zig");
-const send_queue_type = @import("../send_queue.zig").send_queue;
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 
 fn notifierFn(ctx: ?*anyopaque) void {
