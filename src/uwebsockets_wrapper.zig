@@ -1,8 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const connection_session = @import("connection/session.zig");
-const Session = connection_session.Session;
+const authentication_session = @import("authentication/session.zig");
+const Session = authentication_session.Session;
 
 // C imports for ZyncBase's uWebSockets bridge.
 pub const c = @cImport({

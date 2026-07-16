@@ -1,11 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const c = @import("uwebsockets_wrapper.zig").c;
-const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
-const typed = @import("typed/types.zig");
-const typed_codec = @import("typed/codec.zig");
-const json_read = @import("json/read.zig");
-const base64_utils = @import("base64_utils.zig");
+const c = @import("../uwebsockets_wrapper.zig").c;
+const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
+const typed = @import("../typed/types.zig");
+const typed_codec = @import("../typed/codec.zig");
+const json_read = @import("../json/read.zig");
+const base64_utils = @import("../base64_utils.zig");
 
 /// Maps JWT RSA/PSS algorithm names to their OpenSSL hash digest names.
 const rsa_hash_alg = std.StaticStringMap([:0]const u8).initComptime(.{
