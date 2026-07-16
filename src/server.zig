@@ -13,12 +13,12 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationWorkerPool = @import("notification_worker_pool.zig").NotificationWorkerPool;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const authorization_session_resolver = @import("authorization/session_resolver.zig");
+const session_resolver = @import("authorization/session_resolver.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
-const authentication_ticket_exchange = @import("authentication/ticket_exchange.zig");
+const ticket_exchange = @import("authentication/ticket_exchange.zig");
 const authentication_session = @import("authentication/session.zig");
-const SessionResolver = authorization_session_resolver.SessionResolver;
+const SessionResolver = session_resolver.SessionResolver;
 const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const schema_types = @import("schema/types.zig");
@@ -35,7 +35,7 @@ const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
 const send_queue_type = @import("send_queue.zig").send_queue;
-const TicketExchange = authentication_ticket_exchange.TicketExchange;
+const TicketExchange = ticket_exchange.TicketExchange;
 const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const JwksCache = @import("authentication/jwt_validator.zig").JwksCache;
@@ -497,7 +497,7 @@ pub const ZyncBaseServer = struct {
 
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
-            self.websocket_server.post("/auth/ticket", te, authentication_ticket_exchange.handleAuthTicket);
+            self.websocket_server.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
         }
 
         // Register WebSocket handlers with server as user data
