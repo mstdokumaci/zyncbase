@@ -181,7 +181,7 @@ pub const ZyncBaseServer = struct {
 
         self.session_resolver.init(
             self.memory_strategy.generalAllocator(),
-            self.storage_engine.sessionResolutionBuffer(),
+            &self.connection_manager,
             &self.memory_strategy,
         );
         errdefer self.session_resolver.deinit();
@@ -485,7 +485,7 @@ pub const ZyncBaseServer = struct {
         }
 
         // Lock the engine and start the runtime thread
-        try self.storage_engine.start(&self.send_queue, &self.change_queue);
+        try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);
     }
 
     /// Start the server and run the event loop
@@ -755,7 +755,6 @@ pub const ZyncBaseServer = struct {
             }
         }
 
-        self.session_resolver.poll(&self.connection_manager);
         self.connection_manager.drainSendQueue(&self.send_queue);
 
         const now_ms = std.time.milliTimestamp();

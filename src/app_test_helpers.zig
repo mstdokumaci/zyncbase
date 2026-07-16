@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
-const connection_resolution_buffer = @import("connection/resolution_buffer.zig");
 const connection_session_resolver = @import("connection/session_resolver.zig");
 const connection_state = @import("connection/state.zig");
 const connection_session = @import("connection/session.zig");
@@ -12,12 +11,12 @@ const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const typed_doc_id = @import("typed/doc_id.zig");
 const typed = @import("typed/types.zig");
-const SessionResolutionResult = connection_resolution_buffer.SessionResolutionResult;
 const SessionResolver = connection_session_resolver.SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const Connection = connection_state.Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const send_queue_mod = @import("send_queue.zig");
 const Session = connection_session.Session;
 const schema_types = @import("schema/types.zig");
 const schema_mod_format = @import("schema/format.zig");
@@ -35,7 +34,7 @@ const wire_errors = @import("wire/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
 const authorization_types = @import("authorization/types.zig");
-const authorization_defaults = @import("authorization/defaults.zig");
+const authorization_test_helpers = @import("authorization/test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -188,7 +187,7 @@ pub const AppTestContext = struct {
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization_defaults.implicitConfig(gpa, &self.schema);
+        self.auth_config = try authorization_test_helpers.permissiveTestConfig(gpa, &self.schema);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service
@@ -206,8 +205,11 @@ pub const AppTestContext = struct {
         errdefer self.connection_manager.deinit();
 
         // 10. Initialize Session Resolver
-        self.session_resolver.init(gpa, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
+        self.session_resolver.init(gpa, &self.connection_manager, &self.memory_strategy);
         errdefer self.session_resolver.deinit();
+
+        // 11. Wire session_resolver to storage engine for scope resolution
+        self.storage_engine.setSessionResolver(&self.session_resolver);
     }
 
     pub fn deinit(self: *AppTestContext) void {
@@ -329,32 +331,65 @@ pub const AppTestContext = struct {
             return scope;
         }
 
+        const mock_conn = try self.memory_strategy.acquireConnection();
+        defer if (mock_conn.release()) self.memory_strategy.releaseConnection(mock_conn);
+
         const resolution_id = next_test_resolution_id.fetchAdd(1, .monotonic);
-        const conn_id = resolution_id;
         const msg_id = resolution_id +% 1;
-        const scope_seq = resolution_id +% 2;
 
-        try self.store_service.enqueueResolveScope(conn_id, msg_id, scope_seq, namespace, external_user_id, false);
-        try self.storage_engine.flushPendingWrites();
+        mock_conn.id = resolution_id;
+        mock_conn.ref_count.store(1, .release);
 
-        var out = std.ArrayListUnmanaged(SessionResolutionResult).empty;
-        defer out.deinit(self.allocator);
-        try self.storage_engine.sessionResolutionBuffer().drainInto(&out, self.allocator);
+        // Use mock_conn.allocator (pool's GPA) for strings that the connection will own/free
+        const external_id_dupe = try mock_conn.allocator.dupe(u8, external_user_id);
+        var external_id_transferred = false;
+        errdefer if (!external_id_transferred) mock_conn.allocator.free(external_id_dupe);
+        mock_conn.setSession(.{
+            .external_id = external_id_dupe,
+            .is_anonymous = false,
+            .token_expires_at = std.time.timestamp() + 3600,
+        });
+        external_id_transferred = true;
 
-        var matched_result: ?SessionResolutionResult = null;
-        for (out.items) |result| {
-            if (result.conn_id != conn_id or result.msg_id != msg_id or result.scope_seq != scope_seq) {
-                return error.TestUnexpectedSessionResolutionResult;
-            }
-            if (matched_result != null) return error.TestUnexpectedSessionResolutionResult;
-            matched_result = result;
+        self.connection_manager.mutex.lock();
+        try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
+        self.connection_manager.mutex.unlock();
+        defer {
+            self.connection_manager.mutex.lock();
+            _ = self.connection_manager.map.remove(mock_conn.id);
+            self.connection_manager.mutex.unlock();
         }
 
-        if (matched_result) |result| {
-            if (result.err) |err| return err;
+        // Dupe namespace using mock_conn.allocator since beginStoreScopeResolutionLocked
+        // will store the pointer and resetStoreScopeLocked will free it later.
+        const namespace_dupe = try mock_conn.allocator.dupe(u8, namespace);
+        mock_conn.beginStoreScopeResolutionLocked(namespace_dupe);
+        const scope_seq = mock_conn.scope_seq;
+
+        try self.store_service.enqueueResolveScope(mock_conn.id, msg_id, scope_seq, namespace, external_user_id, false);
+        try self.storage_engine.flushPendingWrites();
+
+        var matched_entry: ?send_queue_mod.Entry = null;
+        while (self.test_context.send_queue.?.pop()) |entry| {
+            if (entry.conn_id == mock_conn.id) {
+                if (matched_entry != null) {
+                    // Unexpected multiple results. Deinit both and fail.
+                    if (matched_entry) |m| m.deinit();
+                    entry.deinit();
+                    return error.TestUnexpectedSessionResolutionResult;
+                }
+                matched_entry = entry;
+            } else {
+                entry.deinit();
+            }
+        }
+        defer if (matched_entry) |entry| entry.deinit();
+
+        if (mock_conn.store_ready) {
+            const session = mock_conn.getStoreSession();
             return .{
-                .namespace_id = result.namespace_id,
-                .user_doc_id = result.user_doc_id,
+                .namespace_id = session.namespace_id,
+                .user_doc_id = session.user_doc_id,
             };
         }
 
@@ -388,12 +423,23 @@ pub const AppTestContext = struct {
     pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
         const gpa = self.memory_strategy.generalAllocator();
         const ws = try gpa.create(WebSocket);
+        errdefer gpa.destroy(ws);
+
         ws.* = createMockWebSocket(gpa);
         try self.connection_manager.onOpen(ws);
+        errdefer self.connection_manager.onClose(ws);
+
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
+        errdefer {
+            if (conn.release()) {
+                self.memory_strategy.releaseConnection(conn);
+            }
+        }
+
         const namespace = "public";
         const scope = try self.resolveStoreScopeForTest(namespace, test_external_user_id);
         try conn.setStoreScopeForNamespace(namespace, scope.namespace_id, scope.user_doc_id);
+
         return ScopedConnection{
             .app = self,
             .ws = ws,
