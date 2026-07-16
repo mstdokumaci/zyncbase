@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const helpers = @import("../app_test_helpers.zig");
-const violation_tracker_helpers = @import("test_helpers.zig");
+const test_helpers = @import("test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
@@ -65,10 +65,10 @@ test "ConnectionManager - onClose clears violation state" {
         defer sc.deinit();
 
         _ = try app.violation_tracker.recordViolation(conn_id);
-        try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
+        try testing.expectEqual(@as(u32, 1), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
     }
 
-    try testing.expectEqual(@as(u32, 0), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
+    try testing.expectEqual(@as(u32, 0), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
 }
 
 test "ConnectionManager - onOpen clears stale violation state" {
@@ -87,7 +87,7 @@ test "ConnectionManager - onOpen clears stale violation state" {
         }
 
         _ = try app.violation_tracker.recordViolation(conn_id);
-        try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
+        try testing.expectEqual(@as(u32, 1), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
     }
 
     {
@@ -97,7 +97,7 @@ test "ConnectionManager - onOpen clears stale violation state" {
         const sc = try app.openScopedConnection(&dummy_ws);
         defer sc.deinit();
 
-        try testing.expectEqual(@as(u32, 0), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
+        try testing.expectEqual(@as(u32, 0), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
     }
 }
 
