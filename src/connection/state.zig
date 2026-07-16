@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const uws = @import("../uwebsockets_wrapper.zig");
-const Session = @import("session.zig").Session;
+const Session = @import("../authentication/session.zig").Session;
 const WebSocket = uws.WebSocket;
 
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};

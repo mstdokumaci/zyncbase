@@ -20,7 +20,7 @@ const authorization_evaluate = @import("authorization/evaluate.zig");
 const authorization_presence = @import("authorization/presence.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const JwtValidator = @import("jwt_validator.zig").JwtValidator;
+const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
