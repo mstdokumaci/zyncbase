@@ -17,6 +17,7 @@ const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const authorization_types = @import("authorization/types.zig");
 const authorization_evaluate = @import("authorization/evaluate.zig");
+const authorization_presence = @import("authorization/presence.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
@@ -605,7 +606,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization_evaluate.authorizePresenceWrite(
+        try authorization_presence.authorizePresenceWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,
@@ -638,7 +639,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization_evaluate.authorizePresenceSharedWrite(
+        try authorization_presence.authorizePresenceSharedWrite(
             arena_allocator,
             self.auth_config,
             conn.presence_namespace orelse return error.SessionNotReady,

@@ -11,8 +11,7 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const typed_codec = @import("typed/codec.zig");
 const typed = @import("typed/types.zig");
 const authorization_types = @import("authorization/types.zig");
-const authorization_read_auth = @import("authorization/read_auth.zig");
-const authorization_write_auth = @import("authorization/write_auth.zig");
+const authorization_store = @import("authorization/store.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const ReadKind = storage_mod.ReadKind;
@@ -231,7 +230,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization_read_auth.authorizeStoreRead(ctx.allocator, .{
+        var store_read = try authorization_store.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -239,7 +238,7 @@ pub const StoreService = struct {
             .session_claims = ctx.session_claims,
             .namespace = ctx.namespace,
         });
-        errdefer if (read_auth) |*p| p.deinit(ctx.allocator);
+        errdefer if (store_read) |*p| p.deinit(ctx.allocator);
 
         const filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
 
@@ -250,7 +249,7 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = ctx.namespace_id,
             .filter = filter,
-            .auth_predicate = read_auth,
+            .auth_predicate = store_read,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };
@@ -270,7 +269,7 @@ pub const StoreService = struct {
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
-        var read_auth = try authorization_read_auth.authorizeStoreRead(ctx.allocator, .{
+        var store_read = try authorization_store.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
             .session_user_id = ctx.session_user_id,
@@ -278,7 +277,7 @@ pub const StoreService = struct {
             .session_claims = ctx.session_claims,
             .namespace = ctx.namespace,
         });
-        errdefer if (read_auth) |*p| p.deinit(ctx.allocator);
+        errdefer if (store_read) |*p| p.deinit(ctx.allocator);
 
         var filter_clone = try sub_filter.clone(ctx.allocator);
         errdefer filter_clone.deinit(ctx.allocator);
@@ -299,7 +298,7 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = namespace_id,
             .filter = filter_clone,
-            .auth_predicate = read_auth,
+            .auth_predicate = store_read,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };
@@ -322,7 +321,7 @@ pub const StoreService = struct {
     ) !void {
         const parsed = try self.parseStorePath(path);
 
-        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = parsed.table,
             .session_user_id = ctx.session_user_id,
@@ -333,8 +332,8 @@ pub const StoreService = struct {
             .value = null,
             .is_create = false,
         });
-        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+        defer if (store_write) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (store_write) |*p| p else null;
 
         try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
     }
@@ -420,7 +419,7 @@ pub const StoreService = struct {
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
-        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,
@@ -431,8 +430,8 @@ pub const StoreService = struct {
             .value = &value,
             .is_create = is_create,
         });
-        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+        defer if (store_write) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (store_write) |*p| p else null;
 
         if (is_create) {
             try self.storage_engine.upsertDocument(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
@@ -462,7 +461,7 @@ pub const StoreService = struct {
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
-        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,
@@ -473,8 +472,8 @@ pub const StoreService = struct {
             .value = &value,
             .is_create = is_create,
         });
-        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+        defer if (store_write) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (store_write) |*p| p else null;
 
         if (is_create) {
             return try self.storage_engine.prepareBatchUpsert(
@@ -506,7 +505,7 @@ pub const StoreService = struct {
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload);
 
-        var auth_result = try authorization_write_auth.authorizeStoreWrite(self.allocator, .{
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
             .session_user_id = ctx.session_user_id,
@@ -517,8 +516,8 @@ pub const StoreService = struct {
             .value = null,
             .is_create = false,
         });
-        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+        defer if (store_write) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (store_write) |*p| p else null;
 
         return try self.storage_engine.prepareBatchDelete(
             path.table_index,
