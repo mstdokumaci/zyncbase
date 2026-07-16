@@ -64,58 +64,18 @@ pub const SessionResolver = struct {
 
         if (resolution_err) |err| {
             const final_err = if (conn.isScopeSeqCurrentFor(scope_seq, is_presence)) err else error.RequestSuperseded;
-            const wire_err = wire_errors.getWireError(final_err);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, final_err);
         }
 
         const pending_namespace = conn.dupePendingNamespaceIfSeq(handle.allocator(), scope_seq, is_presence) catch |err| {
-            const wire_err = wire_errors.getWireError(err);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, err);
         } orelse {
-            const wire_err = wire_errors.getWireError(error.RequestSuperseded);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, error.RequestSuperseded);
         };
 
         const external_user_id = conn.dupeExternalUserId(handle.allocator()) catch |err| {
             _ = conn.resetScopeIfSeq(scope_seq, is_presence);
-            const wire_err = wire_errors.getWireError(err);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, err);
         };
 
         authorization_evaluate.authorizeNamespace(
@@ -128,31 +88,11 @@ pub const SessionResolver = struct {
             is_presence,
         ) catch |err| {
             _ = conn.resetScopeIfSeq(scope_seq, is_presence);
-            const wire_err = wire_errors.getWireError(err);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, err);
         };
 
         if (!conn.setScopeIfSeq(scope_seq, namespace_id, user_doc_id, is_presence)) {
-            const wire_err = wire_errors.getWireError(error.RequestSuperseded);
-            const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
-                std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
-                return null;
-            };
-            handle.retain();
-            return .{
-                .conn_id = conn_id,
-                .data = msg,
-                .arena = handle,
-            };
+            return makeErrorOutcome(handle, conn_id, msg_id, error.RequestSuperseded);
         }
 
         const msg = wire_encode.encodeSuccess(handle.allocator(), msg_id) catch |encode_err| {
@@ -167,3 +107,26 @@ pub const SessionResolver = struct {
         };
     }
 };
+
+/// Encode an error response into the arena and wrap it in a ResolutionOutcome.
+/// Retains one consumer reference on the arena (matching the caller's contract:
+/// the consumer's `entry.deinit()` drops it to 0 and returns the arena to the pool).
+/// Returns null only if encoding the error response itself fails.
+fn makeErrorOutcome(
+    handle: ArenaHandle,
+    conn_id: u64,
+    msg_id: u64,
+    err: anyerror,
+) ?SessionResolver.ResolutionOutcome {
+    const wire_err = wire_errors.getWireError(err);
+    const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
+        std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
+        return null;
+    };
+    handle.retain();
+    return .{
+        .conn_id = conn_id,
+        .data = msg,
+        .arena = handle,
+    };
+}

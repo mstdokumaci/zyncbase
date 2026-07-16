@@ -372,6 +372,12 @@ pub const AppTestContext = struct {
         var matched_entry: ?send_queue_mod.Entry = null;
         while (self.test_context.send_queue.?.pop()) |entry| {
             if (entry.conn_id == mock_conn.id) {
+                if (matched_entry != null) {
+                    // Unexpected multiple results. Deinit both and fail.
+                    if (matched_entry) |m| m.deinit();
+                    entry.deinit();
+                    return error.TestUnexpectedSessionResolutionResult;
+                }
                 matched_entry = entry;
             } else {
                 entry.deinit();
