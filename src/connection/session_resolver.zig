@@ -104,6 +104,7 @@ pub const SessionResolver = struct {
         };
 
         const external_user_id = conn.dupeExternalUserId(handle.allocator()) catch |err| {
+            _ = conn.resetScopeIfSeq(scope_seq, is_presence);
             const wire_err = wire_errors.getWireError(err);
             const msg = wire_encode.encodeError(handle.allocator(), msg_id, wire_err) catch |encode_err| {
                 std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});

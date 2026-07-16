@@ -363,7 +363,6 @@ pub const ConnectionManager = struct {
             }
         }
     }
-
 };
 
 // Default send-broadcast helper used by other modules (e.g. presence manager).
