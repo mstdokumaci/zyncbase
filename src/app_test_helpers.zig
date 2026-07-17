@@ -454,7 +454,17 @@ pub const AppTestContext = struct {
     /// the onClose callbacks for all mock WebSockets, since the test environment
     /// lacks the asynchronous event loop that would normally handle this.
     pub fn closeAllConnections(self: *AppTestContext) void {
-        self.connection_manager.closeAllConnections();
+        // Close all active connections (inlined from ConnectionManager since it
+        // is test-only logic; production shutdown uses sendDisconnectToAll instead).
+        self.connection_manager.mutex.lock();
+        {
+            var it = self.connection_manager.map.valueIterator();
+            while (it.next()) |state| {
+                const conn = state.*;
+                conn.ws.close();
+            }
+        }
+        self.connection_manager.mutex.unlock();
 
         // Pump onClose for all remaining connections in the manager.
         // We iterate and remove until empty to avoid concurrent modification issues.
