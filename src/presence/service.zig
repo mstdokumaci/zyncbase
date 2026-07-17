@@ -75,7 +75,7 @@ pub const PresenceService = struct {
     }
 
     /// Enqueue remove_user. No per-op auth — namespace admission already gatekept presenceRead.
-    pub fn removeUser(self: *PresenceService, session: Session) !void {
+    pub fn removeUser(self: *PresenceService, session: Session) void {
         self.enqueue(.{ .remove_user = .{
             .namespace_id = session.namespace_id,
             .user_id = session.user_doc_id,
@@ -83,7 +83,7 @@ pub const PresenceService = struct {
     }
 
     /// Enqueue subscribe_user with client-provided sub_id and msg_id.
-    pub fn subscribeUser(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) !void {
+    pub fn subscribeUser(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) void {
         self.enqueue(.{ .subscribe_user = .{
             .namespace_id = session.namespace_id,
             .conn_id = session.conn_id,
@@ -93,7 +93,7 @@ pub const PresenceService = struct {
     }
 
     /// Enqueue subscribe_shared with client-provided sub_id and msg_id.
-    pub fn subscribeShared(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) !void {
+    pub fn subscribeShared(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) void {
         self.enqueue(.{ .subscribe_shared = .{
             .namespace_id = session.namespace_id,
             .conn_id = session.conn_id,
@@ -103,7 +103,7 @@ pub const PresenceService = struct {
     }
 
     /// Enqueue unsubscribe_user.
-    pub fn unsubscribeUser(self: *PresenceService, session: Session) !void {
+    pub fn unsubscribeUser(self: *PresenceService, session: Session) void {
         self.enqueue(.{ .unsubscribe_user = .{
             .namespace_id = session.namespace_id,
             .conn_id = session.conn_id,
@@ -111,7 +111,7 @@ pub const PresenceService = struct {
     }
 
     /// Enqueue unsubscribe_shared.
-    pub fn unsubscribeShared(self: *PresenceService, session: Session) !void {
+    pub fn unsubscribeShared(self: *PresenceService, session: Session) void {
         self.enqueue(.{ .unsubscribe_shared = .{
             .namespace_id = session.namespace_id,
             .conn_id = session.conn_id,

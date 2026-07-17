@@ -618,7 +618,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        try self.presence_service.subscribeUser(
+        self.presence_service.subscribeUser(
             try buildPresenceSession(self.allocator, session, conn),
             sub_id,
             msg_id,
@@ -640,7 +640,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         _ = req;
 
-        try self.presence_service.unsubscribeUser(
+        self.presence_service.unsubscribeUser(
             try buildPresenceSession(arena_allocator, session, conn),
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
@@ -660,7 +660,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        try self.presence_service.subscribeShared(
+        self.presence_service.subscribeShared(
             try buildPresenceSession(self.allocator, session, conn),
             sub_id,
             msg_id,
@@ -682,7 +682,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         _ = req;
 
-        try self.presence_service.unsubscribeShared(
+        self.presence_service.unsubscribeShared(
             try buildPresenceSession(arena_allocator, session, conn),
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
@@ -701,7 +701,7 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try self.presence_service.removeUser(
+        self.presence_service.removeUser(
             try buildPresenceSession(arena_allocator, session, conn),
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);

@@ -145,7 +145,7 @@ test "PresenceService: removeUser with null worker (no crash)" {
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
-    try svc.removeUser(session);
+    svc.removeUser(session);
 }
 
 test "PresenceService: subscribeUser with null worker (no crash)" {
@@ -161,7 +161,7 @@ test "PresenceService: subscribeUser with null worker (no crash)" {
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
-    try svc.subscribeUser(session, 200, 42);
+    svc.subscribeUser(session, 200, 42);
 }
 
 test "PresenceService: subscribeShared with null worker (no crash)" {
@@ -177,7 +177,7 @@ test "PresenceService: subscribeShared with null worker (no crash)" {
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
-    try svc.subscribeShared(session, 200, 42);
+    svc.subscribeShared(session, 200, 42);
 }
 
 test "PresenceService: unsubscribeUser with null worker (no crash)" {
@@ -193,7 +193,7 @@ test "PresenceService: unsubscribeUser with null worker (no crash)" {
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
-    try svc.unsubscribeUser(session);
+    svc.unsubscribeUser(session);
 }
 
 test "PresenceService: unsubscribeShared with null worker (no crash)" {
@@ -209,7 +209,7 @@ test "PresenceService: unsubscribeShared with null worker (no crash)" {
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
-    try svc.unsubscribeShared(session);
+    svc.unsubscribeShared(session);
 }
 
 test "PresenceService: removeAllForConnection with null worker (no crash)" {
