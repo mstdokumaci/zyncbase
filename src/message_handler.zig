@@ -469,7 +469,7 @@ pub const MessageHandler = struct {
         }, table_index, parsed, sub_id, .subscribe);
         errdefer read_req.deinit(self.allocator);
 
-        // Register subscription synchronously before async read so subscriptions are not missed.
+        // Register subscription synchronously before async read so notifications are not missed.
         // subscribe() clones the filter internally; read_req retains ownership.
         _ = try self.subscription_engine.subscribe(session.namespace_id, table_index, read_req.filter, conn.id, sub_id);
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);

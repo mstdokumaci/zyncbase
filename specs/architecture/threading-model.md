@@ -93,7 +93,7 @@ variable:
 ### Writer (1 thread, fixed)
 - Receives mutations through a dedicated write queue
 - Commits to SQLite in serialized order; total write ordering is architecturally guaranteed
-- After each commit, fans committed changes out to notification workers
+- After each commit, fans committed changes out to subscription workers
 - Delivers write outcomes (acknowledged or rejected) back to the event loop for client delivery
 
 ### Checkpoint (1 thread, fixed)
@@ -129,7 +129,7 @@ variable:
 ### 2. Write Path (Serialized)
 - Mutation is enqueued to the dedicated write queue and the event loop returns immediately
 - Writer thread dequeues and commits to SQLite in serialized order
-- After commit, committed changes are distributed to notification workers for subscription fanout
+- After commit, committed changes are distributed to subscription workers for subscription fanout
 - Write outcomes are delivered back to the event loop for client acknowledgement
 
 ### 3. Read Path (Parallel)
@@ -153,7 +153,7 @@ The core engine routes incoming messages to either the parallel read path or the
 - Connection state: mutated only through connection management methods; no direct mutation from background threads
 - Storage writes: serialized through the single-writer queue; bypassing it breaks acknowledgement ordering
 - Storage reads: each reader thread owns its SQLite connection exclusively; no connection sharing
-- Notification fanout: committed changes distributed to notification workers via a sharded work queue; each worker owns one shard
+- Notification fanout: committed changes distributed to subscription workers via a sharded work queue; each worker owns one shard
 - Subscriptions: register/unregister through the subscription registry; disconnects must detach all connection-owned subscriptions
 - Presence: event loop enqueues operations into the presence worker's input queue; the presence worker is the sole mutator of presence state
 - WebSocket sends: background workers push owned encoded messages to the cross-thread queue; only the event loop drains and delivers to connections

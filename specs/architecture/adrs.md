@@ -129,7 +129,7 @@ A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005
 
 ### Minimum Hardware Requirement
 
-The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 3 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one notification worker.
+The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 3 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one subscription worker.
 
 ### Thread Budget Formula
 
