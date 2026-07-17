@@ -9,7 +9,7 @@ const c = @import("../uwebsockets_wrapper.zig").c;
 const json_read = @import("../json/read.zig");
 const json_iterate = @import("../json/iterate.zig");
 const json_write = @import("../json/write.zig");
-const base64_utils = @import("../base64_utils.zig");
+const base64_utils = @import("base64_utils.zig");
 
 pub const TicketExchange = struct {
     allocator: Allocator,

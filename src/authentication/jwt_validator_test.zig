@@ -6,7 +6,7 @@ const JwtValidator = jwt_validator.JwtValidator;
 const JwksCache = jwt_validator.JwksCache;
 const Jwk = jwt_validator.Jwk;
 const json_write = @import("../json/write.zig");
-const base64_utils = @import("../base64_utils.zig");
+const base64_utils = @import("base64_utils.zig");
 
 fn createHmacJwt(
     allocator: Allocator,
