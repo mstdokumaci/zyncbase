@@ -83,11 +83,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             reclamation_interval_ms: u64 = 100,
         };
 
-        pub const UpdateOptions = struct {
-            max_capacity: ?usize = null,
-            evict_batch_size: usize = 0,
-        };
-
         const EpochManager = struct {
             current_epoch: std.atomic.Value(u64),
             thread_epochs: [128]std.atomic.Value(u64),
@@ -253,25 +248,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             }
         };
 
-        pub const Snapshot = struct {
-            cache: *Self,
-            map: *MapType,
-            epoch_slot: usize,
-
-            pub fn deinit(self: Snapshot) void {
-                self.cache.epoch_manager.exit(self.epoch_slot);
-            }
-        };
-
-        pub fn getSnapshot(self: *Self) Snapshot {
-            const slot = self.epoch_manager.enter();
-            return Snapshot{
-                .cache = self,
-                .map = self.entries.load(.acquire),
-                .epoch_slot = slot,
-            };
-        }
-
         /// Handle for a cached item, ensures proper ref counting
         pub const Handle = struct {
             cache: *Self,
@@ -325,55 +301,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     entry.version.store(new_version, .release);
 
                     var result: CowResult = .{};
-                    const gop = try new_entries.getOrPut(ctx.key);
-                    if (gop.found_existing) {
-                        result.replaced = gop.value_ptr.*;
-                    }
-                    gop.value_ptr.* = entry;
-                    result.created = entry;
-                    return result;
-                }
-            }.transform);
-        }
-
-        /// Update an entry in the cache with extended options (e.g., size limit)
-        pub fn updateExt(self: *Self, key: KeyType, new_data: t, options: UpdateOptions) !void {
-            const Ctx = struct { cache: *Self, key: KeyType, data: t, options: UpdateOptions };
-            return self.cowMutation(Ctx, .{ .cache = self, .key = key, .data = new_data, .options = options }, struct {
-                fn transform(ctx: Ctx, new_entries: *MapType) anyerror!CowResult {
-                    var result: CowResult = .{};
-                    errdefer result.deinit(ctx.cache.allocator);
-
-                    if (ctx.options.max_capacity) |max| {
-                        const exists = new_entries.contains(ctx.key);
-                        if (!exists and new_entries.count() >= max) {
-                            const to_evict = @min(ctx.options.evict_batch_size, new_entries.count());
-                            var evicted_count: usize = 0;
-                            var nit = new_entries.iterator();
-                            while (nit.next()) |entry| {
-                                if (evicted_count >= to_evict) break;
-                                if (std.meta.eql(entry.key_ptr.*, ctx.key)) continue;
-
-                                try result.evicted.append(ctx.cache.allocator, .{
-                                    .key = entry.key_ptr.*,
-                                    .entry = entry.value_ptr.*,
-                                });
-                                evicted_count += 1;
-                            }
-
-                            for (result.evicted.items) |ev| {
-                                _ = new_entries.remove(ev.key);
-                            }
-                        }
-                    }
-
-                    const old_entry = new_entries.get(ctx.key);
-                    const new_version = if (old_entry) |oe| oe.version.load(.acquire) + 1 else 0;
-
-                    const entry = try CacheEntry.init(ctx.cache.allocator, ctx.data);
-                    errdefer ctx.cache.allocator.destroy(entry);
-                    entry.version.store(new_version, .release);
-
                     const gop = try new_entries.getOrPut(ctx.key);
                     if (gop.found_existing) {
                         result.replaced = gop.value_ptr.*;

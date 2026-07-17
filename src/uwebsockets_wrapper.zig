@@ -243,10 +243,6 @@ pub const WebSocket = struct {
         c.uws_ws_close(if (self.ssl) 1 else 0, self.ws.?);
     }
 
-    pub fn getSession(self: WebSocket) ?Session {
-        return self.session;
-    }
-
     pub fn takeSession(self: *WebSocket) ?Session {
         const sess = self.session;
         self.session = null;

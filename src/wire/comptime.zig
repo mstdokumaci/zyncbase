@@ -11,7 +11,3 @@ pub fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disab
         };
     }.val);
 }
-
-pub fn comptimeKeyPayload(comptime key: []const u8) []const u8 {
-    return key;
-}

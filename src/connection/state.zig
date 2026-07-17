@@ -125,16 +125,6 @@ pub const Connection = struct {
         self.is_backpressured = false;
     }
 
-    /// One-time initialization for a connection object in a pool, with pre-allocated
-    /// subscription capacity to avoid per-subscription heap allocations on the event
-    /// loop thread. Propagates OutOfMemory if pre-allocation fails.
-    pub fn initPoolWithCapacity(self: *Connection, allocator: Allocator) !void {
-        self.initPool(allocator);
-        // Pre-allocate a small initial capacity so the first few addSubscription
-        // calls on the event loop thread don't trigger heap allocations.
-        try self.subscription_ids.ensureTotalCapacity(allocator, 16);
-    }
-
     /// Activate a pooled connection for a new client session.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
         self.resetSession();
@@ -230,17 +220,6 @@ pub const Connection = struct {
         self.pending_presence_namespace = namespace;
     }
 
-    pub fn resetStoreScope(self: *Connection) void {
-        self.resetStoreScopeLocked();
-    }
-
-    /// Replace the active store scope after namespace and users.id resolution.
-    pub fn setStoreScope(self: *Connection, namespace_id: i64, user_doc_id: typed_doc_id.DocId) void {
-        self.namespace_id = namespace_id;
-        self.user_doc_id = user_doc_id;
-        self.store_ready = true;
-    }
-
     pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: typed_doc_id.DocId) !void {
         const namespace_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(namespace_owned);
@@ -295,11 +274,6 @@ pub const Connection = struct {
         return self.store_namespace;
     }
 
-    pub fn dupeStoreNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
-        const namespace = self.store_namespace orelse return null;
-        return @as(?[]const u8, try allocator.dupe(u8, namespace));
-    }
-
     pub fn dupePendingNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64, is_presence: bool) !?[]const u8 {
         if (is_presence) {
             if (self.presence_scope_seq != expected_scope_seq) return null;
@@ -320,17 +294,8 @@ pub const Connection = struct {
         };
     }
 
-    pub fn resetPresenceScope(self: *Connection) void {
-        self.resetPresenceScopeLocked();
-    }
-
     pub fn getPresenceNamespace(self: *Connection) ?[]const u8 {
         return self.presence_namespace;
-    }
-
-    pub fn dupePresenceNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
-        const namespace = self.presence_namespace orelse return null;
-        return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 
     /// Allocate the next subscription ID in O(1) time.
