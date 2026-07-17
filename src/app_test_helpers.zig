@@ -27,7 +27,7 @@ pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence/manager.zig").PresenceManager;
+const PresenceService = @import("presence/service.zig").PresenceService;
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
@@ -122,7 +122,7 @@ pub const AppTestContext = struct {
     session_resolver: SessionResolver,
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
-    presence_manager: PresenceManager,
+    presence_service: PresenceService,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema: Schema,
@@ -193,11 +193,11 @@ pub const AppTestContext = struct {
         // 7. Initialize Store Service
         self.store_service = StoreService.init(gpa, &self.storage_engine, &self.schema, &self.auth_config);
 
-        // 8. Initialize Presence Manager
-        self.presence_manager.init(gpa, self.schema.presence_user_fields, self.schema.presence_shared_fields);
+        // 8b. Initialize Presence Service (null worker — no spawn in tests)
+        self.presence_service = PresenceService.init(gpa, null, &self.auth_config, &self.schema);
 
         // 9. Initialize Handler and Manager
-        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_manager, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
+        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
@@ -225,6 +225,7 @@ pub const AppTestContext = struct {
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
+        self.presence_service.deinit();
         self.store_service.deinit();
 
         // 5. Cleanup remaining infrastructure
