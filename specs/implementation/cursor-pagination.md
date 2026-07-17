@@ -10,7 +10,7 @@ ZyncBase exposes a purely cursor-driven pagination topology over offset-based eq
 
 | File | Responsibility |
 |------|----------------|
-| `src/query_parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
+| `src/query/parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
 | `src/storage_engine/reader.zig` | Builds compound SQL selection predicates and executes tie-breaking pagination queries. |
 | `src/store_service.zig` | Marshals cursor bounds between client requests and storage queries. |
 

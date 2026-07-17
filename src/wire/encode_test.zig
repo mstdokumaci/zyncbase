@@ -9,7 +9,7 @@ const schema_parse = @import("../schema/parse.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const query_parser = @import("../query_parser.zig");
+const query_parser = @import("../query/parser.zig");
 const tth = @import("../typed/test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 

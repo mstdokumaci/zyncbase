@@ -6,9 +6,9 @@ const schema_types = @import("schema/types.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
-const qth = @import("query_parser_test_helpers.zig");
+const qth = @import("query/test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
-const query_ast = @import("query_ast.zig");
+const query_ast = @import("query/ast.zig");
 
 fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metadata: *const schema_types.Table) !std.AutoHashMap(typed_doc_id.DocId, void) {
     var ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);

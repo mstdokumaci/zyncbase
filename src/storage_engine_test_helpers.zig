@@ -22,7 +22,7 @@ pub const FieldType = schema_types.FieldType;
 pub const TableMetadata = schema_types.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema/test_helpers.zig");
-pub const query_ast = @import("query_ast.zig");
+const query_ast = @import("query/ast.zig");
 pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
