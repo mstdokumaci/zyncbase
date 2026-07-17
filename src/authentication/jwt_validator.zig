@@ -212,17 +212,6 @@ pub const JwksCache = struct {
 
         return error.KeyNotFound;
     }
-
-    pub fn setKeys(self: *JwksCache, keys: []Jwk, timestamp: i64) !void {
-        for (keys) |*key| {
-            try key.buildPkey(self.allocator);
-        }
-        const state = JwksState{
-            .keys = keys,
-            .last_fetched = timestamp,
-        };
-        try self.state_cache.update(0, state);
-    }
 };
 
 /// JWK representation used purely for JSON (de)serialization. The live `Jwk`

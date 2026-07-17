@@ -8,6 +8,19 @@ const Jwk = jwt_validator.Jwk;
 const json_write = @import("../json/write.zig");
 const base64_utils = @import("base64_utils.zig");
 
+/// Test-only helper to populate JwksCache keys, inlined from JwksCache
+/// to keep test accommodations out of the production codebase.
+fn setKeys(cache: *JwksCache, keys: []Jwk, timestamp: i64) !void {
+    for (keys) |*key| {
+        try key.buildPkey(cache.allocator);
+    }
+    const state = jwt_validator.JwksState{
+        .keys = keys,
+        .last_fetched = timestamp,
+    };
+    try cache.state_cache.update(0, state);
+}
+
 fn createHmacJwt(
     allocator: Allocator,
     secret: []const u8,
@@ -167,7 +180,7 @@ test "JwksCache: getJwk looks up populated keys" {
         .n = try allocator.dupe(u8, n_b64),
         .e = try allocator.dupe(u8, e_b64),
     };
-    try cache.setKeys(keys, std.time.timestamp());
+    try setKeys(&cache, keys, std.time.timestamp());
 
     // Retrieve valid key
     const retrieved = try cache.getJwk("key_1");
@@ -196,7 +209,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
         .n = try allocator.dupe(u8, "2SJJNHh5kweKQwpXL796HER09fDVdeKAn6VO9pI9JGpv_WCM4KUxfuPyoJUlMNKsNj5QQCuOvJ4lrNwNRr5wPK2wPDsYRZSwhhr3ocUNAFgXf9YeBxSRoax9WHjPSTK6ai-lPWykj_gTl0AbOcw9bgY1ZOlh6DEVu_uPUkUOo7NXLkd5kIxakCWaf4MAl0qAs4bNmnPM78Nn5PdoF8UJ-vbEZ2sYu_PYp3q-GsdIfCxLLV8F3Xj5lQLR6nfIoz1L8tHPuPSh08B_rFuDdDhtcfsW0fPF_CyYelTydwTyVD_CzZpM0vgTLr8Uuxd8f7rqEdSp3h0IzR0cNGp4jcKHHw"),
         .e = try allocator.dupe(u8, "AQAB"),
     };
-    try cache.setKeys(keys, std.time.timestamp());
+    try setKeys(&cache, keys, std.time.timestamp());
 
     const token_rs = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6NDAwMDAwMDAwMH0.Rs_fn7LadvhYdkjEiowVbslQybN1DjW7tVzY4teRQzgqClPjcfyAvI30_QgnMOHfQAcy5dXITWw2pv4mnc9vFVIpmO3wLqIsmyHS_IZ563QS0s7ZMnsHECeTeQaXIFhz8Q1xZeKkJ5zXuTi8zTdMpOS_UTObd_RXKP5g8dZQXOaU5xEijixLaGAkxwST1aqWj0C6SjJNleGFgi_s3csUfyW41jBUV6qigt17tM7FzYt9kz-jjJArLiZEgGQLlf8w036UUPWphPBPJjBHc7qOhZLC_YVPeyYAXyRb0BwNSNGfHhzLMqxaYs0QtYTBrEgU0tRIkqYjYNICxyU9LXhCZg";
 
