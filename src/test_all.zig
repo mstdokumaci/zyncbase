@@ -43,6 +43,7 @@ test {
     _ = @import("connection/violations_test.zig");
     _ = @import("presence/record_test.zig");
     _ = @import("presence/manager_test.zig");
+    _ = @import("presence/service_test.zig");
     _ = @import("presence/worker_test.zig");
     _ = @import("query/parser_test.zig");
     _ = @import("query/ast_test.zig");

@@ -9,15 +9,12 @@ const connection_mod = @import("connection/state.zig");
 const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence/manager.zig").PresenceManager;
-const PresenceOp = @import("presence/worker.zig").PresenceOp;
-const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
+const PresenceService = @import("presence/service.zig").PresenceService;
 const wire_errors = @import("wire/errors.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const authorization_types = @import("authorization/types.zig");
 const authorization_evaluate = @import("authorization/evaluate.zig");
-const authorization_presence = @import("authorization/presence.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
@@ -29,17 +26,13 @@ pub const MessageHandler = struct {
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     store_service: *StoreService,
-    presence_manager: *PresenceManager,
+    presence_service: *PresenceService,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
     auth_config: *const authorization_types.AuthConfig,
     schema: *const schema_types.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
-
-    /// Pointer to the presence worker thread. Set by the server
-    /// after both MessageHandler and PresenceWorker are initialized.
-    presence_worker: ?*PresenceWorker = null,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -48,7 +41,7 @@ pub const MessageHandler = struct {
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
         store_service: *StoreService,
-        presence_manager: *PresenceManager,
+        presence_service: *PresenceService,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
         auth_config: *const authorization_types.AuthConfig,
@@ -61,33 +54,13 @@ pub const MessageHandler = struct {
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
             .store_service = store_service,
-            .presence_manager = presence_manager,
+            .presence_service = presence_service,
             .subscription_engine = subscription_engine,
             .security_config = security_config,
             .auth_config = auth_config,
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
-            .presence_worker = null,
-        };
-    }
-
-    pub fn setPresenceWorker(
-        self: *MessageHandler,
-        worker: *PresenceWorker,
-    ) void {
-        self.presence_worker = worker;
-    }
-
-    fn enqueuePresenceOp(self: *MessageHandler, op: PresenceOp.Op) void {
-        var temp_op = PresenceOp{ .op = op, .allocator = self.allocator };
-        const presence = self.presence_worker orelse {
-            temp_op.deinit();
-            return;
-        };
-        presence.enqueue(temp_op) catch |err| {
-            std.log.err("Failed to enqueue presence op: {}", .{err});
-            temp_op.deinit();
         };
     }
 
@@ -211,11 +184,7 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
 
         if (presence_ns != connection_mod.unset_namespace_id) {
-            self.enqueuePresenceOp(.{ .remove_all_for_connection = .{
-                .namespace_id = presence_ns,
-                .user_id = presence_user,
-                .conn_id = conn.id,
-            } });
+            self.presence_service.removeAllForConnection(presence_ns, presence_user, conn.id);
         }
     }
 
@@ -606,23 +575,11 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization_presence.authorizePresenceWrite(
-            arena_allocator,
-            self.auth_config,
-            conn.presence_namespace orelse return error.SessionNotReady,
-            session.user_doc_id,
-            conn.getExternalUserId() orelse return error.SessionNotReady,
-            conn.getSessionClaimsPtr(),
-            self.schema.presence_user_fields,
-            &req.data,
+        try self.presence_service.setUser(
+            try buildPresenceSession(arena_allocator, session, conn),
+            req.data,
         );
 
-        const cloned_patch = try req.data.deepClone(self.allocator);
-        self.enqueuePresenceOp(.{ .set_user = .{
-            .namespace_id = session.namespace_id,
-            .user_id = session.user_doc_id,
-            .patch = cloned_patch,
-        } });
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -639,23 +596,11 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        try authorization_presence.authorizePresenceSharedWrite(
-            arena_allocator,
-            self.auth_config,
-            conn.presence_namespace orelse return error.SessionNotReady,
-            session.user_doc_id,
-            conn.getExternalUserId() orelse return error.SessionNotReady,
-            conn.getSessionClaimsPtr(),
-            self.schema.presence_shared_fields,
-            &req.data,
+        try self.presence_service.setShared(
+            try buildPresenceSession(arena_allocator, session, conn),
+            req.data,
         );
 
-        const cloned_patch = try req.data.deepClone(self.allocator);
-        self.enqueuePresenceOp(.{ .set_shared = .{
-            .namespace_id = session.namespace_id,
-            .patch = cloned_patch,
-            .source_conn = conn.id,
-        } });
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -673,12 +618,11 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        self.enqueuePresenceOp(.{ .subscribe_user = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = conn.id,
-            .sub_id = sub_id,
-            .msg_id = msg_id,
-        } });
+        self.presence_service.subscribeUser(
+            try buildPresenceSession(self.allocator, session, conn),
+            sub_id,
+            msg_id,
+        );
         return null;
     }
 
@@ -696,10 +640,9 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         _ = req;
 
-        self.enqueuePresenceOp(.{ .unsubscribe_user = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = conn.id,
-        } });
+        self.presence_service.unsubscribeUser(
+            try buildPresenceSession(arena_allocator, session, conn),
+        );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -717,12 +660,11 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        self.enqueuePresenceOp(.{ .subscribe_shared = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = conn.id,
-            .sub_id = sub_id,
-            .msg_id = msg_id,
-        } });
+        self.presence_service.subscribeShared(
+            try buildPresenceSession(self.allocator, session, conn),
+            sub_id,
+            msg_id,
+        );
         return null;
     }
 
@@ -740,10 +682,9 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         _ = req;
 
-        self.enqueuePresenceOp(.{ .unsubscribe_shared = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = conn.id,
-        } });
+        self.presence_service.unsubscribeShared(
+            try buildPresenceSession(arena_allocator, session, conn),
+        );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -760,19 +701,39 @@ pub const MessageHandler = struct {
 
         const session = try requirePresenceSession(conn);
 
-        self.enqueuePresenceOp(.{ .remove_user = .{
-            .namespace_id = session.namespace_id,
-            .user_id = session.user_doc_id,
-        } });
+        self.presence_service.removeUser(
+            try buildPresenceSession(arena_allocator, session, conn),
+        );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
-    fn requirePresenceSession(conn: *Connection) !struct { namespace_id: i64, user_doc_id: typed_doc_id.DocId } {
+    fn requirePresenceSession(conn: *Connection) !PresenceSession {
         if (!conn.presence_ready) return error.SessionNotReady;
         if (conn.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
         return .{
             .namespace_id = conn.presence_namespace_id,
             .user_doc_id = conn.user_doc_id,
+        };
+    }
+
+    const PresenceSession = struct {
+        namespace_id: i64,
+        user_doc_id: typed_doc_id.DocId,
+    };
+
+    fn buildPresenceSession(
+        arena: Allocator,
+        session: PresenceSession,
+        conn: *Connection,
+    ) !PresenceService.Session {
+        return .{
+            .namespace_id = session.namespace_id,
+            .user_doc_id = session.user_doc_id,
+            .conn_id = conn.id,
+            .external_user_id = conn.getExternalUserId() orelse return error.SessionNotReady,
+            .session_claims = conn.getSessionClaimsPtr(),
+            .presence_namespace = conn.presence_namespace orelse return error.SessionNotReady,
+            .arena = arena,
         };
     }
 
@@ -791,11 +752,7 @@ pub const MessageHandler = struct {
 
         // Enqueue cleanup of old namespace presence to the dispatcher thread
         if (old_ns != connection_mod.unset_namespace_id) {
-            self.enqueuePresenceOp(.{ .remove_all_for_connection = .{
-                .namespace_id = old_ns,
-                .user_id = old_user,
-                .conn_id = conn.id,
-            } });
+            self.presence_service.removeAllForConnection(old_ns, old_user, conn.id);
         }
 
         return scope_seq;

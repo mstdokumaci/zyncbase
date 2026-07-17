@@ -34,6 +34,7 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
+const PresenceService = @import("presence/service.zig").PresenceService;
 const send_queue_type = @import("connection/send_queue.zig").send_queue;
 const TicketExchange = ticket_exchange.TicketExchange;
 const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
@@ -66,6 +67,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     presence_manager: PresenceManager,
     presence_worker: ?*PresenceWorker,
+    presence_service: PresenceService,
     send_queue: send_queue_type,
     send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     message_handler: MessageHandler,
@@ -158,6 +160,13 @@ pub const ZyncBaseServer = struct {
         errdefer presence_worker.stop();
         self.presence_worker = presence_worker;
 
+        self.presence_service = PresenceService.init(
+            self.memory_strategy.generalAllocator(),
+            presence_worker,
+            &self.auth_config,
+            &self.schema,
+        );
+
         const jwt_config = try self.initJWT(&config);
         errdefer if (self.jwks_cache) |jc| {
             jc.deinit();
@@ -165,7 +174,7 @@ pub const ZyncBaseServer = struct {
             self.jwks_cache = null;
         };
 
-        self.initMessageHandlerWired(&config, presence_worker);
+        self.initMessageHandlerWired(&config);
         errdefer self.message_handler.deinit();
 
         try self.initConnectionManagerInternal(&config);
@@ -330,13 +339,13 @@ pub const ZyncBaseServer = struct {
         return jwt_config;
     }
 
-    fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config, presence_worker: *PresenceWorker) void {
+    fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config) void {
         self.message_handler.init(
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.violation_tracker,
             &self.store_service,
-            &self.presence_manager,
+            &self.presence_service,
             &self.subscription_engine,
             config.security,
             &self.auth_config,
@@ -344,7 +353,6 @@ pub const ZyncBaseServer = struct {
             if (self.jwt_validator) |*jv| jv else null,
             &config.authentication.session.claims,
         );
-        self.message_handler.setPresenceWorker(presence_worker);
     }
 
     fn initConnectionManagerInternal(self: *ZyncBaseServer, config: *const Config) !void {
@@ -665,6 +673,9 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
+
+        std.log.debug("Deinitializing presence_service", .{});
+        self.presence_service.deinit();
 
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();

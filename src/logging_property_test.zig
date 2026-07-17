@@ -18,7 +18,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = connection_manager.ConnectionManager;
 const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const StoreService = @import("store_service.zig").StoreService;
-const PresenceManager = @import("presence/manager.zig").PresenceManager;
+const PresenceService = @import("presence/service.zig").PresenceService;
 const authorization_defaults = @import("authorization/defaults.zig");
 
 // Custom log handler to capture log messages for testing
@@ -349,8 +349,8 @@ test "logging: level filtering" {
         var store_service = StoreService.init(allocator, &storage_engine, &sm2, &auth_config);
         defer store_service.deinit();
 
-        var presence_manager: PresenceManager = undefined;
-        presence_manager.init(allocator, sm2.presence_user_fields, sm2.presence_shared_fields);
+        var presence_service = PresenceService.init(allocator, null, &auth_config, &sm2);
+        defer presence_service.deinit();
 
         var handler: MessageHandler = undefined;
         const empty_claims: std.StringHashMapUnmanaged([]const u8) = .{};
@@ -359,7 +359,7 @@ test "logging: level filtering" {
             &memory_strategy,
             &tracker,
             &store_service,
-            &presence_manager,
+            &presence_service,
             &subscription_engine,
             .{},
             &auth_config,
@@ -444,8 +444,8 @@ test "logging: message formatting" {
         var store_service = StoreService.init(allocator, &storage_engine, &sm3, &auth_config2);
         defer store_service.deinit();
 
-        var presence_manager: PresenceManager = undefined;
-        presence_manager.init(allocator, sm3.presence_user_fields, sm3.presence_shared_fields);
+        var presence_service = PresenceService.init(allocator, null, &auth_config2, &sm3);
+        defer presence_service.deinit();
 
         var handler: MessageHandler = undefined;
         const empty_claims2: std.StringHashMapUnmanaged([]const u8) = .{};
@@ -454,7 +454,7 @@ test "logging: message formatting" {
             &memory_strategy,
             &tracker,
             &store_service,
-            &presence_manager,
+            &presence_service,
             &subscription_engine,
             .{},
             &auth_config2,
@@ -523,8 +523,8 @@ test "logging: message formatting" {
         var store_service = StoreService.init(allocator, &storage_engine, &sm4, &auth_config3);
         defer store_service.deinit();
 
-        var presence_manager: PresenceManager = undefined;
-        presence_manager.init(allocator, sm4.presence_user_fields, sm4.presence_shared_fields);
+        var presence_service = PresenceService.init(allocator, null, &auth_config3, &sm4);
+        defer presence_service.deinit();
 
         var handler: MessageHandler = undefined;
         const empty_claims3: std.StringHashMapUnmanaged([]const u8) = .{};
@@ -533,7 +533,7 @@ test "logging: message formatting" {
             &memory_strategy,
             &tracker,
             &store_service,
-            &presence_manager,
+            &presence_service,
             &subscription_engine,
             .{},
             &auth_config3,

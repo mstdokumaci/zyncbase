@@ -61,7 +61,7 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
         &app.memory_strategy,
         &app.violation_tracker,
         &app.store_service,
-        &app.presence_manager,
+        &app.presence_service,
         &app.subscription_engine,
         .{ .max_messages_per_second = 1_000_001 },
         &app.auth_config,
