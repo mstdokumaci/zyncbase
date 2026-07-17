@@ -1,8 +1,8 @@
 const std = @import("std");
-const schema_types = @import("schema/types.zig");
-const query_ast = @import("query_ast.zig");
-const typed = @import("typed/types.zig");
-const tth = @import("typed/test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
+const query_ast = @import("ast.zig");
+const typed = @import("../typed/types.zig");
+const tth = @import("../typed/test_helpers.zig");
 
 const Operator = query_ast.Operator;
 const ValueShape = query_ast.ValueShape;

@@ -8,8 +8,8 @@ const helpers = @import("app_test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const schema_system = @import("schema/system.zig");
 const store_service = @import("store_service.zig");
-const qth = @import("query_parser_test_helpers.zig");
-const query_parser = @import("query_parser.zig");
+const qth = @import("query/test_helpers.zig");
+const query_parser = @import("query/parser.zig");
 const StorageError = storage_mod.StorageError;
 const typed_doc_id = @import("typed/doc_id.zig");
 

@@ -1,8 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
-const query_ast = @import("../query_ast.zig");
-const filter_eval = @import("../filter_eval.zig");
+const query_ast = @import("../query/ast.zig");
+const query_eval = @import("../query/eval.zig");
 const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -74,7 +74,7 @@ pub fn getCachedRecord(
     const handle = cache.get(cache_key) catch return .miss;
     errdefer handle.release();
     if (guard_predicate) |predicate| {
-        if (!(filter_eval.evaluatePredicate(predicate, handle.data()) catch @panic("evaluatePredicate failed"))) {
+        if (!(query_eval.evaluatePredicate(predicate, handle.data()) catch @panic("evaluatePredicate failed"))) {
             handle.release();
             return .guard_failed;
         }

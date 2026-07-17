@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const schema_types = @import("../schema/types.zig");
-const query_ast = @import("../query_ast.zig");
+const query_ast = @import("../query/ast.zig");
 const typed = @import("../typed/types.zig");
 const evaluate_mod = @import("evaluate.zig");
 

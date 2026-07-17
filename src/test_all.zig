@@ -40,13 +40,19 @@ test {
     _ = @import("threading/latch_test.zig");
     _ = @import("connection/manager_test.zig");
     _ = @import("connection/state_test.zig");
+    _ = @import("connection/violations_test.zig");
     _ = @import("presence/record_test.zig");
     _ = @import("presence/manager_test.zig");
     _ = @import("presence/worker_test.zig");
+    _ = @import("query/parser_test.zig");
+    _ = @import("query/ast_test.zig");
+    _ = @import("query/eval_test.zig");
+    _ = @import("authentication/jwt_validator_test.zig");
+    _ = @import("authentication/ticket_exchange_test.zig");
+
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
-    _ = @import("connection/violations_test.zig");
     _ = @import("lock_free_cache_test.zig");
     _ = @import("lock_free_cache_leak_test.zig");
     _ = @import("memory_strategy_test.zig");
@@ -56,10 +62,6 @@ test {
     _ = @import("store_service_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
-    _ = @import("query_parser_test.zig");
-    _ = @import("query_ast_test.zig");
-    _ = @import("filter_eval_test.zig");
-
     _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("message_handler_property_test.zig");
@@ -75,14 +77,11 @@ test {
     _ = @import("msgpack_utils_property_test.zig");
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
-    _ = @import("query_parser_property_test.zig");
     _ = @import("subscription_engine_test.zig");
     _ = @import("change_queue_test.zig");
     _ = @import("notification_worker_pool_test.zig");
     _ = @import("notification_worker_pool_perf_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
-    _ = @import("authentication/jwt_validator_test.zig");
-    _ = @import("authentication/ticket_exchange_test.zig");
     _ = @import("subscription_engine_thread_safety_test.zig");
 
     // Integration tests

@@ -10,9 +10,9 @@ This document specifies the pipeline that parses wire-encoded query tuples, norm
 
 | File | Responsibility |
 |------|----------------|
-| `src/query_ast.zig` | Defines Zig AST representation for query filters, sort descriptors, and operators. |
-| `src/query_parser.zig` | Deserializes MessagePack tuples into query ASTs, validating fields against schemas. |
-| `src/filter_eval.zig` | Evaluates AST predicates in-memory (used by authorization and sub engines). |
+| `src/query/ast.zig` | Defines Zig AST representation for query filters, sort descriptors, and operators. |
+| `src/query/parser.zig` | Deserializes MessagePack tuples into query ASTs, validating fields against schemas. |
+| `src/query/eval.zig` | Evaluates AST predicates in-memory (used by authorization and sub engines). |
 | `src/storage_engine/filter_sql.zig` | Lowers query predicates to SQLite parameterized `WHERE` clauses. |
 | `src/storage_engine/reader.zig` | Prepares and binds SQLite query statements, executing pagination and queries. |
 

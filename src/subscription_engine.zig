@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const query_ast = @import("query_ast.zig");
-const filter_eval = @import("filter_eval.zig");
+const query_ast = @import("query/ast.zig");
+const query_eval = @import("query/eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const typed = @import("typed/types.zig");
@@ -478,6 +478,6 @@ pub const SubscriptionEngine = struct {
 
     /// Evaluates a record against a filter AST.
     pub fn evaluateFilter(filter: *const QueryFilter, record: *const Record) !bool {
-        return filter_eval.evaluatePredicate(&filter.predicate, record);
+        return query_eval.evaluatePredicate(&filter.predicate, record);
     }
 };

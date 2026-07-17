@@ -8,12 +8,12 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 | File | Responsibility |
 |------|----------------|
-| `src/query_ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
-| `src/query_parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
+| `src/query/ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
+| `src/query/parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
 | `src/storage_engine/filter_sql.zig` | AST-to-SQL predicate lowering and bound value ownership. |
 | `src/storage_engine/sql.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
 | `src/storage_engine/reader.zig` | Query execution and row decoding. |
-| `src/filter_eval.zig` | In-memory predicate evaluation for subscription matching. |
+| `src/query/eval.zig` | In-memory predicate evaluation for subscription matching. |
 | `src/subscription_engine.zig` | Subscription grouping, query retention, and record-change matching. |
 | `src/store_service.zig` | Store-facing query, subscribe, and load-more operations. |
 
@@ -43,11 +43,11 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 1. `MessageHandler` extracts the wire request and requires a ready store scope.
 2. Authorization builds an optional read predicate for the current session.
-3. `query_parser.zig` parses the requested filter/sort/limit/cursor into `QueryFilter`.
+3. `parser.zig` parses the requested filter/sort/limit/cursor into `QueryFilter`.
 4. `store_service.zig` passes the filter and auth predicate to storage.
 5. Storage lowers predicates through `filter_sql.zig` and executes the SELECT.
 6. Results are encoded by `wire.encodeQuery`.
-7. Subscriptions retain the parsed query and use `filter_eval.zig` for committed changes.
+7. Subscriptions retain the parsed query and use `eval.zig` for committed changes.
 
 ## Invariants
 
