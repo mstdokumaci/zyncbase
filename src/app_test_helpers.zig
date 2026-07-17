@@ -225,7 +225,7 @@ pub const AppTestContext = struct {
         errdefer self.session_resolver.deinit();
 
         // 11. Wire session_resolver to storage engine for scope resolution
-        self.storage_engine.setSessionResolver(&self.session_resolver);
+        self.storage_engine.write_worker.session_resolver = &self.session_resolver;
     }
 
     pub fn deinit(self: *AppTestContext) void {

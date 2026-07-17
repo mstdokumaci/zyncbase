@@ -468,10 +468,6 @@ pub const StorageEngine = struct {
         std.log.info("Storage engine started (Runtime Phase)", .{});
     }
 
-    pub fn setSessionResolver(self: *StorageEngine, session_resolver: *SessionResolver) void {
-        self.write_worker.session_resolver = session_resolver;
-    }
-
     pub fn enqueueRead(self: *StorageEngine, request: ReadRequest) !void {
         try self.read_request_queue.push(request);
     }
