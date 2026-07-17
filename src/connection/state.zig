@@ -220,19 +220,6 @@ pub const Connection = struct {
         self.pending_presence_namespace = namespace;
     }
 
-    pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: typed_doc_id.DocId) !void {
-        const namespace_owned = try self.allocator.dupe(u8, namespace);
-        errdefer self.allocator.free(namespace_owned);
-
-        if (self.store_namespace) |ns| self.allocator.free(ns);
-        if (self.pending_store_namespace) |ns| self.allocator.free(ns);
-        self.store_namespace = namespace_owned;
-        self.pending_store_namespace = null;
-        self.namespace_id = namespace_id;
-        self.user_doc_id = user_doc_id;
-        self.store_ready = true;
-    }
-
     pub fn setScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed_doc_id.DocId, is_presence: bool) bool {
         if (is_presence) {
             if (self.presence_scope_seq != expected_scope_seq) return false;

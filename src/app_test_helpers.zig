@@ -65,6 +65,22 @@ pub fn destroyMockWebSocket(allocator: Allocator, ws: *WebSocket) void {
         ws.session = null;
     }
 }
+
+/// Test-only helper to set a connection's store scope, inlined from Connection
+/// to keep test accommodations out of the production codebase.
+fn setStoreScopeForNamespace(conn: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: typed_doc_id.DocId) !void {
+    const namespace_owned = try conn.allocator.dupe(u8, namespace);
+    errdefer conn.allocator.free(namespace_owned);
+
+    if (conn.store_namespace) |ns| conn.allocator.free(ns);
+    if (conn.pending_store_namespace) |ns| conn.allocator.free(ns);
+    conn.store_namespace = namespace_owned;
+    conn.pending_store_namespace = null;
+    conn.namespace_id = namespace_id;
+    conn.user_doc_id = user_doc_id;
+    conn.store_ready = true;
+}
+
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// Errors on async (deferred) responses. The caller is responsible for freeing the returned []u8.
 pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) ![]u8 {
@@ -439,7 +455,7 @@ pub const AppTestContext = struct {
 
         const namespace = "public";
         const scope = try self.resolveStoreScopeForTest(namespace, test_external_user_id);
-        try conn.setStoreScopeForNamespace(namespace, scope.namespace_id, scope.user_doc_id);
+        try setStoreScopeForNamespace(conn, namespace, scope.namespace_id, scope.user_doc_id);
 
         return ScopedConnection{
             .app = self,
