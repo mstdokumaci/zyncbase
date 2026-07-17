@@ -46,9 +46,9 @@ Some concerns span multiple subsystems. The canonical owner for each flow is:
 | Concern | Canonical Owner | Key Mechanism | Thread Boundary |
 |---------|----------------|---------------|-----------------|
 | Namespace resolution | `connection/session_resolver.zig` | `SessionResolutionBuffer` (lock-free ring) | Writer thread → Event loop |
-| Subscription lifecycle | `subscription_engine.zig` | `ChangeBuffer` (lock-free ring, 8192 cap) | Writer thread → Event loop |
+| Subscription lifecycle | `subscription/engine.zig` | `ChangeBuffer` (lock-free ring, 8192 cap) | Writer thread → Event loop |
 | Write acknowledgement | `storage_engine/write_worker.zig` | `SendQueue` (lock-free MPSC) | Writer thread (producer) → Event loop (consumer, drains in post-handler) |
-| Notification fanout | `notification_worker_pool.zig` | `ChangeQueue` (sharded SPMC blocking queue) | Writer thread (producer) → `NotificationWorkerPool` workers (consumers) |
+| Subscription fanout | `subscription/worker_pool.zig` | `ChangeQueue` (sharded SPMC blocking queue) | Writer thread (producer) → `SubscriptionWorkerPool` workers (consumers) |
 | Error propagation | `wire/errors.zig` | `getWireError()` switch table | Synchronous + async via `SendQueue` |
 | Schema sync | `wire/encode.zig` + `connection/manager.zig` | Pre-encoded `[]const u8` at startup | Startup only, sent on `onOpen` |
 
@@ -66,7 +66,7 @@ Each owner file documents the full flow; other files link rather than duplicate.
 - [Networking](./networking.md) - uWebSockets binding, server lifecycle, connection callbacks, and transport rules.
 - [Wire Protocol](./wire-protocol.md) - MessagePack envelope, message names, response/push names, and compatibility rules.
 - [Message Handler](./message-handler.md) - WebSocket message routing, scoped session gates, and response/error flow.
-- [Threading](./threading.md) - Worker topology, serialized writes, cross-thread notification, and synchronization ownership.
+- [Threading](./threading.md) - Worker topology, serialized writes, cross-thread subscription, and synchronization ownership.
 - [Memory Strategy](./memory-strategy.md) - Allocator ownership, request arenas, connection state, and leak checks.
 
 ## Engine Internals

@@ -1,10 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const query_ast = @import("query/ast.zig");
-const query_eval = @import("query/eval.zig");
+const query_ast = @import("../query/ast.zig");
+const query_eval = @import("../query/eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const typed = @import("typed/types.zig");
+const typed = @import("../typed/types.zig");
 const Record = typed.Record;
 const Value = typed.Value;
 

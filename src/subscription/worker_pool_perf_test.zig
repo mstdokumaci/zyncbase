@@ -1,19 +1,19 @@
 const std = @import("std");
 const testing = std.testing;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const RecordChange = @import("subscription_engine.zig").RecordChange;
-const query_ast = @import("query/ast.zig");
-const qth = @import("query/test_helpers.zig");
-const tth = @import("typed/test_helpers.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
+const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+const RecordChange = @import("engine.zig").RecordChange;
+const query_ast = @import("../query/ast.zig");
+const qth = @import("../query/test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const SubscriptionWorker = @import("subscription_worker_pool.zig").SubscriptionWorker;
-const wire_encode = @import("wire/encode.zig");
-const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
-const typed_doc_id = @import("typed/doc_id.zig");
-const schema_system = @import("schema/system.zig");
+const SubscriptionWorker = @import("worker_pool.zig").SubscriptionWorker;
+const wire_encode = @import("../wire/encode.zig");
+const sth = @import("../storage_engine_test_helpers.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const schema_system = @import("../schema/system.zig");
 
 const TestContext = struct {
     allocator: std.mem.Allocator,

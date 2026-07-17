@@ -5,14 +5,14 @@ pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const SubscriptionWorkerPool = @import("subscription_worker_pool.zig").SubscriptionWorkerPool;
-const ChangeQueue = @import("change_queue.zig").ChangeQueue;
+const SubscriptionWorkerPool = @import("subscription/worker_pool.zig").SubscriptionWorkerPool;
+const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const session_resolver = @import("authorization/session_resolver.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");

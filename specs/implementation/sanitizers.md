@@ -13,7 +13,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 | `build.zig` | Configures compiler instrumentation options for sanitizers (`-fsanitize=thread`). |
 | `src/memory_safety_property_test.zig` | Fuzzes boundary conditions to trigger GPA leak detection. |
 | `src/lock_free_cache_leak_test.zig` | Validates that retired cache nodes are correctly destroyed under stress load. |
-| `src/subscription_engine_thread_safety_test.zig` | Stresses subscription engines to detect concurrency races under TSan. |
+| `src/subscription/engine_thread_safety_test.zig` | Stresses subscription engines to detect concurrency races under TSan. |
 
 ---
 

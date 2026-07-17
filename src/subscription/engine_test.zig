@@ -1,13 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
-const subscription_engine = @import("subscription_engine.zig");
+const subscription_engine = @import("engine.zig");
 const SubscriptionEngine = subscription_engine.SubscriptionEngine;
-const typed = @import("typed/types.zig");
-const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
-const qth = @import("query/test_helpers.zig");
-const tth = @import("typed/test_helpers.zig");
-const query_ast = @import("query/ast.zig");
+const typed = @import("../typed/types.zig");
+const sth = @import("../storage_engine_test_helpers.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
+const qth = @import("../query/test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
+const query_ast = @import("../query/ast.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;

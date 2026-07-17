@@ -15,8 +15,8 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
 | `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
 | `src/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
-| `src/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `NotificationWorkerPool`. |
-| `src/notification_worker_pool.zig` | Pool of `NotificationWorker` threads; each worker drains one shard of `ChangeQueue`. |
+| `src/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
+| `src/subscription_worker_pool.zig` | Pool of `SubscriptionWorker` threads; each worker drains one shard of `ChangeQueue`. |
 | `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
 | `src/presence/worker.zig` | Dedicated `PresenceWorker` thread; SPSC input queue of `PresenceOp`; drains ops, mutates `PresenceManager`, encodes and pushes broadcasts to `SendQueue`. |
 | `src/threading/managed_thread.zig` | Generic background thread wrapper with atomic shutdown flag, condvar, signal/broadcast, and safe join. |
