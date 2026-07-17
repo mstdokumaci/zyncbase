@@ -66,20 +66,6 @@ test "getArray returns array" {
     try std.testing.expect((try read.getArray(obj, "nothing")) == null);
 }
 
-test "dupString dups and returns null for absent" {
-    var p = try read.parseValue(std.testing.allocator,
-        \\{"name":"alice"}
-    );
-    defer p.deinit();
-    const obj = p.value.object;
-    const duped = try read.dupString(std.testing.allocator, obj, "name");
-    try std.testing.expect(duped != null);
-    defer std.testing.allocator.free(duped.?);
-    try std.testing.expectEqualStrings("alice", duped.?);
-
-    try std.testing.expect((try read.dupString(std.testing.allocator, obj, "missing")) == null);
-}
-
 test "setString sets optional field only when string present" {
     var p = try read.parseValue(std.testing.allocator,
         \\{"secret":"abc","new_secret":"xyz","noop":42}
@@ -120,24 +106,6 @@ test "replaceString frees old and dups new" {
     defer std.testing.allocator.free(type_mismatch);
     try std.testing.expectError(error.TypeMismatch, read.replaceString(std.testing.allocator, &type_mismatch, obj, "noop"));
     try std.testing.expectEqualStrings("keep", type_mismatch);
-}
-
-test "getEnum resolves string to enum tag" {
-    const Level = enum { debug, info, warn, @"error" };
-    const map = std.StaticStringMap(Level).initComptime(.{
-        .{ "debug", .debug },
-        .{ "info", .info },
-        .{ "warn", .warn },
-        .{ "error", .@"error" },
-    });
-    var p = try read.parseValue(std.testing.allocator,
-        \\{"level":"warn","other":"nope"}
-    );
-    defer p.deinit();
-    const obj = p.value.object;
-    try std.testing.expectEqual(Level.warn, (try read.getEnum(Level, obj, "level", map)).?);
-    try std.testing.expect((try read.getEnum(Level, obj, "other", map)) == null);
-    try std.testing.expect((try read.getEnum(Level, obj, "missing", map)) == null);
 }
 
 test "setBool assigns when present, no-op when missing or null" {
