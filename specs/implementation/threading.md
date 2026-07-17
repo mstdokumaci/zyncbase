@@ -15,8 +15,8 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
 | `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
 | `src/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
-| `src/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
-| `src/subscription_worker_pool.zig` | Pool of `SubscriptionWorker` threads; each worker drains one shard of `ChangeQueue`. |
+| `src/subscription/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
+| `src/subscription/worker_pool.zig` | Pool of `SubscriptionWorker` threads; each worker drains one shard of `ChangeQueue`. |
 | `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
 | `src/presence/worker.zig` | Dedicated `PresenceWorker` thread; SPSC input queue of `PresenceOp`; drains ops, mutates `PresenceManager`, encodes and pushes broadcasts to `SendQueue`. |
 | `src/threading/managed_thread.zig` | Generic background thread wrapper with atomic shutdown flag, condvar, signal/broadcast, and safe join. |
@@ -42,8 +42,8 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `SendQueue` | `Allocator` | Lock-free MPSC queue for owned cross-thread message delivery to connections. |
 | `ChangeQueue` | `Allocator`, `spmcBlockingQueue(ChangeJob)`, shard count | Sharded SPMC blocking queue. Writer thread pushes `ChangeJob` entries; each `NotificationWorker` drains one shard. Sharding is by `(namespace_id, table_index, doc_id)` hash. |
 | `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its allocator. |
-| `NotificationWorkerPool` | `workerPool(NotificationWorker)`, `ChangeQueue`, `SubscriptionEngine`, `SendQueue`, `Notifier` | Manages N `NotificationWorker` threads; each worker owns one shard of `ChangeQueue`. |
-| `NotificationWorker` | `managedThread(NotificationWorker)`, `ChangeQueue` shard, `SubscriptionEngine`, `SendQueue`, `Notifier` | Drains one `ChangeQueue` shard, evaluates subscription filters, encodes delta messages, pushes owned bytes to `SendQueue`, wakes event loop. |
+| `SubscriptionWorkerPool` | `workerPool(SubscriptionWorker)`, `ChangeQueue`, `SubscriptionEngine`, `SendQueue`, `Notifier` | Manages N `SubscriptionWorker` threads; each worker owns one shard of `ChangeQueue`. |
+| `SubscriptionWorker` | `managedThread(SubscriptionWorker)`, `ChangeQueue` shard, `SubscriptionEngine`, `SendQueue`, `Notifier` | Drains one `ChangeQueue` shard, evaluates subscription filters, encodes delta messages, pushes owned bytes to `SendQueue`, wakes event loop. |
 | `WriteWorker` | `managedThread(WriteWorker)`, `spscQueue(WriteOp, IndexPool)`, `WaitGroup`, `Notifier`, SQLite writer connection | Sole writer thread; executes mutations, emits `RecordChange` to `ChangeQueue`, encodes write outcomes to `SendQueue`. |
 | `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | SPSC queue type alias for write operations; `IndexPool` provides zero-allocation pooled nodes. |
 | `ReadWorkerPool` | `workerPool(ReadWorker)`, `read_request_queue`, `SendQueue` | Owns N reader threads, each with exclusive SQLite connection. |
