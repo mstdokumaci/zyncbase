@@ -14,7 +14,7 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 | `src/storage_engine/sql.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
 | `src/storage_engine/reader.zig` | Query execution and row decoding. |
 | `src/query/eval.zig` | In-memory predicate evaluation for subscription matching. |
-| `src/subscription_engine.zig` | Subscription grouping, query retention, and record-change matching. |
+| `src/subscription/engine.zig` | Subscription grouping, query retention, and record-change matching. |
 | `src/store_service.zig` | Store-facing query, subscribe, and load-more operations. |
 
 ## Important Types

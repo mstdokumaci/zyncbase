@@ -1,18 +1,18 @@
 const std = @import("std");
 const testing = std.testing;
-const NotificationWorkerPool = @import("notification_worker_pool.zig").NotificationWorkerPool;
+const SubscriptionWorkerPool = @import("worker_pool.zig").SubscriptionWorkerPool;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
-const typed_doc_id = @import("typed/doc_id.zig");
-const typed = @import("typed/types.zig");
-const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
-const qth = @import("query/test_helpers.zig");
-const tth = @import("typed/test_helpers.zig");
-const query_ast = @import("query/ast.zig");
+const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+const sth = @import("../storage_engine_test_helpers.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
+const qth = @import("../query/test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
+const query_ast = @import("../query/ast.zig");
 
 const TestContext = struct {
     allocator: std.mem.Allocator,
@@ -67,7 +67,7 @@ fn makeRecordWithId(allocator: std.mem.Allocator, id: typed_doc_id.DocId, status
     return record;
 }
 
-test "NotificationWorkerPool: matching change is processed and pushed to send_queue" {
+test "SubscriptionWorkerPool: matching change is processed and pushed to send_queue" {
     const allocator = testing.allocator;
     var ctx: TestContext = undefined;
     try ctx.init(allocator);
@@ -84,7 +84,7 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
     const conn_id: u64 = 1;
     _ = try ctx.subscription_engine.subscribe(conn_id, table.index, filter, conn_id, sub_id);
 
-    var pool = try NotificationWorkerPool.init(
+    var pool = try SubscriptionWorkerPool.init(
         allocator,
         1,
         &ctx.change_queue,
@@ -123,13 +123,13 @@ test "NotificationWorkerPool: matching change is processed and pushed to send_qu
     // Verify notifier was called
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
-    // Drain and release the send_queue entry (notification entries are arena-held).
+    // Drain and release the send_queue entry (subscription entries are arena-held).
     if (ctx.send_queue.pop()) |entry| {
         entry.deinit();
     }
 }
 
-test "NotificationWorkerPool: non-matching change does not push to send_queue" {
+test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     const allocator = testing.allocator;
     var ctx: TestContext = undefined;
     try ctx.init(allocator);
@@ -144,7 +144,7 @@ test "NotificationWorkerPool: non-matching change does not push to send_queue" {
     const table = ctx.schema.table("items") orelse return error.TestExpectedValue;
     _ = try ctx.subscription_engine.subscribe(1, table.index, filter, 1, 100);
 
-    var pool = try NotificationWorkerPool.init(
+    var pool = try SubscriptionWorkerPool.init(
         allocator,
         1,
         &ctx.change_queue,

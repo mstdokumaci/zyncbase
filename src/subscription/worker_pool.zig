@@ -3,24 +3,24 @@ const Allocator = std.mem.Allocator;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const ChangeJob = @import("change_queue.zig").ChangeJob;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const RecordChange = @import("subscription_engine.zig").RecordChange;
+const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+const RecordChange = @import("engine.zig").RecordChange;
 const MatchOp = SubscriptionEngine.MatchOp;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const ArenaHandle = @import("memory_strategy.zig").ArenaHandle;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
-const msgpack = @import("msgpack_utils.zig");
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const msgpack = @import("../msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const typed = @import("typed/types.zig");
-const wire_encode = @import("wire/encode.zig");
-const schema_types = @import("schema/types.zig");
-const schema_system = @import("schema/system.zig");
-const managedThread = @import("threading/managed_thread.zig").managedThread;
-const workerPool = @import("threading/worker_pool.zig").workerPool;
-const Notifier = @import("threading/notifier.zig").Notifier;
+const typed = @import("../typed/types.zig");
+const wire_encode = @import("../wire/encode.zig");
+const schema_types = @import("../schema/types.zig");
+const schema_system = @import("../schema/system.zig");
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const workerPool = @import("../threading/worker_pool.zig").workerPool;
+const Notifier = @import("../threading/notifier.zig").Notifier;
 
-pub const NotificationWorkerPool = struct {
-    pool: workerPool(NotificationWorker),
+pub const SubscriptionWorkerPool = struct {
+    pool: workerPool(SubscriptionWorker),
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
@@ -39,12 +39,12 @@ pub const NotificationWorkerPool = struct {
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) !NotificationWorkerPool {
-        var pool = try workerPool(NotificationWorker).init(allocator, num_workers);
+    ) !SubscriptionWorkerPool {
+        var pool = try workerPool(SubscriptionWorker).init(allocator, num_workers);
         errdefer pool.deinit();
 
         for (pool.workers, 0..) |*w, i| {
-            w.* = NotificationWorker.init(
+            w.* = SubscriptionWorker.init(
                 i,
                 change_queue,
                 subscription_engine,
@@ -68,22 +68,22 @@ pub const NotificationWorkerPool = struct {
         };
     }
 
-    pub fn start(self: *NotificationWorkerPool) !void {
+    pub fn start(self: *SubscriptionWorkerPool) !void {
         try self.pool.start();
     }
 
-    pub fn stop(self: *NotificationWorkerPool) void {
+    pub fn stop(self: *SubscriptionWorkerPool) void {
         self.change_queue.shutdown();
         self.pool.stop();
     }
 
-    pub fn deinit(self: *NotificationWorkerPool) void {
+    pub fn deinit(self: *SubscriptionWorkerPool) void {
         self.pool.deinit();
     }
 };
 
-pub const NotificationWorker = struct {
-    thread: managedThread(NotificationWorker),
+pub const SubscriptionWorker = struct {
+    thread: managedThread(SubscriptionWorker),
     id: usize,
     change_queue: *ChangeQueue,
     subscription_engine: *SubscriptionEngine,
@@ -101,9 +101,9 @@ pub const NotificationWorker = struct {
         send_queue: *send_queue_type,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
-    ) NotificationWorker {
+    ) SubscriptionWorker {
         return .{
-            .thread = managedThread(NotificationWorker).init(),
+            .thread = managedThread(SubscriptionWorker).init(),
             .id = id,
             .change_queue = change_queue,
             .subscription_engine = subscription_engine,
@@ -114,15 +114,15 @@ pub const NotificationWorker = struct {
         };
     }
 
-    pub fn spawn(self: *NotificationWorker) !void {
+    pub fn spawn(self: *SubscriptionWorker) !void {
         try self.thread.spawn(workerLoop, self);
     }
 
-    pub fn stop(self: *NotificationWorker) void {
+    pub fn stop(self: *SubscriptionWorker) void {
         self.thread.stop();
     }
 
-    fn workerLoop(self: *NotificationWorker) void {
+    fn workerLoop(self: *SubscriptionWorker) void {
         const shard_idx = self.id % self.change_queue.shardCount();
         const shard = self.change_queue.getShard(shard_idx);
 
@@ -136,13 +136,13 @@ pub const NotificationWorker = struct {
         }
     }
 
-    fn processChange(self: *NotificationWorker, job: ChangeJob) void {
+    fn processChange(self: *SubscriptionWorker, job: ChangeJob) void {
         var job_mut = job;
         defer job_mut.deinit(job_mut.allocator);
 
         const change = job_mut.change;
         const table_metadata = self.schema.tableByIndex(change.table_index) orelse {
-            std.log.err("NotificationWorker skipping delta for unknown table index {d}", .{change.table_index});
+            std.log.err("SubscriptionWorker skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };
 
@@ -160,20 +160,20 @@ pub const NotificationWorker = struct {
             null;
 
         if (id_val == null) {
-            std.log.err("NotificationWorker skipping delta for namespace {d}, table {d} because record has no id", .{ change.namespace_id, change.table_index });
+            std.log.err("SubscriptionWorker skipping delta for namespace {d}, table {d} because record has no id", .{ change.namespace_id, change.table_index });
             return;
         }
 
         const id_val_actual = id_val.?;
 
         const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
-            std.log.err("NotificationWorker acquireArenaDeferred failed: {}", .{err});
+            std.log.err("SubscriptionWorker acquireArenaDeferred failed: {}", .{err});
             return;
         };
         const alloc = handle.allocator();
 
         const matches = self.subscription_engine.handleRecordChange(record_change, alloc) catch |err| {
-            std.log.err("NotificationWorker handleRecordChange failed: {}", .{err});
+            std.log.err("SubscriptionWorker handleRecordChange failed: {}", .{err});
             handle.release();
             return;
         };
@@ -194,7 +194,7 @@ pub const NotificationWorker = struct {
     }
 
     pub fn dispatchDeltasToMatches(
-        self: *NotificationWorker,
+        self: *SubscriptionWorker,
         matches: []const SubscriptionEngine.Match,
         set_suffix: ?[]const u8,
         remove_suffix: ?[]const u8,
@@ -209,12 +209,12 @@ pub const NotificationWorker = struct {
             const writer = out.writer(alloc);
 
             out.appendSlice(alloc, &wire_encode.store_delta_header) catch |err| {
-                std.log.err("NotificationWorker failed to write header: {}", .{err});
+                std.log.err("SubscriptionWorker failed to write header: {}", .{err});
                 continue;
             };
 
             msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch |err| {
-                std.log.err("NotificationWorker failed to encode subId {}: {}", .{ match.subscription_id, err });
+                std.log.err("SubscriptionWorker failed to encode subId {}: {}", .{ match.subscription_id, err });
                 continue;
             };
 
@@ -224,12 +224,12 @@ pub const NotificationWorker = struct {
             };
 
             out.appendSlice(alloc, suffix) catch |err| {
-                std.log.err("NotificationWorker failed to append suffix: {}", .{err});
+                std.log.err("SubscriptionWorker failed to append suffix: {}", .{err});
                 continue;
             };
 
             const owned_msg = alloc.dupe(u8, out.items) catch |err| {
-                std.log.err("NotificationWorker failed to dupe encoded delta: {}", .{err});
+                std.log.err("SubscriptionWorker failed to dupe encoded delta: {}", .{err});
                 continue;
             };
 
@@ -237,7 +237,7 @@ pub const NotificationWorker = struct {
             // observe the refcount dropping to zero before the entry is visible.
             handle.retain();
             self.send_queue.push(.{ .conn_id = match.connection_id, .data = owned_msg, .arena = handle }) catch |err| {
-                std.log.err("NotificationWorker failed to push to SendQueue: {}", .{err});
+                std.log.err("SubscriptionWorker failed to push to SendQueue: {}", .{err});
                 handle.release();
                 continue;
             };
@@ -266,7 +266,7 @@ fn encodeDeltaSuffixes(
     for (matches) |match| {
         if (set_suffix.* == null and match.op == MatchOp.set_op) {
             const new_record = change.new_record orelse {
-                std.log.err("NotificationWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
+                std.log.err("SubscriptionWorker skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
                 return false;
             };
             set_suffix.* = wire_encode.encodeSetDeltaSuffix(
@@ -276,7 +276,7 @@ fn encodeDeltaSuffixes(
                 new_record,
                 table_metadata,
             ) catch |err| {
-                std.log.err("NotificationWorker failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
+                std.log.err("SubscriptionWorker failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
                 return false;
             };
         }
@@ -286,7 +286,7 @@ fn encodeDeltaSuffixes(
                 table_metadata.index,
                 id_val_actual,
             ) catch |err| {
-                std.log.err("NotificationWorker failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
+                std.log.err("SubscriptionWorker failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
                 return false;
             };
         }

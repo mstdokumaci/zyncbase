@@ -5,14 +5,14 @@ pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const NotificationWorkerPool = @import("notification_worker_pool.zig").NotificationWorkerPool;
-const ChangeQueue = @import("change_queue.zig").ChangeQueue;
+const SubscriptionWorkerPool = @import("subscription/worker_pool.zig").SubscriptionWorkerPool;
+const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const session_resolver = @import("authorization/session_resolver.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
@@ -59,7 +59,7 @@ pub const ZyncBaseServer = struct {
     checkpoint_manager: CheckpointWorker,
     storage_engine: StorageEngine,
     change_queue: ChangeQueue,
-    notification_worker_pool: ?NotificationWorkerPool,
+    subscription_worker_pool: ?SubscriptionWorkerPool,
     session_resolver: SessionResolver,
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
@@ -171,13 +171,13 @@ pub const ZyncBaseServer = struct {
         try self.initConnectionManagerInternal(&config);
         errdefer self.connection_manager.deinit();
 
-        var pool = try self.initNotificationPoolInternal();
+        var pool = try self.initSubscriptionPoolInternal();
         errdefer {
             pool.stop();
             pool.deinit();
         }
         try pool.start();
-        self.notification_worker_pool = pool;
+        self.subscription_worker_pool = pool;
 
         self.session_resolver.init(
             self.memory_strategy.generalAllocator(),
@@ -186,7 +186,7 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.session_resolver.deinit();
 
-        // Wire Notification Dispatcher hook into WebSocket Server
+        // Wire Subscription Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
         self.websocket_server.drain_handler = drainHandler;
@@ -246,7 +246,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.send_queue.deinit();
         self.change_queue = try ChangeQueue.init(
             self.memory_strategy.generalAllocator(),
-            self.thread_budget.notification,
+            self.thread_budget.subscription,
         );
     }
 
@@ -358,10 +358,10 @@ pub const ZyncBaseServer = struct {
         );
     }
 
-    fn initNotificationPoolInternal(self: *ZyncBaseServer) !NotificationWorkerPool {
-        return try NotificationWorkerPool.init(
+    fn initSubscriptionPoolInternal(self: *ZyncBaseServer) !SubscriptionWorkerPool {
+        return try SubscriptionWorkerPool.init(
             self.memory_strategy.generalAllocator(),
-            self.thread_budget.notification,
+            self.thread_budget.subscription,
             &self.change_queue,
             &self.subscription_engine,
             &self.memory_strategy,
@@ -607,8 +607,8 @@ pub const ZyncBaseServer = struct {
         // even if already stopped — stop() checks and sets write_thread to null.
         self.storage_engine.write_worker.stop();
 
-        // Stop notification workers to ensure no one pushes to change_queue/send_queue during their deinit.
-        if (self.notification_worker_pool) |*pool| pool.stop();
+        // Stop subscription workers to ensure no one pushes to change_queue/send_queue during their deinit.
+        if (self.subscription_worker_pool) |*pool| pool.stop();
 
         // Stop presence dispatcher thread to ensure no one pushes to send_queue during its deinit.
         if (self.presence_worker) |presence_worker| presence_worker.stop();
@@ -681,8 +681,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing session_resolver", .{});
         self.session_resolver.deinit();
 
-        std.log.debug("Deinitializing notification_worker_pool", .{});
-        if (self.notification_worker_pool) |*pool| pool.deinit();
+        std.log.debug("Deinitializing subscription_worker_pool", .{});
+        if (self.subscription_worker_pool) |*pool| pool.deinit();
 
         std.log.debug("Deinitializing websocket_server", .{});
         self.websocket_server.deinit();

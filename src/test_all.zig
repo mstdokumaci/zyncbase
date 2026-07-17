@@ -49,6 +49,12 @@ test {
     _ = @import("query/eval_test.zig");
     _ = @import("authentication/jwt_validator_test.zig");
     _ = @import("authentication/ticket_exchange_test.zig");
+    _ = @import("subscription/engine_test.zig");
+    _ = @import("subscription/engine_thread_safety_test.zig");
+    _ = @import("subscription/change_queue_test.zig");
+    _ = @import("subscription/worker_pool_test.zig");
+    _ = @import("subscription/worker_pool_perf_test.zig");
+    _ = @import("subscription/consistency_test.zig");
 
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
@@ -62,7 +68,6 @@ test {
     _ = @import("store_service_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
-    _ = @import("sync_consistency_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("message_handler_property_test.zig");
     _ = @import("config_loader_property_test.zig");
@@ -77,12 +82,7 @@ test {
     _ = @import("msgpack_utils_property_test.zig");
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
-    _ = @import("subscription_engine_test.zig");
-    _ = @import("change_queue_test.zig");
-    _ = @import("notification_worker_pool_test.zig");
-    _ = @import("notification_worker_pool_perf_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
-    _ = @import("subscription_engine_thread_safety_test.zig");
 
     // Integration tests
     _ = @import("integration_wiring_test.zig");
