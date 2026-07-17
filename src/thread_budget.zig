@@ -10,7 +10,7 @@ pub const ThreadBudget = struct {
     checkpoint: usize = 1,
     presence: usize = 1,
     readers: usize,
-    notification: usize,
+    subscription: usize,
 
     pub fn init(cpu_count: usize) ThreadBudgetError!ThreadBudget {
         if (cpu_count < 3) {
@@ -19,26 +19,26 @@ pub const ThreadBudget = struct {
 
         const remaining: usize = @max(cpu_count, 4) - 4;
         const readers = @min(4, @max(1, remaining / 2));
-        const notification = @max(1, remaining -| readers);
+        const subscription = @max(1, remaining -| readers);
 
         return .{
             .readers = readers,
-            .notification = notification,
+            .subscription = subscription,
         };
     }
 
     pub fn total(self: ThreadBudget) usize {
-        return self.event_loop + self.writer + self.checkpoint + self.presence + self.readers + self.notification;
+        return self.event_loop + self.writer + self.checkpoint + self.presence + self.readers + self.subscription;
     }
 
     pub fn logSummary(self: ThreadBudget) void {
-        std.log.info("Thread budget: event_loop={} writer={} checkpoint={} presence={} readers={} notification={} (total={})", .{
+        std.log.info("Thread budget: event_loop={} writer={} checkpoint={} presence={} readers={} subscription={} (total={})", .{
             self.event_loop,
             self.writer,
             self.checkpoint,
             self.presence,
             self.readers,
-            self.notification,
+            self.subscription,
             self.total(),
         });
     }

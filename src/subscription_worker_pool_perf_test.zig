@@ -8,7 +8,7 @@ const tth = @import("typed/test_helpers.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const send_queue_type = @import("connection/send_queue.zig").send_queue;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const NotificationWorker = @import("notification_worker_pool.zig").NotificationWorker;
+const SubscriptionWorker = @import("subscription_worker_pool.zig").SubscriptionWorker;
 const wire_encode = @import("wire/encode.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
@@ -60,13 +60,13 @@ const TestContext = struct {
     }
 };
 
-// Measures the full notification fanout for one change that matches 5k of 10k subscribers,
+// Measures the full subscription fanout for one change that matches 5k of 10k subscribers,
 // broken down by stage so regressions can be attributed to a specific stage:
 //   A: handleRecordChange (filter evaluation + Match gathering)   — matching
 //   B: encodeSetDeltaSuffix (delta encoding, once per change)      — suffix
 //   C: dispatchDeltasToMatches (arena dupe + send_queue push)      — fan-out dispatch
 //   D: drain send_queue (per-match pop + free)                     — consumer side
-test "NotificationWorkerPool: dispatch fanout performance" {
+test "SubscriptionWorkerPool: dispatch fanout performance" {
     const allocator = testing.allocator;
     var ctx: TestContext = undefined;
     try ctx.init(allocator);
@@ -100,7 +100,7 @@ test "NotificationWorkerPool: dispatch fanout performance" {
 
     // Worker is constructed but never started — we drive dispatch synchronously
     // (no thread scheduling jitter) to isolate the fanout cost from worker plumbing.
-    var worker = NotificationWorker.init(
+    var worker = SubscriptionWorker.init(
         0,
         &ctx.change_queue,
         &ctx.subscription_engine,
