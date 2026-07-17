@@ -325,10 +325,6 @@ pub const MemoryStrategy = struct {
                     _ = self.active_count.fetchSub(1, .release);
                 }
             }
-
-            pub fn activeCount(self: *Self) usize {
-                return self.active_count.load(.acquire);
-            }
         };
     }
 
