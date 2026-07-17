@@ -492,8 +492,14 @@ test "property: random valid query filters" {
         if (random.boolean()) {
             const num_conds = random.intRangeAtMost(usize, 0, 10);
             const conds_arr = try allocator.alloc(msgpack.Payload, num_conds);
+            var populated: usize = 0;
+            errdefer {
+                for (conds_arr[0..populated]) |c| c.free(allocator);
+                allocator.free(conds_arr);
+            }
             for (conds_arr) |*c| {
                 c.* = try generateRandomCondition(allocator, random, false, field_index, .text);
+                populated += 1;
             }
             try root.mapPut("conditions", .{ .arr = conds_arr });
         }
@@ -501,14 +507,21 @@ test "property: random valid query filters" {
         if (random.boolean()) {
             const num_or_conds = random.intRangeAtMost(usize, 0, 5);
             const or_conds_arr = try allocator.alloc(msgpack.Payload, num_or_conds);
+            var populated: usize = 0;
+            errdefer {
+                for (or_conds_arr[0..populated]) |c| c.free(allocator);
+                allocator.free(or_conds_arr);
+            }
             for (or_conds_arr) |*c| {
                 c.* = try generateRandomCondition(allocator, random, false, field_index, .text);
+                populated += 1;
             }
             try root.mapPut("orConditions", .{ .arr = or_conds_arr });
         }
 
         if (random.boolean()) {
             var order_arr = try allocator.alloc(msgpack.Payload, 2);
+            errdefer allocator.free(order_arr);
             order_arr[0] = msgpack.Payload.uintToPayload(field_index);
             order_arr[1] = msgpack.Payload.uintToPayload(if (random.boolean()) 1 else 0);
             try root.mapPut("orderBy", .{ .arr = order_arr });
@@ -529,7 +542,13 @@ test "property: reject unknown field names" {
 
         // Add a condition with a field index not in schema
         const conds_arr = try allocator.alloc(msgpack.Payload, 1);
+        var populated: usize = 0;
+        errdefer {
+            for (conds_arr[0..populated]) |c| c.free(allocator);
+            allocator.free(conds_arr);
+        }
         conds_arr[0] = try generateRandomCondition(allocator, random, true, 0, .text);
+        populated += 1;
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
         const tables = [_]schema_types.Table{
@@ -557,6 +576,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
         return .{ .arr = cond };
     } else {
         var cond = try allocator.alloc(msgpack.Payload, 3);
+        errdefer allocator.free(cond);
         cond[0] = msgpack.Payload.uintToPayload(resolved_field_index);
         cond[1] = msgpack.Payload.uintToPayload(op_code);
         cond[2] = switch (op_code) {
@@ -581,6 +601,7 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
         .boolean => msgpack.Payload{ .bool = random.boolean() },
         .array => blk: {
             var arr = try allocator.alloc(msgpack.Payload, 1);
+            errdefer allocator.free(arr);
             arr[0] = try msgpack.Payload.strToPayload("v", allocator);
             break :blk .{ .arr = arr };
         },
@@ -590,8 +611,14 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
 fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_types.FieldType) !msgpack.Payload {
     const len = random.intRangeAtMost(usize, 0, 3);
     const arr = try allocator.alloc(msgpack.Payload, len);
+    var populated: usize = 0;
+    errdefer {
+        for (arr[0..populated]) |item| item.free(allocator);
+        allocator.free(arr);
+    }
     for (arr) |*item| {
         item.* = try randomValueForType(allocator, random, field_type);
+        populated += 1;
     }
     return .{ .arr = arr };
 }
