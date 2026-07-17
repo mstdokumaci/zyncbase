@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const latch = @import("latch.zig").latch;
-const ErrorLatch = @import("latch.zig").ErrorLatch;
+
+const ErrorLatch = latch(void);
 
 test "latch(void): resolve unblocks wait" {
     var l = ErrorLatch{};

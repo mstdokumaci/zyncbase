@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const managedThread = @import("managed_thread.zig").managedThread;
-const ErrorLatch = @import("latch.zig").ErrorLatch;
+const latch = @import("latch.zig").latch;
+
+const ErrorLatch = latch(void);
 
 const TestContext = struct {
     ran: bool = false,
