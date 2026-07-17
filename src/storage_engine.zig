@@ -487,11 +487,6 @@ pub const StorageEngine = struct {
         return self.write_worker.setupConn();
     }
 
-    /// Returns a reference to the engine's schema.
-    pub fn schemaRef(self: *const StorageEngine) *const Schema {
-        return self.schema;
-    }
-
     /// Round-robin reader node selection. Returns the next reader node.
     pub fn nextReaderNode(self: *StorageEngine) *ReaderNode {
         const idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;

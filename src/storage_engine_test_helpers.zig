@@ -50,7 +50,7 @@ pub fn readDoc(
     id: typed_doc_id.DocId,
     namespace_id: i64,
 ) !?typed.Record {
-    const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
+    const table_metadata = engine.schema.tableByIndex(table_index) orelse return error.UnknownTable;
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
@@ -75,7 +75,7 @@ pub fn queryDocs(
     namespace_id: i64,
     filter: *const query_ast.QueryFilter,
 ) !QueryResult {
-    const table_metadata = engine.schemaRef().tableByIndex(table_index) orelse return error.UnknownTable;
+    const table_metadata = engine.schema.tableByIndex(table_index) orelse return error.UnknownTable;
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = engine.nextReaderNode();
