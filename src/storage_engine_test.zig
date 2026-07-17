@@ -380,13 +380,13 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var latch = storage_mod.AckLatch{};
-    const version_before = ctx.engine.write_worker.version.load(.acquire);;
+    const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries, &latch);
 
     try testing.expectError(storage_mod.StorageError.UnknownTable, latch.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
-    try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire););
+    try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
 
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
