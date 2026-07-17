@@ -49,11 +49,6 @@ pub fn getArray(obj: ObjectMap, key: []const u8) !?std.json.Array {
     return v.array;
 }
 
-pub fn dupString(allocator: Allocator, obj: ObjectMap, key: []const u8) !?[]const u8 {
-    const s = try getString(obj, key) orelse return null;
-    return try allocator.dupe(u8, s);
-}
-
 pub fn setString(
     allocator: Allocator,
     field: *?[]const u8,
@@ -88,16 +83,6 @@ pub fn setInt(comptime T: type, field: *T, obj: ObjectMap, key: []const u8) !voi
     if (try getInt(obj, key)) |v| {
         field.* = std.math.cast(T, v) orelse return error.Overflow;
     }
-}
-
-pub fn getEnum(
-    comptime Enum: type,
-    obj: ObjectMap,
-    key: []const u8,
-    map: std.StaticStringMap(Enum),
-) !?Enum {
-    const s = try getString(obj, key) orelse return null;
-    return map.get(s);
 }
 
 // ---------------------------------------------------------------------------

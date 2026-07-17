@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const managedThread = @import("managed_thread.zig").managedThread;
-const ErrorLatch = @import("latch.zig").ErrorLatch;
+const latch = @import("latch.zig").latch;
+
+const error_latch = latch(void);
 
 const TestContext = struct {
     ran: bool = false,
@@ -94,10 +96,10 @@ test "managedThread: lockWork and unlockWork round-trip" {
 
 test "managedThread: waitForWork blocks until signal" {
     var mt = managedThread(TestContext).init();
-    var ready_latch = ErrorLatch{};
+    var ready_latch = error_latch{};
 
     const Signaller = struct {
-        fn run(mt_ptr: *@TypeOf(mt), ready: *ErrorLatch) void {
+        fn run(mt_ptr: *@TypeOf(mt), ready: *error_latch) void {
             ready.wait() catch |err| @panic(@errorName(err));
             mt_ptr.lockWork();
             mt_ptr.signal();
@@ -136,10 +138,10 @@ test "managedThread: waitForWorkTimed returns stop when already requested" {
 
 test "managedThread: waitForWorkTimed returns signaled when woken" {
     var mt = managedThread(TestContext).init();
-    var ready_latch = ErrorLatch{};
+    var ready_latch = error_latch{};
 
     const Signaller = struct {
-        fn run(mt_ptr: *@TypeOf(mt), ready: *ErrorLatch) void {
+        fn run(mt_ptr: *@TypeOf(mt), ready: *error_latch) void {
             ready.wait() catch |err| @panic(@errorName(err));
             mt_ptr.lockWork();
             mt_ptr.signal();

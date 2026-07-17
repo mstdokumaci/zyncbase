@@ -108,10 +108,6 @@ pub const WriteWorker = struct {
         _ = self.version.fetchAdd(1, .acq_rel);
     }
 
-    pub fn snapshotVersion(self: *const WriteWorker) u64 {
-        return self.version.load(.acquire);
-    }
-
     pub fn notifyChanges(self: *WriteWorker) void {
         self.notifier.notify();
     }

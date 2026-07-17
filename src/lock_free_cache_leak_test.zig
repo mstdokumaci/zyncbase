@@ -40,7 +40,7 @@ test "LockFreeCache: pool stability and leak test" {
     var retries: u32 = 0;
     while (retries < 10) : (retries += 1) {
         cache.reclaim(true);
-        active = cache.pool.activeCount();
+        active = cache.pool.active_count.load(.acquire);
         if (active < 5) break;
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }

@@ -68,19 +68,6 @@ pub const ConnectionManager = struct {
         self.allocator.free(self.schema_sync_msg);
     }
 
-    /// Close all active connections for graceful shutdown
-    pub fn closeAllConnections(self: *ConnectionManager) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var it = self.map.valueIterator();
-        while (it.next()) |state| {
-            const conn = state.*;
-            conn.ws.close();
-            // We don't remove from map here, onClose will handle that when uWS confirms
-        }
-    }
-
     pub fn onOpen(self: *ConnectionManager, ws: *WebSocket) !void {
         const conn_id = ws.getConnId();
 

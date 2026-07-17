@@ -26,12 +26,6 @@ pub const RenderedPredicate = struct {
         return self.sql;
     }
 
-    pub fn takeSql(self: *RenderedPredicate) ?[]const u8 {
-        const sql = self.sql;
-        self.sql = null;
-        return sql;
-    }
-
     pub fn takeValues(self: *RenderedPredicate) ?[]Value {
         const values = self.values;
         self.values = null;

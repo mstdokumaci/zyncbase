@@ -60,6 +60,3 @@ pub fn latch(comptime Result: type) type { // zwanzig-disable-line: unused-param
         }
     };
 }
-
-/// Convenience alias for the common fire-and-forget error latch.
-pub const ErrorLatch = latch(void);

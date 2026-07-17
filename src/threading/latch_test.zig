@@ -1,13 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
 const latch = @import("latch.zig").latch;
-const ErrorLatch = @import("latch.zig").ErrorLatch;
+
+const error_latch = latch(void);
 
 test "latch(void): resolve unblocks wait" {
-    var l = ErrorLatch{};
+    var l = error_latch{};
 
     const Runner = struct {
-        fn run(l_ptr: *ErrorLatch) void {
+        fn run(l_ptr: *error_latch) void {
             std.Thread.sleep(5 * std.time.ns_per_ms);
             l_ptr.resolve({});
         }
@@ -18,10 +19,10 @@ test "latch(void): resolve unblocks wait" {
 }
 
 test "latch(void): reject propagates error to wait" {
-    var l = ErrorLatch{};
+    var l = error_latch{};
 
     const Runner = struct {
-        fn run(l_ptr: *ErrorLatch) void {
+        fn run(l_ptr: *error_latch) void {
             std.Thread.sleep(5 * std.time.ns_per_ms);
             l_ptr.reject(error.TestRejection);
         }
@@ -102,7 +103,7 @@ test "latch: resolve before wait returns immediately" {
 }
 
 test "latch: reject before wait returns immediately" {
-    var l = ErrorLatch{};
+    var l = error_latch{};
     l.reject(error.AlreadyRejected);
     try testing.expectError(error.AlreadyRejected, l.wait());
 }

@@ -468,10 +468,6 @@ pub const StorageEngine = struct {
         std.log.info("Storage engine started (Runtime Phase)", .{});
     }
 
-    pub fn setSessionResolver(self: *StorageEngine, session_resolver: *SessionResolver) void {
-        self.write_worker.session_resolver = session_resolver;
-    }
-
     pub fn enqueueRead(self: *StorageEngine, request: ReadRequest) !void {
         try self.read_request_queue.push(request);
     }
@@ -489,17 +485,6 @@ pub const StorageEngine = struct {
             return error.InvalidState;
         }
         return self.write_worker.setupConn();
-    }
-
-    /// Returns a reference to the engine's schema.
-    pub fn schemaRef(self: *const StorageEngine) *const Schema {
-        return self.schema;
-    }
-
-    /// Round-robin reader node selection. Returns the next reader node.
-    pub fn nextReaderNode(self: *StorageEngine) *ReaderNode {
-        const idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
-        return &self.reader_nodes[idx];
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
