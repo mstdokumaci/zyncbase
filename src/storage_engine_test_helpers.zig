@@ -53,7 +53,7 @@ pub fn readDoc(
     const table_metadata = engine.schema.tableByIndex(table_index) orelse return error.UnknownTable;
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
-    const node = engine.nextReaderNode();
+    const node = nextReaderNode(engine);
     node.mutex.lock();
     defer node.mutex.unlock();
 
@@ -78,7 +78,7 @@ pub fn queryDocs(
     const table_metadata = engine.schema.tableByIndex(table_index) orelse return error.UnknownTable;
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
-    const node = engine.nextReaderNode();
+    const node = nextReaderNode(engine);
     node.mutex.lock();
     defer node.mutex.unlock();
 
@@ -534,4 +534,11 @@ pub fn expectFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []
     const actual = try getFieldInt(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
+}
+
+/// Test-only helper to select the next reader node (round-robin).
+/// Inlined from StorageEngine to keep test accommodations out of the production codebase.
+pub fn nextReaderNode(engine: *StorageEngine) *storage_engine.ReaderNode {
+    const idx = engine.next_reader_idx.fetchAdd(1, .monotonic) % engine.reader_nodes.len;
+    return &engine.reader_nodes[idx];
 }

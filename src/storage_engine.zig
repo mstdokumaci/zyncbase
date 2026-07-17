@@ -487,12 +487,6 @@ pub const StorageEngine = struct {
         return self.write_worker.setupConn();
     }
 
-    /// Round-robin reader node selection. Returns the next reader node.
-    pub fn nextReaderNode(self: *StorageEngine) *ReaderNode {
-        const idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_nodes.len;
-        return &self.reader_nodes[idx];
-    }
-
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
         const handle = self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace)) catch return null;
         defer handle.release();
