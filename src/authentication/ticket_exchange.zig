@@ -22,6 +22,11 @@ pub const TicketExchange = struct {
     ssl: bool,
     claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{},
 
+    /// Requests parked waiting for a JWKS refresh. Each entry is a RequestContext
+    /// that was deferred because validateWithClaims returned JwksRefreshInProgress.
+    /// Only accessed from the event loop thread (no lock needed).
+    pending_requests: std.ArrayListUnmanaged(*RequestContext) = .{},
+
     redeemed_tickets: std.StringHashMap(i64),
     mutex: std.Thread.Mutex = .{},
     verifications_since_cleanup: u32 = 0,
@@ -93,6 +98,14 @@ pub const TicketExchange = struct {
     }
 
     pub fn deinit(self: *TicketExchange) void {
+        // Clean up any parked requests that never got resumed.
+        for (self.pending_requests.items) |ctx| {
+            ctx.body.deinit(ctx.allocator);
+            if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+            ctx.allocator.destroy(ctx);
+        }
+        self.pending_requests.deinit(self.allocator);
+
         self.allocator.free(self.anonymous_prefix);
         {
             var it = self.claims_mapping.iterator();
@@ -248,7 +261,14 @@ pub const TicketExchange = struct {
             if (hdr.len > 7 and std.ascii.eqlIgnoreCase(hdr[0..7], "bearer ")) {
                 const token = hdr[7..];
                 if (self.jwt_validator) |val| {
-                    const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
+                    const validated = val.validateWithClaims(allocator, token, self.claims_mapping) catch |err| {
+                        if (err == error.JwksRefreshInProgress) {
+                            // Park this request — a JWKS refresh is in progress.
+                            // The caller (onDataCallback) must NOT destroy ctx.
+                            return error.JwksRefreshInProgress;
+                        }
+                        return err;
+                    };
                     subject = validated.subject;
                     claims = validated.claims;
                 } else {
@@ -298,6 +318,106 @@ pub const TicketExchange = struct {
         }
     }
 
+    /// Called from the event loop (via Loop::defer) after a JWKS refresh
+    /// completes. Retries all parked ticket requests.
+    /// Also called from notifyPostHandler to check for parking timeouts.
+    pub fn retryPendingRequests(self: *TicketExchange) void {
+        if (self.pending_requests.items.len == 0) return;
+
+        var i: usize = 0;
+        while (i < self.pending_requests.items.len) {
+            const ctx = self.pending_requests.items[i];
+
+            // Skip aborted requests — clean them up.
+            if (ctx.aborted) {
+                _ = self.pending_requests.swapRemove(i);
+                ctx.body.deinit(ctx.allocator);
+                if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+                ctx.allocator.destroy(ctx);
+                continue;
+            }
+
+            // Retry the validation.
+            self.handlePostTicketComplete(ctx) catch |err| {
+                if (err == error.JwksRefreshInProgress) {
+                    // Still refreshing — keep parked. Update timestamp.
+                    // (refreshing flag may have auto-reset, but a new thread
+                    // was spawned by getJwk inside handlePostTicketComplete.)
+                    ctx.parked_at = std.time.timestamp();
+                    i += 1;
+                    continue;
+                }
+
+                // Validation failed — send error response and clean up.
+                _ = self.pending_requests.swapRemove(i);
+                if (!ctx.aborted) {
+                    const ssl_val: c_int = if (ctx.ssl) 1 else 0;
+                    const status = if (err == error.InvalidMessage or err == error.InvalidAnonymousSubject)
+                        "400 Bad Request"
+                    else
+                        "401 Unauthorized";
+                    const code = if (err == error.InvalidMessage or err == error.InvalidAnonymousSubject)
+                        "INVALID_MESSAGE"
+                    else
+                        "AUTH_FAILED";
+                    c.uws_res_write_status(ssl_val, ctx.res, status.ptr, status.len);
+                    c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+                    var resp_buf: [256]u8 = undefined;
+                    const resp = std.fmt.bufPrint(&resp_buf, "{{\"code\":\"{s}\"}}", .{code}) catch "{\"code\":\"AUTH_FAILED\"}"; // zwanzig-disable-line: swallowed-error
+                    c.uws_res_end(ssl_val, ctx.res, resp.ptr, resp.len, 0);
+                }
+                ctx.body.deinit(ctx.allocator);
+                if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+                ctx.allocator.destroy(ctx);
+                continue;
+            };
+
+            // Success — handlePostTicketComplete already sent the response.
+            // We are the caller here (not onDataCallback), so we own the ctx
+            // and must free it. (handlePostTicketComplete does not free ctx.)
+            _ = self.pending_requests.swapRemove(i);
+            ctx.body.deinit(ctx.allocator);
+            if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+            ctx.allocator.destroy(ctx);
+        }
+    }
+
+    /// Called from notifyPostHandler on every loop iteration.
+    /// Fails parked requests that have waited longer than 10 seconds.
+    pub fn checkParkedTimeouts(self: *TicketExchange) void {
+        if (self.pending_requests.items.len == 0) return;
+
+        const now = std.time.timestamp();
+        const timeout_seconds: i64 = 10;
+
+        var i: usize = 0;
+        while (i < self.pending_requests.items.len) {
+            const ctx = self.pending_requests.items[i];
+            if (ctx.aborted) {
+                _ = self.pending_requests.swapRemove(i);
+                ctx.body.deinit(ctx.allocator);
+                if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+                ctx.allocator.destroy(ctx);
+                continue;
+            }
+            if (now - ctx.parked_at > timeout_seconds) {
+                // Timed out — send AUTH_FAILED and clean up.
+                _ = self.pending_requests.swapRemove(i);
+                if (!ctx.aborted) {
+                    const ssl_val: c_int = if (ctx.ssl) 1 else 0;
+                    c.uws_res_write_status(ssl_val, ctx.res, "401 Unauthorized", "401 Unauthorized".len);
+                    c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+                    c.uws_res_end(ssl_val, ctx.res, "{\"code\":\"AUTH_FAILED\",\"message\":\"JWKS refresh timeout\"}", 52, 0);
+                }
+                ctx.body.deinit(ctx.allocator);
+                if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+                ctx.allocator.destroy(ctx);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
     fn cleanupExpiredTicketsLocked(self: *TicketExchange, now: i64) void {
         var expired_keys = std.ArrayListUnmanaged([]const u8).empty;
         defer expired_keys.deinit(self.allocator);
@@ -324,15 +444,20 @@ pub const RequestContext = struct {
     body: std.ArrayListUnmanaged(u8),
     auth_header: ?[]const u8,
     aborted: bool,
+    parked_at: i64 = 0, // timestamp when parked for timeout checking
 };
 
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
     if (user_data == null) return;
     const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
     ctx.aborted = true;
-    ctx.body.deinit(ctx.allocator);
-    if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
-    ctx.allocator.destroy(ctx);
+    // Do NOT deinit/destroy here — the context may be in pending_requests.
+    // The retry/timeout sweep will clean it up when it sees aborted == true.
+    // If the context was already successfully handled (response sent),
+    // uWebSockets may call onAborted for the same response object. In that case
+    // the context has already been destroyed by the success path. This is a
+    // uWebSockets quirk — the existing code has the same risk. We preserve the
+    // existing behavior: mark aborted, let the cleanup happen elsewhere.
 }
 
 fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_last: c_int, user_data: ?*anyopaque) callconv(.c) void {
@@ -353,6 +478,27 @@ fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_
 
     if (is_last != 0) {
         ctx.exchange.handlePostTicketComplete(ctx) catch |err| {
+            if (err == error.JwksRefreshInProgress) {
+                // Park the request — do NOT send a response or destroy ctx.
+                // The retry callback (triggered by Loop::defer after the
+                // JWKS refresh completes) will call handlePostTicketComplete
+                // again.
+                ctx.parked_at = std.time.timestamp();
+                ctx.exchange.pending_requests.append(ctx.allocator, ctx) catch {
+                    // If we can't park (OOM), fail the request.
+                    std.log.err("Failed to park ticket request: out of memory", .{});
+                    if (!ctx.aborted) {
+                        const ssl_val: c_int = if (ctx.ssl) 1 else 0;
+                        c.uws_res_write_status(ssl_val, ctx.res, "500 Internal Server Error", "500 Internal Server Error".len);
+                        c.uws_res_end(ssl_val, ctx.res, "Internal Server Error", "Internal Server Error".len, 0);
+                    }
+                    ctx.body.deinit(ctx.allocator);
+                    if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+                    ctx.allocator.destroy(ctx);
+                };
+                return; // Do NOT deinit/destroy ctx — it's parked.
+            }
+
             std.log.warn("Error handling ticket POST: {}", .{err});
             if (!ctx.aborted) {
                 const ssl_val: c_int = if (ctx.ssl) 1 else 0;

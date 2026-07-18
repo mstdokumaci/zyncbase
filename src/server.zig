@@ -320,6 +320,10 @@ pub const ZyncBaseServer = struct {
             errdefer self.memory_strategy.generalAllocator().destroy(jc);
             jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
             jwks_cache_ptr = jc;
+
+            // Warm the cache synchronously at startup (blocking is safe —
+            // no connections are being served yet).
+            jc.warmCache();
         }
         self.jwks_cache = jwks_cache_ptr;
         const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
@@ -712,12 +716,16 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing violation_tracker", .{});
         self.violation_tracker.deinit();
 
-        // Deinitialize ticket exchange and JWKS cache
-        if (self.ticket_exchange) |te| te.deinit();
+        // Deinitialize ticket exchange and JWKS cache.
+        // JwksCache.deinit() must run first: it sets the shutting_down flag so
+        // the (detached, possibly-still-running) refresh thread skips the cache
+        // update. ticket_exchange and message_handler deinit then free any
+        // parked request contexts.
         if (self.jwks_cache) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
         }
+        if (self.ticket_exchange) |te| te.deinit();
 
         // Free config - need to use pointer to field
         std.log.debug("About to deinit config", .{});
@@ -742,6 +750,15 @@ pub const ZyncBaseServer = struct {
     fn notifyPostHandler(ctx: ?*anyopaque) void {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+
+        // Wire up the JwksCache deferred-resume callback once the event loop
+        // (and thus its loop pointer) is available. setDeferCallback is
+        // idempotent, so calling it on every post-handler iteration is safe.
+        if (self.jwks_cache) |jc| {
+            if (self.websocket_server.loop.load(.acquire)) |loop| {
+                jc.setDeferCallback(@ptrCast(loop), retryParkedRequests, @ptrCast(self));
+            }
+        }
 
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
@@ -768,11 +785,24 @@ pub const ZyncBaseServer = struct {
 
         self.connection_manager.drainSendQueue(&self.send_queue);
 
+        // Check for parked request timeouts (JWKS refresh took too long).
+        if (self.ticket_exchange) |te| te.checkParkedTimeouts();
+        self.message_handler.checkParkedWsTimeouts(&self.connection_manager);
+
         const now_ms = std.time.milliTimestamp();
         if (now_ms - self.last_token_sweep_ms >= 15_000) {
             self.last_token_sweep_ms = now_ms;
             self.connection_manager.sweepExpiredTokens(self.config.authentication.session.token_grace_period_seconds);
         }
+    }
+
+    /// Deferred callback invoked on the event loop thread after a JWKS refresh
+    /// completes. Retries all parked ticket and WebSocket AuthRefresh requests.
+    fn retryParkedRequests(ctx: ?*anyopaque) callconv(.c) void {
+        if (ctx == null) return;
+        const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+        if (self.ticket_exchange) |te| te.retryPendingRequests();
+        self.message_handler.retryPendingWsRefresh(&self.connection_manager);
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {

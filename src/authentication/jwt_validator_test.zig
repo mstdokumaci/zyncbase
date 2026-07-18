@@ -191,8 +191,14 @@ test "JwksCache: getJwk looks up populated keys" {
     try testing.expectEqualStrings(n_b64, retrieved.n.?);
     try testing.expectEqualStrings(e_b64, retrieved.e.?);
 
-    // Key not found triggers refresh, which fails on dummy URL (testing error behavior)
-    try testing.expectError(error.HttpFetchFailed, cache.getJwk("key_2"));
+    // Key not found triggers async refresh — caller gets JwksRefreshInProgress.
+    try testing.expectError(error.JwksRefreshInProgress, cache.getJwk("key_2"));
+
+    // Wait for the ephemeral refresh thread to finish so the testing allocator
+    // doesn't detect a leak from the RefreshContext still owned by the thread.
+    while (cache.refreshing.load(.acquire)) {
+        std.Thread.sleep(1_000_000); // 1ms
+    }
 }
 
 test "JwtValidator: verify RS256 and PS256 tokens" {

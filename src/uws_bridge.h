@@ -78,6 +78,7 @@ typedef void (*uws_res_data_handler)(uws_res_t *res, const char *chunk, size_t c
 typedef void (*uws_res_aborted_handler)(void *user_data);
 
 struct us_loop_t *uws_get_loop();
+void uws_loop_defer(struct us_loop_t *loop, void *ctx, void (*cb)(void *ctx));
 
 #ifdef __cplusplus
 }

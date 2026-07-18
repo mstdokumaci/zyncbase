@@ -142,6 +142,30 @@ pub const JwksCache = struct {
     jwks_url: ?[]const u8 = null,
     state_cache: *jwks_state_cache_type,
 
+    // --- Async refresh (ephemeral thread) ---
+    /// Atomic flag: true while an ephemeral refresh thread is running.
+    /// Prevents a thundering herd (multiple threads fetching simultaneously).
+    refreshing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Atomic flag: true when the server is shutting down.
+    /// The ephemeral thread checks this after fetch and skips the cache update.
+    shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Protects the race between the ephemeral thread updating the cache and
+    /// deinit() destroying it.
+    refresh_mutex: std.Thread.Mutex = .{},
+
+    /// Timestamp (seconds) when the current refresh was triggered.
+    /// Used to auto-reset `refreshing` if the thread dies silently.
+    refresh_started_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+    /// The event loop pointer and defer callback for waking parked requests.
+    /// Set by the server during initialization.
+    loop_ptr: ?*anyopaque = null, // *c.struct_us_loop_t
+    defer_cb: ?*const fn (?*anyopaque) callconv(.c) void = null,
+    defer_ctx: ?*anyopaque = null,
+    // --- End async refresh fields ---
+
     pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !JwksCache {
         const state_cache = try allocator.create(jwks_state_cache_type);
         errdefer {
@@ -158,6 +182,16 @@ pub const JwksCache = struct {
     }
 
     pub fn deinit(self: *JwksCache) void {
+        // Signal the ephemeral thread (if running) to skip the cache update.
+        self.refresh_mutex.lock();
+        self.shutting_down.store(true, .release);
+        self.refresh_mutex.unlock();
+
+        // We do NOT join the thread — fetch has no read timeout in Zig's
+        // std.http.Client and could block forever. The thread is already
+        // detached. It checks shutting_down after fetch returns and skips the
+        // cache update.
+
         if (self.jwks_url) |url| self.allocator.free(url);
         self.state_cache.deinit();
         self.allocator.destroy(self.state_cache);
@@ -165,54 +199,214 @@ pub const JwksCache = struct {
 
     pub fn getJwk(self: *JwksCache, kid: []const u8) !Jwk {
         const url = self.jwks_url orelse return error.JwksNotConfigured;
+        _ = url; // URL is used by triggerRefresh, not here.
         const now = std.time.timestamp();
 
-        // 1. Try to read from the lock-free cache
-        var found_key: ?Jwk = null;
+        // 1. Try to read from the lock-free cache.
         if (self.state_cache.get(0)) |handle| {
             defer handle.release();
             const state = handle.data();
             if (now - state.last_fetched <= 3600) {
                 for (state.keys) |key| {
                     if (std.mem.eql(u8, key.kid, kid)) {
-                        found_key = try key.clone(self.allocator);
-                        break;
+                        return try key.clone(self.allocator);
                     }
                 }
+                // Key not found in a fresh cache — could be a newly rotated
+                // key. Trigger a refresh so the next attempt succeeds.
+                self.triggerRefresh();
+                return error.JwksRefreshInProgress;
             }
         } else |_| {}
 
-        if (found_key) |key| {
-            return key;
-        }
+        // 2. Cache is empty or expired. Trigger async refresh.
+        self.triggerRefresh();
+        return error.JwksRefreshInProgress;
+    }
 
-        // 2. Fetch outside lock-free atomic context
-        const keys = try fetchJwks(self.allocator, url);
-        var cache_owned = false;
-        errdefer if (!cache_owned) {
-            for (keys) |k| k.deinit(self.allocator);
-            self.allocator.free(keys);
+    /// Called by the server during initialization to provide the event loop
+    /// pointer and the callback that resumes parked requests.
+    /// The callback will be invoked on the event loop thread via Loop::defer().
+    pub fn setDeferCallback(
+        self: *JwksCache,
+        loop_ptr: *anyopaque,
+        defer_cb: *const fn (?*anyopaque) callconv(.c) void,
+        defer_ctx: ?*anyopaque,
+    ) void {
+        self.loop_ptr = loop_ptr;
+        self.defer_cb = defer_cb;
+        self.defer_ctx = defer_ctx;
+    }
+
+    /// Synchronously fetch and populate the cache. Called once at startup
+    /// before the event loop begins accepting connections.
+    /// If the fetch fails, logs a warning and continues (the first request
+    /// will trigger an async refresh).
+    pub fn warmCache(self: *JwksCache) void {
+        const url = self.jwks_url orelse return;
+        const keys = fetchJwks(self.allocator, url) catch |err| {
+            std.log.warn("Startup JWKS fetch failed (will retry on first request): {}", .{err});
+            return;
         };
-
         const new_state = JwksState{
             .keys = keys,
             .last_fetched = std.time.timestamp(),
         };
+        self.state_cache.update(0, new_state) catch |err| {
+            std.log.err("Startup JWKS cache update failed: {}", .{err});
+            for (keys) |k| k.deinit(self.allocator);
+            self.allocator.free(keys);
+        };
+    }
 
-        // 3. Atomically update/swap the cache
-        try self.state_cache.update(0, new_state);
-        cache_owned = true;
-
-        // 4. Return from locally fetched keys (already validated/stored)
-        for (keys) |key| {
-            if (std.mem.eql(u8, key.kid, kid)) {
-                return try key.clone(self.allocator);
+    /// Trigger an async JWKS refresh. Called from the event loop thread when
+    /// getJwk() finds the cache empty, expired, or missing a key.
+    ///
+    /// If a refresh is already in progress, this is a no-op (the pending
+    /// request will be resumed when the in-progress refresh completes).
+    ///
+    /// If the refresh flag is stale (thread died), it is auto-reset.
+    pub fn triggerRefresh(self: *JwksCache) void {
+        // Auto-reset stale refresh flag (thread may have died).
+        const now = std.time.timestamp();
+        if (self.refreshing.load(.acquire)) {
+            const started = self.refresh_started_at.load(.acquire);
+            if (now - started > 15) {
+                // Stale — reset and allow a new refresh.
+                self.refreshing.store(false, .release);
+            } else {
+                // Refresh in progress — nothing to do.
+                return;
             }
         }
 
-        return error.KeyNotFound;
+        // CAS: only one thread/caller wins the race to spawn.
+        if (self.refreshing.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            return; // Someone else just set it to true.
+        }
+        self.refresh_started_at.store(now, .release);
+
+        // Duplicate the URL for the thread to own (thread cannot borrow
+        // self.jwks_url because deinit may free it during shutdown).
+        const url_owned = if (self.jwks_url) |url| self.allocator.dupe(u8, url) catch {
+            self.refreshing.store(false, .release);
+            return;
+        } else null;
+
+        // Allocate the refresh context on the heap.
+        const ctx = self.allocator.create(RefreshContext) catch {
+            if (url_owned) |u| self.allocator.free(u);
+            self.refreshing.store(false, .release);
+            return;
+        };
+        ctx.* = .{
+            .cache = self,
+            .url_owned = url_owned,
+            .allocator = self.allocator,
+        };
+
+        // Spawn the ephemeral thread.
+        const thread = std.Thread.spawn(.{}, jwksRefreshWorker, .{ctx}) catch {
+            if (url_owned) |u| self.allocator.free(u);
+            self.allocator.destroy(ctx);
+            self.refreshing.store(false, .release);
+            return;
+        };
+
+        // Detach — we never join. fetch has no read timeout in Zig's
+        // std.http.Client and could block forever, so joining during
+        // shutdown would hang the process. The detached thread checks
+        // shutting_down after fetch returns and skips the cache update.
+        thread.detach();
+    }
+
+    /// Schedule the deferred callback on the event loop to resume parked
+    /// requests. Called from the ephemeral thread after cache update (success
+    /// or failure). Must be called WITHOUT holding refresh_mutex (the defer
+    /// callback will run on the loop thread and may try to acquire it).
+    fn fireDeferCallback(self: *JwksCache) void {
+        if (self.loop_ptr) |loop| {
+            if (self.defer_cb) |cb| {
+                // uws_loop_defer is thread-safe — pushes to a mutex-protected
+                // queue and wakes the loop. The callback runs on the loop thread.
+                c.uws_loop_defer(
+                    @ptrCast(loop),
+                    self.defer_ctx,
+                    cb,
+                );
+            }
+        }
     }
 };
+
+/// Heap-allocated context passed to the ephemeral refresh thread.
+/// The thread owns the URL copy and frees it + itself when done.
+const RefreshContext = struct {
+    cache: *JwksCache,
+    url_owned: ?[]const u8,
+    allocator: Allocator,
+};
+
+/// The ephemeral thread entry point. Performs the blocking HTTP fetch and
+/// OpenSSL key building, then updates the lock-free cache and schedules a
+/// deferred callback on the event loop to resume parked requests.
+fn jwksRefreshWorker(ctx: *RefreshContext) void {
+    // Free the context and URL when done. The thread owns both.
+    defer {
+        if (ctx.url_owned) |u| ctx.allocator.free(u);
+        ctx.allocator.destroy(ctx);
+    }
+
+    const cache = ctx.cache;
+    const allocator = ctx.allocator;
+    const url = ctx.url_owned orelse {
+        // No URL configured — shouldn't happen, but handle gracefully.
+        cache.refreshing.store(false, .release);
+        cache.fireDeferCallback();
+        return;
+    };
+
+    // Perform the blocking fetch. This may take 100ms-5s normally.
+    // If the endpoint is stuck, this blocks indefinitely (no read timeout
+    // in Zig 0.15's std.http.Client). The parking timeout on the event loop
+    // side handles this case.
+    const keys = fetchJwks(allocator, url) catch |err| {
+        std.log.warn("JWKS refresh fetch failed: {}", .{err});
+        cache.refresh_mutex.lock();
+        defer cache.refresh_mutex.unlock();
+        cache.refreshing.store(false, .release);
+        if (!cache.shutting_down.load(.acquire)) {
+            cache.fireDeferCallback();
+        }
+        return;
+    };
+
+    // Successfully fetched — update the cache under the mutex so deinit()
+    // can't destroy it while we're writing.
+    cache.refresh_mutex.lock();
+    defer cache.refresh_mutex.unlock();
+
+    // If shutting down, skip the cache update and free the keys.
+    if (cache.shutting_down.load(.acquire)) {
+        for (keys) |k| k.deinit(allocator);
+        allocator.free(keys);
+        return;
+    }
+
+    const new_state = JwksState{
+        .keys = keys,
+        .last_fetched = std.time.timestamp(),
+    };
+
+    cache.state_cache.update(0, new_state) catch |err| {
+        std.log.err("JWKS cache update failed: {}", .{err});
+        for (keys) |k| k.deinit(allocator);
+        allocator.free(keys);
+    };
+
+    cache.refreshing.store(false, .release);
+    cache.fireDeferCallback();
+}
 
 /// JWK representation used purely for JSON (de)serialization. The live `Jwk`
 /// struct carries an opaque `pkey` pointer that cannot be parsed from JSON,
@@ -363,6 +557,14 @@ pub const JwtValidator = struct {
             .expires_at = extractExp(decoded.payload),
             .claims = claims,
         };
+    }
+
+    /// Trigger an async JWKS refresh. Called by callers when they receive
+    /// error.JwksRefreshInProgress from validate/validateWithClaims.
+    pub fn triggerJwksRefresh(self: JwtValidator) void {
+        if (self.config.jwks_cache) |cache| {
+            cache.triggerRefresh();
+        }
     }
 };
 

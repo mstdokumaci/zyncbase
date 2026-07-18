@@ -93,6 +93,7 @@ struct us_listen_socket_t *uws_app_listen(int ssl, uws_app_t *app, const char *h
 // Loop helpers — us_wakeup_loop, us_listen_socket_close declared in libusockets.h
 struct us_loop_t *uws_get_loop();
 void uws_loop_addPostHandler(void *loop, void *ctx, void (*cb)(void *ctx, void *loop));
+void uws_loop_defer(void *loop, void *ctx, void (*cb)(void *ctx));
 void uws_loop_removePostHandler(void *loop, void *key);
 
 void uws_ws(int ssl, uws_app_t *app, void *upgrade_context, const char *pattern, size_t pattern_length, size_t id, const uws_socket_behavior_t *behavior);
