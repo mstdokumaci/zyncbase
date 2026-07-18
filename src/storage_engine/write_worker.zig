@@ -399,7 +399,6 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         doc_id: typed_doc_id.DocId,
         has_guard: bool,
-        has_write_ack: bool,
         pk_insert: bool,
         pk_delete: bool,
         old_record: ?Record,
@@ -470,7 +469,7 @@ pub const WriteWorker = struct {
             return false;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, true, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
     }
 
     /// Unified update handler shared by both write paths. See executeUpsertEntry.
@@ -496,7 +495,7 @@ pub const WriteWorker = struct {
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, false, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
     }
 
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
@@ -522,7 +521,7 @@ pub const WriteWorker = struct {
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, false, true, maybe_old_record, null);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
     }
 
     pub fn flushBatch(
