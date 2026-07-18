@@ -537,13 +537,11 @@ pub const StoreService = struct {
             .value = &value,
             .is_create = is_create,
         });
-
-        const columns_slice = columns.toOwnedSlice(self.allocator) catch |err| {
-            if (store_write) |*p| p.deinit(self.allocator);
-            return err;
-        };
+        errdefer if (store_write) |*p| p.deinit(self.allocator);
 
         try doc_states.put(key, .exists);
+
+        const columns_slice = try columns.toOwnedSlice(self.allocator);
 
         return storage_mod.BatchEntry{
             .kind = if (is_create) .upsert else .update,
