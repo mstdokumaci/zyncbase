@@ -348,24 +348,23 @@ pub const WriteWorker = struct {
         };
 
         for (ops, 0..) |op, op_idx| {
-            const has_write_ack = op.getWriteAckInfo() != null;
             switch (op) {
                 .upsert => |iop| {
                     const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeUpsertEntry(&ctx, iop, namespace_id, table_metadata, has_write_ack)) continue;
+                    if (try executeUpsertEntry(&ctx, iop, namespace_id, table_metadata)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .update => |uop| {
                     const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeUpdateEntry(&ctx, uop, namespace_id, table_metadata, has_write_ack)) continue;
+                    if (try executeUpdateEntry(&ctx, uop, namespace_id, table_metadata)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 .delete => |dop| {
                     const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeDeleteEntry(&ctx, dop, namespace_id, table_metadata, has_write_ack)) continue;
+                    if (try executeDeleteEntry(&ctx, dop, namespace_id, table_metadata)) continue;
                     try guard_rejected.append(self.allocator, op_idx);
                 },
                 else => unreachable,
@@ -452,7 +451,6 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-        has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
         const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
@@ -478,7 +476,6 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-        has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
 
@@ -504,7 +501,6 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-        has_write_ack: bool,
     ) !bool {
         const self = ctx.self;
 
@@ -765,7 +761,6 @@ pub const WriteWorker = struct {
 
     fn runBatchTransaction(
         self: *WriteWorker,
-        bop: anytype,
         entries: []const BatchEntry,
         tx_started: *bool,
         failed_batch_index: *?usize,
@@ -779,11 +774,6 @@ pub const WriteWorker = struct {
 
         try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatchOp BEGIN");
         tx_started.* = true;
-
-        const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
-            bop.conn_id != null and bop.write_id != null
-        else
-            false;
 
         var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
         defer pk_inserts.deinit(self.allocator);
@@ -806,9 +796,9 @@ pub const WriteWorker = struct {
             const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema_system.global_namespace_id;
 
             const succeeded = switch (entry.kind) {
-                .upsert => executeUpsertEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
-                .update => executeUpdateEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
-                .delete => executeDeleteEntry(&ctx, entry, namespace_id, table_metadata, is_confirmed),
+                .upsert => executeUpsertEntry(&ctx, entry, namespace_id, table_metadata),
+                .update => executeUpdateEntry(&ctx, entry, namespace_id, table_metadata),
+                .delete => executeDeleteEntry(&ctx, entry, namespace_id, table_metadata),
             } catch |err| {
                 failed_batch_index.* = entry_idx;
                 return err;
@@ -871,7 +861,7 @@ pub const WriteWorker = struct {
         };
 
         // 2. Execute all entries in a single transaction
-        self.runBatchTransaction(bop, entries, &tx_started, &failed_batch_index, &eviction_keys) catch |err| {
+        self.runBatchTransaction(entries, &tx_started, &failed_batch_index, &eviction_keys) catch |err| {
             final_err = err;
         };
     }
