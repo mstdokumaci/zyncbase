@@ -217,7 +217,7 @@ test "storage: insert/delete inverse consistency" {
         try testing.expect(record1 != null);
 
         // Delete
-        try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id, null, null, null);
+        try engine.enqueueWriteOp(.{ .delete = .{ .table_index = test_table.metadata.index, .id = tc.id, .namespace_id = tc.namespace_id } });
         try engine.flushPendingWrites();
         // Verify it's gone
         const record2 = try test_table.readDoc(allocator, tc.id, tc.namespace_id);
@@ -451,7 +451,7 @@ test "storage: random operations fuzzing" {
             },
             1 => {
                 // Delete
-                try engine.deleteDocument(0, id, ns, null, null, null);
+                try engine.enqueueWriteOp(.{ .delete = .{ .table_index = 0, .id = id, .namespace_id = ns } });
             },
             2 => {
                 // Query

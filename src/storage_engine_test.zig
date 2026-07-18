@@ -68,16 +68,16 @@ const DirectWriterContext = struct {
 };
 
 fn makeDeleteBatchEntries(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.BatchEntry {
-    const entries = try allocator.alloc(storage_mod.BatchEntry, 1);
-    errdefer allocator.free(entries);
+    _ = allocator;
+    const entries = try testing.allocator.alloc(storage_mod.BatchEntry, 1);
+    errdefer testing.allocator.free(entries);
     entries[0] = .{
         .kind = .delete,
         .table_index = table_index,
         .id = 1,
         .namespace_id = 1,
         .owner_doc_id = 0,
-        .sql = try allocator.dupe(u8, "not used"),
-        .values = null,
+        .columns = &[_]storage_mod.ColumnValue{},
         .timestamp = 0,
     };
     return entries;
@@ -392,25 +392,6 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
 }
 
-test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
-    const table = schema_helpers.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-batch-validate-table", table);
-    defer ctx.deinit();
-
-    const entries = try makeDeleteBatchEntries(allocator, 999);
-
-    ctx.engine.batchWrite(entries, null, null) catch |err| {
-        try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
-        try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
-        return;
-    };
-
-    return error.TestUnexpectedResult;
-}
-
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
@@ -500,10 +481,10 @@ test "StorageEngine: client writes blocked during migration" {
     // Simulate migration in progress
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
-    // upsertDocument should be blocked
+    // enqueueWriteOp should be blocked
     const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
-    // deleteDocument should be blocked
+    // delete should be blocked
     const err3 = (try ctx.table("items")).deleteDocument(1, 1);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
@@ -598,16 +579,16 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
 
-    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 999;
     const write_id: [16]u8 = .{1} ** 16;
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, conn_id, write_id);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -647,12 +628,12 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_ok, namespace_id, author_a, &seed_ok, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_ok, namespace_id, author_a, &seed_ok, null, null, null);
     const seed_reject = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_reject, namespace_id, author_a, &seed_reject, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &seed_reject, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
@@ -662,13 +643,13 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     // op #1 has no guard (must commit), op #2 has a rejecting guard (must fail).
     const conn_ok: u64 = 1001;
     const write_ok: [16]u8 = .{1} ** 16;
-    const ok_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try ctx.engine.upsertDocument(table_meta.index, doc_ok, namespace_id, author_a, ok_columns, null, conn_ok, write_ok);
+    const ok_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_ok, namespace_id, author_a, &ok_columns, null, conn_ok, write_ok);
 
     const conn_reject: u64 = 1002;
     const write_reject: [16]u8 = .{2} ** 16;
-    const reject_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try ctx.engine.upsertDocument(table_meta.index, doc_reject, namespace_id, author_a, reject_columns, &guard, conn_reject, write_reject);
+    const reject_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &reject_columns, guard, conn_reject, write_reject);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -723,14 +704,14 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
 
-    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, null, null);
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, null, null);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -770,7 +751,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "hello" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
@@ -778,7 +759,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
 
     const conn_id: u64 = 888;
     const write_id: [16]u8 = .{2} ** 16;
-    try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -818,7 +799,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
 
     const conn_id: u64 = 777;
     const write_id: [16]u8 = .{3} ** 16;
-    try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -852,10 +833,10 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
 
-    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 555;
     const write_id: [16]u8 = .{4} ** 16;
-    try ctx.engine.updateDocument(table_meta.index, doc_id, namespace_id, update_columns, &guard, conn_id, write_id);
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -890,13 +871,13 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_a } });
     defer guard.deinit(allocator);
 
-    const columns = &[_]sth.ColumnValue{
+    const columns = [_]sth.ColumnValue{
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new" } } },
     };
     const conn_id: u64 = 666;
     const write_id: [16]u8 = .{5} ** 16;
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, columns, &guard, conn_id, write_id);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);
@@ -939,16 +920,16 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
 
-    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 444;
     const write_id: [16]u8 = .{6} ** 16;
-    try ctx.engine.updateDocument(table_meta.index, doc_id, namespace_id, update_columns, &guard, conn_id, write_id);
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     const entries = drainOutcomes(&ctx.test_context.send_queue.?);

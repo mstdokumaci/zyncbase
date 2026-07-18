@@ -50,7 +50,7 @@ test "storage: stability no crashes on concurrent errors" {
                 const record = sth.readDoc(t_ctx.allocator, &t_ctx.ctx.engine, tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
                 defer if (record) |r| r.deinit(t_ctx.allocator);
                 // Try to delete the value
-                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1, null, null, null) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.engine.enqueueWriteOp(.{ .delete = .{ .table_index = tbl_md.index, .id = key, .namespace_id = 1 } }) catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;

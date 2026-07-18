@@ -233,6 +233,11 @@ pub const FilterPredicate = struct {
     }
 
     pub fn deinit(self: *FilterPredicate, allocator: std.mem.Allocator) void {
+        self.freeMemory(allocator);
+        self.* = .{};
+    }
+
+    pub fn freeMemory(self: *const FilterPredicate, allocator: std.mem.Allocator) void {
         if (self.conditions) |conds| {
             for (conds) |*c| c.deinit(allocator);
             allocator.free(conds);
@@ -241,7 +246,6 @@ pub const FilterPredicate = struct {
             for (or_conds) |*c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        self.* = .{};
     }
 
     pub fn clone(self: FilterPredicate, allocator: std.mem.Allocator) !FilterPredicate {
