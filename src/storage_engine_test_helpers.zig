@@ -43,9 +43,14 @@ pub const QueryResult = struct {
 
 fn cloneColumns(allocator: Allocator, columns: []const ColumnValue) ![]ColumnValue {
     const owned = try allocator.alloc(ColumnValue, columns.len);
-    errdefer allocator.free(owned);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |col| col.value.deinit(allocator);
+        allocator.free(owned);
+    }
     for (columns, 0..) |col, i| {
         owned[i] = .{ .index = col.index, .value = try col.value.clone(allocator) };
+        initialized += 1;
     }
     return owned;
 }

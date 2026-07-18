@@ -158,6 +158,14 @@ pub const StoreService = struct {
         doc_id: DocId,
     };
 
+    const DocKey = struct {
+        table_index: usize,
+        doc_id: DocId,
+    };
+
+    const BatchDocState = enum { exists, deleted };
+    const BatchDocStates = std.AutoHashMap(DocKey, BatchDocState);
+
     pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?ScopedSession {
         if (namespace.len == 0) return error.InvalidMessageFormat;
         if (external_user_id.len == 0) return error.InvalidMessageFormat;
@@ -321,7 +329,7 @@ pub const StoreService = struct {
     ) !void {
         const parsed = try self.parseStorePath(path);
 
-        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
+        const store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = parsed.table,
             .session_user_id = ctx.session_user_id,
@@ -332,14 +340,6 @@ pub const StoreService = struct {
             .value = null,
             .is_create = false,
         });
-
-        if (store_write) |*p| {
-            if (p.isAlwaysFalse()) {
-                p.deinit(self.allocator);
-                store_write = null;
-                return;
-            }
-        }
 
         const op = storage_mod.WriteOp{
             .delete = .{
@@ -366,6 +366,9 @@ pub const StoreService = struct {
         if (ops.len == 0) return; // no-op, success
         if (ops.len > 500) return error.BatchTooLarge;
 
+        var doc_states = BatchDocStates.init(self.allocator);
+        defer doc_states.deinit();
+
         var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
         var initialized: usize = 0;
         var entries_owned = true;
@@ -384,9 +387,9 @@ pub const StoreService = struct {
 
             if (std.mem.eql(u8, kind_str, "s")) {
                 if (tuple.len < 3) return error.MissingRequiredFields;
-                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp);
+                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, &doc_states);
             } else if (std.mem.eql(u8, kind_str, "r")) {
-                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp);
+                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, &doc_states);
             } else {
                 return error.InvalidMessageFormat;
             }
@@ -502,6 +505,7 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
         timestamp: i64,
+        doc_states: *BatchDocStates,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload);
 
@@ -513,7 +517,12 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
+        const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
+        const effective_state = doc_states.get(key);
+        const is_create = if (effective_state) |state|
+            state == .deleted
+        else
+            !self.storage_engine.documentExists(path.table_index, path.doc_id);
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
@@ -534,6 +543,8 @@ pub const StoreService = struct {
             return err;
         };
 
+        try doc_states.put(key, .exists);
+
         return storage_mod.BatchEntry{
             .kind = if (is_create) .upsert else .update,
             .table_index = path.table_index,
@@ -551,6 +562,7 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         timestamp: i64,
+        doc_states: *BatchDocStates,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload);
 
@@ -566,6 +578,9 @@ pub const StoreService = struct {
             .is_create = false,
         });
         errdefer if (store_write) |*p| p.deinit(self.allocator);
+
+        const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
+        try doc_states.put(key, .deleted);
 
         return storage_mod.BatchEntry{
             .kind = .delete,
