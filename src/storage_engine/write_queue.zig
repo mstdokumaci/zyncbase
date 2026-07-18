@@ -2,7 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed = @import("../typed/types.zig");
+const query_ast = @import("../query/ast.zig");
+const ColumnValue = @import("sql.zig").ColumnValue;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
 
@@ -50,15 +51,14 @@ pub const BatchEntry = struct {
     id: typed_doc_id.DocId,
     namespace_id: i64,
     owner_doc_id: typed_doc_id.DocId,
-    sql: []const u8,
-    values: ?[]typed.Value,
-    guard_values: ?[]typed.Value = null,
+    columns: []ColumnValue,
+    guard_predicate: ?query_ast.FilterPredicate = null,
     timestamp: i64,
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
-        allocator.free(self.sql);
-        if (self.values) |vals| typed.deinitValueSlice(allocator, vals);
-        if (self.guard_values) |vals| typed.deinitValueSlice(allocator, vals);
+        for (self.columns) |col| col.value.deinit(allocator);
+        if (self.columns.len > 0) allocator.free(self.columns);
+        if (self.guard_predicate) |*pred| pred.freeMemory(allocator);
     }
 };
 
@@ -69,9 +69,8 @@ pub const WriteOp = union(enum) {
         id: typed_doc_id.DocId,
         namespace_id: i64,
         owner_doc_id: typed_doc_id.DocId,
-        sql: []const u8,
-        values: []typed.Value,
-        guard_values: ?[]typed.Value = null,
+        columns: []ColumnValue,
+        guard_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
@@ -80,9 +79,8 @@ pub const WriteOp = union(enum) {
         table_index: usize,
         id: typed_doc_id.DocId,
         namespace_id: i64,
-        sql: []const u8,
-        values: []typed.Value,
-        guard_values: ?[]typed.Value = null,
+        columns: []ColumnValue,
+        guard_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
@@ -91,8 +89,7 @@ pub const WriteOp = union(enum) {
         table_index: usize,
         id: typed_doc_id.DocId,
         namespace_id: i64,
-        sql: []const u8,
-        guard_values: ?[]typed.Value = null,
+        guard_predicate: ?query_ast.FilterPredicate = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
@@ -137,18 +134,17 @@ pub const WriteOp = union(enum) {
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
         switch (self) {
             .upsert => |op| {
-                allocator.free(op.sql);
-                typed.deinitValueSlice(allocator, op.values);
-                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
+                for (op.columns) |col| col.value.deinit(allocator);
+                allocator.free(op.columns);
+                if (op.guard_predicate) |*pred| pred.freeMemory(allocator);
             },
             .update => |op| {
-                allocator.free(op.sql);
-                typed.deinitValueSlice(allocator, op.values);
-                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
+                for (op.columns) |col| col.value.deinit(allocator);
+                allocator.free(op.columns);
+                if (op.guard_predicate) |*pred| pred.freeMemory(allocator);
             },
             .delete => |op| {
-                allocator.free(op.sql);
-                if (op.guard_values) |guard_vals| typed.deinitValueSlice(allocator, guard_vals);
+                if (op.guard_predicate) |*pred| pred.freeMemory(allocator);
             },
             .resolve_session => |op| {
                 allocator.free(op.namespace);

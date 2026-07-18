@@ -6,19 +6,15 @@ const WriteWorker = write_worker_mod.WriteWorker;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
 const connection = @import("storage_engine/connection.zig");
 const schema_types = @import("schema/types.zig");
-const schema_system = @import("schema/system.zig");
 const Schema = schema_types.Schema;
-const query_ast = @import("query/ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed_doc_id = @import("typed/doc_id.zig");
-const typed = @import("typed/types.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
 const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const sql_build = @import("sql/build.zig");
-const filter_sql = @import("storage_engine/filter_sql.zig");
 const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const SessionResolver = @import("authorization/session_resolver.zig").SessionResolver;
 const read_buffer = @import("storage_engine/read_buffer.zig");
@@ -41,7 +37,6 @@ pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
 pub const ReadKind = read_buffer.ReadKind;
 const DocId = typed_doc_id.DocId;
-const Value = typed.Value;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
@@ -161,6 +156,8 @@ pub const StorageEngine = struct {
                 .performance_config = performance_config,
                 .db_path = db_path,
                 .in_memory = options.in_memory,
+                // SAFETY: Initialized below via memory_strategy.acquireArena().
+                .batch_arena = undefined,
                 .json_buf = sql.JsonBuf.init(allocator),
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
@@ -168,6 +165,9 @@ pub const StorageEngine = struct {
             .pk_sets = undefined,
         };
         errdefer self.read_request_queue.deinit();
+
+        self.write_worker.batch_arena = try memory_strategy.acquireArena();
+        errdefer self.memory_strategy.releaseArena(self.write_worker.batch_arena);
 
         self.write_worker.stmt_cache.init(allocator, self.write_worker.performance_config.statement_cache_size);
         errdefer self.write_worker.stmt_cache.deinit(allocator);
@@ -535,361 +535,10 @@ pub const StorageEngine = struct {
         self.write_worker.flushPendingWrites();
     }
 
-    // ─── Storage methods ──────────────────────────────────────────────────
+    // ─── Write path ──────────────────────────────────────────────────────
 
-    const WriteResources = struct {
-        table_metadata: *const schema_types.Table,
-        effective_namespace_id: i64,
-        rendered_guard: ?filter_sql.RenderedPredicate,
-
-        fn deinit(self: *WriteResources, allocator: Allocator) void {
-            if (self.rendered_guard) |*rendered| rendered.deinit(allocator);
-        }
-
-        fn guardSql(self: *const WriteResources) ?[]const u8 {
-            if (self.rendered_guard) |*rendered| return rendered.sqlSlice();
-            return null;
-        }
-
-        fn takeGuardValues(self: *WriteResources) ?[]Value {
-            if (self.rendered_guard) |*rendered| return rendered.takeValues();
-            return null;
-        }
-    };
-
-    fn prepareWriteResources(
-        self: *StorageEngine,
-        table_index: usize,
-        namespace_id: i64,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-    ) !WriteResources {
-        const table_metadata = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
-        const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
-        return .{
-            .table_metadata = table_metadata,
-            .effective_namespace_id = effective_namespace_id,
-            .rendered_guard = rendered_guard,
-        };
-    }
-
-    /// INSERT OR REPLACE a document into a table.
-    pub fn upsertDocument(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        owner_doc_id: DocId,
-        columns: []const ColumnValue,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        conn_id: ?u64,
-        write_id: ?[16]u8,
-    ) !void {
+    pub fn enqueueWriteOp(self: *StorageEngine, op: WriteOp) !void {
         try self.ensureMutationAllowed();
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-        var queued = false;
-
-        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, res.table_metadata, columns, res.guardSql());
-        errdefer if (!queued) self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-        };
-
-        const values = try self.cloneColumnValues(columns);
-        errdefer if (!queued) {
-            for (values) |v| v.deinit(self.allocator);
-            self.allocator.free(values);
-        };
-
-        const op = WriteOp{
-            .upsert = .{
-                .table_index = table_index,
-                .id = id,
-                .namespace_id = res.effective_namespace_id,
-                .owner_doc_id = owner_doc_id,
-                .sql = sql_string,
-                .values = values,
-                .guard_values = guard_values,
-                .timestamp = std.time.timestamp(),
-                .conn_id = conn_id,
-                .write_id = write_id,
-            },
-        };
-
         try self.write_worker.enqueueOp(op);
-        queued = true;
-    }
-
-    /// UPDATE an existing document in a table.
-    pub fn updateDocument(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        columns: []const ColumnValue,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        conn_id: ?u64,
-        write_id: ?[16]u8,
-    ) !void {
-        try self.ensureMutationAllowed();
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-        var queued = false;
-
-        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, res.table_metadata, columns, res.guardSql());
-        errdefer if (!queued) self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-        };
-
-        const values = try self.cloneColumnValues(columns);
-        errdefer if (!queued) {
-            for (values) |v| v.deinit(self.allocator);
-            self.allocator.free(values);
-        };
-
-        const op = WriteOp{
-            .update = .{
-                .table_index = table_index,
-                .id = id,
-                .namespace_id = res.effective_namespace_id,
-                .sql = sql_string,
-                .values = values,
-                .guard_values = guard_values,
-                .timestamp = std.time.timestamp(),
-                .conn_id = conn_id,
-                .write_id = write_id,
-            },
-        };
-
-        try self.write_worker.enqueueOp(op);
-        queued = true;
-    }
-
-    /// Atomically execute a batch of upsert/delete operations in a single transaction.
-    /// Fire-and-forget: takes ownership of entries and returns immediately after enqueue.
-    pub fn batchWrite(
-        self: *StorageEngine,
-        entries: []BatchEntry,
-        conn_id: ?u64,
-        write_id: ?[16]u8,
-    ) !void {
-        var entries_owned = true;
-        errdefer if (entries_owned) {
-            for (entries) |entry| entry.deinit(self.allocator);
-            self.allocator.free(entries);
-        };
-
-        try self.ensureMutationAllowed();
-
-        for (entries) |entry| {
-            _ = self.schema.tableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
-        }
-
-        const op = WriteOp{
-            .batch = .{
-                .entries = entries,
-                .latch = null,
-                .conn_id = conn_id,
-                .write_id = write_id,
-            },
-        };
-        var queued = false;
-        errdefer if (!queued) op.deinit(self.allocator);
-        entries_owned = false;
-
-        try self.write_worker.enqueueOp(op);
-        queued = true;
-    }
-
-    pub fn prepareBatchUpsert(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        owner_doc_id: DocId,
-        columns: []const ColumnValue,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        timestamp: i64,
-    ) !BatchEntry {
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-
-        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, res.table_metadata, columns, res.guardSql());
-        errdefer self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-
-        const values = try self.cloneColumnValues(columns);
-        errdefer {
-            for (values) |value| value.deinit(self.allocator);
-            self.allocator.free(values);
-        }
-
-        return .{
-            .kind = .upsert,
-            .table_index = table_index,
-            .id = id,
-            .namespace_id = res.effective_namespace_id,
-            .owner_doc_id = owner_doc_id,
-            .sql = sql_string,
-            .values = values,
-            .guard_values = guard_values,
-            .timestamp = timestamp,
-        };
-    }
-
-    pub fn prepareBatchUpdate(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        columns: []const ColumnValue,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        timestamp: i64,
-    ) !BatchEntry {
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-
-        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, res.table_metadata, columns, res.guardSql());
-        errdefer self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-
-        const values = try self.cloneColumnValues(columns);
-        errdefer {
-            for (values) |value| value.deinit(self.allocator);
-            self.allocator.free(values);
-        }
-
-        return .{
-            .kind = .update,
-            .table_index = table_index,
-            .id = id,
-            .namespace_id = res.effective_namespace_id,
-            .owner_doc_id = typed_doc_id.zero,
-            .sql = sql_string,
-            .values = values,
-            .guard_values = guard_values,
-            .timestamp = timestamp,
-        };
-    }
-
-    pub fn prepareBatchDelete(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        owner_doc_id: DocId,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        timestamp: i64,
-    ) !BatchEntry {
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-
-        const sql_string: []const u8 = blk: {
-            const guard_sql = res.guardSql();
-            break :blk if (guard_sql) |fragment|
-                try std.mem.concat(self.allocator, u8, &.{
-                    res.table_metadata.delete_document_sql_prefix,
-                    fragment,
-                    res.table_metadata.delete_document_sql_suffix,
-                })
-            else
-                try std.mem.concat(self.allocator, u8, &.{
-                    res.table_metadata.delete_document_sql_prefix,
-                    res.table_metadata.delete_document_sql_suffix,
-                });
-        };
-        errdefer self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-
-        return .{
-            .kind = .delete,
-            .table_index = table_index,
-            .id = id,
-            .namespace_id = res.effective_namespace_id,
-            .owner_doc_id = owner_doc_id,
-            .sql = sql_string,
-            .values = null,
-            .guard_values = guard_values,
-            .timestamp = timestamp,
-        };
-    }
-
-    fn cloneColumnValues(self: *StorageEngine, columns: []const ColumnValue) ![]Value {
-        const values = try self.allocator.alloc(Value, columns.len);
-        var initialized_count: usize = 0;
-        errdefer {
-            for (values[0..initialized_count]) |value| value.deinit(self.allocator);
-            self.allocator.free(values);
-        }
-        for (columns, 0..) |col, i| {
-            values[i] = try col.value.clone(self.allocator);
-            initialized_count += 1;
-        }
-        return values;
-    }
-
-    /// DELETE a document from a table.
-    pub fn deleteDocument(
-        self: *StorageEngine,
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-        guard_predicate: ?*const query_ast.FilterPredicate,
-        conn_id: ?u64,
-        write_id: ?[16]u8,
-    ) !void {
-        try self.ensureMutationAllowed();
-        if (guard_predicate) |predicate| {
-            if (predicate.isAlwaysFalse()) return;
-        }
-        var res = try self.prepareWriteResources(table_index, namespace_id, guard_predicate);
-        defer res.deinit(self.allocator);
-        var queued = false;
-
-        const guard_sql = res.guardSql();
-        const sql_string: []const u8 = if (guard_sql) |fragment|
-            try std.mem.concat(self.allocator, u8, &.{
-                res.table_metadata.delete_document_sql_prefix,
-                fragment,
-                res.table_metadata.delete_document_sql_suffix,
-            })
-        else
-            try std.mem.concat(self.allocator, u8, &.{
-                res.table_metadata.delete_document_sql_prefix,
-                res.table_metadata.delete_document_sql_suffix,
-            });
-        errdefer if (!queued) self.allocator.free(sql_string);
-
-        const guard_values = res.takeGuardValues();
-        errdefer if (!queued) {
-            if (guard_values) |values| typed.deinitValueSlice(self.allocator, values);
-        };
-
-        const op = WriteOp{
-            .delete = .{
-                .table_index = table_index,
-                .id = id,
-                .namespace_id = res.effective_namespace_id,
-                .sql = sql_string,
-                .guard_values = guard_values,
-                .conn_id = conn_id,
-                .write_id = write_id,
-            },
-        };
-
-        try self.write_worker.enqueueOp(op);
-        queued = true;
     }
 };

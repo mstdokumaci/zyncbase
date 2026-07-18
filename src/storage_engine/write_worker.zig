@@ -9,6 +9,8 @@ const typed = @import("../typed/types.zig");
 const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
 const sql = @import("sql.zig");
+const filter_sql = @import("filter_sql.zig");
+const query_ast = @import("../query/ast.zig");
 const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
 const change_queue_mod = @import("../subscription/change_queue.zig");
@@ -70,6 +72,10 @@ pub const WriteWorker = struct {
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,
+    /// Per-batch arena for JIT SQL generation and guard rendering.
+    /// Acquired from MemoryStrategy pool at init, held for worker lifetime.
+    /// Reset (.retain_capacity) at the start of each batch flush.
+    batch_arena: *std.heap.ArenaAllocator,
     /// Reusable scratch buffer for streaming array-to-JSON serialization.
     /// Reset (length only) between uses; capacity is retained for steady-state reuse.
     json_buf: sql.JsonBuf,
@@ -198,6 +204,7 @@ pub const WriteWorker = struct {
             op.deinit(self.allocator);
         }
         self.queue.deinit();
+        self.memory_strategy.releaseArena(self.batch_arena);
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -459,11 +466,11 @@ pub const WriteWorker = struct {
 
         // An upsert returning no row under a guard means the row exists and the
         // guard failed — unconditionally a conflict.
-        if (maybe_new_record == null and old_record == null and entry.guard_values != null and has_write_ack) {
+        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null and has_write_ack) {
             return false;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, true, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, true, false, old_record, maybe_new_record);
     }
 
     /// Unified update handler shared by both write paths. See executeUpsertEntry.
@@ -484,12 +491,12 @@ pub const WriteWorker = struct {
 
         // Row unaffected + guard present + write ack: probe existence to
         // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_new_record == null and old_record == null and entry.guard_values != null and has_write_ack) {
+        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null and has_write_ack) {
             if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, false, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, false, false, old_record, maybe_new_record);
     }
 
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
@@ -510,12 +517,12 @@ pub const WriteWorker = struct {
 
         // Row unaffected + guard present + write ack: probe existence to
         // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_old_record == null and entry.guard_values != null and has_write_ack) {
+        if (maybe_old_record == null and entry.guard_predicate != null and has_write_ack) {
             if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_values != null, has_write_ack, false, true, maybe_old_record, null);
+        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, has_write_ack, false, true, maybe_old_record, null);
     }
 
     pub fn flushBatch(
@@ -523,6 +530,7 @@ pub const WriteWorker = struct {
         batch: *std.ArrayListUnmanaged(WriteOp),
         last_batch_time: *i64,
     ) void {
+        _ = self.batch_arena.reset(.retain_capacity);
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
@@ -821,6 +829,7 @@ pub const WriteWorker = struct {
         bop: anytype,
         last_batch_time: *i64,
     ) void {
+        _ = self.batch_arena.reset(.retain_capacity);
         const entries = bop.entries;
         var tx_started = false;
         var final_err: ?anyerror = null;
@@ -1012,7 +1021,13 @@ pub const WriteWorker = struct {
         owner_id: DocId,
         table_metadata: *const schema_types.Table,
     ) !?Record {
-        const sql_str = op.sql;
+        const arena_alloc = self.batch_arena.allocator();
+
+        const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
+        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
+
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
@@ -1030,12 +1045,9 @@ pub const WriteWorker = struct {
             bind_idx += 1;
         }
 
-        if (@typeInfo(@TypeOf(op.values)) == .optional) {
-            if (op.values) |vals| {
-                try self.bindValueSlice(stmt, &bind_idx, vals);
-            }
-        } else {
-            try self.bindValueSlice(stmt, &bind_idx, op.values);
+        for (op.columns) |col| {
+            try sql.bindValue(col.value, &self.conn, stmt, bind_idx, &self.json_buf);
+            bind_idx += 1;
         }
 
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
@@ -1043,8 +1055,10 @@ pub const WriteWorker = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
-        if (op.guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1056,19 +1070,21 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
     ) !?Record {
-        const sql_str = op.sql;
+        const arena_alloc = self.batch_arena.allocator();
+
+        const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
+        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
+
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
         var bind_idx: c_int = 1;
-
-        if (@typeInfo(@TypeOf(op.values)) == .optional) {
-            if (op.values) |vals| {
-                try self.bindValueSlice(stmt, &bind_idx, vals);
-            }
-        } else {
-            try self.bindValueSlice(stmt, &bind_idx, op.values);
+        for (op.columns) |col| {
+            try sql.bindValue(col.value, &self.conn, stmt, bind_idx, &self.json_buf);
+            bind_idx += 1;
         }
 
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
@@ -1077,8 +1093,10 @@ pub const WriteWorker = struct {
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
 
-        if (op.guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1090,7 +1108,24 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
     ) !?Record {
-        const sql_str = op.sql;
+        const arena_alloc = self.batch_arena.allocator();
+
+        const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
+
+        const guard_fragment = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str: []const u8 = if (guard_fragment) |fragment|
+            try std.mem.concat(arena_alloc, u8, &.{
+                table_metadata.delete_document_sql_prefix,
+                fragment,
+                table_metadata.delete_document_sql_suffix,
+            })
+        else
+            try std.mem.concat(arena_alloc, u8, &.{
+                table_metadata.delete_document_sql_prefix,
+                table_metadata.delete_document_sql_suffix,
+            });
+
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
@@ -1098,8 +1133,10 @@ pub const WriteWorker = struct {
         try sql.bindDocIdNamespace(stmt, &self.conn, 1, op.id, namespace_id);
 
         var bind_idx: c_int = 3;
-        if (op.guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);

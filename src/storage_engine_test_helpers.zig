@@ -41,6 +41,107 @@ pub const QueryResult = struct {
     }
 };
 
+fn cloneColumns(allocator: Allocator, columns: []const ColumnValue) ![]ColumnValue {
+    const owned = try allocator.alloc(ColumnValue, columns.len);
+    errdefer allocator.free(owned);
+    for (columns, 0..) |col, i| {
+        owned[i] = .{ .index = col.index, .value = try col.value.clone(allocator) };
+    }
+    return owned;
+}
+
+fn cloneGuardPredicate(allocator: Allocator, guard: ?query_ast.FilterPredicate) !?query_ast.FilterPredicate {
+    const pred = guard orelse return null;
+    return try pred.clone(allocator);
+}
+
+pub fn enqueueUpsert(
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    owner_doc_id: typed_doc_id.DocId,
+    columns: []const ColumnValue,
+    guard: ?query_ast.FilterPredicate,
+    conn_id: ?u64,
+    write_id: ?[16]u8,
+) !void {
+    const allocator = engine.allocator;
+    const owned_columns = try cloneColumns(allocator, columns);
+    errdefer {
+        for (owned_columns) |col| col.value.deinit(allocator);
+        allocator.free(owned_columns);
+    }
+    const owned_guard = try cloneGuardPredicate(allocator, guard);
+    errdefer if (owned_guard) |*p| @constCast(p).deinit(allocator);
+
+    try engine.enqueueWriteOp(.{ .upsert = .{
+        .table_index = table_index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .owner_doc_id = owner_doc_id,
+        .columns = owned_columns,
+        .guard_predicate = owned_guard,
+        .timestamp = std.time.timestamp(),
+        .conn_id = conn_id,
+        .write_id = write_id,
+    } });
+}
+
+pub fn enqueueUpdate(
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    columns: []const ColumnValue,
+    guard: ?query_ast.FilterPredicate,
+    conn_id: ?u64,
+    write_id: ?[16]u8,
+) !void {
+    const allocator = engine.allocator;
+    const owned_columns = try cloneColumns(allocator, columns);
+    errdefer {
+        for (owned_columns) |col| col.value.deinit(allocator);
+        allocator.free(owned_columns);
+    }
+    const owned_guard = try cloneGuardPredicate(allocator, guard);
+    errdefer if (owned_guard) |*p| @constCast(p).deinit(allocator);
+
+    try engine.enqueueWriteOp(.{ .update = .{
+        .table_index = table_index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .columns = owned_columns,
+        .guard_predicate = owned_guard,
+        .timestamp = std.time.timestamp(),
+        .conn_id = conn_id,
+        .write_id = write_id,
+    } });
+}
+
+pub fn enqueueDelete(
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    guard: ?query_ast.FilterPredicate,
+    conn_id: ?u64,
+    write_id: ?[16]u8,
+) !void {
+    const allocator = engine.allocator;
+    const owned_guard = try cloneGuardPredicate(allocator, guard);
+    errdefer if (owned_guard) |*p| @constCast(p).deinit(allocator);
+
+    try engine.enqueueWriteOp(.{ .delete = .{
+        .table_index = table_index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .guard_predicate = owned_guard,
+        .conn_id = conn_id,
+        .write_id = write_id,
+    } });
+}
+
 /// Read a single document by ID directly from SQLite (bypasses cache and guard predicates).
 /// Returns null if the document does not exist.
 pub fn readDoc(
@@ -182,7 +283,7 @@ pub const TableFixture = struct {
         id: typed_doc_id.DocId,
         namespace_id: i64,
     ) !void {
-        return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null, null, null);
+        return enqueueDelete(self.engine, self.metadata.index, id, namespace_id, null, null, null);
     }
 
     pub fn getOne(
@@ -472,9 +573,9 @@ fn insertNamedWithMetadata(
     namespace_id: i64,
     columns: anytype,
 ) !void {
-    var resolved: [columns.len]storage_engine.ColumnValue = undefined;
+    var resolved: [columns.len]ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.upsertDocument(table_metadata.index, id, namespace_id, typed_doc_id.zero, &resolved, null, null, null);
+    try enqueueUpsert(engine, table_metadata.index, id, namespace_id, typed_doc_id.zero, &resolved, null, null, null);
 }
 
 // ─── Record field accessors (module-level, for callers with raw Record + metadata) ───
