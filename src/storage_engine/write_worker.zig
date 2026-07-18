@@ -436,7 +436,7 @@ pub const WriteWorker = struct {
             return true;
         } else {
             // Row was not affected — check for guard conflict.
-            const guard_conflict = old_record != null and has_guard and has_write_ack;
+            const guard_conflict = old_record != null and has_guard;
             if (old_record) |r| r.deinit(self.allocator);
             if (new_record) |r| r.deinit(self.allocator);
             return !guard_conflict;
@@ -466,7 +466,7 @@ pub const WriteWorker = struct {
 
         // An upsert returning no row under a guard means the row exists and the
         // guard failed — unconditionally a conflict.
-        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null and has_write_ack) {
+        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null) {
             return false;
         }
 
@@ -489,9 +489,9 @@ pub const WriteWorker = struct {
             return mapAndLogError("updateEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
-        // Row unaffected + guard present + write ack: probe existence to
+        // Row unaffected + guard present: probe existence to
         // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null and has_write_ack) {
+        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null) {
             if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
             return true;
         }
@@ -515,9 +515,9 @@ pub const WriteWorker = struct {
             return mapAndLogError("deleteEntry", err, table_metadata.name, self.allocator, null);
         };
 
-        // Row unaffected + guard present + write ack: probe existence to
+        // Row unaffected + guard present: probe existence to
         // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_old_record == null and entry.guard_predicate != null and has_write_ack) {
+        if (maybe_old_record == null and entry.guard_predicate != null) {
             if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
             return true;
         }
