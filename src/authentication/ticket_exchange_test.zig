@@ -19,7 +19,7 @@ test "TicketExchange: generate and verify single-use ticket" {
         false,
         null,
         false,
-        empty_claims_mapping,
+        &empty_claims_mapping,
     );
     defer exchange.deinit();
 
@@ -48,7 +48,7 @@ test "TicketExchange: generate and verify multi-use ticket" {
         false,
         null,
         false,
-        empty_claims_mapping,
+        &empty_claims_mapping,
     );
     defer exchange.deinit();
 
@@ -77,7 +77,7 @@ test "TicketExchange: expired ticket verification fails" {
         false,
         null,
         false,
-        empty_claims_mapping,
+        &empty_claims_mapping,
     );
     defer exchange.deinit();
 
@@ -104,7 +104,7 @@ test "TicketExchange: validate anonymous subject" {
         true, // anonymous_enabled = true
         "anon:",
         false,
-        empty_claims_mapping,
+        &empty_claims_mapping,
     );
     defer exchange_enabled.deinit();
 
@@ -126,7 +126,7 @@ test "TicketExchange: validate anonymous subject" {
         false, // anonymous_enabled = false
         "anon:",
         false,
-        empty_claims_mapping,
+        &empty_claims_mapping,
     );
     defer exchange_disabled.deinit();
 

@@ -381,16 +381,6 @@ pub const JwtValidator = struct {
         return .{ .config = config };
     }
 
-    /// Verifies a JWT token. Returns the subject claim value allocated using `allocator`.
-    pub fn validate(self: JwtValidator, allocator: Allocator, token: []const u8) ![]const u8 {
-        var decoded = try splitToken(allocator, token);
-        defer decoded.deinit(allocator);
-
-        try verifyTokenSignature(self.config, decoded);
-        try validateStandardClaims(self.config, decoded.payload);
-        return try allocator.dupe(u8, (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing);
-    }
-
     pub const ValidatedToken = struct {
         subject: []const u8,
         expires_at: i64,

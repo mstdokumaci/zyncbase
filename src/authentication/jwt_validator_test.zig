@@ -17,6 +17,14 @@ fn setKeys(jwks: *Jwks, keys: []Jwk) !void {
     jwks.state = jwt_validator.JwksState{ .keys = keys };
 }
 
+/// Test-only: wraps validateWithClaims with an empty claims mapping,
+/// extracting just the subject — equivalent to the deleted `validate` method.
+fn validateSubject(validator: JwtValidator, allocator: Allocator, token: []const u8) ![]const u8 {
+    var result = try validator.validateWithClaims(allocator, token, .{});
+    defer result.deinit(allocator);
+    return try allocator.dupe(u8, result.subject);
+}
+
 fn createHmacJwt(
     allocator: Allocator,
     secret: []const u8,
@@ -76,7 +84,7 @@ test "JwtValidator: valid HS256 signature and claims" {
         .audience = "audience_abc",
     });
 
-    const validated_sub = try validator.validate(allocator, token);
+    const validated_sub = try validateSubject(validator, allocator, token);
     defer allocator.free(validated_sub);
 
     try testing.expectEqualStrings(sub, validated_sub);
@@ -98,7 +106,7 @@ test "JwtValidator: expired token" {
         .audience = "audience_abc",
     });
 
-    try testing.expectError(error.TokenExpired, validator.validate(allocator, token));
+    try testing.expectError(error.TokenExpired, validateSubject(validator, allocator, token));
 }
 
 test "JwtValidator: secret mismatch fails validation" {
@@ -118,7 +126,7 @@ test "JwtValidator: secret mismatch fails validation" {
         .audience = "audience_abc",
     });
 
-    try testing.expectError(error.AuthFailed, validator.validate(allocator, token));
+    try testing.expectError(error.AuthFailed, validateSubject(validator, allocator, token));
 }
 
 test "JwtValidator: issuer mismatch fails validation" {
@@ -137,7 +145,7 @@ test "JwtValidator: issuer mismatch fails validation" {
         .audience = "audience_abc",
     });
 
-    try testing.expectError(error.IssuerMismatch, validator.validate(allocator, token));
+    try testing.expectError(error.IssuerMismatch, validateSubject(validator, allocator, token));
 }
 
 test "JwtValidator: audience mismatch fails validation" {
@@ -156,7 +164,7 @@ test "JwtValidator: audience mismatch fails validation" {
         .audience = "audience_other",
     });
 
-    try testing.expectError(error.AudienceMismatch, validator.validate(allocator, token));
+    try testing.expectError(error.AudienceMismatch, validateSubject(validator, allocator, token));
 }
 
 test "Jwks: getJwk looks up populated keys" {
@@ -221,7 +229,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .audience = "audience_abc",
             .jwks = &jwks,
         });
-        const sub = try validator.validate(allocator, token_rs);
+        const sub = try validateSubject(validator, allocator, token_rs);
         defer allocator.free(sub);
         try testing.expectEqualStrings("user_12345", sub);
     }
@@ -234,7 +242,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .audience = "audience_abc",
             .jwks = &jwks,
         });
-        const sub = try validator.validate(allocator, token_ps);
+        const sub = try validateSubject(validator, allocator, token_ps);
         defer allocator.free(sub);
         try testing.expectEqualStrings("user_12345", sub);
     }

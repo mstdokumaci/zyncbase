@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
-const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
 const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
@@ -16,11 +15,11 @@ pub const TicketExchange = struct {
     ticket_secret: [32]u8,
     ttl_seconds: u32,
     single_use: bool,
-    jwt_validator: ?JwtValidator,
+    jwt_validator: ?*JwtValidator,
     anonymous_enabled: bool,
     anonymous_prefix: []const u8,
     ssl: bool,
-    claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{},
+    claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
     redeemed_tickets: std.StringHashMap(i64),
     mutex: std.Thread.Mutex = .{},
@@ -32,11 +31,11 @@ pub const TicketExchange = struct {
         ticket_secret_opt: ?[]const u8,
         ttl_seconds: u32,
         single_use: bool,
-        jwt_config: ?JwtValidationConfig,
+        jwt_validator: ?*JwtValidator,
         anonymous_enabled: bool,
         anonymous_prefix: ?[]const u8,
         ssl: bool,
-        claims_mapping: std.StringHashMapUnmanaged([]const u8),
+        claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
     ) !*TicketExchange {
         const self = try allocator.create(TicketExchange);
         errdefer allocator.destroy(self);
@@ -53,38 +52,19 @@ pub const TicketExchange = struct {
             std.crypto.random.bytes(&secret_key);
         }
 
-        const validator = if (jwt_config) |cfg| JwtValidator.init(cfg) else null;
         const prefix = if (anonymous_prefix) |p| try allocator.dupe(u8, p) else try allocator.dupe(u8, "anon:");
         errdefer allocator.free(prefix);
-
-        var claims_copy: std.StringHashMapUnmanaged([]const u8) = .{};
-        errdefer {
-            var it = claims_copy.iterator();
-            while (it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                allocator.free(entry.value_ptr.*);
-            }
-            claims_copy.deinit(allocator);
-        }
-        var mapping_it = claims_mapping.iterator();
-        while (mapping_it.next()) |entry| {
-            const key = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(key);
-            const val = try allocator.dupe(u8, entry.value_ptr.*);
-            errdefer allocator.free(val);
-            try claims_copy.put(allocator, key, val);
-        }
 
         self.* = .{
             .allocator = allocator,
             .ticket_secret = secret_key,
             .ttl_seconds = ttl_seconds,
             .single_use = single_use,
-            .jwt_validator = validator,
+            .jwt_validator = jwt_validator,
             .anonymous_enabled = anonymous_enabled,
             .anonymous_prefix = prefix,
             .ssl = ssl,
-            .claims_mapping = claims_copy,
+            .claims_mapping = claims_mapping,
             .redeemed_tickets = std.StringHashMap(i64).init(allocator),
             .mutex = .{},
         };
@@ -94,14 +74,6 @@ pub const TicketExchange = struct {
 
     pub fn deinit(self: *TicketExchange) void {
         self.allocator.free(self.anonymous_prefix);
-        {
-            var it = self.claims_mapping.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.claims_mapping.deinit(self.allocator);
-        }
         var it = self.redeemed_tickets.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -248,7 +220,7 @@ pub const TicketExchange = struct {
             if (hdr.len > 7 and std.ascii.eqlIgnoreCase(hdr[0..7], "bearer ")) {
                 const token = hdr[7..];
                 if (self.jwt_validator) |val| {
-                    const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
+                    const validated = try val.validateWithClaims(allocator, token, self.claims_mapping.*);
                     subject = validated.subject;
                     claims = validated.claims;
                 } else {

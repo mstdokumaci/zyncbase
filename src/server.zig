@@ -167,7 +167,7 @@ pub const ZyncBaseServer = struct {
             &self.schema,
         );
 
-        const jwt_config = try self.initJWT(&config);
+        try self.initJWT(&config);
         errdefer if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
@@ -201,7 +201,7 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.drain_handler = drainHandler;
         self.websocket_server.drain_handler_ctx = self;
 
-        try self.initTicketExchangeInternal(&config, jwt_config);
+        try self.initTicketExchangeInternal(&config);
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
             self.ticket_exchange = null;
@@ -312,7 +312,7 @@ pub const ZyncBaseServer = struct {
         return pw;
     }
 
-    fn initJWT(self: *ZyncBaseServer, config: *const Config) !?JwtValidationConfig {
+    fn initJWT(self: *ZyncBaseServer, config: *const Config) !void {
         const auth_cfg = &config.authentication;
         var jwks_ptr: ?*Jwks = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
@@ -340,7 +340,6 @@ pub const ZyncBaseServer = struct {
         if (jwt_config) |cfg| {
             self.jwt_validator = JwtValidator.init(cfg);
         }
-        return jwt_config;
     }
 
     fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config) void {
@@ -384,18 +383,18 @@ pub const ZyncBaseServer = struct {
         );
     }
 
-    fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config, jwt_config: ?JwtValidationConfig) !void {
+    fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config) !void {
         const auth_cfg = &config.authentication;
         self.ticket_exchange = try TicketExchange.init(
             self.memory_strategy.generalAllocator(),
             auth_cfg.ticket_secret,
             auth_cfg.ticket_ttl_seconds,
             auth_cfg.ticket_single_use,
-            jwt_config,
+            if (self.jwt_validator) |*jv| jv else null,
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,
             self.websocket_server.ssl,
-            auth_cfg.session.claims,
+            &auth_cfg.session.claims,
         );
     }
 
