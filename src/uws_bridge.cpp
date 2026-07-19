@@ -317,6 +317,11 @@ extern "C"
         });
     }
 
+    void uws_loop_defer(us_loop_t *loop, void *ctx, void (*cb)(void *ctx)) {
+        uWS::Loop *uwsLoop = (uWS::Loop *)loop;
+        uwsLoop->defer([ctx, cb]() { cb(ctx); });
+    }
+
     void uws_loop_removePostHandler(us_loop_t *loop, void *key)
     {
         uWS::Loop *uwsLoop = (uWS::Loop *)loop;

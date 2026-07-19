@@ -65,7 +65,9 @@ pub const MessageHandler = struct {
     }
 
     /// Clean up message handler resources
-    pub fn deinit(_: *MessageHandler) void {}
+    pub fn deinit(self: *MessageHandler) void {
+        _ = self;
+    }
 
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
@@ -488,29 +490,29 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const token = wire_decode.extractAuthRefreshFast(message) catch {
-            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
             return null;
         };
 
         const validator = self.jwt_validator orelse {
-            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured");
             return null;
         };
 
         var validated = validator.validateWithClaims(conn.allocator, token, self.session_claims_mapping.*) catch {
-            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
             return null;
         };
 
         const sess = conn.session orelse {
             validated.deinit(conn.allocator);
-            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
             return null;
         };
 
         if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
             validated.deinit(conn.allocator);
-            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
             return null;
         }
 
@@ -758,13 +760,13 @@ pub const MessageHandler = struct {
         return scope_seq;
     }
 
-    fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) !void {
+    fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) void {
+        defer conn.ws.close();
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         conn.send(disconnect_msg) catch |err| {
             std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
         };
-        conn.ws.close();
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

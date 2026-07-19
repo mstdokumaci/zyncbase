@@ -39,7 +39,7 @@ const send_queue_type = @import("connection/send_queue.zig").send_queue;
 const TicketExchange = ticket_exchange.TicketExchange;
 const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
-const JwksCache = @import("authentication/jwt_validator.zig").JwksCache;
+const Jwks = @import("authentication/jwt_validator.zig").Jwks;
 const Session = authentication_session.Session;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
@@ -75,7 +75,7 @@ pub const ZyncBaseServer = struct {
     schema: Schema,
     auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
-    jwks_cache: ?*JwksCache = null,
+    jwks: ?*Jwks = null,
     jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
@@ -167,11 +167,11 @@ pub const ZyncBaseServer = struct {
             &self.schema,
         );
 
-        const jwt_config = try self.initJWT(&config);
-        errdefer if (self.jwks_cache) |jc| {
+        try self.initJWT(&config);
+        errdefer if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
-            self.jwks_cache = null;
+            self.jwks = null;
         };
 
         self.initMessageHandlerWired(&config);
@@ -201,7 +201,7 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.drain_handler = drainHandler;
         self.websocket_server.drain_handler_ctx = self;
 
-        try self.initTicketExchangeInternal(&config, jwt_config);
+        try self.initTicketExchangeInternal(&config);
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
             self.ticket_exchange = null;
@@ -312,31 +312,34 @@ pub const ZyncBaseServer = struct {
         return pw;
     }
 
-    fn initJWT(self: *ZyncBaseServer, config: *const Config) !?JwtValidationConfig {
+    fn initJWT(self: *ZyncBaseServer, config: *const Config) !void {
         const auth_cfg = &config.authentication;
-        var jwks_cache_ptr: ?*JwksCache = null;
+        var jwks_ptr: ?*Jwks = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
-            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
+            const jc = try self.memory_strategy.generalAllocator().create(Jwks);
             errdefer self.memory_strategy.generalAllocator().destroy(jc);
-            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
-            jwks_cache_ptr = jc;
+            jc.* = try Jwks.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jwks_ptr = jc;
+
+            // Fetch JWKS synchronously at startup. Server must have valid
+            // keys before accepting connections.
+            try jc.loadJwks();
         }
-        self.jwks_cache = jwks_cache_ptr;
-        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
+        self.jwks = jwks_ptr;
+        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_ptr != null)
             JwtValidationConfig{
                 .secret = auth_cfg.jwt_secret,
                 .algorithm = auth_cfg.jwt_algorithm,
                 .issuer = auth_cfg.jwt_issuer,
                 .audience = auth_cfg.jwt_audience,
                 .subject_claim = auth_cfg.jwt_subject_claim,
-                .jwks_cache = jwks_cache_ptr,
+                .jwks = jwks_ptr,
             }
         else
             null;
         if (jwt_config) |cfg| {
             self.jwt_validator = JwtValidator.init(cfg);
         }
-        return jwt_config;
     }
 
     fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config) void {
@@ -380,18 +383,18 @@ pub const ZyncBaseServer = struct {
         );
     }
 
-    fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config, jwt_config: ?JwtValidationConfig) !void {
+    fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config) !void {
         const auth_cfg = &config.authentication;
         self.ticket_exchange = try TicketExchange.init(
             self.memory_strategy.generalAllocator(),
             auth_cfg.ticket_secret,
             auth_cfg.ticket_ttl_seconds,
             auth_cfg.ticket_single_use,
-            jwt_config,
+            if (self.jwt_validator) |*jv| jv else null,
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,
             self.websocket_server.ssl,
-            auth_cfg.session.claims,
+            &auth_cfg.session.claims,
         );
     }
 
@@ -503,6 +506,13 @@ pub const ZyncBaseServer = struct {
             self.config.server.port,
         });
 
+        // Register the JWKS refresh timer hook. The timer will be created
+        // from the event loop thread once the loop is ready (after listen()).
+        if (self.jwks) |jc| {
+            self.websocket_server.on_loop_ready = jwksLoopReadyCb;
+            self.websocket_server.on_loop_ready_ctx = jc;
+        }
+
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
             self.websocket_server.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
@@ -610,6 +620,9 @@ pub const ZyncBaseServer = struct {
 
         std.log.info("Stopping background workers", .{});
 
+        // Stop JWKS refresh timer thread.
+        if (self.jwks) |jc| jc.stopRefreshTimer();
+
         // Stop the storage engine writer thread. Must be after final flush+checkpoint
         // in finishGracefulShutdown(), which uses the writer thread. Safe to call
         // even if already stopped — stop() checks and sets write_thread to null.
@@ -712,12 +725,15 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing violation_tracker", .{});
         self.violation_tracker.deinit();
 
-        // Deinitialize ticket exchange and JWKS cache
-        if (self.ticket_exchange) |te| te.deinit();
-        if (self.jwks_cache) |jc| {
+        // Deinitialize ticket exchange and JWKS cache.
+        // Jwks.deinit() must run first: it stops the refresh timer thread
+        // and frees the cached keys. ticket_exchange and message_handler deinit
+        // then free their resources.
+        if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
         }
+        if (self.ticket_exchange) |te| te.deinit();
 
         // Free config - need to use pointer to field
         std.log.debug("About to deinit config", .{});
@@ -806,6 +822,14 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
     }
+}
+
+fn jwksLoopReadyCb(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
+    if (ctx == null or loop == null) return;
+    const jc: *Jwks = @ptrCast(@alignCast(ctx.?));
+    jc.startRefreshTimer(loop.?) catch |err| {
+        std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+    };
 }
 
 fn onWebSocketOpen(ws: *WebSocket, user_data: ?*anyopaque) void {

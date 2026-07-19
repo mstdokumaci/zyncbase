@@ -37,6 +37,9 @@ pub const WebSocketServer = struct {
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
     drain_handler_ctx: ?*anyopaque = null,
     verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror!Session = null,
+    on_loop_ready: ?*const fn (?*anyopaque, ?*c.struct_us_loop_t) void = null,
+    on_loop_ready_ctx: ?*anyopaque = null,
+    loop_ready_fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub const Config = struct {
         port: u16,
@@ -112,6 +115,9 @@ pub const WebSocketServer = struct {
         self.drain_handler = null;
         self.drain_handler_ctx = null;
         self.verify_ticket_cb = null;
+        self.on_loop_ready = null;
+        self.on_loop_ready_ctx = null;
+        self.loop_ready_fired = std.atomic.Value(bool).init(false);
     }
 
     /// Clean up resources after run() exits & server thread is joined.
@@ -285,6 +291,14 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
 fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
     if (ctx == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
+
+    // Fire the one-shot "on loop ready" hook on the first iteration where
+    // the loop pointer is available.
+    if (!server.loop_ready_fired.swap(true, .acq_rel)) {
+        if (server.loop.load(.acquire)) |loop| {
+            if (server.on_loop_ready) |cb| cb(server.on_loop_ready_ctx, loop);
+        }
+    }
 
     if (server.post_handler) |handler| {
         handler(server.post_handler_ctx);
