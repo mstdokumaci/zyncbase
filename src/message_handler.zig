@@ -761,12 +761,12 @@ pub const MessageHandler = struct {
     }
 
     fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) void {
+        defer conn.ws.close();
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         conn.send(disconnect_msg) catch |err| {
             std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
         };
-        conn.ws.close();
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {
