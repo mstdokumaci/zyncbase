@@ -3,22 +3,18 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const jwt_validator = @import("jwt_validator.zig");
 const JwtValidator = jwt_validator.JwtValidator;
-const JwksCache = jwt_validator.JwksCache;
+const Jwks = jwt_validator.Jwks;
 const Jwk = jwt_validator.Jwk;
 const json_write = @import("../json/write.zig");
 const base64_utils = @import("base64_utils.zig");
 
-/// Test-only helper to populate JwksCache keys, inlined from JwksCache
+/// Test-only helper to populate Jwks keys, inlined from Jwks
 /// to keep test accommodations out of the production codebase.
-fn setKeys(cache: *JwksCache, keys: []Jwk, timestamp: i64) !void {
+fn setKeys(jwks: *Jwks, keys: []Jwk) !void {
     for (keys) |*key| {
-        try key.buildPkey(cache.allocator);
+        try key.buildPkey(jwks.allocator);
     }
-    const state = jwt_validator.JwksState{
-        .keys = keys,
-        .last_fetched = timestamp,
-    };
-    try cache.state_cache.update(0, state);
+    jwks.state = jwt_validator.JwksState{ .keys = keys };
 }
 
 fn createHmacJwt(
@@ -163,11 +159,11 @@ test "JwtValidator: audience mismatch fails validation" {
     try testing.expectError(error.AudienceMismatch, validator.validate(allocator, token));
 }
 
-test "JwksCache: getJwk looks up populated keys" {
+test "Jwks: getJwk looks up populated keys" {
     const allocator = testing.allocator;
 
-    var cache = try JwksCache.init(allocator, "https://example.com/.well-known/jwks.json");
-    defer cache.deinit();
+    var jwks = try Jwks.init(allocator, "https://example.com/.well-known/jwks.json");
+    defer jwks.deinit();
 
     // Valid RSA modulus/exponent so setKeys can eagerly build the EVP_PKEY.
     const n_b64 = "2SJJNHh5kweKQwpXL796HER09fDVdeKAn6VO9pI9JGpv_WCM4KUxfuPyoJUlMNKsNj5QQCuOvJ4lrNwNRr5wPK2wPDsYRZSwhhr3ocUNAFgXf9YeBxSRoax9WHjPSTK6ai-lPWykj_gTl0AbOcw9bgY1ZOlh6DEVu_uPUkUOo7NXLkd5kIxakCWaf4MAl0qAs4bNmnPM78Nn5PdoF8UJ-vbEZ2sYu_PYp3q-GsdIfCxLLV8F3Xj5lQLR6nfIoz1L8tHPuPSh08B_rFuDdDhtcfsW0fPF_CyYelTydwTyVD_CzZpM0vgTLr8Uuxd8f7rqEdSp3h0IzR0cNGp4jcKHHw";
@@ -180,10 +176,12 @@ test "JwksCache: getJwk looks up populated keys" {
         .n = try allocator.dupe(u8, n_b64),
         .e = try allocator.dupe(u8, e_b64),
     };
-    try setKeys(&cache, keys, std.time.timestamp());
+    try setKeys(&jwks, keys);
 
     // Retrieve valid key
-    const retrieved = try cache.getJwk("key_1");
+    const retrieved = jwks.getJwk("key_1") orelse {
+        @panic("expected to find key_1");
+    };
     defer retrieved.deinit(allocator);
 
     try testing.expectEqualStrings("RSA", retrieved.kty);
@@ -191,21 +189,15 @@ test "JwksCache: getJwk looks up populated keys" {
     try testing.expectEqualStrings(n_b64, retrieved.n.?);
     try testing.expectEqualStrings(e_b64, retrieved.e.?);
 
-    // Key not found triggers async refresh — caller gets JwksRefreshInProgress.
-    try testing.expectError(error.JwksRefreshInProgress, cache.getJwk("key_2"));
-
-    // Wait for the ephemeral refresh thread to finish so the testing allocator
-    // doesn't detect a leak from the RefreshContext still owned by the thread.
-    while (cache.refreshing.load(.acquire)) {
-        std.Thread.sleep(1_000_000); // 1ms
-    }
+    // Key not found returns null.
+    try testing.expectEqual(jwks.getJwk("key_2"), null);
 }
 
 test "JwtValidator: verify RS256 and PS256 tokens" {
     const allocator = testing.allocator;
 
-    var cache = try JwksCache.init(allocator, "https://example.com/.well-known/jwks.json");
-    defer cache.deinit();
+    var jwks = try Jwks.init(allocator, "https://example.com/.well-known/jwks.json");
+    defer jwks.deinit();
 
     // Populate the JWK we generated
     var keys = try allocator.alloc(Jwk, 1);
@@ -215,7 +207,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
         .n = try allocator.dupe(u8, "2SJJNHh5kweKQwpXL796HER09fDVdeKAn6VO9pI9JGpv_WCM4KUxfuPyoJUlMNKsNj5QQCuOvJ4lrNwNRr5wPK2wPDsYRZSwhhr3ocUNAFgXf9YeBxSRoax9WHjPSTK6ai-lPWykj_gTl0AbOcw9bgY1ZOlh6DEVu_uPUkUOo7NXLkd5kIxakCWaf4MAl0qAs4bNmnPM78Nn5PdoF8UJ-vbEZ2sYu_PYp3q-GsdIfCxLLV8F3Xj5lQLR6nfIoz1L8tHPuPSh08B_rFuDdDhtcfsW0fPF_CyYelTydwTyVD_CzZpM0vgTLr8Uuxd8f7rqEdSp3h0IzR0cNGp4jcKHHw"),
         .e = try allocator.dupe(u8, "AQAB"),
     };
-    try setKeys(&cache, keys, std.time.timestamp());
+    try setKeys(&jwks, keys);
 
     const token_rs = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleTEifQ.eyJzdWIiOiJ1c2VyXzEyMzQ1IiwiaXNzIjoiaXNzdWVyX3h5eiIsImF1ZCI6ImF1ZGllbmNlX2FiYyIsImV4cCI6NDAwMDAwMDAwMH0.Rs_fn7LadvhYdkjEiowVbslQybN1DjW7tVzY4teRQzgqClPjcfyAvI30_QgnMOHfQAcy5dXITWw2pv4mnc9vFVIpmO3wLqIsmyHS_IZ563QS0s7ZMnsHECeTeQaXIFhz8Q1xZeKkJ5zXuTi8zTdMpOS_UTObd_RXKP5g8dZQXOaU5xEijixLaGAkxwST1aqWj0C6SjJNleGFgi_s3csUfyW41jBUV6qigt17tM7FzYt9kz-jjJArLiZEgGQLlf8w036UUPWphPBPJjBHc7qOhZLC_YVPeyYAXyRb0BwNSNGfHhzLMqxaYs0QtYTBrEgU0tRIkqYjYNICxyU9LXhCZg";
 
@@ -227,7 +219,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .algorithm = "RS256",
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
-            .jwks_cache = &cache,
+            .jwks = &jwks,
         });
         const sub = try validator.validate(allocator, token_rs);
         defer allocator.free(sub);
@@ -240,7 +232,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
             .algorithm = "PS256",
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
-            .jwks_cache = &cache,
+            .jwks = &jwks,
         });
         const sub = try validator.validate(allocator, token_ps);
         defer allocator.free(sub);

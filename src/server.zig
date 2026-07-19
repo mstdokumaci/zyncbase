@@ -39,7 +39,7 @@ const send_queue_type = @import("connection/send_queue.zig").send_queue;
 const TicketExchange = ticket_exchange.TicketExchange;
 const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
-const JwksCache = @import("authentication/jwt_validator.zig").JwksCache;
+const Jwks = @import("authentication/jwt_validator.zig").Jwks;
 const Session = authentication_session.Session;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
@@ -75,7 +75,7 @@ pub const ZyncBaseServer = struct {
     schema: Schema,
     auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
-    jwks_cache: ?*JwksCache = null,
+    jwks: ?*Jwks = null,
     jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
@@ -168,10 +168,10 @@ pub const ZyncBaseServer = struct {
         );
 
         const jwt_config = try self.initJWT(&config);
-        errdefer if (self.jwks_cache) |jc| {
+        errdefer if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
-            self.jwks_cache = null;
+            self.jwks = null;
         };
 
         self.initMessageHandlerWired(&config);
@@ -314,26 +314,26 @@ pub const ZyncBaseServer = struct {
 
     fn initJWT(self: *ZyncBaseServer, config: *const Config) !?JwtValidationConfig {
         const auth_cfg = &config.authentication;
-        var jwks_cache_ptr: ?*JwksCache = null;
+        var jwks_ptr: ?*Jwks = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
-            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
+            const jc = try self.memory_strategy.generalAllocator().create(Jwks);
             errdefer self.memory_strategy.generalAllocator().destroy(jc);
-            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
-            jwks_cache_ptr = jc;
+            jc.* = try Jwks.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jwks_ptr = jc;
 
-            // Warm the cache synchronously at startup (blocking is safe —
-            // no connections are being served yet).
-            jc.warmCache();
+            // Fetch JWKS synchronously at startup. Server must have valid
+            // keys before accepting connections.
+            try jc.loadJwks();
         }
-        self.jwks_cache = jwks_cache_ptr;
-        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
+        self.jwks = jwks_ptr;
+        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_ptr != null)
             JwtValidationConfig{
                 .secret = auth_cfg.jwt_secret,
                 .algorithm = auth_cfg.jwt_algorithm,
                 .issuer = auth_cfg.jwt_issuer,
                 .audience = auth_cfg.jwt_audience,
                 .subject_claim = auth_cfg.jwt_subject_claim,
-                .jwks_cache = jwks_cache_ptr,
+                .jwks = jwks_ptr,
             }
         else
             null;
@@ -529,6 +529,11 @@ pub const ZyncBaseServer = struct {
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
 
+        // Start JWKS background refresh timer
+        if (self.jwks) |jc| {
+            try jc.startRefreshTimer();
+        }
+
         // Start listening on configured port
         try self.websocket_server.listen();
 
@@ -613,6 +618,9 @@ pub const ZyncBaseServer = struct {
         self.workers_stopped = true;
 
         std.log.info("Stopping background workers", .{});
+
+        // Stop JWKS refresh timer thread.
+        if (self.jwks) |jc| jc.stopRefreshTimer();
 
         // Stop the storage engine writer thread. Must be after final flush+checkpoint
         // in finishGracefulShutdown(), which uses the writer thread. Safe to call
@@ -717,11 +725,10 @@ pub const ZyncBaseServer = struct {
         self.violation_tracker.deinit();
 
         // Deinitialize ticket exchange and JWKS cache.
-        // JwksCache.deinit() must run first: it sets the shutting_down flag so
-        // the (detached, possibly-still-running) refresh thread skips the cache
-        // update. ticket_exchange and message_handler deinit then free any
-        // parked request contexts.
-        if (self.jwks_cache) |jc| {
+        // Jwks.deinit() must run first: it stops the refresh timer thread
+        // and frees the cached keys. ticket_exchange and message_handler deinit
+        // then free their resources.
+        if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
         }
@@ -751,15 +758,6 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
 
-        // Wire up the JwksCache deferred-resume callback once the event loop
-        // (and thus its loop pointer) is available. setDeferCallback is
-        // idempotent, so calling it on every post-handler iteration is safe.
-        if (self.jwks_cache) |jc| {
-            if (self.websocket_server.loop.load(.acquire)) |loop| {
-                jc.setDeferCallback(@ptrCast(loop), retryParkedRequests, @ptrCast(self));
-            }
-        }
-
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
             if (!self.shutdown_in_progress and !self.shutdown_performed) {
@@ -785,24 +783,11 @@ pub const ZyncBaseServer = struct {
 
         self.connection_manager.drainSendQueue(&self.send_queue);
 
-        // Check for parked request timeouts (JWKS refresh took too long).
-        if (self.ticket_exchange) |te| te.checkParkedTimeouts();
-        self.message_handler.checkParkedWsTimeouts(&self.connection_manager);
-
         const now_ms = std.time.milliTimestamp();
         if (now_ms - self.last_token_sweep_ms >= 15_000) {
             self.last_token_sweep_ms = now_ms;
             self.connection_manager.sweepExpiredTokens(self.config.authentication.session.token_grace_period_seconds);
         }
-    }
-
-    /// Deferred callback invoked on the event loop thread after a JWKS refresh
-    /// completes. Retries all parked ticket and WebSocket AuthRefresh requests.
-    fn retryParkedRequests(ctx: ?*anyopaque) callconv(.c) void {
-        if (ctx == null) return;
-        const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-        if (self.ticket_exchange) |te| te.retryPendingRequests();
-        self.message_handler.retryPendingWsRefresh(&self.connection_manager);
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {

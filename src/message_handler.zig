@@ -7,7 +7,6 @@ const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const connection_mod = @import("connection/state.zig");
 const Connection = connection_mod.Connection;
-const ConnectionManager = @import("connection/manager.zig").ConnectionManager;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceService = @import("presence/service.zig").PresenceService;
@@ -19,15 +18,6 @@ const authorization_evaluate = @import("authorization/evaluate.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
-
-/// WebSocket AuthRefresh requests parked waiting for JWKS refresh.
-/// Keyed by conn_id. Only accessed from the event loop thread.
-const ParkedWsRefresh = struct {
-    conn_id: u64,
-    msg_id: u64,
-    token: []u8, // Owned copy — freed when the entry is removed.
-    parked_at: i64,
-};
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -43,10 +33,6 @@ pub const MessageHandler = struct {
     schema: *const schema_types.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
-
-    /// WebSocket AuthRefresh requests parked waiting for JWKS refresh.
-    /// Keyed by conn_id. Only accessed from the event loop thread.
-    pending_ws_refresh: std.AutoHashMapUnmanaged(u64, ParkedWsRefresh) = .{},
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -80,12 +66,7 @@ pub const MessageHandler = struct {
 
     /// Clean up message handler resources
     pub fn deinit(self: *MessageHandler) void {
-        // Clean up parked WS refresh requests.
-        var it = self.pending_ws_refresh.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.value_ptr.token);
-        }
-        self.pending_ws_refresh.deinit(self.allocator);
+        _ = self;
     }
 
     /// Handle WebSocket message event
@@ -518,28 +499,7 @@ pub const MessageHandler = struct {
             return null;
         };
 
-        var validated = validator.validateWithClaims(conn.allocator, token, self.session_claims_mapping.*) catch |err| {
-            if (err == error.JwksRefreshInProgress) {
-                // Park this request — a JWKS refresh is in progress.
-                // Store a copy of the token for retry.
-                const token_copy = conn.allocator.dupe(u8, token) catch {
-                    self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Internal error");
-                    return null;
-                };
-                self.pending_ws_refresh.put(conn.allocator, conn.id, .{
-                    .conn_id = conn.id,
-                    .msg_id = msg_id,
-                    .token = token_copy,
-                    .parked_at = std.time.timestamp(),
-                }) catch {
-                    conn.allocator.free(token_copy);
-                    self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Internal error");
-                    return null;
-                };
-                // Trigger the refresh (in case getJwk didn't already).
-                validator.triggerJwksRefresh();
-                return null; // No response sent — client waits.
-            }
+        var validated = validator.validateWithClaims(conn.allocator, token, self.session_claims_mapping.*) catch {
             self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
             return null;
         };
@@ -563,117 +523,6 @@ pub const MessageHandler = struct {
         conn.updateSessionClaims(claims, expires_at);
 
         return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
-    }
-
-    /// Called from the event loop (via Loop::defer) after a JWKS refresh
-    /// completes. Retries all parked WebSocket AuthRefresh requests.
-    /// `cm` is the connection manager, used to look up and send to connections.
-    pub fn retryPendingWsRefresh(self: *MessageHandler, cm: *ConnectionManager) void {
-        if (self.pending_ws_refresh.count() == 0) return;
-
-        // Collect keys to retry (can't iterate and modify simultaneously).
-        var keys_to_retry = std.ArrayListUnmanaged(u64).empty;
-        defer keys_to_retry.deinit(self.allocator);
-        {
-            var it = self.pending_ws_refresh.keyIterator();
-            while (it.next()) |k| {
-                keys_to_retry.append(self.allocator, k.*) catch return;
-            }
-        }
-
-        for (keys_to_retry.items) |conn_id| {
-            const parked = self.pending_ws_refresh.get(conn_id) orelse continue;
-
-            const conn = cm.acquireConnection(conn_id) catch {
-                // Connection closed while parked — clean up.
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                continue;
-            };
-            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-
-            const validator = self.jwt_validator orelse {
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                continue;
-            };
-
-            var validated = validator.validateWithClaims(conn.allocator, parked.token, self.session_claims_mapping.*) catch |err| {
-                if (err == error.JwksRefreshInProgress) {
-                    // Still refreshing — keep parked.
-                    continue;
-                }
-                // Validation failed — disconnect.
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
-                continue;
-            };
-
-            const sess = conn.session orelse {
-                validated.deinit(conn.allocator);
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                continue;
-            };
-
-            if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
-                validated.deinit(conn.allocator);
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
-                continue;
-            }
-
-            const claims = validated.claims;
-            const expires_at = validated.expires_at;
-            validated.claims = .{};
-            validated.deinit(conn.allocator);
-            conn.updateSessionClaims(claims, expires_at);
-
-            // Send the OK response.
-            var arena = std.heap.ArenaAllocator.init(conn.allocator);
-            defer arena.deinit();
-            const arena_allocator = arena.allocator();
-            const response = wire_encode.encodeOkWithSession(arena_allocator, parked.msg_id, conn.getSessionClaimsPtr()) catch {
-                self.allocator.free(parked.token);
-                _ = self.pending_ws_refresh.remove(conn_id);
-                continue;
-            };
-            cm.sendToConnection(conn.id, response);
-
-            self.allocator.free(parked.token);
-            _ = self.pending_ws_refresh.remove(conn_id);
-        }
-    }
-
-    /// Called from notifyPostHandler on every loop iteration.
-    /// Fails parked WS refresh requests that have waited longer than 10 seconds.
-    pub fn checkParkedWsTimeouts(self: *MessageHandler, cm: *ConnectionManager) void {
-        if (self.pending_ws_refresh.count() == 0) return;
-
-        const now = std.time.timestamp();
-        const timeout_seconds: i64 = 10;
-
-        var keys_to_remove = std.ArrayListUnmanaged(u64).empty;
-        defer keys_to_remove.deinit(self.allocator);
-
-        var it = self.pending_ws_refresh.iterator();
-        while (it.next()) |entry| {
-            const parked = entry.value_ptr.*;
-            if (now - parked.parked_at > timeout_seconds) {
-                keys_to_remove.append(self.allocator, entry.key_ptr.*) catch break; // zwanzig-disable-line: swallowed-error
-            }
-        }
-
-        for (keys_to_remove.items) |conn_id| {
-            const parked = self.pending_ws_refresh.get(conn_id) orelse continue;
-            self.allocator.free(parked.token);
-            _ = self.pending_ws_refresh.remove(conn_id);
-            const conn = cm.acquireConnection(conn_id) catch continue; // zwanzig-disable-line: swallowed-error
-            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWKS refresh timeout");
-        }
     }
 
     // === Presence message handlers ===
