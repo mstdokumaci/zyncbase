@@ -254,6 +254,7 @@ pub const TicketExchange = struct {
             c.uws_res_write_status(ssl_val, ctx.res, "200 OK", "200 OK".len);
             c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
             c.uws_res_end(ssl_val, ctx.res, response_body.ptr, response_body.len, 0);
+            ctx.response_sent = true;
         }
     }
 
@@ -296,19 +297,21 @@ pub const RequestContext = struct {
     body: std.ArrayListUnmanaged(u8),
     auth_header: ?[]const u8,
     aborted: bool,
+    response_sent: bool,
 };
 
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
     if (user_data == null) return;
     const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
-    ctx.aborted = true;
-    // Do NOT deinit/destroy here — the context may be in pending_requests.
-    // The retry/timeout sweep will clean it up when it sees aborted == true.
-    // If the context was already successfully handled (response sent),
-    // uWebSockets may call onAborted for the same response object. In that case
-    // the context has already been destroyed by the success path. This is a
-    // uWebSockets quirk — the existing code has the same risk. We preserve the
-    // existing behavior: mark aborted, let the cleanup happen elsewhere.
+    if (ctx.response_sent) {
+        // Response was already sent; clean up the context now that
+        // uWebSockets can no longer invoke the abort callback.
+        ctx.body.deinit(ctx.allocator);
+        if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+        ctx.allocator.destroy(ctx);
+    } else {
+        ctx.aborted = true;
+    }
 }
 
 fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_last: c_int, user_data: ?*anyopaque) callconv(.c) void {
@@ -359,9 +362,17 @@ fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_
             }
         };
 
-        ctx.body.deinit(ctx.allocator);
-        if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
-        ctx.allocator.destroy(ctx);
+        if (ctx.aborted) {
+            // Aborted before response was sent — no callback will follow,
+            // safe to destroy now.
+            ctx.body.deinit(ctx.allocator);
+            if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+            ctx.allocator.destroy(ctx);
+        } else {
+            // Response was sent; keep ctx alive so onAbortedCallback can
+            // safely access it if uWebSockets fires the abort after the send.
+            ctx.response_sent = true;
+        }
     }
 }
 
@@ -400,6 +411,7 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
         .body = std.ArrayListUnmanaged(u8).empty,
         .auth_header = auth_header_dup,
         .aborted = false,
+        .response_sent = false,
     };
 
     c.uws_res_on_aborted(ssl_val, res_nn, onAbortedCallback, ctx);
