@@ -43,6 +43,7 @@ const Jwks = @import("authentication/jwt_validator.zig").Jwks;
 const Session = authentication_session.Session;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
+const uws_timer = @import("uws_timer.zig");
 
 // Atomic global server reference for signal handlers (written once before registration,
 // read from signal handler thread). Explicit acquire/release atomics are required as
@@ -582,6 +583,9 @@ pub const ZyncBaseServer = struct {
         // finishGracefulShutdown can be called once all connections drain.
         if (self.websocket_server.loop.load(.acquire)) |loop| {
             uws_c.us_wakeup_loop(loop);
+            self.armShutdownTimeout(loop) catch |err| {
+                std.log.warn("Failed to arm shutdown timeout timer: {}", .{err});
+            };
         }
     }
 
@@ -769,13 +773,6 @@ pub const ZyncBaseServer = struct {
                 self.startGracefulShutdown() catch |err| {
                     std.log.err("Failed to start graceful shutdown: {}", .{err});
                 };
-                if (self.shutdown_in_progress) {
-                    if (self.websocket_server.loop.load(.acquire)) |loop| {
-                        self.armShutdownTimeout(loop) catch |err| {
-                            std.log.warn("Failed to arm shutdown timeout timer: {}", .{err});
-                        };
-                    }
-                }
             }
             if (self.shutdown_in_progress) {
                 const count = self.connection_manager.active_connection_count.load(.acquire);
@@ -794,37 +791,19 @@ pub const ZyncBaseServer = struct {
     }
 
     fn armShutdownTimeout(self: *ZyncBaseServer, loop: *uws_c.struct_us_loop_t) !void {
-        const timer = uws_c.us_create_timer(loop, 1, @sizeOf(*ZyncBaseServer)) orelse
-            return error.TimerCreateFailed;
-
-        const ext = uws_c.us_timer_ext(timer);
-        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*ZyncBaseServer)], std.mem.asBytes(&self));
-
-        uws_c.us_timer_set(timer, shutdownTimeoutCallback, 3_000, 0);
-        self.shutdown_timeout_timer = timer;
+        self.shutdown_timeout_timer = try uws_timer.startTimer(ZyncBaseServer, self, loop, shutdownTimeoutCallback, 3_000, 0);
     }
 
     fn stopShutdownTimeoutTimer(self: *ZyncBaseServer) void {
-        if (self.shutdown_timeout_timer) |t| {
-            uws_c.us_timer_close(t);
-            self.shutdown_timeout_timer = null;
-        }
+        uws_timer.stopTimer(&self.shutdown_timeout_timer);
     }
 
     fn shutdownTimeoutCallback(t: ?*uws_c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
-        const self = extractServerPtr(timer);
+        const self = uws_timer.extractPtr(ZyncBaseServer, timer);
         self.finishGracefulShutdown() catch |err| {
             std.log.err("Shutdown timeout timer finishGracefulShutdown failed: {}", .{err});
         };
-    }
-
-    fn extractServerPtr(t: *uws_c.struct_us_timer_t) *ZyncBaseServer {
-        const ext = uws_c.us_timer_ext(t);
-        // SAFETY: The extension slot was written by armShutdownTimeout with a valid *ZyncBaseServer pointer.
-        var ptr: *ZyncBaseServer = undefined;
-        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*ZyncBaseServer)]);
-        return ptr;
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("../uwebsockets_wrapper.zig").c;
+const uws_timer = @import("../uws_timer.zig");
 const httpx = @import("httpx");
 const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
@@ -180,27 +181,13 @@ pub const Jwks = struct {
     /// loop that fires every 6 hours, spawning an ephemeral thread for each fetch.
     pub fn startRefreshTimer(self: *Jwks, loop: *c.struct_us_loop_t) !void {
         if (self.jwks_url == null) return;
-
-        const timer = c.us_create_timer(loop, 1, @sizeOf(*Jwks)) orelse
-            return error.TimerCreateFailed;
-
-        // Store *Jwks in the timer extension slot.
-        const ext = c.us_timer_ext(timer);
-        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*Jwks)], std.mem.asBytes(&self));
-
-        c.us_timer_set(timer, timerCallback, jwks_refresh_interval_ms, jwks_refresh_interval_ms);
-
-        self.timer = timer;
+        self.timer = try uws_timer.startTimer(Jwks, self, loop, timerCallback, jwks_refresh_interval_ms, jwks_refresh_interval_ms);
     }
 
     /// Signal the refresh timer to stop, close the timer, and join the ephemeral thread.
     pub fn stopRefreshTimer(self: *Jwks) void {
         self.stop_refresh.store(true, .release);
-
-        if (self.timer) |t| {
-            c.us_timer_close(t);
-            self.timer = null;
-        }
+        uws_timer.stopTimer(&self.timer);
 
         self.mutex.lock();
         const thread = self.refresh_thread;
@@ -225,7 +212,7 @@ pub const Jwks = struct {
 
     fn timerCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
-        const self = extractJwksPtr(timer);
+        const self = uws_timer.extractPtr(Jwks, timer);
 
         // Reap the previous ephemeral thread (it has finished; join is instant).
         // Done before locking so the (rare, ~instant) join doesn't hold the mutex.
@@ -245,14 +232,6 @@ pub const Jwks = struct {
         };
 
         self.refresh_thread = thread;
-    }
-
-    fn extractJwksPtr(t: *c.struct_us_timer_t) *Jwks {
-        const ext = c.us_timer_ext(t);
-        // SAFETY: The extension slot was written by startRefreshTimer with a valid *Jwks pointer.
-        var ptr: *Jwks = undefined;
-        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*Jwks)]);
-        return ptr;
     }
 
     fn fetchAndRefresh(self: *Jwks) void {

@@ -11,6 +11,7 @@ const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const c = @import("../uwebsockets_wrapper.zig").c;
+const uws_timer = @import("../uws_timer.zig");
 
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
@@ -380,35 +381,17 @@ pub const ConnectionManager = struct {
     }
 
     pub fn startTokenSweepTimer(self: *ConnectionManager, loop: *c.struct_us_loop_t) !void {
-        const timer = c.us_create_timer(loop, 1, @sizeOf(*ConnectionManager)) orelse
-            return error.TimerCreateFailed;
-
-        const ext = c.us_timer_ext(timer);
-        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*ConnectionManager)], std.mem.asBytes(&self));
-
-        c.us_timer_set(timer, tokenSweepCallback, 15_000, 15_000);
-        self.token_sweep_timer = timer;
+        self.token_sweep_timer = try uws_timer.startTimer(ConnectionManager, self, loop, tokenSweepCallback, 15_000, 15_000);
     }
 
     pub fn stopTokenSweepTimer(self: *ConnectionManager) void {
-        if (self.token_sweep_timer) |t| {
-            c.us_timer_close(t);
-            self.token_sweep_timer = null;
-        }
+        uws_timer.stopTimer(&self.token_sweep_timer);
     }
 
     fn tokenSweepCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
-        const self = extractConnectionManagerPtr(timer);
+        const self = uws_timer.extractPtr(ConnectionManager, timer);
         self.sweepExpiredTokens();
-    }
-
-    fn extractConnectionManagerPtr(t: *c.struct_us_timer_t) *ConnectionManager {
-        const ext = c.us_timer_ext(t);
-        // SAFETY: The extension slot was written by startTokenSweepTimer with a valid *ConnectionManager pointer.
-        var ptr: *ConnectionManager = undefined;
-        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*ConnectionManager)]);
-        return ptr;
     }
 };
 
