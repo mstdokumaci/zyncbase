@@ -9,6 +9,8 @@ const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const c = @import("../uwebsockets_wrapper.zig").c;
 
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
@@ -29,6 +31,18 @@ pub const ConnectionManager = struct {
     /// Pre-encoded SchemaSync message sent to every new connection on open.
     schema_sync_msg: []const u8,
 
+    /// Grace period for expired tokens (seconds), used by the timer sweep.
+    token_grace_period_seconds: u32 = 0,
+
+    /// uWS timer for periodic token expiry sweeps (replaces timestamp poll).
+    token_sweep_timer: ?*c.struct_us_timer_t = null,
+
+    /// Atomic connection count for cheap shutdown polling (maintained alongside map count).
+    active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    /// Notifier fired when the last connection closes during shutdown.
+    last_conn_notifier: Notifier = .{},
+
     pub fn init(
         self: *ConnectionManager,
         allocator: Allocator,
@@ -36,6 +50,7 @@ pub const ConnectionManager = struct {
         message_handler: *MessageHandler,
         schema: *const Schema,
         max_connections: usize,
+        token_grace_period_seconds: u32,
     ) !void {
         // Pre-build SchemaSync message once at startup
         const schema_sync_msg = try wire_encode.encodeSchemaSync(allocator, schema);
@@ -48,10 +63,13 @@ pub const ConnectionManager = struct {
             .mutex = .{},
             .max_connections = max_connections,
             .schema_sync_msg = schema_sync_msg,
+            .token_grace_period_seconds = token_grace_period_seconds,
         };
     }
 
     pub fn deinit(self: *ConnectionManager) void {
+        self.stopTokenSweepTimer();
+
         self.mutex.lock();
         var it = self.map.valueIterator();
         while (it.next()) |conn_ptr| {
@@ -113,6 +131,7 @@ pub const ConnectionManager = struct {
 
         try self.map.put(self.allocator, conn_id, conn);
         inserted = true;
+        _ = self.active_connection_count.fetchAdd(1, .acq_rel);
         std.log.info("Client connected: id={}", .{conn_id});
 
         conn.send(connected_msg) catch {
@@ -151,9 +170,9 @@ pub const ConnectionManager = struct {
         const conn = blk: {
             self.mutex.lock();
             defer self.mutex.unlock();
-            const c = self.map.get(conn_id) orelse return;
-            c.acquire();
-            break :blk c;
+            const existing = self.map.get(conn_id) orelse return;
+            existing.acquire();
+            break :blk existing;
         };
 
         // 3. Release the connection after message handling
@@ -182,6 +201,10 @@ pub const ConnectionManager = struct {
 
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
+            }
+            _ = self.active_connection_count.fetchSub(1, .acq_rel);
+            if (self.active_connection_count.load(.acquire) == 0) {
+                self.last_conn_notifier.notify();
             }
             std.log.info("Client disconnected: id={}", .{conn_id});
         }
@@ -306,8 +329,9 @@ pub const ConnectionManager = struct {
         }
     }
 
-    pub fn sweepExpiredTokens(self: *ConnectionManager, grace_period_seconds: u32) void {
+    pub fn sweepExpiredTokens(self: *ConnectionManager) void {
         const now = std.time.timestamp();
+        const grace_period_seconds = self.token_grace_period_seconds;
         var to_close: std.ArrayListUnmanaged(*Connection) = .empty;
         defer to_close.deinit(self.allocator);
 
@@ -349,6 +373,42 @@ pub const ConnectionManager = struct {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
+    }
+
+    pub fn setLastConnectionNotifier(self: *ConnectionManager, n: Notifier) void {
+        self.last_conn_notifier = n;
+    }
+
+    pub fn startTokenSweepTimer(self: *ConnectionManager, loop: *c.struct_us_loop_t) !void {
+        const timer = c.us_create_timer(loop, 1, @sizeOf(*ConnectionManager)) orelse
+            return error.TimerCreateFailed;
+
+        const ext = c.us_timer_ext(timer);
+        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*ConnectionManager)], std.mem.asBytes(&self));
+
+        c.us_timer_set(timer, tokenSweepCallback, 15_000, 15_000);
+        self.token_sweep_timer = timer;
+    }
+
+    pub fn stopTokenSweepTimer(self: *ConnectionManager) void {
+        if (self.token_sweep_timer) |t| {
+            c.us_timer_close(t);
+            self.token_sweep_timer = null;
+        }
+    }
+
+    fn tokenSweepCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
+        const timer = t orelse return;
+        const self = extractConnectionManagerPtr(timer);
+        self.sweepExpiredTokens();
+    }
+
+    fn extractConnectionManagerPtr(t: *c.struct_us_timer_t) *ConnectionManager {
+        const ext = c.us_timer_ext(t);
+        // SAFETY: The extension slot was written by startTokenSweepTimer with a valid *ConnectionManager pointer.
+        var ptr: *ConnectionManager = undefined;
+        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*ConnectionManager)]);
+        return ptr;
     }
 };
 

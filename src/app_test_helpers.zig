@@ -217,7 +217,7 @@ pub const AppTestContext = struct {
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
-        try self.connection_manager.init(gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000);
+        try self.connection_manager.init(gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
         errdefer self.connection_manager.deinit();
 
         // 10. Initialize Session Resolver

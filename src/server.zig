@@ -80,9 +80,8 @@ pub const ZyncBaseServer = struct {
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
-    shutdown_start_time: i64 = 0,
     workers_stopped: bool = false,
-    last_token_sweep_ms: i64 = 0,
+    shutdown_timeout_timer: ?*uws_c.struct_us_timer_t = null,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -213,11 +212,10 @@ pub const ZyncBaseServer = struct {
         self.config = config;
         self.shutdown_performed = false;
         self.shutdown_in_progress = false;
-        self.shutdown_start_time = 0;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
-        self.last_token_sweep_ms = 0;
+        self.shutdown_timeout_timer = null;
 
         return self;
     }
@@ -366,7 +364,9 @@ pub const ZyncBaseServer = struct {
             &self.message_handler,
             &self.schema,
             config.security.max_connections,
+            config.authentication.session.token_grace_period_seconds,
         );
+        self.connection_manager.setLastConnectionNotifier(.{ .callback = lastConnectionClosed, .ctx = self });
     }
 
     fn initSubscriptionPoolInternal(self: *ZyncBaseServer) !SubscriptionWorkerPool {
@@ -506,12 +506,10 @@ pub const ZyncBaseServer = struct {
             self.config.server.port,
         });
 
-        // Register the JWKS refresh timer hook. The timer will be created
-        // from the event loop thread once the loop is ready (after listen()).
-        if (self.jwks) |jc| {
-            self.websocket_server.on_loop_ready = jwksLoopReadyCb;
-            self.websocket_server.on_loop_ready_ctx = jc;
-        }
+        // Register timer hooks. Timers will be created from the event loop
+        // thread once the loop is ready (after listen()).
+        self.websocket_server.on_loop_ready = loopReadyDispatcher;
+        self.websocket_server.on_loop_ready_ctx = self;
 
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
@@ -562,7 +560,6 @@ pub const ZyncBaseServer = struct {
         defer self.shutdown_mutex.unlock();
         if (self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = true;
-        self.shutdown_start_time = std.time.milliTimestamp();
 
         // Set shutdown flag
         self.shutdown_requested.store(true, .release);
@@ -594,6 +591,7 @@ pub const ZyncBaseServer = struct {
         if (!self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = false;
         self.shutdown_performed = true;
+        self.stopShutdownTimeoutTimer();
 
         std.log.info("Flushing pending writes and performing final checkpoint", .{});
 
@@ -622,6 +620,12 @@ pub const ZyncBaseServer = struct {
 
         // Stop JWKS refresh timer thread.
         if (self.jwks) |jc| jc.stopRefreshTimer();
+
+        // Stop token sweep timer.
+        self.connection_manager.stopTokenSweepTimer();
+
+        // Stop shutdown timeout timer.
+        self.stopShutdownTimeoutTimer();
 
         // Stop the storage engine writer thread. Must be after final flush+checkpoint
         // in finishGracefulShutdown(), which uses the writer thread. Safe to call
@@ -765,13 +769,17 @@ pub const ZyncBaseServer = struct {
                 self.startGracefulShutdown() catch |err| {
                     std.log.err("Failed to start graceful shutdown: {}", .{err});
                 };
+                if (self.shutdown_in_progress) {
+                    if (self.websocket_server.loop.load(.acquire)) |loop| {
+                        self.armShutdownTimeout(loop) catch |err| {
+                            std.log.warn("Failed to arm shutdown timeout timer: {}", .{err});
+                        };
+                    }
+                }
             }
             if (self.shutdown_in_progress) {
-                self.connection_manager.mutex.lock();
-                const count = self.connection_manager.map.count();
-                self.connection_manager.mutex.unlock();
-                const elapsed = std.time.milliTimestamp() - self.shutdown_start_time;
-                if (count == 0 or elapsed > 3000) {
+                const count = self.connection_manager.active_connection_count.load(.acquire);
+                if (count == 0) {
                     self.finishGracefulShutdown() catch |err| {
                         std.log.err("Failed to finish graceful shutdown: {}", .{err});
                     };
@@ -783,12 +791,40 @@ pub const ZyncBaseServer = struct {
         }
 
         self.connection_manager.drainSendQueue(&self.send_queue);
+    }
 
-        const now_ms = std.time.milliTimestamp();
-        if (now_ms - self.last_token_sweep_ms >= 15_000) {
-            self.last_token_sweep_ms = now_ms;
-            self.connection_manager.sweepExpiredTokens(self.config.authentication.session.token_grace_period_seconds);
+    fn armShutdownTimeout(self: *ZyncBaseServer, loop: *uws_c.struct_us_loop_t) !void {
+        const timer = uws_c.us_create_timer(loop, 1, @sizeOf(*ZyncBaseServer)) orelse
+            return error.TimerCreateFailed;
+
+        const ext = uws_c.us_timer_ext(timer);
+        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*ZyncBaseServer)], std.mem.asBytes(&self));
+
+        uws_c.us_timer_set(timer, shutdownTimeoutCallback, 3_000, 0);
+        self.shutdown_timeout_timer = timer;
+    }
+
+    fn stopShutdownTimeoutTimer(self: *ZyncBaseServer) void {
+        if (self.shutdown_timeout_timer) |t| {
+            uws_c.us_timer_close(t);
+            self.shutdown_timeout_timer = null;
         }
+    }
+
+    fn shutdownTimeoutCallback(t: ?*uws_c.struct_us_timer_t) callconv(.c) void {
+        const timer = t orelse return;
+        const self = extractServerPtr(timer);
+        self.finishGracefulShutdown() catch |err| {
+            std.log.err("Shutdown timeout timer finishGracefulShutdown failed: {}", .{err});
+        };
+    }
+
+    fn extractServerPtr(t: *uws_c.struct_us_timer_t) *ZyncBaseServer {
+        const ext = uws_c.us_timer_ext(t);
+        // SAFETY: The extension slot was written by armShutdownTimeout with a valid *ZyncBaseServer pointer.
+        var ptr: *ZyncBaseServer = undefined;
+        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*ZyncBaseServer)]);
+        return ptr;
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {
@@ -824,12 +860,29 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     }
 }
 
-fn jwksLoopReadyCb(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
+fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
     if (ctx == null or loop == null) return;
-    const jc: *Jwks = @ptrCast(@alignCast(ctx.?));
-    jc.startRefreshTimer(loop.?) catch |err| {
-        std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+    const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+
+    server.connection_manager.startTokenSweepTimer(loop.?) catch |err| {
+        std.log.err("Failed to start token sweep timer: {}", .{err});
     };
+
+    if (server.jwks) |jc| {
+        jc.startRefreshTimer(loop.?) catch |err| {
+            std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+        };
+    }
+}
+
+fn lastConnectionClosed(ctx: ?*anyopaque) void {
+    if (ctx == null) return;
+    const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+    if (server.shutdown_in_progress) {
+        if (server.websocket_server.loop.load(.acquire)) |loop| {
+            uws_c.us_wakeup_loop(loop);
+        }
+    }
 }
 
 fn onWebSocketOpen(ws: *WebSocket, user_data: ?*anyopaque) void {

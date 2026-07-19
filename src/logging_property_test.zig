@@ -370,7 +370,7 @@ test "logging: level filtering" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm2, 100_000);
+        try manager.init(allocator, &memory_strategy, &handler, &sm2, 100_000, 30);
         defer manager.deinit();
 
         // Trigger different log levels
@@ -465,7 +465,7 @@ test "logging: message formatting" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm3, 100_000);
+        try manager.init(allocator, &memory_strategy, &handler, &sm3, 100_000, 30);
         defer manager.deinit();
 
         // Trigger various log messages
@@ -544,7 +544,7 @@ test "logging: message formatting" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm4, 100_000);
+        try manager.init(allocator, &memory_strategy, &handler, &sm4, 100_000, 30);
         defer manager.deinit();
 
         // Test multiple connections to verify ID formatting
