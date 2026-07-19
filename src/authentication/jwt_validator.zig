@@ -147,7 +147,6 @@ pub const Jwks = struct {
     timer: ?*c.struct_us_timer_t = null,
     refresh_thread: ?std.Thread = null,
     stop_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    fetch_in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !Jwks {
         return Jwks{
@@ -205,16 +204,10 @@ pub const Jwks = struct {
 
         self.mutex.lock();
         const thread = self.refresh_thread;
+        self.refresh_thread = null;
         self.mutex.unlock();
 
-        if (thread) |t| {
-            t.join();
-            self.mutex.lock();
-            self.refresh_thread = null;
-            self.mutex.unlock();
-        }
-
-        self.stop_refresh.store(false, .release);
+        if (thread) |t| t.join();
     }
 
     /// Returns the JWK matching the given kid, or null if not found.
@@ -234,30 +227,24 @@ pub const Jwks = struct {
         const timer = t orelse return;
         const self = extractJwksPtr(timer);
 
-        if (self.stop_refresh.load(.acquire)) return;
-        if (self.fetch_in_progress.load(.acquire)) return;
-
         // Reap the previous ephemeral thread (it has finished; join is instant).
+        // Done before locking so the (rare, ~instant) join doesn't hold the mutex.
         self.mutex.lock();
-        if (self.refresh_thread) |thread| {
-            self.mutex.unlock();
-            thread.join();
-            self.mutex.lock();
-            self.refresh_thread = null;
-        }
+        const stale_thread = self.refresh_thread;
         self.mutex.unlock();
+        if (stale_thread) |thread| thread.join();
 
-        self.fetch_in_progress.store(true, .release);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.stop_refresh.load(.acquire)) return;
 
         const thread = std.Thread.spawn(.{}, fetchAndRefresh, .{self}) catch |err| {
             std.log.warn("Failed to spawn JWKS refresh thread: {}", .{err});
-            self.fetch_in_progress.store(false, .release);
             return;
         };
 
-        self.mutex.lock();
         self.refresh_thread = thread;
-        self.mutex.unlock();
     }
 
     fn extractJwksPtr(t: *c.struct_us_timer_t) *Jwks {
@@ -267,29 +254,25 @@ pub const Jwks = struct {
         @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*Jwks)]);
         return ptr;
     }
+
+    fn fetchAndRefresh(self: *Jwks) void {
+        const url = self.jwks_url orelse return;
+        const keys = fetchJwks(self.allocator, url) catch |err| {
+            std.log.warn("JWKS refresh failed: {}", .{err});
+            return;
+        };
+
+        const new_state = JwksState{ .keys = keys };
+        self.mutex.lock();
+        var old = self.state;
+        self.state = new_state;
+        self.mutex.unlock();
+
+        if (old) |*o| o.deinit(self.allocator);
+    }
 };
 
-fn fetchAndRefresh(self: *Jwks) void {
-    defer self.fetch_in_progress.store(false, .release);
-
-    if (self.stop_refresh.load(.acquire)) return;
-
-    const url = self.jwks_url orelse return;
-    const keys = fetchJwks(self.allocator, url) catch |err| {
-        std.log.warn("JWKS refresh failed: {}", .{err});
-        return;
-    };
-
-    const new_state = JwksState{ .keys = keys };
-    self.mutex.lock();
-    var old = self.state;
-    self.state = new_state;
-    self.mutex.unlock();
-
-    if (old) |*o| o.deinit(self.allocator);
-}
-
-/// JWK representation used purely for JSON (de)serialization. The live `Jwk`
+/// JWK representation used purely for JSON (de)serialization). The live `Jwk`
 /// struct carries an opaque `pkey` pointer that cannot be parsed from JSON,
 /// so the wire format is read into this type and converted.
 const JwkWire = struct {
