@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("../uwebsockets_wrapper.zig").c;
+const httpx = @import("httpx");
 const typed = @import("../typed/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const json_read = @import("../json/read.zig");
@@ -134,15 +135,19 @@ pub const JwksState = struct {
 };
 
 /// Hardcoded 6-hour refresh interval for JWKS background refresh.
-const jwks_refresh_interval_ns: u64 = 6 * 60 * 60 * std.time.ns_per_s;
+const jwks_refresh_interval_ms: c_int = 6 * 60 * 60 * 1000;
+/// 5-minute hard timeout for JWKS HTTP fetches so the ephemeral thread always exits.
+const jwks_fetch_timeout_ms: u64 = 5 * 60 * 1000;
 
 pub const Jwks = struct {
     allocator: Allocator,
     jwks_url: ?[]const u8 = null,
     state: ?JwksState = null,
     mutex: std.Thread.Mutex = .{},
+    timer: ?*c.struct_us_timer_t = null,
     refresh_thread: ?std.Thread = null,
     stop_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    fetch_in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !Jwks {
         return Jwks{
@@ -172,20 +177,43 @@ pub const Jwks = struct {
         self.state = new_state;
     }
 
-    /// Start the background refresh timer. Spawns a long-lived thread that
-    /// refreshes the JWKS every 6 hours.
-    pub fn startRefreshTimer(self: *Jwks) !void {
+    /// Start the background refresh timer. Creates a uWS timer on the event
+    /// loop that fires every 6 hours, spawning an ephemeral thread for each fetch.
+    pub fn startRefreshTimer(self: *Jwks, loop: *c.struct_us_loop_t) !void {
         if (self.jwks_url == null) return;
-        self.refresh_thread = try std.Thread.spawn(.{}, refreshLoop, .{self});
+
+        const timer = c.us_create_timer(loop, 1, @sizeOf(*Jwks)) orelse
+            return error.TimerCreateFailed;
+
+        // Store *Jwks in the timer extension slot.
+        const ext = c.us_timer_ext(timer);
+        @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*Jwks)], std.mem.asBytes(&self));
+
+        c.us_timer_set(timer, timerCallback, jwks_refresh_interval_ms, jwks_refresh_interval_ms);
+
+        self.timer = timer;
     }
 
-    /// Signal the refresh timer to stop and join the thread.
+    /// Signal the refresh timer to stop, close the timer, and join the ephemeral thread.
     pub fn stopRefreshTimer(self: *Jwks) void {
         self.stop_refresh.store(true, .release);
-        if (self.refresh_thread) |t| {
-            t.join();
-            self.refresh_thread = null;
+
+        if (self.timer) |t| {
+            c.us_timer_close(t);
+            self.timer = null;
         }
+
+        self.mutex.lock();
+        const thread = self.refresh_thread;
+        self.mutex.unlock();
+
+        if (thread) |t| {
+            t.join();
+            self.mutex.lock();
+            self.refresh_thread = null;
+            self.mutex.unlock();
+        }
+
         self.stop_refresh.store(false, .release);
     }
 
@@ -202,31 +230,64 @@ pub const Jwks = struct {
         return null;
     }
 
-    fn refreshLoop(self: *Jwks) void {
-        while (!self.stop_refresh.load(.acquire)) {
-            var elapsed_ns: u64 = 0;
-            while (elapsed_ns < jwks_refresh_interval_ns) {
-                if (self.stop_refresh.load(.acquire)) return;
-                std.Thread.sleep(1 * std.time.ns_per_s);
-                elapsed_ns += std.time.ns_per_s;
-            }
+    fn timerCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
+        const timer = t orelse return;
+        const self = extractJwksPtr(timer);
 
-            const url = self.jwks_url orelse return;
-            const keys = fetchJwks(self.allocator, url) catch |err| {
-                std.log.warn("JWKS refresh failed: {}", .{err});
-                continue;
-            };
+        if (self.stop_refresh.load(.acquire)) return;
+        if (self.fetch_in_progress.load(.acquire)) return;
 
-            const new_state = JwksState{ .keys = keys };
-            self.mutex.lock();
-            var old = self.state;
-            self.state = new_state;
+        // Reap the previous ephemeral thread (it has finished; join is instant).
+        self.mutex.lock();
+        if (self.refresh_thread) |thread| {
             self.mutex.unlock();
-
-            if (old) |*o| o.deinit(self.allocator);
+            thread.join();
+            self.mutex.lock();
+            self.refresh_thread = null;
         }
+        self.mutex.unlock();
+
+        self.fetch_in_progress.store(true, .release);
+
+        const thread = std.Thread.spawn(.{}, fetchAndRefresh, .{self}) catch |err| {
+            std.log.warn("Failed to spawn JWKS refresh thread: {}", .{err});
+            self.fetch_in_progress.store(false, .release);
+            return;
+        };
+
+        self.mutex.lock();
+        self.refresh_thread = thread;
+        self.mutex.unlock();
+    }
+
+    fn extractJwksPtr(t: *c.struct_us_timer_t) *Jwks {
+        const ext = c.us_timer_ext(t);
+        // SAFETY: The extension slot was written by startRefreshTimer with a valid *Jwks pointer.
+        var ptr: *Jwks = undefined;
+        @memcpy(std.mem.asBytes(&ptr), @as([*]u8, @ptrCast(ext))[0..@sizeOf(*Jwks)]);
+        return ptr;
     }
 };
+
+fn fetchAndRefresh(self: *Jwks) void {
+    defer self.fetch_in_progress.store(false, .release);
+
+    if (self.stop_refresh.load(.acquire)) return;
+
+    const url = self.jwks_url orelse return;
+    const keys = fetchJwks(self.allocator, url) catch |err| {
+        std.log.warn("JWKS refresh failed: {}", .{err});
+        return;
+    };
+
+    const new_state = JwksState{ .keys = keys };
+    self.mutex.lock();
+    var old = self.state;
+    self.state = new_state;
+    self.mutex.unlock();
+
+    if (old) |*o| o.deinit(self.allocator);
+}
 
 /// JWK representation used purely for JSON (de)serialization. The live `Jwk`
 /// struct carries an opaque `pkey` pointer that cannot be parsed from JSON,
@@ -243,25 +304,22 @@ const JwkWire = struct {
 };
 
 fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
-    var client = std.http.Client{ .allocator = allocator };
+    var client = httpx.Client.init(allocator);
     defer client.deinit();
 
-    var body_buf = std.ArrayListUnmanaged(u8).empty;
-    defer body_buf.deinit(allocator);
-    var body_writer = std.Io.Writer.Allocating.fromArrayList(allocator, &body_buf);
-    defer body_writer.deinit();
-
-    const result = try client.fetch(.{
-        .location = .{ .url = url_str },
-        .response_writer = &body_writer.writer,
+    var response = try client.get(url_str, .{
+        .timeout_ms = jwks_fetch_timeout_ms,
     });
+    defer response.deinit();
 
-    if (result.status != .ok) return error.HttpFetchFailed;
+    if (!response.ok()) return error.HttpFetchFailed;
+
+    const body = response.text() orelse return error.EmptyBody;
 
     const parsed = try std.json.parseFromSlice(
         struct { keys: []JwkWire },
         allocator,
-        body_writer.written(),
+        body,
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();

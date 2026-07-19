@@ -30,6 +30,13 @@ pub fn build(b: *std.Build) void {
     });
     const msgpack_module = msgpack_dep.module("msgpack");
 
+    // httpx dependency for HTTP client with timeout support
+    const httpx_dep = b.dependency("httpx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const httpx_module = httpx_dep.module("httpx");
+
     // Add zwanzig dependency
     const zw = b.dependency("zwanzig", .{
         .target = target,
@@ -54,6 +61,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("sqlite", sqlite_module);
     exe.root_module.addImport("msgpack", msgpack_module);
+    exe.root_module.addImport("httpx", httpx_module);
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
             exe.root_module.sanitize_thread = true;
@@ -67,12 +75,12 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
     const test_slowest_step = b.step("test-slowest", "Run all tests and report the slowest ones");
-    const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
+    const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
     const run_slow_tests = b.addRunArtifact(slow_tests);
     test_slowest_step.dependOn(&run_slow_tests.step);
 
@@ -89,10 +97,11 @@ pub fn build(b: *std.Build) void {
     });
     exe_check.root_module.addImport("sqlite", sqlite_module);
     exe_check.root_module.addImport("msgpack", msgpack_module);
+    exe_check.root_module.addImport("httpx", httpx_module);
     linkUWS(b, exe_check, sysroot, sanitize);
     check_step.dependOn(&exe_check.step);
 
-    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
+    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     check_step.dependOn(&test_check.step);
 }
 
@@ -102,6 +111,7 @@ fn setupTest(
     optimize: std.builtin.OptimizeMode,
     sqlite_module: *std.Build.Module,
     msgpack_module: *std.Build.Module,
+    httpx_module: *std.Build.Module,
     root_file: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
@@ -126,6 +136,7 @@ fn setupTest(
 
     t.root_module.addImport("sqlite", sqlite_module);
     t.root_module.addImport("msgpack", msgpack_module);
+    t.root_module.addImport("httpx", httpx_module);
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
             t.root_module.sanitize_thread = true;

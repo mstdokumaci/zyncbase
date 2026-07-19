@@ -507,6 +507,13 @@ pub const ZyncBaseServer = struct {
             self.config.server.port,
         });
 
+        // Register the JWKS refresh timer hook. The timer will be created
+        // from the event loop thread once the loop is ready (after listen()).
+        if (self.jwks) |jc| {
+            self.websocket_server.on_loop_ready = jwksLoopReadyCb;
+            self.websocket_server.on_loop_ready_ctx = jc;
+        }
+
         // Register HTTP POST /auth/ticket route
         if (self.ticket_exchange) |te| {
             self.websocket_server.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
@@ -528,11 +535,6 @@ pub const ZyncBaseServer = struct {
 
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
-
-        // Start JWKS background refresh timer
-        if (self.jwks) |jc| {
-            try jc.startRefreshTimer();
-        }
 
         // Start listening on configured port
         try self.websocket_server.listen();
@@ -821,6 +823,14 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
     }
+}
+
+fn jwksLoopReadyCb(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
+    if (ctx == null or loop == null) return;
+    const jc: *Jwks = @ptrCast(@alignCast(ctx.?));
+    jc.startRefreshTimer(loop.?) catch |err| {
+        std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+    };
 }
 
 fn onWebSocketOpen(ws: *WebSocket, user_data: ?*anyopaque) void {

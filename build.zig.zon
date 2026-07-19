@@ -15,6 +15,10 @@
             .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.14.0.tar.gz",
             .hash = "zwanzig-0.14.0-oiXZljvxGACKRbJD3WEVSKM_gbCm6GUsrz2_TbFP7xfe",
         },
+        .httpx = .{
+            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.0.7.tar.gz",
+            .hash = "httpx-0.0.7-8qj2evX4CQDJRRmwgwJtbWrABhBbhWoXprzRM7Xqir5z",
+        },
     },
     .paths = .{
         "build.zig",
