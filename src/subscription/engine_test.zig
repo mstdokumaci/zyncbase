@@ -809,6 +809,123 @@ test "SubscriptionEngine: multiple collections isolation" {
     try testing.expectEqual(@as(u32, 1), engine.active_subs.count());
 }
 
+test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var schema = try sth.createSchema(allocator, &.{
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
+            schema_helpers.makeField("owner", .integer),
+            schema_helpers.makeField("team", .integer),
+        }),
+    });
+    defer schema.deinit();
+
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
+    const coll_key = subscription_engine.CollectionKey{ .namespace_id = 1, .table_index = table_index };
+
+    // status=active AND owner=1
+    var filter_a = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+        .{ .field_index = 4, .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+    });
+    defer filter_a.deinit(allocator);
+
+    // status=active AND owner=2
+    var filter_b = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+        .{ .field_index = 4, .op = .eq, .value = tth.valInt(2), .field_type = .integer, .items_type = null },
+    });
+    defer filter_b.deinit(allocator);
+
+    // status=active AND team=7
+    var filter_c = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+        .{ .field_index = 5, .op = .eq, .value = tth.valInt(7), .field_type = .integer, .items_type = null },
+    });
+    defer filter_c.deinit(allocator);
+
+    _ = try engine.subscribe(1, table_index, filter_a, 1, 100);
+    _ = try engine.subscribe(1, table_index, filter_b, 2, 200);
+    _ = try engine.subscribe(1, table_index, filter_c, 3, 300);
+
+    try testing.expectEqual(@as(u32, 3), engine.groups.count());
+    try testing.expect(engine.dags_by_collection.get(coll_key) != null);
+    // Shared eq(status) branch under the collection root.
+    try testing.expectEqual(@as(u32, 1), engine.dags_by_collection.get(coll_key).?.root.eq_branches.count());
+
+    // Matches only owner=1
+    var rec_a = try tth.recordFromValues(allocator, &.{
+        tth.valText("active"),
+        tth.valInt(1),
+        tth.valInt(0),
+    });
+    defer rec_a.deinit(allocator);
+    const matches_a = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_a,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_a);
+    try testing.expectEqual(@as(usize, 1), matches_a.len);
+    try testing.expectEqual(@as(u64, 1), matches_a[0].connection_id);
+    try testing.expectEqual(@as(u64, 100), matches_a[0].subscription_id);
+
+    // Matches owner=2 and team=7
+    var rec_bc = try tth.recordFromValues(allocator, &.{
+        tth.valText("active"),
+        tth.valInt(2),
+        tth.valInt(7),
+    });
+    defer rec_bc.deinit(allocator);
+    const matches_bc = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_bc,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_bc);
+    try testing.expectEqual(@as(usize, 2), matches_bc.len);
+    var found_b = false;
+    var found_c = false;
+    for (matches_bc) |m| {
+        if (m.connection_id == 2 and m.subscription_id == 200) found_b = true;
+        if (m.connection_id == 3 and m.subscription_id == 300) found_c = true;
+    }
+    try testing.expect(found_b);
+    try testing.expect(found_c);
+
+    // Draft matches nobody
+    var rec_draft = try tth.recordFromValues(allocator, &.{
+        tth.valText("draft"),
+        tth.valInt(1),
+        tth.valInt(7),
+    });
+    defer rec_draft.deinit(allocator);
+    const matches_none = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_draft,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_none);
+    try testing.expectEqual(@as(usize, 0), matches_none.len);
+
+    // Last unsubscribes tear down the DAG
+    engine.unsubscribe(1, 100);
+    engine.unsubscribe(2, 200);
+    try testing.expect(engine.dags_by_collection.get(coll_key) != null);
+    engine.unsubscribe(3, 300);
+    try testing.expect(engine.dags_by_collection.get(coll_key) == null);
+    try testing.expectEqual(@as(u32, 0), engine.groups.count());
+}
+
 test "SubscriptionEngine: filter removal notification when record leaves filter" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);

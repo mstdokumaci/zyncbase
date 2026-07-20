@@ -8,6 +8,8 @@ const OrClause = query_ast.OrClause;
 const typed = @import("../typed/types.zig");
 const Record = typed.Record;
 const Value = typed.Value;
+const predicate_dag = @import("predicate_dag.zig");
+const PredicateDag = predicate_dag.PredicateDag;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -206,6 +208,8 @@ pub const SubscriptionEngine = struct {
     groups: std.AutoHashMapUnmanaged(u64, SubscriptionGroup) = .empty,
     /// collection_key -> ArrayList(GroupId)
     groups_by_collection: std.AutoHashMapUnmanaged(CollectionKey, std.ArrayListUnmanaged(u64)) = .empty,
+    /// collection_key -> condition-prefix trie used for change matching
+    dags_by_collection: std.AutoHashMapUnmanaged(CollectionKey, PredicateDag) = .empty,
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
     next_group_id: u64 = 1,
@@ -223,6 +227,12 @@ pub const SubscriptionEngine = struct {
             entry.deinit(self.allocator);
         }
         self.groups_by_collection.deinit(self.allocator);
+
+        var it_dags = self.dags_by_collection.valueIterator();
+        while (it_dags.next()) |dag| {
+            dag.deinit();
+        }
+        self.dags_by_collection.deinit(self.allocator);
 
         var it_groups = self.groups.valueIterator();
         while (it_groups.next()) |g| {
@@ -288,6 +298,24 @@ pub const SubscriptionEngine = struct {
             _ = self.groups_by_collection.remove(coll_key);
         };
         try gop.value_ptr.append(self.allocator, group_id);
+        errdefer self.removeGroupFromCollectionIndex(coll_key, group_id);
+
+        // Insert into the per-collection condition-prefix trie.
+        const grp_for_dag = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
+        const dag_gop = try self.dags_by_collection.getOrPut(self.allocator, coll_key);
+        if (!dag_gop.found_existing) {
+            dag_gop.value_ptr.* = PredicateDag.init(self.allocator);
+        }
+        errdefer {
+            if (self.dags_by_collection.getPtr(coll_key)) |dag| {
+                dag.removeGroup(group_id, &grp_for_dag.filter);
+                if (dag.isEmpty()) {
+                    dag.deinit();
+                    _ = self.dags_by_collection.remove(coll_key);
+                }
+            }
+        }
+        _ = try dag_gop.value_ptr.insertGroup(group_id, &grp_for_dag.filter);
 
         return .{ .group_id = group_id, .first_sub = true };
     }
@@ -339,10 +367,7 @@ pub const SubscriptionEngine = struct {
             if (self.groups.getPtr(group_id)) |grp| {
                 _ = grp.subscribers.remove(sub_key);
                 if (first_sub and grp.subscribers.count() == 0) {
-                    _ = self.groups_by_filter.remove(grp.filter);
-                    self.removeGroupFromCollectionIndex(coll_key, group_id);
-                    grp.deinit(self.allocator);
-                    _ = self.groups.remove(group_id);
+                    self.destroyGroupLocked(coll_key, group_id, grp);
                 }
             }
         };
@@ -366,6 +391,30 @@ pub const SubscriptionEngine = struct {
         }
     }
 
+    fn removeGroupFromDag(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64, filter: *const QueryFilter) void {
+        if (self.dags_by_collection.getPtr(coll_key)) |dag| {
+            dag.removeGroup(group_id, filter);
+            if (dag.isEmpty()) {
+                dag.deinit();
+                _ = self.dags_by_collection.remove(coll_key);
+            }
+        }
+    }
+
+    /// Tears down a group with zero subscribers from all indexes. Consumes `group`.
+    fn destroyGroupLocked(
+        self: *SubscriptionEngine,
+        coll_key: CollectionKey,
+        group_id: u64,
+        group: *SubscriptionGroup,
+    ) void {
+        _ = self.groups_by_filter.remove(group.filter);
+        self.removeGroupFromDag(coll_key, group_id, &group.filter);
+        self.removeGroupFromCollectionIndex(coll_key, group_id);
+        group.deinit(self.allocator);
+        _ = self.groups.remove(group_id);
+    }
+
     pub fn unsubscribe(self: *SubscriptionEngine, conn_id: u64, sub_id: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -387,11 +436,8 @@ pub const SubscriptionEngine = struct {
         _ = group.subscribers.remove(sub_key);
 
         if (group.subscribers.count() == 0) {
-            _ = self.groups_by_filter.remove(group.filter);
             const coll_key = CollectionKey{ .namespace_id = group.namespace_id, .table_index = group.table_index };
-            self.removeGroupFromCollectionIndex(coll_key, group_id.value);
-            group.deinit(self.allocator);
-            _ = self.groups.remove(group_id.value);
+            self.destroyGroupLocked(coll_key, group_id.value, group);
         }
     }
 
@@ -449,15 +495,39 @@ pub const SubscriptionEngine = struct {
             .table_index = change.table_index,
         };
 
-        const group_ids = self.groups_by_collection.get(key) orelse return allocator.alloc(Match, 0);
-        for (group_ids.items) |gid| {
+        const dag = self.dags_by_collection.getPtr(key) orelse return allocator.alloc(Match, 0);
+
+        var matched_before_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer matched_before_ids.deinit(allocator);
+        var matched_after_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer matched_after_ids.deinit(allocator);
+
+        if (change.old_record) |old| {
+            try dag.collectMatches(&old, &matched_before_ids, allocator);
+            try self.filterResidualMatches(&matched_before_ids, &old, allocator);
+        }
+        if (change.new_record) |new| {
+            try dag.collectMatches(&new, &matched_after_ids, allocator);
+            try self.filterResidualMatches(&matched_after_ids, &new, allocator);
+        }
+
+        // Union of candidate group ids (AND path + residual OR passed).
+        var candidate_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer candidate_ids.deinit(allocator);
+        var before_it = matched_before_ids.keyIterator();
+        while (before_it.next()) |gid| try candidate_ids.put(allocator, gid.*, {});
+        var after_it = matched_after_ids.keyIterator();
+        while (after_it.next()) |gid| try candidate_ids.put(allocator, gid.*, {});
+
+        var cand_it = candidate_ids.keyIterator();
+        while (cand_it.next()) |gid_ptr| {
+            const gid = gid_ptr.*;
             const group = self.groups.get(gid) orelse continue;
 
-            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(&group.filter, &old) else false;
-            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(&group.filter, &new) else false;
+            const matched_before = matched_before_ids.contains(gid);
+            const matches_after = matched_after_ids.contains(gid);
 
             if (matched_before and !matches_after) {
-                // Record left the filter: send remove
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -467,9 +537,7 @@ pub const SubscriptionEngine = struct {
                     });
                 }
             } else if (matches_after) {
-                // Record now matches the filter: send set.
-                // Covers both "record entered the filter" (!matched_before)
-                // and "record changed within the filter" (matched_before).
+                // Record entered the filter or changed within it.
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -482,6 +550,32 @@ pub const SubscriptionEngine = struct {
         }
 
         return try matches.toOwnedSlice(allocator);
+    }
+
+    /// Drop trie candidates whose residual OR clauses fail (AND path already proven).
+    fn filterResidualMatches(
+        self: *const SubscriptionEngine,
+        candidates: *std.AutoHashMapUnmanaged(u64, void),
+        record: *const Record,
+        allocator: Allocator,
+    ) !void {
+        var to_remove: std.ArrayListUnmanaged(u64) = .empty;
+        defer to_remove.deinit(allocator);
+
+        var it = candidates.keyIterator();
+        while (it.next()) |gid_ptr| {
+            const gid = gid_ptr.*;
+            const group = self.groups.get(gid) orelse {
+                try to_remove.append(allocator, gid);
+                continue;
+            };
+            if (!try predicate_dag.residualMatches(&group.filter.predicate, record)) {
+                try to_remove.append(allocator, gid);
+            }
+        }
+        for (to_remove.items) |gid| {
+            _ = candidates.remove(gid);
+        }
     }
 
     /// Evaluates a record against a filter AST.
