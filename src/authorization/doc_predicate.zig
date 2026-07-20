@@ -472,24 +472,7 @@ const PredicateBuilder = struct {
         filter: *query_ast.FilterPredicate,
     ) !void {
         try self.appendMovedConditions(allocator, &self.conditions, filter.conditions);
-        if (filter.or_clauses) |clauses| {
-            for (clauses) |clause| {
-                var moved_conds = try allocator.alloc(query_ast.Condition, clause.len);
-                for (clause, 0..) |*c, i| {
-                    moved_conds[i] = c.*;
-                    c.* = .{
-                        .field_index = 0,
-                        .op = .eq,
-                        .value = null,
-                        .field_type = .text,
-                        .items_type = null,
-                    };
-                }
-                try self.or_clauses.append(allocator, moved_conds);
-            }
-            allocator.free(clauses);
-            filter.or_clauses = null;
-        }
+        try self.moveOrClauses(allocator, filter);
     }
 
     fn appendOrFilterMove(
@@ -497,31 +480,13 @@ const PredicateBuilder = struct {
         allocator: Allocator,
         filter: *query_ast.FilterPredicate,
     ) !void {
-        const conds = filter.conditions orelse @as([]const query_ast.Condition, &.{});
-        const clauses = filter.or_clauses orelse @as([]const query_ast.OrClause, &.{});
-
-        if (conds.len == 0 and clauses.len == 0) return;
-
         // Each filter being ORed becomes a single OrClause.
-        // If the filter has AND conditions, they form one OrClause.
-        // If the filter has OR clauses, each becomes an OrClause.
+        // AND conditions: each becomes a single-condition OrClause.
+        // OR clauses: each appended as-is.
         if (filter.conditions) |mutable_conds| {
-            if (clauses.len > 0) {
-                // Filter has both AND and OR — shouldn't happen with current validation,
-                // but handle gracefully: wrap AND conds as one clause, append OR clauses separately
-                try self.appendMovedConditionsAsOrClause(allocator, filter);
-                return;
-            }
-            // Only AND conditions: each becomes a single-condition OrClause
             for (mutable_conds) |*cond| {
                 const moved = cond.*;
-                cond.* = .{
-                    .field_index = 0,
-                    .op = .eq,
-                    .value = null,
-                    .field_type = .text,
-                    .items_type = null,
-                };
+                cond.* = .{ .field_index = 0, .op = .eq, .value = null, .field_type = .text, .items_type = null };
                 const single = try allocator.alloc(query_ast.Condition, 1);
                 single[0] = moved;
                 try self.or_clauses.append(allocator, single);
@@ -530,76 +495,21 @@ const PredicateBuilder = struct {
             filter.conditions = null;
         }
 
-        if (filter.or_clauses) |mutable_clauses| {
-            // Only OR clauses: append each as an OrClause
-            for (mutable_clauses) |clause| {
-                var moved_conds = try allocator.alloc(query_ast.Condition, clause.len);
-                for (clause, 0..) |*c, i| {
-                    moved_conds[i] = c.*;
-                    c.* = .{
-                        .field_index = 0,
-                        .op = .eq,
-                        .value = null,
-                        .field_type = .text,
-                        .items_type = null,
-                    };
-                }
-                try self.or_clauses.append(allocator, moved_conds);
-            }
-            allocator.free(mutable_clauses);
-            filter.or_clauses = null;
-        }
+        try self.moveOrClauses(allocator, filter);
     }
 
-    fn appendMovedConditionsAsOrClause(
-        self: *PredicateBuilder,
-        allocator: Allocator,
-        filter: *query_ast.FilterPredicate,
-    ) !void {
-        // Collect all conditions from the filter into one OrClause
-        var total: usize = 0;
-        if (filter.conditions) |conds| total += conds.len;
-        if (filter.or_clauses) |clauses| {
-            for (clauses) |clause| total += clause.len;
-        }
-        if (total == 0) return;
-
-        const combined = try allocator.alloc(query_ast.Condition, total);
-        var idx: usize = 0;
-        if (filter.conditions) |conds| {
-            for (conds) |*c| {
-                combined[idx] = c.*;
-                c.* = .{
-                    .field_index = 0,
-                    .op = .eq,
-                    .value = null,
-                    .field_type = .text,
-                    .items_type = null,
-                };
-                idx += 1;
+    fn moveOrClauses(self: *PredicateBuilder, allocator: Allocator, filter: *query_ast.FilterPredicate) !void {
+        const clauses = filter.or_clauses orelse return;
+        for (clauses) |clause| {
+            var moved = try allocator.alloc(query_ast.Condition, clause.len);
+            for (clause, 0..) |*c, i| {
+                moved[i] = c.*;
+                c.* = .{ .field_index = 0, .op = .eq, .value = null, .field_type = .text, .items_type = null };
             }
-            allocator.free(conds);
-            filter.conditions = null;
+            try self.or_clauses.append(allocator, moved);
         }
-        if (filter.or_clauses) |clauses| {
-            for (clauses) |clause| {
-                for (clause) |*c| {
-                    combined[idx] = c.*;
-                    c.* = .{
-                        .field_index = 0,
-                        .op = .eq,
-                        .value = null,
-                        .field_type = .text,
-                        .items_type = null,
-                    };
-                    idx += 1;
-                }
-                allocator.free(clause);
-            }
-            allocator.free(clauses);
-            filter.or_clauses = null;
-        }
-        try self.or_clauses.append(allocator, combined);
+        allocator.free(clauses);
+        filter.or_clauses = null;
     }
 
     fn appendMovedConditions(

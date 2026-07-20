@@ -300,8 +300,8 @@ pub const StoreService = struct {
         if (filter_clone.after) |*old| old.deinit(ctx.allocator);
         filter_clone.after = cursor;
 
-        // Recompute structural hash (after is not part of hash, so it's unchanged,
-        // but computing it keeps the invariant that the hash is always valid)
+        // Recompute structural hash — after presence is part of the hash,
+        // so transitioning from null to a cursor changes it.
         filter_clone.structural_hash = query_hasher.computeStructuralHash(&filter_clone);
 
         return ReadRequest{

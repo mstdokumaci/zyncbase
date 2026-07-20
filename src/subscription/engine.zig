@@ -93,7 +93,7 @@ pub const CanonicalFilterContext = struct {
 
     pub fn eql(_: CanonicalFilterContext, a: QueryFilter, b: QueryFilter) bool {
         if (a.predicate.state != b.predicate.state) return false;
-        if (!eqlConditionsAsSets(a.predicate.conditions, b.predicate.conditions)) return false;
+        if (!eqlConditionsSorted(a.predicate.conditions, b.predicate.conditions)) return false;
         if (!eqlOrClauses(a.predicate.or_clauses, b.predicate.or_clauses)) return false;
         if (!std.meta.eql(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
@@ -164,7 +164,7 @@ fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
     };
 }
 
-fn eqlConditionsAsSets(a: ?[]const Condition, b: ?[]const Condition) bool {
+fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
     const aa = a.?;
@@ -183,7 +183,7 @@ fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
     const bb = b.?;
     if (aa.len != bb.len) return false;
     for (aa, 0..) |clause_a, i| {
-        if (!eqlConditionsAsSets(clause_a, bb[i])) return false;
+        if (!eqlConditionsSorted(clause_a, bb[i])) return false;
     }
     return true;
 }

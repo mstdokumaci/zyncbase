@@ -1,7 +1,6 @@
 const std = @import("std");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
@@ -583,22 +582,19 @@ fn conditionValueLessThan(a: ?Value, b: ?Value) bool {
     if (b == null) return false;
     const av = a.?;
     const bv = b.?;
-    if (@intFromEnum(std.meta.activeTag(av)) != @intFromEnum(std.meta.activeTag(bv)))
-        return @intFromEnum(std.meta.activeTag(av)) < @intFromEnum(std.meta.activeTag(bv));
+    const at = @intFromEnum(std.meta.activeTag(av));
+    const bt = @intFromEnum(std.meta.activeTag(bv));
+    if (at != bt) return at < bt;
     return switch (av) {
-        .scalar => |as| switch (as) {
-            .text => |at| if (bv.scalar == .text) std.mem.lessThan(u8, at, bv.scalar.text) else false,
-            .integer => |ai| if (bv.scalar == .integer) ai < bv.scalar.integer else false,
-            .real => |ar| if (bv.scalar == .real) ar < bv.scalar.real else false,
-            .boolean => |ab| if (bv.scalar == .boolean) @intFromBool(ab) < @intFromBool(bv.scalar.boolean) else false,
-            .doc_id => |ad| if (bv.scalar == .doc_id) std.mem.lessThan(u8, &typed_doc_id.toBytes(ad), &typed_doc_id.toBytes(bv.scalar.doc_id)) else false,
-        },
+        .scalar => av.scalar.order(bv.scalar) == .lt,
         .array => |aa| blk: {
             const ba = bv.array;
-            const min_len = @min(aa.len, ba.len);
-            for (0..min_len) |i| {
-                if (ScalarValue.order(aa[i], ba[i]) == .lt) break :blk true;
-                if (ScalarValue.order(aa[i], ba[i]) == .gt) break :blk false;
+            for (0..@min(aa.len, ba.len)) |i| {
+                switch (ScalarValue.order(aa[i], ba[i])) {
+                    .lt => break :blk true,
+                    .gt => break :blk false,
+                    .eq => {},
+                }
             }
             break :blk aa.len < ba.len;
         },
