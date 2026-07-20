@@ -45,48 +45,62 @@ pub const Operator = enum(u8) {
             .eq => lhs.eql(rhs),
             .ne => !lhs.eql(rhs),
             .gt => lhs.order(rhs) == .gt,
-            .gte => blk: {
-                const ord = lhs.order(rhs);
-                break :blk ord == .gt or ord == .eq;
-            },
             .lt => lhs.order(rhs) == .lt,
-            .lte => blk: {
-                const ord = lhs.order(rhs);
-                break :blk ord == .lt or ord == .eq;
-            },
-            .startsWith => blk: {
-                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
-                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
-                break :blk std.ascii.startsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
-            },
-            .endsWith => blk: {
-                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
-                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
-                break :blk std.ascii.endsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
-            },
-            .in => blk: {
-                if (lhs != .scalar) break :blk false;
-                if (rhs != .array) break :blk false;
-                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
-            },
-            .notIn => blk: {
-                if (lhs != .scalar) break :blk false;
-                if (rhs != .array) break :blk false;
-                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
-            },
-            .contains => blk: {
-                // array.contains(scalar): binary search
-                if (lhs == .array and rhs == .scalar)
-                    break :blk std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
-                // text.contains(text): case-insensitive substring
-                if (lhs == .scalar and lhs.scalar == .text and rhs == .scalar and rhs.scalar == .text)
-                    break :blk std.ascii.indexOfIgnoreCase(lhs.scalar.text, rhs.scalar.text) != null;
-                break :blk false;
-            },
-            .isNull, .isNotNull => unreachable, // use compareNullary
+            .gte => compareGte(lhs, rhs),
+            .lte => compareLte(lhs, rhs),
+            .startsWith => compareStartsWith(lhs, rhs),
+            .endsWith => compareEndsWith(lhs, rhs),
+            .in => compareIn(lhs, rhs),
+            .notIn => compareNotIn(lhs, rhs),
+            .contains => compareContains(lhs, rhs),
+            .isNull, .isNotNull => unreachable,
         };
     }
 };
+
+fn compareGte(lhs: Value, rhs: Value) bool {
+    const ord = lhs.order(rhs);
+    return ord == .gt or ord == .eq;
+}
+
+fn compareLte(lhs: Value, rhs: Value) bool {
+    const ord = lhs.order(rhs);
+    return ord == .lt or ord == .eq;
+}
+
+fn compareStartsWith(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar or lhs.scalar != .text) return false;
+    if (rhs != .scalar or rhs.scalar != .text) return false;
+    return std.ascii.startsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+}
+
+fn compareEndsWith(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar or lhs.scalar != .text) return false;
+    if (rhs != .scalar or rhs.scalar != .text) return false;
+    return std.ascii.endsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+}
+
+fn compareIn(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar) return false;
+    if (rhs != .array) return false;
+    return std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
+}
+
+fn compareNotIn(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar) return false;
+    if (rhs != .array) return false;
+    return std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
+}
+
+fn compareContains(lhs: Value, rhs: Value) bool {
+    // array.contains(scalar): binary search
+    if (lhs == .array and rhs == .scalar)
+        return std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
+    // text.contains(text): case-insensitive substring
+    if (lhs == .scalar and lhs.scalar == .text and rhs == .scalar and rhs.scalar == .text)
+        return std.ascii.indexOfIgnoreCase(lhs.scalar.text, rhs.scalar.text) != null;
+    return false;
+}
 
 /// The value shape an operator expects for a given field type.
 ///
@@ -269,101 +283,19 @@ pub const FilterPredicate = struct {
             self.clearClauses(allocator);
             return self.state;
         }
-        if (self.conditions) |conds| {
-            for (conds) |c| {
-                if (c.isTriviallyFalse()) {
-                    self.clearClauses(allocator);
-                    self.state = .match_none;
-                    return self.state;
-                }
-            }
-            self.conditions = try compactTrivialTrueConditions(allocator, conds);
+
+        try self.normalizeConditions(allocator);
+        if (self.state == .match_none) return self.state;
+
+        const had_or_clauses = self.or_clauses != null;
+        try self.removeTriviallyTrueOrClauses(allocator);
+        if (had_or_clauses and self.or_clauses == null) {
+            self.state = if (self.hasClauses()) .conditional else .match_all;
+            return self.state;
         }
 
-        if (self.or_clauses) |clauses| {
-            // If any clause has a trivially true condition, the entire clause
-            // is true → remove it from the AND (it's a no-op).
-            var clause_keep_count: usize = 0;
-            for (clauses) |clause| {
-                var clause_has_true = false;
-                for (clause) |c| {
-                    if (c.isTriviallyTrue()) {
-                        clause_has_true = true;
-                        break;
-                    }
-                }
-                if (!clause_has_true) clause_keep_count += 1;
-            }
-
-            if (clause_keep_count < clauses.len) {
-                // Some clauses were trivially true — compact.
-                if (clause_keep_count == 0) {
-                    // All clauses were trivially true → remove or_clauses entirely.
-                    for (clauses) |clause| {
-                        for (clause) |*c| c.deinit(allocator);
-                        allocator.free(clause);
-                    }
-                    allocator.free(clauses);
-                    self.or_clauses = null;
-                    self.state = if (self.hasClauses()) .conditional else .match_all;
-                    return self.state;
-                }
-                // Compact: keep only non-trivially-true clauses.
-                const compacted = try allocator.alloc(OrClause, clause_keep_count);
-                var out: usize = 0;
-                for (clauses) |clause| {
-                    var clause_has_true = false;
-                    for (clause) |c| {
-                        if (c.isTriviallyTrue()) {
-                            clause_has_true = true;
-                            break;
-                        }
-                    }
-                    if (clause_has_true) {
-                        for (clause) |*c| c.deinit(allocator);
-                        allocator.free(clause);
-                    } else {
-                        compacted[out] = clause;
-                        out += 1;
-                    }
-                }
-                allocator.free(clauses);
-                self.or_clauses = compacted;
-            }
-
-            // Now process each surviving clause: remove trivially false conditions.
-            // If a clause becomes empty (all false) → entire predicate is match_none.
-            var clause_idx: usize = 0;
-            while (clause_idx < self.or_clauses.?.len) {
-                const clause = self.or_clauses.?[clause_idx];
-                var keep: usize = 0;
-                for (clause) |c| {
-                    if (!c.isTriviallyFalse()) keep += 1;
-                }
-                if (keep == 0) {
-                    // All conditions in this clause are false → clause is false → entire predicate is match_none.
-                    self.clearClauses(allocator);
-                    self.state = .match_none;
-                    return self.state;
-                }
-                if (keep < clause.len) {
-                    // Compact this clause.
-                    const compacted = try allocator.alloc(Condition, keep);
-                    var out: usize = 0;
-                    for (clause) |*c| {
-                        if (c.isTriviallyFalse()) {
-                            c.deinit(allocator);
-                        } else {
-                            compacted[out] = c.*;
-                            out += 1;
-                        }
-                    }
-                    allocator.free(clause);
-                    self.or_clauses.?[clause_idx] = compacted;
-                }
-                clause_idx += 1;
-            }
-        }
+        try self.compactFalseConditionsInOrClauses(allocator);
+        if (self.state == .match_none) return self.state;
 
         // Sort conditions for deterministic order (required for structural hash)
         if (self.conditions) |conds| {
@@ -379,6 +311,71 @@ pub const FilterPredicate = struct {
 
         self.state = if (self.hasClauses()) .conditional else .match_all;
         return self.state;
+    }
+
+    fn normalizeConditions(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const conds = self.conditions orelse return;
+        for (conds) |c| {
+            if (c.isTriviallyFalse()) {
+                self.clearClauses(allocator);
+                self.state = .match_none;
+                return;
+            }
+        }
+        self.conditions = try compactTrivialTrueConditions(allocator, conds);
+    }
+
+    fn removeTriviallyTrueOrClauses(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const clauses = self.or_clauses orelse return;
+
+        // Count clauses that are NOT trivially true.
+        var clause_keep_count: usize = 0;
+        for (clauses) |clause| {
+            if (!clauseHasTriviallyTrue(clause)) clause_keep_count += 1;
+        }
+
+        if (clause_keep_count < clauses.len) {
+            if (clause_keep_count == 0) {
+                for (clauses) |clause| {
+                    for (clause) |*c| c.deinit(allocator);
+                    allocator.free(clause);
+                }
+                allocator.free(clauses);
+                self.or_clauses = null;
+                return;
+            }
+            // Compact: keep only non-trivially-true clauses.
+            const compacted = try allocator.alloc(OrClause, clause_keep_count);
+            var out: usize = 0;
+            for (clauses) |clause| {
+                if (clauseHasTriviallyTrue(clause)) {
+                    for (clause) |*c| c.deinit(allocator);
+                    allocator.free(clause);
+                } else {
+                    compacted[out] = clause;
+                    out += 1;
+                }
+            }
+            allocator.free(clauses);
+            self.or_clauses = compacted;
+        }
+    }
+
+    /// Remove trivially-false conditions from each surviving OR clause.
+    /// If a clause becomes empty → entire predicate is match_none.
+    fn compactFalseConditionsInOrClauses(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const clauses = self.or_clauses orelse return;
+        var clause_idx: usize = 0;
+        while (clause_idx < clauses.len) {
+            const result = try compactTrivialFalseConditions(allocator, clauses[clause_idx]);
+            if (result == null) {
+                self.clearClauses(allocator);
+                self.state = .match_none;
+                return;
+            }
+            clauses[clause_idx] = result.?;
+            clause_idx += 1;
+        }
     }
 
     fn clearClauses(self: *FilterPredicate, allocator: std.mem.Allocator) void {
@@ -546,6 +543,35 @@ fn compactTrivialTrueConditions(allocator: std.mem.Allocator, conds: []Condition
         }
         compacted[out] = c.*;
         out += 1;
+    }
+    allocator.free(conds);
+    return compacted;
+}
+
+fn clauseHasTriviallyTrue(clause: OrClause) bool {
+    for (clause) |c| {
+        if (c.isTriviallyTrue()) return true;
+    }
+    return false;
+}
+
+fn compactTrivialFalseConditions(allocator: std.mem.Allocator, conds: []Condition) !?[]Condition {
+    var keep: usize = 0;
+    for (conds) |c| {
+        if (!c.isTriviallyFalse()) keep += 1;
+    }
+    if (keep == 0) return null;
+    if (keep == conds.len) return conds;
+
+    const compacted = try allocator.alloc(Condition, keep);
+    var out: usize = 0;
+    for (conds) |*c| {
+        if (c.isTriviallyFalse()) {
+            c.deinit(allocator);
+        } else {
+            compacted[out] = c.*;
+            out += 1;
+        }
     }
     allocator.free(conds);
     return compacted;
