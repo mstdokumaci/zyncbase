@@ -45,48 +45,62 @@ pub const Operator = enum(u8) {
             .eq => lhs.eql(rhs),
             .ne => !lhs.eql(rhs),
             .gt => lhs.order(rhs) == .gt,
-            .gte => blk: {
-                const ord = lhs.order(rhs);
-                break :blk ord == .gt or ord == .eq;
-            },
             .lt => lhs.order(rhs) == .lt,
-            .lte => blk: {
-                const ord = lhs.order(rhs);
-                break :blk ord == .lt or ord == .eq;
-            },
-            .startsWith => blk: {
-                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
-                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
-                break :blk std.ascii.startsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
-            },
-            .endsWith => blk: {
-                if (lhs != .scalar or lhs.scalar != .text) break :blk false;
-                if (rhs != .scalar or rhs.scalar != .text) break :blk false;
-                break :blk std.ascii.endsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
-            },
-            .in => blk: {
-                if (lhs != .scalar) break :blk false;
-                if (rhs != .array) break :blk false;
-                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
-            },
-            .notIn => blk: {
-                if (lhs != .scalar) break :blk false;
-                if (rhs != .array) break :blk false;
-                break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
-            },
-            .contains => blk: {
-                // array.contains(scalar): binary search
-                if (lhs == .array and rhs == .scalar)
-                    break :blk std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
-                // text.contains(text): case-insensitive substring
-                if (lhs == .scalar and lhs.scalar == .text and rhs == .scalar and rhs.scalar == .text)
-                    break :blk std.ascii.indexOfIgnoreCase(lhs.scalar.text, rhs.scalar.text) != null;
-                break :blk false;
-            },
-            .isNull, .isNotNull => unreachable, // use compareNullary
+            .gte => compareGte(lhs, rhs),
+            .lte => compareLte(lhs, rhs),
+            .startsWith => compareStartsWith(lhs, rhs),
+            .endsWith => compareEndsWith(lhs, rhs),
+            .in => compareIn(lhs, rhs),
+            .notIn => compareNotIn(lhs, rhs),
+            .contains => compareContains(lhs, rhs),
+            .isNull, .isNotNull => unreachable,
         };
     }
 };
+
+fn compareGte(lhs: Value, rhs: Value) bool {
+    const ord = lhs.order(rhs);
+    return ord == .gt or ord == .eq;
+}
+
+fn compareLte(lhs: Value, rhs: Value) bool {
+    const ord = lhs.order(rhs);
+    return ord == .lt or ord == .eq;
+}
+
+fn compareStartsWith(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar or lhs.scalar != .text) return false;
+    if (rhs != .scalar or rhs.scalar != .text) return false;
+    return std.ascii.startsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+}
+
+fn compareEndsWith(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar or lhs.scalar != .text) return false;
+    if (rhs != .scalar or rhs.scalar != .text) return false;
+    return std.ascii.endsWithIgnoreCase(lhs.scalar.text, rhs.scalar.text);
+}
+
+fn compareIn(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar) return false;
+    if (rhs != .array) return false;
+    return std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
+}
+
+fn compareNotIn(lhs: Value, rhs: Value) bool {
+    if (lhs != .scalar) return false;
+    if (rhs != .array) return false;
+    return std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
+}
+
+fn compareContains(lhs: Value, rhs: Value) bool {
+    // array.contains(scalar): binary search
+    if (lhs == .array and rhs == .scalar)
+        return std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
+    // text.contains(text): case-insensitive substring
+    if (lhs == .scalar and lhs.scalar == .text and rhs == .scalar and rhs.scalar == .text)
+        return std.ascii.indexOfIgnoreCase(lhs.scalar.text, rhs.scalar.text) != null;
+    return false;
+}
 
 /// The value shape an operator expects for a given field type.
 ///
@@ -209,10 +223,12 @@ pub const PredicateState = enum(u8) {
     match_none,
 };
 
+pub const OrClause = []Condition;
+
 pub const FilterPredicate = struct {
     state: PredicateState = .conditional,
     conditions: ?[]Condition = null,
-    or_conditions: ?[]Condition = null,
+    or_clauses: ?[]OrClause = null,
 
     pub fn isEmpty(self: FilterPredicate) bool {
         return self.isAlwaysTrue();
@@ -220,7 +236,7 @@ pub const FilterPredicate = struct {
 
     pub fn hasClauses(self: FilterPredicate) bool {
         const has_conds = self.conditions != null and self.conditions.?.len > 0;
-        const has_or = self.or_conditions != null and self.or_conditions.?.len > 0;
+        const has_or = self.or_clauses != null and self.or_clauses.?.len > 0;
         return has_conds or has_or;
     }
 
@@ -242,9 +258,12 @@ pub const FilterPredicate = struct {
             for (conds) |*c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |*c| c.deinit(allocator);
-            allocator.free(or_conds);
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
         }
     }
 
@@ -252,10 +271,10 @@ pub const FilterPredicate = struct {
         var cloned = FilterPredicate{
             .state = self.state,
             .conditions = try cloneConditions(allocator, self.conditions),
-            .or_conditions = null,
+            .or_clauses = null,
         };
         errdefer cloned.deinit(allocator);
-        cloned.or_conditions = try cloneConditions(allocator, self.or_conditions);
+        cloned.or_clauses = try cloneOrClauses(allocator, self.or_clauses);
         return cloned;
     }
 
@@ -264,44 +283,99 @@ pub const FilterPredicate = struct {
             self.clearClauses(allocator);
             return self.state;
         }
-        if (self.conditions) |conds| {
-            for (conds) |c| {
-                if (c.isTriviallyFalse()) {
-                    self.clearClauses(allocator);
-                    self.state = .match_none;
-                    return self.state;
-                }
-            }
-            self.conditions = try compactTrivialTrueConditions(allocator, conds);
+
+        try self.normalizeConditions(allocator);
+        if (self.state == .match_none) return self.state;
+
+        const had_or_clauses = self.or_clauses != null;
+        try self.removeTriviallyTrueOrClauses(allocator);
+        if (had_or_clauses and self.or_clauses == null) {
+            self.state = if (self.hasClauses()) .conditional else .match_all;
+            return self.state;
         }
 
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |c| {
-                if (c.isTriviallyTrue()) {
-                    for (or_conds) |*or_c| or_c.deinit(allocator);
-                    allocator.free(or_conds);
-                    self.or_conditions = null;
-                    self.state = if (self.hasClauses()) .conditional else .match_all;
-                    return self.state;
-                }
-            }
+        try self.compactFalseConditionsInOrClauses(allocator);
+        if (self.state == .match_none) return self.state;
 
-            var keep_count: usize = 0;
-            for (or_conds) |c| {
-                if (!c.isTriviallyFalse()) keep_count += 1;
+        // Sort conditions for deterministic order (required for structural hash)
+        if (self.conditions) |conds| {
+            std.mem.sort(Condition, conds, {}, conditionLessThan);
+        }
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                std.mem.sort(Condition, clause, {}, conditionLessThan);
             }
-
-            if (keep_count == 0) {
-                self.clearClauses(allocator);
-                self.state = .match_none;
-                return self.state;
-            }
-
-            self.or_conditions = try compactTrivialFalseConditions(allocator, or_conds, keep_count);
+            // Sort or_clauses by their first condition for deterministic clause order
+            std.mem.sort(OrClause, clauses, {}, orClauseLessThan);
         }
 
         self.state = if (self.hasClauses()) .conditional else .match_all;
         return self.state;
+    }
+
+    fn normalizeConditions(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const conds = self.conditions orelse return;
+        for (conds) |c| {
+            if (c.isTriviallyFalse()) {
+                self.clearClauses(allocator);
+                self.state = .match_none;
+                return;
+            }
+        }
+        self.conditions = try compactTrivialTrueConditions(allocator, conds);
+    }
+
+    fn removeTriviallyTrueOrClauses(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const clauses = self.or_clauses orelse return;
+
+        // Count clauses that are NOT trivially true.
+        var clause_keep_count: usize = 0;
+        for (clauses) |clause| {
+            if (!clauseHasTriviallyTrue(clause)) clause_keep_count += 1;
+        }
+
+        if (clause_keep_count < clauses.len) {
+            if (clause_keep_count == 0) {
+                for (clauses) |clause| {
+                    for (clause) |*c| c.deinit(allocator);
+                    allocator.free(clause);
+                }
+                allocator.free(clauses);
+                self.or_clauses = null;
+                return;
+            }
+            // Compact: keep only non-trivially-true clauses.
+            const compacted = try allocator.alloc(OrClause, clause_keep_count);
+            var out: usize = 0;
+            for (clauses) |clause| {
+                if (clauseHasTriviallyTrue(clause)) {
+                    for (clause) |*c| c.deinit(allocator);
+                    allocator.free(clause);
+                } else {
+                    compacted[out] = clause;
+                    out += 1;
+                }
+            }
+            allocator.free(clauses);
+            self.or_clauses = compacted;
+        }
+    }
+
+    /// Remove trivially-false conditions from each surviving OR clause.
+    /// If a clause becomes empty → entire predicate is match_none.
+    fn compactFalseConditionsInOrClauses(self: *FilterPredicate, allocator: std.mem.Allocator) !void {
+        const clauses = self.or_clauses orelse return;
+        var clause_idx: usize = 0;
+        while (clause_idx < clauses.len) {
+            const result = try compactTrivialFalseConditions(allocator, clauses[clause_idx]);
+            if (result == null) {
+                self.clearClauses(allocator);
+                self.state = .match_none;
+                return;
+            }
+            clauses[clause_idx] = result.?;
+            clause_idx += 1;
+        }
     }
 
     fn clearClauses(self: *FilterPredicate, allocator: std.mem.Allocator) void {
@@ -310,11 +384,72 @@ pub const FilterPredicate = struct {
             allocator.free(conds);
             self.conditions = null;
         }
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |*c| c.deinit(allocator);
-            allocator.free(or_conds);
-            self.or_conditions = null;
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
+            self.or_clauses = null;
         }
+    }
+
+    /// Merges `guard` into `self` in-place: self ∧ guard.
+    /// Guard conditions are appended to self.conditions.
+    /// Guard or_clauses are appended to self.or_clauses.
+    /// Guard state is respected: match_all = no-op, match_none = self becomes match_none.
+    /// Takes ownership of guard's memory on success.
+    pub fn mergeInPlace(
+        self: *FilterPredicate,
+        allocator: std.mem.Allocator,
+        guard: *FilterPredicate,
+    ) !void {
+        if (guard.state == .match_all) {
+            guard.deinit(allocator);
+            return;
+        }
+        if (guard.state == .match_none) {
+            guard.deinit(allocator);
+            self.deinit(allocator);
+            self.state = .match_none;
+            return;
+        }
+
+        // Move guard's conditions into self
+        if (guard.conditions) |guard_conds| {
+            if (self.conditions) |self_conds| {
+                // Concatenate: allocate new combined slice
+                const combined = try allocator.alloc(Condition, self_conds.len + guard_conds.len);
+                for (self_conds, 0..) |c, i| combined[i] = c;
+                for (guard_conds, 0..) |c, i| combined[self_conds.len + i] = c;
+                allocator.free(self_conds);
+                allocator.free(guard_conds);
+                self.conditions = combined;
+                guard.conditions = null;
+            } else {
+                self.conditions = guard_conds;
+                guard.conditions = null;
+            }
+        }
+
+        // Move guard's or_clauses into self
+        if (guard.or_clauses) |guard_clauses| {
+            if (self.or_clauses) |self_clauses| {
+                // Concatenate: allocate new combined slice
+                const combined = try allocator.alloc(OrClause, self_clauses.len + guard_clauses.len);
+                for (self_clauses, 0..) |c, i| combined[i] = c;
+                for (guard_clauses, 0..) |c, i| combined[self_clauses.len + i] = c;
+                allocator.free(self_clauses);
+                allocator.free(guard_clauses);
+                self.or_clauses = combined;
+                guard.or_clauses = null;
+            } else {
+                self.or_clauses = guard_clauses;
+                guard.or_clauses = null;
+            }
+        }
+
+        _ = try self.normalize(allocator);
     }
 };
 
@@ -323,6 +458,7 @@ pub const QueryFilter = struct {
     order_by: SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
+    structural_hash: u64 = 0,
 
     pub fn deinit(self: *QueryFilter, allocator: std.mem.Allocator) void {
         self.predicate.deinit(allocator);
@@ -331,7 +467,7 @@ pub const QueryFilter = struct {
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {
-        var copy = self;
+        var copy = self; // copies structural_hash by value
         copy.predicate = try self.predicate.clone(allocator);
         errdefer copy.predicate.deinit(allocator);
         copy.order_by = self.order_by;
@@ -341,6 +477,35 @@ pub const QueryFilter = struct {
         return copy;
     }
 };
+
+fn cloneOrClauses(allocator: std.mem.Allocator, clauses: ?[]const OrClause) !?[]OrClause {
+    const cls = clauses orelse return null;
+    const cloned = try allocator.alloc(OrClause, cls.len);
+    var initialized_count: usize = 0;
+    errdefer {
+        for (cloned[0..initialized_count]) |clause| {
+            for (clause) |*c| c.deinit(allocator);
+            allocator.free(clause);
+        }
+        allocator.free(cloned);
+    }
+    for (cls, 0..) |clause, i| {
+        const conds = clause;
+        const cloned_conds = try allocator.alloc(Condition, conds.len);
+        var cond_count: usize = 0;
+        errdefer {
+            for (cloned_conds[0..cond_count]) |*c| c.deinit(allocator);
+            allocator.free(cloned_conds);
+        }
+        for (conds, 0..) |condition, j| {
+            cloned_conds[j] = try condition.clone(allocator);
+            cond_count += 1;
+        }
+        cloned[i] = cloned_conds;
+        initialized_count += 1;
+    }
+    return cloned;
+}
 
 fn cloneConditions(allocator: std.mem.Allocator, conditions: ?[]const Condition) !?[]Condition {
     const conds = conditions orelse return null;
@@ -383,23 +548,84 @@ fn compactTrivialTrueConditions(allocator: std.mem.Allocator, conds: []Condition
     return compacted;
 }
 
-fn compactTrivialFalseConditions(
-    allocator: std.mem.Allocator,
-    conds: []Condition,
-    keep_count: usize,
-) ![]Condition {
-    if (keep_count == conds.len) return conds;
+fn clauseHasTriviallyTrue(clause: OrClause) bool {
+    for (clause) |c| {
+        if (c.isTriviallyTrue()) return true;
+    }
+    return false;
+}
 
-    const compacted = try allocator.alloc(Condition, keep_count);
+fn compactTrivialFalseConditions(allocator: std.mem.Allocator, conds: []Condition) !?[]Condition {
+    var keep: usize = 0;
+    for (conds) |c| {
+        if (!c.isTriviallyFalse()) keep += 1;
+    }
+    if (keep == 0) return null;
+    if (keep == conds.len) return conds;
+
+    const compacted = try allocator.alloc(Condition, keep);
     var out: usize = 0;
     for (conds) |*c| {
         if (c.isTriviallyFalse()) {
             c.deinit(allocator);
-            continue;
+        } else {
+            compacted[out] = c.*;
+            out += 1;
         }
-        compacted[out] = c.*;
-        out += 1;
     }
     allocator.free(conds);
     return compacted;
+}
+
+fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
+    if (a.field_index != b.field_index) return a.field_index < b.field_index;
+    if (a.op != b.op) return @intFromEnum(a.op) < @intFromEnum(b.op);
+    if (a.field_type != b.field_type) return @intFromEnum(a.field_type) < @intFromEnum(b.field_type);
+    // items_type comparison: null < non-null, both null = equal
+    const a_items = a.items_type;
+    const b_items = b.items_type;
+    if (a_items != null and b_items != null) {
+        if (a_items.? != b_items.?) return @intFromEnum(a_items.?) < @intFromEnum(b_items.?);
+    } else if (a_items == null and b_items != null) {
+        return true; // null < non-null
+    } else if (a_items != null and b_items == null) {
+        return false; // non-null > null
+    }
+    // both null or equal — continue to value comparison
+    return conditionValueLessThan(a.value, b.value);
+}
+
+fn orClauseLessThan(_: void, a: OrClause, b: OrClause) bool {
+    const min_len = @min(a.len, b.len);
+    for (0..min_len) |i| {
+        if (conditionLessThan({}, a[i], b[i])) return true;
+        if (conditionLessThan({}, b[i], a[i])) return false;
+    }
+    return a.len < b.len;
+}
+
+fn conditionValueLessThan(a: ?Value, b: ?Value) bool {
+    if (a == null and b == null) return false;
+    if (a == null) return true;
+    if (b == null) return false;
+    const av = a.?;
+    const bv = b.?;
+    const at = @intFromEnum(std.meta.activeTag(av));
+    const bt = @intFromEnum(std.meta.activeTag(bv));
+    if (at != bt) return at < bt;
+    return switch (av) {
+        .scalar => av.scalar.order(bv.scalar) == .lt,
+        .array => |aa| blk: {
+            const ba = bv.array;
+            for (0..@min(aa.len, ba.len)) |i| {
+                switch (ScalarValue.order(aa[i], ba[i])) {
+                    .lt => break :blk true,
+                    .gt => break :blk false,
+                    .eq => {},
+                }
+            }
+            break :blk aa.len < ba.len;
+        },
+        .nil => false,
+    };
 }

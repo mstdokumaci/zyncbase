@@ -235,7 +235,8 @@ pub const WriteWorker = struct {
         id: DocId,
     ) !?Record {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return null;
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, table_metadata.select_document_sql);
+        const cache_key = std.hash.Wyhash.hash(0, table_metadata.select_document_sql);
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, table_metadata.select_document_sql);
         defer mstmt.release();
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
@@ -1017,7 +1018,7 @@ pub const WriteWorker = struct {
         const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
         const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
@@ -1066,7 +1067,7 @@ pub const WriteWorker = struct {
         const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
         const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
@@ -1115,7 +1116,7 @@ pub const WriteWorker = struct {
                 table_metadata.delete_document_sql_suffix,
             });
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 

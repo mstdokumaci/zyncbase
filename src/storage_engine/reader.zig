@@ -33,7 +33,6 @@ pub fn buildSelectQuery(
     table_metadata: *const schema_types.Table,
     namespace_id: i64,
     filter: *const query_ast.QueryFilter,
-    guard_predicate: ?*const query_ast.FilterPredicate,
 ) !QueryResult {
     var buf = SqlBuf.init();
     defer buf.deinit(allocator);
@@ -54,7 +53,6 @@ pub fn buildSelectQuery(
     try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
     try appendWhereConditions(allocator, &buf, &values, table_metadata, filter, sort_field_name_quoted);
-    try appendGuardPredicate(allocator, &buf, &values, table_metadata, guard_predicate);
 
     // 3.. ORDER BY
     try sql_build.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
@@ -62,8 +60,8 @@ pub fn buildSelectQuery(
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
         const effective_limit: u32 = if (l == std.math.maxInt(u32)) l else l + 1;
-        try buf.appendSlice(allocator, " LIMIT ");
-        try std.fmt.format(buf.writer(allocator), "{}", .{effective_limit});
+        try buf.appendSlice(allocator, " LIMIT ?");
+        try values.append(allocator, Value{ .scalar = .{ .integer = @intCast(effective_limit) } });
     }
 
     const sql_owned = try buf.toOwnedSlice(allocator);
@@ -121,20 +119,6 @@ fn appendWhereConditions(
     }
 
     try buf.appendSlice(allocator, ")");
-}
-
-fn appendGuardPredicate(
-    allocator: Allocator,
-    buf: *SqlBuf,
-    values: *std.ArrayListUnmanaged(Value),
-    table_metadata: *const schema_types.Table,
-    guard_predicate: ?*const query_ast.FilterPredicate,
-) !void {
-    const predicate = guard_predicate orelse return;
-    if (predicate.isEmpty()) return;
-    try buf.appendSlice(allocator, " AND (");
-    try filter_sql.appendFilterPredicateSql(allocator, buf, values, table_metadata, predicate);
-    try buf.append(allocator, ')');
 }
 
 pub fn execSelectDocument(

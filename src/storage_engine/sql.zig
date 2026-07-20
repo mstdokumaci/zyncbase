@@ -29,7 +29,7 @@ const Entry = struct {
 pub const StatementCache = struct {
     const LruList = std.DoublyLinkedList;
 
-    map: std.StringHashMapUnmanaged(*LruList.Node),
+    map: std.AutoHashMapUnmanaged(u64, *LruList.Node),
     list: LruList,
     count: usize,
     cache_limit: usize,
@@ -66,11 +66,15 @@ pub const StatementCache = struct {
         self.count = 0;
     }
 
-    /// Retrieves a prepared statement matched by SQL string.
-    /// Returns null if not in cache. Updates LRU on hit.
-    fn get(self: *StatementCache, sql: []const u8) ?*sqlite.c.sqlite3_stmt {
-        const node = self.map.get(sql) orelse return null;
+    /// Retrieves a prepared statement matched by u64 key + SQL verification.
+    /// Returns null if not in cache or SQL doesn't match (hash collision).
+    /// Updates LRU on hit.
+    fn get(self: *StatementCache, key: u64, sql: []const u8) ?*sqlite.c.sqlite3_stmt {
+        const node = self.map.get(key) orelse return null;
         const entry: *Entry = @fieldParentPtr("node", node);
+
+        // Hash collision safety: verify SQL string matches.
+        if (!std.mem.eql(u8, entry.sql, sql)) return null;
 
         // Move to front (Most Recently Used)
         self.list.remove(node);
@@ -84,13 +88,13 @@ pub const StatementCache = struct {
     }
 
     /// Adds a new statement to the cache. Evicts LRU if capacity exceeded.
-    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !void {
+    fn put(self: *StatementCache, allocator: Allocator, key: u64, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !void {
         // Evict if at capacity
         if (self.count >= self.cache_limit) {
             if (self.list.last) |old_node| {
                 const old_entry: *Entry = @fieldParentPtr("node", old_node);
                 self.list.remove(old_node);
-                _ = self.map.remove(old_entry.sql);
+                _ = self.map.remove(std.hash.Wyhash.hash(0, old_entry.sql));
                 _ = sqlite.c.sqlite3_finalize(old_entry.stmt);
                 allocator.free(old_entry.sql);
                 allocator.destroy(old_entry);
@@ -110,25 +114,25 @@ pub const StatementCache = struct {
             .node = .{},
         };
 
-        try self.map.put(allocator, sql_owned, &entry.node);
+        try self.map.put(allocator, key, &entry.node);
         self.list.prepend(&entry.node);
         self.count += 1;
     }
 
     /// High-level helper to get a statement or prepare one if missing.
     /// Returns a ManagedStmt which ensures the statement is reset upon release.
-    pub fn acquire(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, sql: []const u8) !ManagedStmt {
-        if (self.get(sql)) |stmt| {
+    pub fn acquire(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, cache_key: u64, sql_fallback: []const u8) !ManagedStmt {
+        if (self.get(cache_key, sql_fallback)) |stmt| {
             return ManagedStmt{ .stmt = stmt };
         }
 
         const stmt = blk: {
-            const dynamic = try db.prepareDynamic(sql);
+            const dynamic = try db.prepareDynamic(sql_fallback);
             break :blk dynamic.stmt;
         };
         errdefer _ = sqlite.c.sqlite3_finalize(stmt);
 
-        try self.put(allocator, sql, stmt);
+        try self.put(allocator, cache_key, sql_fallback, stmt);
         return ManagedStmt{ .stmt = stmt };
     }
 };
@@ -299,7 +303,7 @@ pub fn resolveNamespaceId(
         \\ON CONFLICT(name) DO UPDATE SET name = excluded.name
         \\RETURNING id
     ;
-    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
+    var mstmt = try stmt_cache.acquire(allocator, db, std.hash.Wyhash.hash(0, sql_text), sql_text);
     defer mstmt.release();
 
     if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
@@ -325,7 +329,7 @@ pub fn resolveUserId(
         \\ON CONFLICT("namespace_id", "external_id") DO UPDATE SET "external_id" = excluded."external_id"
         \\RETURNING "id"
     ;
-    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
+    var mstmt = try stmt_cache.acquire(allocator, db, std.hash.Wyhash.hash(0, sql_text), sql_text);
     defer mstmt.release();
 
     if (bindBlobTransient(mstmt.stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);

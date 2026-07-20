@@ -66,10 +66,11 @@ test "query with orConditions" {
     const users_md = schema.table("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
-    try testing.expect(filter.predicate.or_conditions != null);
-    try testing.expectEqual(@as(usize, 2), filter.predicate.or_conditions.?.len);
-    try testing.expectEqual(role_index, filter.predicate.or_conditions.?[0].field_index);
-    try testing.expectEqualStrings("admin", filter.predicate.or_conditions.?[0].value.?.scalar.text);
+    try testing.expect(filter.predicate.or_clauses != null);
+    try testing.expectEqual(@as(usize, 1), filter.predicate.or_clauses.?.len);
+    try testing.expectEqual(@as(usize, 2), filter.predicate.or_clauses.?[0].len);
+    try testing.expectEqual(role_index, filter.predicate.or_clauses.?[0][0].field_index);
+    try testing.expectEqualStrings("admin", filter.predicate.or_clauses.?[0][0].value.?.scalar.text);
 }
 
 test "query with orderBy and after" {
@@ -256,7 +257,7 @@ test "query normalization drops AND notIn empty set" {
     try testing.expectEqual(@as(usize, 1), conds.len);
     try testing.expectEqual(query_ast.Operator.eq, conds[0].op);
     try testing.expectEqual(tbl.fieldIndex("age").?, conds[0].field_index);
-    try testing.expect(filter.predicate.or_conditions == null);
+    try testing.expect(filter.predicate.or_clauses == null);
 }
 
 test "in condition rejects non-array operand" {

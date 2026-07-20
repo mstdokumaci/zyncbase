@@ -16,13 +16,11 @@ pub const ReadRequest = struct {
     table_index: usize,
     namespace_id: i64,
     filter: query_ast.QueryFilter,
-    auth_predicate: ?query_ast.FilterPredicate,
     sub_id: ?u64 = null,
     allocator: Allocator,
 
     pub fn deinit(self: *ReadRequest, _: Allocator) void {
         self.filter.deinit(self.allocator);
-        if (self.auth_predicate) |*p| p.deinit(self.allocator);
     }
 };
 
