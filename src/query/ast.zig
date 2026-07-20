@@ -596,10 +596,12 @@ fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
 }
 
 fn orClauseLessThan(_: void, a: OrClause, b: OrClause) bool {
-    if (a.len == 0 and b.len == 0) return false;
-    if (a.len == 0) return true;
-    if (b.len == 0) return false;
-    return conditionLessThan({}, a[0], b[0]);
+    const min_len = @min(a.len, b.len);
+    for (0..min_len) |i| {
+        if (conditionLessThan({}, a[i], b[i])) return true;
+        if (conditionLessThan({}, b[i], a[i])) return false;
+    }
+    return a.len < b.len;
 }
 
 fn conditionValueLessThan(a: ?Value, b: ?Value) bool {

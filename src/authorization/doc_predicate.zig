@@ -472,6 +472,7 @@ const PredicateBuilder = struct {
         filter: *query_ast.FilterPredicate,
     ) !void {
         try self.appendMovedConditions(allocator, &self.conditions, filter.conditions);
+        filter.conditions = null;
         try self.moveOrClauses(allocator, filter);
     }
 

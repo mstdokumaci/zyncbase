@@ -215,6 +215,10 @@ const FilterParseCtx = struct {
         value: msgpack.Payload,
     ) ParserError!void {
         const new_conds = try parseConditions(self.allocator, self.table_metadata, value);
+        errdefer {
+            for (new_conds) |*c| c.deinit(self.allocator);
+            self.allocator.free(new_conds);
+        }
         // Free existing or_clauses if any
         if (self.predicate.or_clauses) |clauses| {
             for (clauses) |clause| {
