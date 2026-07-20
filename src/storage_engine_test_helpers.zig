@@ -188,7 +188,7 @@ pub fn queryDocs(
     node.mutex.lock();
     defer node.mutex.unlock();
 
-    const query_res = try reader_mod.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, null);
+    const query_res = try reader_mod.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter);
     defer query_res.deinit(allocator);
 
     var dynamic = try node.conn.prepareDynamic(query_res.sql);

@@ -43,10 +43,10 @@ const LowerResult = union(enum) {
 
 const Shape = struct {
     conditions: usize = 0,
-    or_conditions: usize = 0,
+    or_clauses: usize = 0,
 
     fn isEmpty(self: Shape) bool {
-        return self.conditions == 0 and self.or_conditions == 0;
+        return self.conditions == 0 and self.or_clauses == 0;
     }
 };
 
@@ -250,11 +250,8 @@ fn validateAndShape(conds: []const types.Condition, table: *const schema_types.T
     var out = Shape{};
     for (conds) |condition| {
         const child = try validateShape(condition, table);
-        if (out.or_conditions > 0 and child.or_conditions > 0) {
-            return error.UnsupportedAuthorizationPredicate;
-        }
         out.conditions += child.conditions;
-        out.or_conditions += child.or_conditions;
+        out.or_clauses += child.or_clauses;
     }
     return out;
 }
@@ -279,13 +276,13 @@ fn validateOrShape(conds: []const types.Condition, table: *const schema_types.Ta
         or_terms += try shapeAsOrTermCount(child);
     }
 
-    if (or_terms > 0) return .{ .or_conditions = or_terms };
+    if (or_terms > 0) return .{ .or_clauses = or_terms };
     return first orelse Shape{};
 }
 
 fn shapeAsOrTermCount(shape: Shape) DocPredicateError!usize {
-    if (shape.or_conditions > 0 and shape.conditions == 0) return shape.or_conditions;
-    if (shape.conditions == 1 and shape.or_conditions == 0) return 1;
+    if (shape.or_clauses > 0 and shape.conditions == 0) return shape.or_clauses;
+    if (shape.conditions == 1 and shape.or_clauses == 0) return 1;
     return error.UnsupportedAuthorizationPredicate;
 }
 
@@ -452,17 +449,20 @@ fn validateScalarType(field_type: schema_types.FieldType, scalar: typed.ScalarVa
 
 const PredicateBuilder = struct {
     conditions: std.ArrayListUnmanaged(query_ast.Condition) = .empty,
-    or_conditions: std.ArrayListUnmanaged(query_ast.Condition) = .empty,
+    or_clauses: std.ArrayListUnmanaged(query_ast.OrClause) = .empty,
 
     fn isEmpty(self: PredicateBuilder) bool {
-        return self.conditions.items.len == 0 and self.or_conditions.items.len == 0;
+        return self.conditions.items.len == 0 and self.or_clauses.items.len == 0;
     }
 
     fn deinit(self: *PredicateBuilder, allocator: Allocator) void {
         for (self.conditions.items) |*condition| condition.deinit(allocator);
         self.conditions.deinit(allocator);
-        for (self.or_conditions.items) |*condition| condition.deinit(allocator);
-        self.or_conditions.deinit(allocator);
+        for (self.or_clauses.items) |clause| {
+            for (clause) |*condition| condition.deinit(allocator);
+            allocator.free(clause);
+        }
+        self.or_clauses.deinit(allocator);
         self.* = .{};
     }
 
@@ -471,11 +471,25 @@ const PredicateBuilder = struct {
         allocator: Allocator,
         filter: *query_ast.FilterPredicate,
     ) !void {
-        if (self.or_conditions.items.len > 0 and filter.or_conditions != null and filter.or_conditions.?.len > 0) {
-            return error.UnsupportedAuthorizationPredicate;
-        }
         try self.appendMovedConditions(allocator, &self.conditions, filter.conditions);
-        try self.appendMovedConditions(allocator, &self.or_conditions, filter.or_conditions);
+        if (filter.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                var moved_conds = try allocator.alloc(query_ast.Condition, clause.len);
+                for (clause, 0..) |*c, i| {
+                    moved_conds[i] = c.*;
+                    c.* = .{
+                        .field_index = 0,
+                        .op = .eq,
+                        .value = null,
+                        .field_type = .text,
+                        .items_type = null,
+                    };
+                }
+                try self.or_clauses.append(allocator, moved_conds);
+            }
+            allocator.free(clauses);
+            filter.or_clauses = null;
+        }
     }
 
     fn appendOrFilterMove(
@@ -484,17 +498,108 @@ const PredicateBuilder = struct {
         filter: *query_ast.FilterPredicate,
     ) !void {
         const conds = filter.conditions orelse @as([]const query_ast.Condition, &.{});
-        const or_conds = filter.or_conditions orelse @as([]const query_ast.Condition, &.{});
-        if (conds.len == 0 and or_conds.len > 0) {
-            try self.appendMovedConditions(allocator, &self.or_conditions, filter.or_conditions);
-            return;
+        const clauses = filter.or_clauses orelse @as([]const query_ast.OrClause, &.{});
+
+        if (conds.len == 0 and clauses.len == 0) return;
+
+        // Each filter being ORed becomes a single OrClause.
+        // If the filter has AND conditions, they form one OrClause.
+        // If the filter has OR clauses, each becomes an OrClause.
+        if (filter.conditions) |mutable_conds| {
+            if (clauses.len > 0) {
+                // Filter has both AND and OR — shouldn't happen with current validation,
+                // but handle gracefully: wrap AND conds as one clause, append OR clauses separately
+                try self.appendMovedConditionsAsOrClause(allocator, filter);
+                return;
+            }
+            // Only AND conditions: each becomes a single-condition OrClause
+            for (mutable_conds) |*cond| {
+                const moved = cond.*;
+                cond.* = .{
+                    .field_index = 0,
+                    .op = .eq,
+                    .value = null,
+                    .field_type = .text,
+                    .items_type = null,
+                };
+                const single = try allocator.alloc(query_ast.Condition, 1);
+                single[0] = moved;
+                try self.or_clauses.append(allocator, single);
+            }
+            allocator.free(mutable_conds);
+            filter.conditions = null;
         }
-        if (conds.len == 1 and or_conds.len == 0) {
-            try self.appendMovedConditions(allocator, &self.or_conditions, filter.conditions);
-            return;
+
+        if (filter.or_clauses) |mutable_clauses| {
+            // Only OR clauses: append each as an OrClause
+            for (mutable_clauses) |clause| {
+                var moved_conds = try allocator.alloc(query_ast.Condition, clause.len);
+                for (clause, 0..) |*c, i| {
+                    moved_conds[i] = c.*;
+                    c.* = .{
+                        .field_index = 0,
+                        .op = .eq,
+                        .value = null,
+                        .field_type = .text,
+                        .items_type = null,
+                    };
+                }
+                try self.or_clauses.append(allocator, moved_conds);
+            }
+            allocator.free(mutable_clauses);
+            filter.or_clauses = null;
         }
-        if (conds.len == 0 and or_conds.len == 0) return;
-        return error.UnsupportedAuthorizationPredicate;
+    }
+
+    fn appendMovedConditionsAsOrClause(
+        self: *PredicateBuilder,
+        allocator: Allocator,
+        filter: *query_ast.FilterPredicate,
+    ) !void {
+        // Collect all conditions from the filter into one OrClause
+        var total: usize = 0;
+        if (filter.conditions) |conds| total += conds.len;
+        if (filter.or_clauses) |clauses| {
+            for (clauses) |clause| total += clause.len;
+        }
+        if (total == 0) return;
+
+        const combined = try allocator.alloc(query_ast.Condition, total);
+        var idx: usize = 0;
+        if (filter.conditions) |conds| {
+            for (conds) |*c| {
+                combined[idx] = c.*;
+                c.* = .{
+                    .field_index = 0,
+                    .op = .eq,
+                    .value = null,
+                    .field_type = .text,
+                    .items_type = null,
+                };
+                idx += 1;
+            }
+            allocator.free(conds);
+            filter.conditions = null;
+        }
+        if (filter.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| {
+                    combined[idx] = c.*;
+                    c.* = .{
+                        .field_index = 0,
+                        .op = .eq,
+                        .value = null,
+                        .field_type = .text,
+                        .items_type = null,
+                    };
+                    idx += 1;
+                }
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
+            filter.or_clauses = null;
+        }
+        try self.or_clauses.append(allocator, combined);
     }
 
     fn appendMovedConditions(
@@ -516,6 +621,7 @@ const PredicateBuilder = struct {
             errdefer moved.deinit(allocator);
             try list.append(allocator, moved);
         }
+        allocator.free(conds);
     }
 
     fn toOwnedPredicate(self: *PredicateBuilder, allocator: Allocator) !query_ast.FilterPredicate {
@@ -528,14 +634,14 @@ const PredicateBuilder = struct {
             allocator.free(conds);
         };
 
-        const or_conditions = if (self.or_conditions.items.len > 0)
-            try self.or_conditions.toOwnedSlice(allocator)
+        const or_clauses = if (self.or_clauses.items.len > 0)
+            try self.or_clauses.toOwnedSlice(allocator)
         else
             null;
 
         return .{
             .conditions = conditions,
-            .or_conditions = or_conditions,
+            .or_clauses = or_clauses,
         };
     }
 };

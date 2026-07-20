@@ -7,7 +7,6 @@ const query_ast = @import("../query/ast.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const storage_cache = @import("cache.zig");
-const filter_sql = @import("filter_sql.zig");
 const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
 const connection = @import("connection.zig");
@@ -34,7 +33,7 @@ fn cleanupRequest(req: ReadRequest) void {
 fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
     const conds = filter.predicate.conditions orelse return null;
     if (conds.len != 1) return null;
-    if (filter.predicate.or_conditions != null) return null;
+    if (filter.predicate.or_clauses != null) return null;
     if (filter.order_by.field_index != id_index or filter.order_by.desc) return null;
     if (filter.after != null) return null;
     const cond = conds[0];
@@ -199,14 +198,11 @@ pub const ReadWorker = struct {
         else
             schema_system.global_namespace_id;
 
-        const auth_pred = if (req.auth_predicate) |*p| p else null;
-
         if (isPointLookup(&req.filter, schema_system.id_field_index)) |id| {
             const result = self.executeSelectDocument(
                 table_metadata,
                 id,
                 effective_namespace_id,
-                auth_pred,
             );
             const response = self.buildResponse(req, table_metadata, result);
             req.deinit(req.allocator);
@@ -217,7 +213,6 @@ pub const ReadWorker = struct {
             table_metadata,
             effective_namespace_id,
             &req.filter,
-            auth_pred,
         );
         const response = self.buildQueryResponse(req, table_metadata, result);
         req.deinit(req.allocator);
@@ -231,15 +226,10 @@ pub const ReadWorker = struct {
         table_metadata: *const schema_types.Table,
         id: DocId,
         namespace_id: i64,
-        guard_predicate: ?*const query_ast.FilterPredicate,
     ) SelectDocumentResult {
-        if (guard_predicate) |predicate| {
-            if (predicate.isAlwaysFalse()) return .{ .record = null };
-        }
-
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, guard_predicate)) {
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, null)) {
             .miss => {},
             .guard_failed => return .{ .record = null },
             .hit => |hit| {
@@ -250,25 +240,7 @@ pub const ReadWorker = struct {
             },
         }
 
-        // Arena-backed guard render + concat: bulk-freed at next request reset.
-        // Guard values are bound as transient SQLite params (copied), and records
-        // are cloned onto self.allocator when cached — safe to omit deinit.
-        const arena_alloc = self.read_arena.allocator();
-        const rendered_guard = filter_sql.renderAndClause(arena_alloc, table_metadata, guard_predicate) catch {
-            return .{ .record = null };
-        };
-
-        // No-guard: use the pre-built cached string directly (zero alloc).
-        // Guard: concat base + guard fragment into the arena.
-        const sql_query: []const u8 = blk: {
-            const guard_fragment = if (rendered_guard) |*rendered| rendered.sqlSlice() else null;
-            break :blk if (guard_fragment) |fragment|
-                std.mem.concat(arena_alloc, u8, &.{ table_metadata.select_document_sql, fragment }) catch {
-                    return .{ .record = null };
-                }
-            else
-                table_metadata.select_document_sql;
-        };
+        const sql_query = table_metadata.select_document_sql;
 
         // Snapshot writer version before the DB read to detect concurrent writes
         const seq_before = self.writer_version.load(.acquire);
@@ -278,7 +250,8 @@ pub const ReadWorker = struct {
             self.node.mutex.lock();
             defer self.node.mutex.unlock();
 
-            var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, sql_query) catch {
+            const stmt_key = std.hash.Wyhash.hash(0, sql_query);
+            var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, stmt_key, sql_query) catch {
                 break :blk null;
             };
             defer mstmt.release();
@@ -290,7 +263,7 @@ pub const ReadWorker = struct {
                 id,
                 namespace_id,
                 table_metadata,
-                if (rendered_guard) |rendered| rendered.values else null,
+                null,
                 &self.json_buf,
             ) catch null;
         };
@@ -325,20 +298,14 @@ pub const ReadWorker = struct {
         table_metadata: *const schema_types.Table,
         namespace_id: i64,
         filter: *const query_ast.QueryFilter,
-        guard_predicate: ?*const query_ast.FilterPredicate,
     ) SelectQueryResult {
         if (filter.predicate.isAlwaysFalse()) {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         }
-        if (guard_predicate) |predicate| {
-            if (predicate.isAlwaysFalse()) {
-                return .{ .records = &[_]Record{}, .next_cursor_str = null };
-            }
-        }
 
         // Arena-backed query build: bulk-freed at next request reset.
         // Values are bound as transient SQLite params; records allocated via arena.
-        const query_res = read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter, guard_predicate) catch {
+        const query_res = read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
 
@@ -348,7 +315,7 @@ pub const ReadWorker = struct {
         self.node.mutex.lock();
         defer self.node.mutex.unlock();
 
-        var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, query_res.sql) catch {
+        var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, filter.structural_hash, query_res.sql) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
         defer mstmt.release();

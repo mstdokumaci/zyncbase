@@ -36,9 +36,12 @@ test "evaluatePredicate keeps conditional AND plus OR semantics" {
         .items_type = null,
     };
 
+    var clause_slice = try allocator.alloc(query_ast.OrClause, 1);
+    clause_slice[0] = or_conds;
+
     var predicate = query_ast.FilterPredicate{
         .conditions = conds,
-        .or_conditions = or_conds,
+        .or_clauses = clause_slice,
     };
     defer predicate.deinit(allocator);
 

@@ -419,7 +419,7 @@ pub const StorageEngine = struct {
             const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
             defer self.allocator.free(sql_str);
 
-            var mstmt = try self.write_worker.stmt_cache.acquire(self.allocator, &self.write_worker.conn, sql_str);
+            var mstmt = try self.write_worker.stmt_cache.acquire(self.allocator, &self.write_worker.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
             defer mstmt.release();
 
             while (true) {

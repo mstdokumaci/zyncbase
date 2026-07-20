@@ -7,6 +7,7 @@ const schema_system = @import("schema/system.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query/parser.zig");
 const query_ast = @import("query/ast.zig");
+const query_hasher = @import("query/hasher.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const typed_codec = @import("typed/codec.zig");
 const typed = @import("typed/types.zig");
@@ -248,7 +249,17 @@ pub const StoreService = struct {
         });
         errdefer if (store_read) |*p| p.deinit(ctx.allocator);
 
-        const filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
+        var filter = try query_parser.parseQueryFilter(ctx.allocator, self.schema, table_index, parsed);
+        errdefer filter.deinit(ctx.allocator);
+
+        // Merge guard into filter (fixes data leak + enables correct structural hash)
+        if (store_read) |*guard| {
+            try query_ast.FilterPredicate.mergeInPlace(&filter.predicate, ctx.allocator, guard);
+            guard.* = .{};
+        }
+
+        // Compute structural hash after merge
+        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
 
         return ReadRequest{
             .conn_id = ctx.conn_id,
@@ -257,7 +268,6 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = ctx.namespace_id,
             .filter = filter,
-            .auth_predicate = store_read,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };
@@ -265,7 +275,8 @@ pub const StoreService = struct {
 
     /// Builds a ReadRequest for a load-more read over an existing subscription.
     /// Clones the subscription's filter, decodes the cursor token, and attaches
-    /// it as the filter's `after` anchor.
+    /// it as the filter's `after` anchor. No re-authorization — the stored
+    /// subscription filter already includes the guard from subscribe time.
     pub fn prepareLoadMoreRead(
         self: *StoreService,
         ctx: ReadContext,
@@ -275,17 +286,7 @@ pub const StoreService = struct {
         sub_id: u64,
         next_cursor: []const u8,
     ) !ReadRequest {
-        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
-
-        var store_read = try authorization_store.authorizeStoreRead(ctx.allocator, .{
-            .config = self.auth_config,
-            .table = table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
-        });
-        errdefer if (store_read) |*p| p.deinit(ctx.allocator);
+        _ = self;
 
         var filter_clone = try sub_filter.clone(ctx.allocator);
         errdefer filter_clone.deinit(ctx.allocator);
@@ -299,6 +300,10 @@ pub const StoreService = struct {
         if (filter_clone.after) |*old| old.deinit(ctx.allocator);
         filter_clone.after = cursor;
 
+        // Recompute structural hash (after is not part of hash, so it's unchanged,
+        // but computing it keeps the invariant that the hash is always valid)
+        filter_clone.structural_hash = query_hasher.computeStructuralHash(&filter_clone);
+
         return ReadRequest{
             .conn_id = ctx.conn_id,
             .msg_id = ctx.msg_id,
@@ -306,7 +311,6 @@ pub const StoreService = struct {
             .table_index = table_index,
             .namespace_id = namespace_id,
             .filter = filter_clone,
-            .auth_predicate = store_read,
             .sub_id = sub_id,
             .allocator = ctx.allocator,
         };

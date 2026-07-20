@@ -4,6 +4,7 @@ const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
+const OrClause = query_ast.OrClause;
 const typed = @import("../typed/types.zig");
 const Record = typed.Record;
 const Value = typed.Value;
@@ -68,14 +69,17 @@ pub const CanonicalFilterContext = struct {
             std.hash.autoHash(&hasher, combined);
         }
         hasher.update("\x00"); // Separator
-        if (f.predicate.or_conditions) |conds| {
-            var combined: u64 = 0;
-            for (conds) |c| {
-                var ch = std.hash.Wyhash.init(0);
-                hashCondition(&ch, c);
-                combined +%= ch.final();
+        if (f.predicate.or_clauses) |clauses| {
+            std.hash.autoHash(&hasher, clauses.len);
+            for (clauses) |clause| {
+                var combined: u64 = 0;
+                for (clause) |c| {
+                    var ch = std.hash.Wyhash.init(0);
+                    hashCondition(&ch, c);
+                    combined +%= ch.final();
+                }
+                std.hash.autoHash(&hasher, combined);
             }
-            std.hash.autoHash(&hasher, combined);
         }
         hasher.update("\x00"); // Separator
         std.hash.autoHash(&hasher, f.order_by);
@@ -90,7 +94,7 @@ pub const CanonicalFilterContext = struct {
     pub fn eql(_: CanonicalFilterContext, a: QueryFilter, b: QueryFilter) bool {
         if (a.predicate.state != b.predicate.state) return false;
         if (!eqlConditionsAsSets(a.predicate.conditions, b.predicate.conditions)) return false;
-        if (!eqlConditionsAsSets(a.predicate.or_conditions, b.predicate.or_conditions)) return false;
+        if (!eqlOrClauses(a.predicate.or_clauses, b.predicate.or_clauses)) return false;
         if (!std.meta.eql(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
         if (a.after == null and b.after == null) return true;
@@ -166,18 +170,22 @@ fn eqlConditionsAsSets(a: ?[]const Condition, b: ?[]const Condition) bool {
     const aa = a.?;
     const bb = b.?;
     if (aa.len != bb.len) return false;
-    var matched = std.bit_set.StaticBitSet(64).initEmpty();
-    var count: usize = 0;
-    for (aa) |ca| {
-        for (bb, 0..) |cb, i| {
-            if (i < 64 and !matched.isSet(i) and eqlCondition(ca, cb)) {
-                matched.set(i);
-                count += 1;
-                break;
-            }
-        }
+    for (aa, 0..) |ca, i| {
+        if (!eqlCondition(ca, bb[i])) return false;
     }
-    return count == aa.len;
+    return true;
+}
+
+fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    const aa = a.?;
+    const bb = b.?;
+    if (aa.len != bb.len) return false;
+    for (aa, 0..) |clause_a, i| {
+        if (!eqlConditionsAsSets(clause_a, bb[i])) return false;
+    }
+    return true;
 }
 
 fn eqlCondition(a: Condition, b: Condition) bool {

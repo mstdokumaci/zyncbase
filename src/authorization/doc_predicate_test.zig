@@ -38,7 +38,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
 
     try testing.expect(predicate.conditions != null);
     try testing.expectEqual(@as(usize, 1), predicate.conditions.?.len);
-    try testing.expect(predicate.or_conditions == null);
+    try testing.expect(predicate.or_clauses == null);
     const condition = predicate.conditions.?[0];
     try testing.expectEqual(query_ast.Operator.eq, condition.op);
     try testing.expect(condition.value != null);
@@ -98,7 +98,7 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
 
     try testing.expect(predicate.isAlwaysFalse());
     try testing.expect(predicate.conditions == null);
-    try testing.expect(predicate.or_conditions == null);
+    try testing.expect(predicate.or_clauses == null);
 }
 
 test "buildDocPredicate clones borrowed literal RHS into predicate" {
@@ -265,13 +265,15 @@ test "buildDocPredicate preserves logical_or predicate" {
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions == null);
-    try testing.expect(predicate.or_conditions != null);
-    try testing.expectEqual(@as(usize, 2), predicate.or_conditions.?.len);
-    try testing.expectEqual(schema_system.owner_id_field_index, predicate.or_conditions.?[0].field_index);
-    try testing.expectEqual(query_ast.Operator.eq, predicate.or_conditions.?[0].op);
-    try testing.expectEqual(query_ast.Operator.eq, predicate.or_conditions.?[1].op);
-    try testing.expect(predicate.or_conditions.?[1].value.?.scalar == .text);
-    try testing.expectEqualStrings("public", predicate.or_conditions.?[1].value.?.scalar.text);
+    try testing.expect(predicate.or_clauses != null);
+    try testing.expectEqual(@as(usize, 2), predicate.or_clauses.?.len);
+    try testing.expectEqual(@as(usize, 1), predicate.or_clauses.?[0].len);
+    try testing.expectEqual(schema_system.owner_id_field_index, predicate.or_clauses.?[0][0].field_index);
+    try testing.expectEqual(query_ast.Operator.eq, predicate.or_clauses.?[0][0].op);
+    try testing.expectEqual(@as(usize, 1), predicate.or_clauses.?[1].len);
+    try testing.expectEqual(query_ast.Operator.eq, predicate.or_clauses.?[1][0].op);
+    try testing.expect(predicate.or_clauses.?[1][0].value.?.scalar == .text);
+    try testing.expectEqualStrings("public", predicate.or_clauses.?[1][0].value.?.scalar.text);
 }
 
 // ─── validateLiteralValue Tests ─────────────────────────────────────────────

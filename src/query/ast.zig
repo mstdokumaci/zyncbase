@@ -1,6 +1,7 @@
 const std = @import("std");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
@@ -209,10 +210,12 @@ pub const PredicateState = enum(u8) {
     match_none,
 };
 
+pub const OrClause = []Condition;
+
 pub const FilterPredicate = struct {
     state: PredicateState = .conditional,
     conditions: ?[]Condition = null,
-    or_conditions: ?[]Condition = null,
+    or_clauses: ?[]OrClause = null,
 
     pub fn isEmpty(self: FilterPredicate) bool {
         return self.isAlwaysTrue();
@@ -220,7 +223,7 @@ pub const FilterPredicate = struct {
 
     pub fn hasClauses(self: FilterPredicate) bool {
         const has_conds = self.conditions != null and self.conditions.?.len > 0;
-        const has_or = self.or_conditions != null and self.or_conditions.?.len > 0;
+        const has_or = self.or_clauses != null and self.or_clauses.?.len > 0;
         return has_conds or has_or;
     }
 
@@ -242,9 +245,12 @@ pub const FilterPredicate = struct {
             for (conds) |*c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |*c| c.deinit(allocator);
-            allocator.free(or_conds);
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
         }
     }
 
@@ -252,10 +258,10 @@ pub const FilterPredicate = struct {
         var cloned = FilterPredicate{
             .state = self.state,
             .conditions = try cloneConditions(allocator, self.conditions),
-            .or_conditions = null,
+            .or_clauses = null,
         };
         errdefer cloned.deinit(allocator);
-        cloned.or_conditions = try cloneConditions(allocator, self.or_conditions);
+        cloned.or_clauses = try cloneOrClauses(allocator, self.or_clauses);
         return cloned;
     }
 
@@ -275,29 +281,101 @@ pub const FilterPredicate = struct {
             self.conditions = try compactTrivialTrueConditions(allocator, conds);
         }
 
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |c| {
-                if (c.isTriviallyTrue()) {
-                    for (or_conds) |*or_c| or_c.deinit(allocator);
-                    allocator.free(or_conds);
-                    self.or_conditions = null;
+        if (self.or_clauses) |clauses| {
+            // If any clause has a trivially true condition, the entire clause
+            // is true → remove it from the AND (it's a no-op).
+            var clause_keep_count: usize = 0;
+            for (clauses) |clause| {
+                var clause_has_true = false;
+                for (clause) |c| {
+                    if (c.isTriviallyTrue()) {
+                        clause_has_true = true;
+                        break;
+                    }
+                }
+                if (!clause_has_true) clause_keep_count += 1;
+            }
+
+            if (clause_keep_count < clauses.len) {
+                // Some clauses were trivially true — compact.
+                if (clause_keep_count == 0) {
+                    // All clauses were trivially true → remove or_clauses entirely.
+                    for (clauses) |clause| {
+                        for (clause) |*c| c.deinit(allocator);
+                        allocator.free(clause);
+                    }
+                    allocator.free(clauses);
+                    self.or_clauses = null;
                     self.state = if (self.hasClauses()) .conditional else .match_all;
                     return self.state;
                 }
+                // Compact: keep only non-trivially-true clauses.
+                const compacted = try allocator.alloc(OrClause, clause_keep_count);
+                var out: usize = 0;
+                for (clauses) |clause| {
+                    var clause_has_true = false;
+                    for (clause) |c| {
+                        if (c.isTriviallyTrue()) {
+                            clause_has_true = true;
+                            break;
+                        }
+                    }
+                    if (clause_has_true) {
+                        for (clause) |*c| c.deinit(allocator);
+                        allocator.free(clause);
+                    } else {
+                        compacted[out] = clause;
+                        out += 1;
+                    }
+                }
+                allocator.free(clauses);
+                self.or_clauses = compacted;
             }
 
-            var keep_count: usize = 0;
-            for (or_conds) |c| {
-                if (!c.isTriviallyFalse()) keep_count += 1;
+            // Now process each surviving clause: remove trivially false conditions.
+            // If a clause becomes empty (all false) → entire predicate is match_none.
+            var clause_idx: usize = 0;
+            while (clause_idx < self.or_clauses.?.len) {
+                const clause = self.or_clauses.?[clause_idx];
+                var keep: usize = 0;
+                for (clause) |c| {
+                    if (!c.isTriviallyFalse()) keep += 1;
+                }
+                if (keep == 0) {
+                    // All conditions in this clause are false → clause is false → entire predicate is match_none.
+                    self.clearClauses(allocator);
+                    self.state = .match_none;
+                    return self.state;
+                }
+                if (keep < clause.len) {
+                    // Compact this clause.
+                    const compacted = try allocator.alloc(Condition, keep);
+                    var out: usize = 0;
+                    for (clause) |*c| {
+                        if (c.isTriviallyFalse()) {
+                            c.deinit(allocator);
+                        } else {
+                            compacted[out] = c.*;
+                            out += 1;
+                        }
+                    }
+                    allocator.free(clause);
+                    self.or_clauses.?[clause_idx] = compacted;
+                }
+                clause_idx += 1;
             }
+        }
 
-            if (keep_count == 0) {
-                self.clearClauses(allocator);
-                self.state = .match_none;
-                return self.state;
+        // Sort conditions for deterministic order (required for structural hash)
+        if (self.conditions) |conds| {
+            std.mem.sort(Condition, conds, {}, conditionLessThan);
+        }
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                std.mem.sort(Condition, clause, {}, conditionLessThan);
             }
-
-            self.or_conditions = try compactTrivialFalseConditions(allocator, or_conds, keep_count);
+            // Sort or_clauses by their first condition for deterministic clause order
+            std.mem.sort(OrClause, clauses, {}, orClauseLessThan);
         }
 
         self.state = if (self.hasClauses()) .conditional else .match_all;
@@ -310,11 +388,72 @@ pub const FilterPredicate = struct {
             allocator.free(conds);
             self.conditions = null;
         }
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |*c| c.deinit(allocator);
-            allocator.free(or_conds);
-            self.or_conditions = null;
+        if (self.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
+            self.or_clauses = null;
         }
+    }
+
+    /// Merges `guard` into `self` in-place: self ∧ guard.
+    /// Guard conditions are appended to self.conditions.
+    /// Guard or_clauses are appended to self.or_clauses.
+    /// Guard state is respected: match_all = no-op, match_none = self becomes match_none.
+    /// Takes ownership of guard's memory on success.
+    pub fn mergeInPlace(
+        self: *FilterPredicate,
+        allocator: std.mem.Allocator,
+        guard: *FilterPredicate,
+    ) !void {
+        if (guard.state == .match_all) {
+            guard.deinit(allocator);
+            return;
+        }
+        if (guard.state == .match_none) {
+            guard.deinit(allocator);
+            self.deinit(allocator);
+            self.state = .match_none;
+            return;
+        }
+
+        // Move guard's conditions into self
+        if (guard.conditions) |guard_conds| {
+            if (self.conditions) |self_conds| {
+                // Concatenate: allocate new combined slice
+                const combined = try allocator.alloc(Condition, self_conds.len + guard_conds.len);
+                for (self_conds, 0..) |c, i| combined[i] = c;
+                for (guard_conds, 0..) |c, i| combined[self_conds.len + i] = c;
+                allocator.free(self_conds);
+                allocator.free(guard_conds);
+                self.conditions = combined;
+                guard.conditions = null;
+            } else {
+                self.conditions = guard_conds;
+                guard.conditions = null;
+            }
+        }
+
+        // Move guard's or_clauses into self
+        if (guard.or_clauses) |guard_clauses| {
+            if (self.or_clauses) |self_clauses| {
+                // Concatenate: allocate new combined slice
+                const combined = try allocator.alloc(OrClause, self_clauses.len + guard_clauses.len);
+                for (self_clauses, 0..) |c, i| combined[i] = c;
+                for (guard_clauses, 0..) |c, i| combined[self_clauses.len + i] = c;
+                allocator.free(self_clauses);
+                allocator.free(guard_clauses);
+                self.or_clauses = combined;
+                guard.or_clauses = null;
+            } else {
+                self.or_clauses = guard_clauses;
+                guard.or_clauses = null;
+            }
+        }
+
+        _ = try self.normalize(allocator);
     }
 };
 
@@ -323,6 +462,7 @@ pub const QueryFilter = struct {
     order_by: SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
+    structural_hash: u64 = 0,
 
     pub fn deinit(self: *QueryFilter, allocator: std.mem.Allocator) void {
         self.predicate.deinit(allocator);
@@ -331,7 +471,7 @@ pub const QueryFilter = struct {
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {
-        var copy = self;
+        var copy = self; // copies structural_hash by value
         copy.predicate = try self.predicate.clone(allocator);
         errdefer copy.predicate.deinit(allocator);
         copy.order_by = self.order_by;
@@ -341,6 +481,35 @@ pub const QueryFilter = struct {
         return copy;
     }
 };
+
+fn cloneOrClauses(allocator: std.mem.Allocator, clauses: ?[]const OrClause) !?[]OrClause {
+    const cls = clauses orelse return null;
+    const cloned = try allocator.alloc(OrClause, cls.len);
+    var initialized_count: usize = 0;
+    errdefer {
+        for (cloned[0..initialized_count]) |clause| {
+            for (clause) |*c| c.deinit(allocator);
+            allocator.free(clause);
+        }
+        allocator.free(cloned);
+    }
+    for (cls, 0..) |clause, i| {
+        const conds = clause;
+        const cloned_conds = try allocator.alloc(Condition, conds.len);
+        var cond_count: usize = 0;
+        errdefer {
+            for (cloned_conds[0..cond_count]) |*c| c.deinit(allocator);
+            allocator.free(cloned_conds);
+        }
+        for (conds, 0..) |condition, j| {
+            cloned_conds[j] = try condition.clone(allocator);
+            cond_count += 1;
+        }
+        cloned[i] = cloned_conds;
+        initialized_count += 1;
+    }
+    return cloned;
+}
 
 fn cloneConditions(allocator: std.mem.Allocator, conditions: ?[]const Condition) !?[]Condition {
     const conds = conditions orelse return null;
@@ -383,23 +552,56 @@ fn compactTrivialTrueConditions(allocator: std.mem.Allocator, conds: []Condition
     return compacted;
 }
 
-fn compactTrivialFalseConditions(
-    allocator: std.mem.Allocator,
-    conds: []Condition,
-    keep_count: usize,
-) ![]Condition {
-    if (keep_count == conds.len) return conds;
-
-    const compacted = try allocator.alloc(Condition, keep_count);
-    var out: usize = 0;
-    for (conds) |*c| {
-        if (c.isTriviallyFalse()) {
-            c.deinit(allocator);
-            continue;
-        }
-        compacted[out] = c.*;
-        out += 1;
+fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
+    if (a.field_index != b.field_index) return a.field_index < b.field_index;
+    if (a.op != b.op) return @intFromEnum(a.op) < @intFromEnum(b.op);
+    if (a.field_type != b.field_type) return @intFromEnum(a.field_type) < @intFromEnum(b.field_type);
+    // items_type comparison: null < non-null, both null = equal
+    const a_items = a.items_type;
+    const b_items = b.items_type;
+    if (a_items != null and b_items != null) {
+        if (a_items.? != b_items.?) return @intFromEnum(a_items.?) < @intFromEnum(b_items.?);
+    } else if (a_items == null and b_items != null) {
+        return true; // null < non-null
+    } else if (a_items != null and b_items == null) {
+        return false; // non-null > null
     }
-    allocator.free(conds);
-    return compacted;
+    // both null or equal — continue to value comparison
+    return conditionValueLessThan(a.value, b.value);
+}
+
+fn orClauseLessThan(_: void, a: OrClause, b: OrClause) bool {
+    if (a.len == 0 and b.len == 0) return false;
+    if (a.len == 0) return true;
+    if (b.len == 0) return false;
+    return conditionLessThan({}, a[0], b[0]);
+}
+
+fn conditionValueLessThan(a: ?Value, b: ?Value) bool {
+    if (a == null and b == null) return false;
+    if (a == null) return true;
+    if (b == null) return false;
+    const av = a.?;
+    const bv = b.?;
+    if (@intFromEnum(std.meta.activeTag(av)) != @intFromEnum(std.meta.activeTag(bv)))
+        return @intFromEnum(std.meta.activeTag(av)) < @intFromEnum(std.meta.activeTag(bv));
+    return switch (av) {
+        .scalar => |as| switch (as) {
+            .text => |at| if (bv.scalar == .text) std.mem.lessThan(u8, at, bv.scalar.text) else false,
+            .integer => |ai| if (bv.scalar == .integer) ai < bv.scalar.integer else false,
+            .real => |ar| if (bv.scalar == .real) ar < bv.scalar.real else false,
+            .boolean => |ab| if (bv.scalar == .boolean) @intFromBool(ab) < @intFromBool(bv.scalar.boolean) else false,
+            .doc_id => |ad| if (bv.scalar == .doc_id) std.mem.lessThan(u8, &typed_doc_id.toBytes(ad), &typed_doc_id.toBytes(bv.scalar.doc_id)) else false,
+        },
+        .array => |aa| blk: {
+            const ba = bv.array;
+            const min_len = @min(aa.len, ba.len);
+            for (0..min_len) |i| {
+                if (ScalarValue.order(aa[i], ba[i]) == .lt) break :blk true;
+                if (ScalarValue.order(aa[i], ba[i]) == .gt) break :blk false;
+            }
+            break :blk aa.len < ba.len;
+        },
+        .nil => false,
+    };
 }

@@ -18,12 +18,18 @@ pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Recor
         }
     }
 
-    if (predicate.or_conditions) |or_conds| {
-        if (or_conds.len == 0) return true;
-        for (or_conds) |condition| {
-            if (try evaluateCondition(&condition, record)) return true;
+    if (predicate.or_clauses) |clauses| {
+        for (clauses) |clause| {
+            if (clause.len == 0) continue;
+            var clause_matched = false;
+            for (clause) |condition| {
+                if (try evaluateCondition(&condition, record)) {
+                    clause_matched = true;
+                    break;
+                }
+            }
+            if (!clause_matched) return false;
         }
-        return false;
     }
 
     return true;

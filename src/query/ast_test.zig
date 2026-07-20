@@ -168,27 +168,31 @@ test "FilterPredicate.normalize collapses in/notIn empty sets" {
         try std.testing.expect(p.conditions == null);
     }
 
-    // `notIn` empty in or_conditions is a tautology -> dropped, AND conditions kept (conditional).
+    // `notIn` empty in or_clauses is a tautology -> dropped, AND conditions kept (conditional).
     {
         var and_conds = try allocator.alloc(query_ast.Condition, 1);
         and_conds[0] = condText(allocator, .eq, "x");
         var or_conds = try allocator.alloc(query_ast.Condition, 1);
         or_conds[0] = cond(allocator, .notIn, try empty.clone(allocator));
-        var p = query_ast.FilterPredicate{ .conditions = and_conds, .or_conditions = or_conds };
+        var clause_slice = try allocator.alloc(query_ast.OrClause, 1);
+        clause_slice[0] = or_conds;
+        var p = query_ast.FilterPredicate{ .conditions = and_conds, .or_clauses = clause_slice };
         defer p.deinit(allocator);
         try std.testing.expectEqual(query_ast.PredicateState.conditional, try p.normalize(allocator));
-        try std.testing.expect(p.or_conditions == null);
+        try std.testing.expect(p.or_clauses == null);
         try std.testing.expect(p.conditions != null);
     }
 
-    // `in` empty in or_conditions -> all OR terms false -> match_none.
+    // `in` empty in or_clauses -> all OR terms false -> match_none.
     {
         var or_conds = try allocator.alloc(query_ast.Condition, 1);
         or_conds[0] = cond(allocator, .in, try empty.clone(allocator));
-        var p = query_ast.FilterPredicate{ .or_conditions = or_conds };
+        var clause_slice = try allocator.alloc(query_ast.OrClause, 1);
+        clause_slice[0] = or_conds;
+        var p = query_ast.FilterPredicate{ .or_clauses = clause_slice };
         defer p.deinit(allocator);
         try std.testing.expectEqual(query_ast.PredicateState.match_none, try p.normalize(allocator));
-        try std.testing.expect(p.or_conditions == null);
+        try std.testing.expect(p.or_clauses == null);
     }
 }
 

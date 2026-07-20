@@ -104,12 +104,13 @@ pub fn appendFilterPredicateSql(
         try appendConditionSql(allocator, &and_list, values, table_metadata, cond);
     }
 
-    const or_conds = predicate.or_conditions orelse @as([]const query_ast.Condition, &.{});
-    if (or_conds.len > 0) {
+    const clauses = predicate.or_clauses orelse @as([]const query_ast.OrClause, &.{});
+    for (clauses) |clause| {
+        if (clause.len == 0) continue;
         try and_list.maybeSep(allocator);
         try buf.append(allocator, '(');
         var or_list = SqlList.init(buf, " OR ");
-        for (or_conds) |*cond| {
+        for (clause) |*cond| {
             try appendConditionSql(allocator, &or_list, values, table_metadata, cond);
         }
         try buf.append(allocator, ')');

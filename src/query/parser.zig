@@ -130,9 +130,12 @@ pub fn parseQueryFilter(
             for (conds) |*c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (predicate.or_conditions) |or_conds| {
-            for (or_conds) |*c| c.deinit(allocator);
-            allocator.free(or_conds);
+        if (predicate.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(clauses);
         }
         if (after) |*a| a.deinit(allocator);
         if (after_token) |token| allocator.free(token);
@@ -181,7 +184,7 @@ const FilterParseCtx = struct {
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
             try self.replaceConditions(self.predicate.conditions, value, &self.predicate.conditions);
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
-            try self.replaceConditions(self.predicate.or_conditions, value, &self.predicate.or_conditions);
+            try self.replaceOrConditions(value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
             self.order_by.* = try parseSortDescriptor(self.table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
@@ -205,6 +208,25 @@ const FilterParseCtx = struct {
             self.allocator.free(old_conds);
         }
         dest.* = new_conds;
+    }
+
+    fn replaceOrConditions(
+        self: *FilterParseCtx,
+        value: msgpack.Payload,
+    ) ParserError!void {
+        const new_conds = try parseConditions(self.allocator, self.table_metadata, value);
+        // Free existing or_clauses if any
+        if (self.predicate.or_clauses) |clauses| {
+            for (clauses) |clause| {
+                for (clause) |*c| c.deinit(self.allocator);
+                self.allocator.free(clause);
+            }
+            self.allocator.free(clauses);
+        }
+        // Wrap the conditions array as a single OrClause
+        const clause_slice = try self.allocator.alloc(query_ast.OrClause, 1);
+        clause_slice[0] = new_conds;
+        self.predicate.or_clauses = clause_slice;
     }
 
     fn parseLimit(self: *FilterParseCtx, value: msgpack.Payload) ParserError!void {
