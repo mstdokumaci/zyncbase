@@ -54,14 +54,10 @@ fn pathConditionLessThan(_: void, a: Condition, b: Condition) bool {
     if (a.field_index != b.field_index) return a.field_index < b.field_index;
     if (a.op != b.op) return @intFromEnum(a.op) < @intFromEnum(b.op);
     if (a.field_type != b.field_type) return @intFromEnum(a.field_type) < @intFromEnum(b.field_type);
-    const a_items = a.items_type;
-    const b_items = b.items_type;
-    if (a_items != null and b_items != null) {
-        if (a_items.? != b_items.?) return @intFromEnum(a_items.?) < @intFromEnum(b_items.?);
-    } else if (a_items == null and b_items != null) {
-        return true;
-    } else if (a_items != null and b_items == null) {
-        return false;
+    if (a.items_type != b.items_type) {
+        if (a.items_type == null) return true;
+        if (b.items_type == null) return false;
+        return @intFromEnum(a.items_type.?) < @intFromEnum(b.items_type.?);
     }
     return hash_context.conditionValueLessThan(a.value, b.value);
 }
