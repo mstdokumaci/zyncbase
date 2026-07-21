@@ -60,30 +60,19 @@ pub const CanonicalFilterContext = struct {
     pub fn hash(_: CanonicalFilterContext, f: QueryFilter) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, f.predicate.state);
-        hasher.update("\x00"); // Separator
         if (f.predicate.conditions) |conds| {
-            var combined: u64 = 0;
             for (conds) |c| {
-                var ch = std.hash.Wyhash.init(0);
-                hash_context.hashCondition(&ch, c);
-                combined +%= ch.final();
+                hash_context.hashCondition(&hasher, c);
             }
-            std.hash.autoHash(&hasher, combined);
         }
-        hasher.update("\x00"); // Separator
         if (f.predicate.or_clauses) |clauses| {
             std.hash.autoHash(&hasher, clauses.len);
             for (clauses) |clause| {
-                var combined: u64 = 0;
                 for (clause) |c| {
-                    var ch = std.hash.Wyhash.init(0);
-                    hash_context.hashCondition(&ch, c);
-                    combined +%= ch.final();
+                    hash_context.hashCondition(&hasher, c);
                 }
-                std.hash.autoHash(&hasher, combined);
             }
         }
-        hasher.update("\x00"); // Separator
         std.hash.autoHash(&hasher, f.order_by);
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
