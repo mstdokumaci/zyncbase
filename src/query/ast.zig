@@ -1,6 +1,7 @@
 const std = @import("std");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
+const hash_context = @import("hash_context.zig");
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
@@ -592,7 +593,7 @@ fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
         return false; // non-null > null
     }
     // both null or equal — continue to value comparison
-    return conditionValueLessThan(a.value, b.value);
+    return hash_context.conditionValueLessThan(a.value, b.value);
 }
 
 fn orClauseLessThan(_: void, a: OrClause, b: OrClause) bool {
@@ -602,30 +603,4 @@ fn orClauseLessThan(_: void, a: OrClause, b: OrClause) bool {
         if (conditionLessThan({}, b[i], a[i])) return false;
     }
     return a.len < b.len;
-}
-
-fn conditionValueLessThan(a: ?Value, b: ?Value) bool {
-    if (a == null and b == null) return false;
-    if (a == null) return true;
-    if (b == null) return false;
-    const av = a.?;
-    const bv = b.?;
-    const at = @intFromEnum(std.meta.activeTag(av));
-    const bt = @intFromEnum(std.meta.activeTag(bv));
-    if (at != bt) return at < bt;
-    return switch (av) {
-        .scalar => av.scalar.order(bv.scalar) == .lt,
-        .array => |aa| blk: {
-            const ba = bv.array;
-            for (0..@min(aa.len, ba.len)) |i| {
-                switch (ScalarValue.order(aa[i], ba[i])) {
-                    .lt => break :blk true,
-                    .gt => break :blk false,
-                    .eq => {},
-                }
-            }
-            break :blk aa.len < ba.len;
-        },
-        .nil => false,
-    };
 }

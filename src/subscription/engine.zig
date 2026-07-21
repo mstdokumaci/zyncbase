@@ -2,12 +2,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
+const hash_context = @import("../query/hash_context.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
 const typed = @import("../typed/types.zig");
 const Record = typed.Record;
-const Value = typed.Value;
 const predicate_dag = @import("predicate_dag.zig");
 const PredicateDag = predicate_dag.PredicateDag;
 
@@ -65,7 +65,7 @@ pub const CanonicalFilterContext = struct {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
-                hashCondition(&ch, c);
+                hash_context.hashCondition(&ch, c);
                 combined +%= ch.final();
             }
             std.hash.autoHash(&hasher, combined);
@@ -77,7 +77,7 @@ pub const CanonicalFilterContext = struct {
                 var combined: u64 = 0;
                 for (clause) |c| {
                     var ch = std.hash.Wyhash.init(0);
-                    hashCondition(&ch, c);
+                    hash_context.hashCondition(&ch, c);
                     combined +%= ch.final();
                 }
                 std.hash.autoHash(&hasher, combined);
@@ -87,7 +87,7 @@ pub const CanonicalFilterContext = struct {
         std.hash.autoHash(&hasher, f.order_by);
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hashValue(&hasher, a.sort_value);
+            hash_context.hashValue(&hasher, a.sort_value);
             std.hash.autoHash(&hasher, a.id);
         }
         return hasher.final();
@@ -103,68 +103,9 @@ pub const CanonicalFilterContext = struct {
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return eqlValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
-    }
-
-    fn hashCondition(hasher: *std.hash.Wyhash, c: Condition) void {
-        std.hash.autoHash(hasher, c.field_index);
-        std.hash.autoHash(hasher, c.op);
-        if (c.value) |v| hashValue(hasher, v);
-        std.hash.autoHash(hasher, c.field_type);
-        std.hash.autoHash(hasher, c.items_type);
-    }
-
-    fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
-        std.hash.autoHash(hasher, std.meta.activeTag(v));
-        switch (v) {
-            .scalar => |s| hashScalarValue(hasher, s),
-            .array => |arr| {
-                for (arr) |item| hashScalarValue(hasher, item);
-            },
-            .nil => {},
-        }
-    }
-
-    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
-        std.hash.autoHash(hasher, std.meta.activeTag(s));
-        switch (s) {
-            .text => |t| hasher.update(t),
-            .doc_id => |id| std.hash.autoHash(hasher, id),
-            .integer => |i| std.hash.autoHash(hasher, i),
-            .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(r))),
-            .boolean => |b| std.hash.autoHash(hasher, b),
-        }
+        return aa.sort_value.eql(bb.sort_value) and std.meta.eql(aa.id, bb.id);
     }
 };
-
-fn eqlValue(a: Value, b: Value) bool {
-    const tag = std.meta.activeTag(a);
-    if (tag != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .scalar => |s| eqlScalarValue(s, b.scalar),
-        .array => |arr| blk: {
-            if (arr.len != b.array.len) break :blk false;
-            for (arr, 0..) |item, i| {
-                if (!eqlScalarValue(item, b.array[i])) break :blk false;
-            }
-            break :blk true;
-        },
-        .nil => true,
-    };
-}
-
-fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
-    const tag = std.meta.activeTag(a);
-    if (tag != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .text => |t| std.mem.eql(u8, t, b.text),
-        .real => |r| blk: {
-            // Standard Zig 0.15 behavior for f64 comparison
-            break :blk r == b.real;
-        },
-        else => std.meta.eql(a, b),
-    };
-}
 
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if (a == null and b == null) return true;
@@ -173,7 +114,7 @@ fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     const bb = b.?;
     if (aa.len != bb.len) return false;
     for (aa, 0..) |ca, i| {
-        if (!eqlCondition(ca, bb[i])) return false;
+        if (!hash_context.eqlCondition(ca, bb[i])) return false;
     }
     return true;
 }
@@ -188,16 +129,6 @@ fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
         if (!eqlConditionsSorted(clause_a, bb[i])) return false;
     }
     return true;
-}
-
-fn eqlCondition(a: Condition, b: Condition) bool {
-    if (a.field_index != b.field_index) return false;
-    if (a.op != b.op) return false;
-    if (a.field_type != b.field_type) return false;
-    if (a.items_type != b.items_type) return false;
-    if (a.value == null and b.value == null) return true;
-    if (a.value == null or b.value == null) return false;
-    return eqlValue(a.value.?, b.value.?);
 }
 
 pub const SubscriptionEngine = struct {

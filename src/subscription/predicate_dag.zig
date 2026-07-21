@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
+const hash_context = @import("../query/hash_context.zig");
 const typed = @import("../typed/types.zig");
 
 const Condition = query_ast.Condition;
@@ -15,7 +16,7 @@ const Value = typed.Value;
 pub const ValueContext = struct {
     pub fn hash(_: ValueContext, v: Value) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        hashValue(&hasher, v);
+        hash_context.hashValue(&hasher, v);
         return hasher.final();
     }
 
@@ -28,54 +29,14 @@ pub const ValueContext = struct {
 pub const ConditionContext = struct {
     pub fn hash(_: ConditionContext, c: Condition) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        hashCondition(&hasher, c);
+        hash_context.hashCondition(&hasher, c);
         return hasher.final();
     }
 
     pub fn eql(_: ConditionContext, a: Condition, b: Condition) bool {
-        return eqlCondition(a, b);
+        return hash_context.eqlCondition(a, b);
     }
 };
-
-fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
-    std.hash.autoHash(hasher, std.meta.activeTag(v));
-    switch (v) {
-        .scalar => |s| hashScalarValue(hasher, s),
-        .array => |arr| {
-            for (arr) |item| hashScalarValue(hasher, item);
-        },
-        .nil => {},
-    }
-}
-
-fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
-    std.hash.autoHash(hasher, std.meta.activeTag(s));
-    switch (s) {
-        .text => |t| hasher.update(t),
-        .doc_id => |id| std.hash.autoHash(hasher, id),
-        .integer => |i| std.hash.autoHash(hasher, i),
-        .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(r))),
-        .boolean => |b| std.hash.autoHash(hasher, b),
-    }
-}
-
-fn hashCondition(hasher: *std.hash.Wyhash, c: Condition) void {
-    std.hash.autoHash(hasher, c.field_index);
-    std.hash.autoHash(hasher, c.op);
-    std.hash.autoHash(hasher, c.field_type);
-    std.hash.autoHash(hasher, c.items_type);
-    if (c.value) |v| hashValue(hasher, v);
-}
-
-fn eqlCondition(a: Condition, b: Condition) bool {
-    if (a.field_index != b.field_index) return false;
-    if (a.op != b.op) return false;
-    if (a.field_type != b.field_type) return false;
-    if (a.items_type != b.items_type) return false;
-    if (a.value == null and b.value == null) return true;
-    if (a.value == null or b.value == null) return false;
-    return a.value.?.eql(b.value.?);
-}
 
 /// Evaluation-order tier: equality first, then cheap ops, then expensive string ops.
 fn conditionTier(op: Operator) u8 {
@@ -102,33 +63,7 @@ fn pathConditionLessThan(_: void, a: Condition, b: Condition) bool {
     } else if (a_items != null and b_items == null) {
         return false;
     }
-    return conditionValueLessThan(a.value, b.value);
-}
-
-fn conditionValueLessThan(a: ?Value, b: ?Value) bool {
-    if (a == null and b == null) return false;
-    if (a == null) return true;
-    if (b == null) return false;
-    const av = a.?;
-    const bv = b.?;
-    const at = @intFromEnum(std.meta.activeTag(av));
-    const bt = @intFromEnum(std.meta.activeTag(bv));
-    if (at != bt) return at < bt;
-    return switch (av) {
-        .scalar => av.scalar.order(bv.scalar) == .lt,
-        .array => |aa| blk: {
-            const ba = bv.array;
-            for (0..@min(aa.len, ba.len)) |i| {
-                switch (typed.ScalarValue.order(aa[i], ba[i])) {
-                    .lt => break :blk true,
-                    .gt => break :blk false,
-                    .eq => {},
-                }
-            }
-            break :blk aa.len < ba.len;
-        },
-        .nil => false,
-    };
+    return hash_context.conditionValueLessThan(a.value, b.value);
 }
 
 const ValueMap = std.HashMapUnmanaged(Value, *Node, ValueContext, 80);
