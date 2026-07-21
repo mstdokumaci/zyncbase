@@ -8,6 +8,13 @@ const testing = std.testing;
 const Condition = query_ast.Condition;
 const PredicateDag = predicate_dag.PredicateDag;
 
+fn listContains(list: *const std.ArrayListUnmanaged(u64), val: u64) bool {
+    for (list.items) |item| {
+        if (item == val) return true;
+    }
+    return false;
+}
+
 test "PredicateDag: shared equality prefix and GC" {
     const allocator = testing.allocator;
     var dag = PredicateDag.init(allocator);
@@ -45,12 +52,12 @@ test "PredicateDag: shared equality prefix and GC" {
     });
     defer rec_a.deinit(allocator);
 
-    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
     defer matches.deinit(allocator);
     try dag.collectMatches(&rec_a, &matches, allocator);
-    try testing.expect(matches.contains(1));
-    try testing.expect(!matches.contains(2));
-    try testing.expect(!matches.contains(3));
+    try testing.expect(listContains(&matches,1));
+    try testing.expect(!listContains(&matches,2));
+    try testing.expect(!listContains(&matches,3));
 
     var rec_active_other = try tth.recordFromValues(allocator, &.{
         tth.valText("active"),
@@ -60,9 +67,9 @@ test "PredicateDag: shared equality prefix and GC" {
     defer rec_active_other.deinit(allocator);
     matches.clearRetainingCapacity();
     try dag.collectMatches(&rec_active_other, &matches, allocator);
-    try testing.expect(!matches.contains(1));
-    try testing.expect(matches.contains(2));
-    try testing.expect(matches.contains(3));
+    try testing.expect(!listContains(&matches,1));
+    try testing.expect(listContains(&matches,2));
+    try testing.expect(listContains(&matches,3));
 
     dag.removeGroup(1, &filter_a);
     dag.removeGroup(2, &filter_b);
@@ -92,11 +99,11 @@ test "PredicateDag: match_all and match_none" {
     var rec = try tth.recordFromValues(allocator, &.{tth.valText("x")});
     defer rec.deinit(allocator);
 
-    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
     defer matches.deinit(allocator);
     try dag.collectMatches(&rec, &matches, allocator);
-    try testing.expect(matches.contains(10));
-    try testing.expect(!matches.contains(11));
+    try testing.expect(listContains(&matches,10));
+    try testing.expect(!listContains(&matches,11));
 
     dag.removeGroup(10, &filter_all);
     dag.removeGroup(11, &filter_none);
@@ -120,14 +127,14 @@ test "PredicateDag: non-eq condition branch" {
     var low = try tth.recordFromValues(allocator, &.{tth.valInt(2)});
     defer low.deinit(allocator);
 
-    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
     defer matches.deinit(allocator);
     try dag.collectMatches(&high, &matches, allocator);
-    try testing.expect(matches.contains(1));
+    try testing.expect(listContains(&matches,1));
 
     matches.clearRetainingCapacity();
     try dag.collectMatches(&low, &matches, allocator);
-    try testing.expect(!matches.contains(1));
+    try testing.expect(!listContains(&matches,1));
 
     dag.removeGroup(1, &filter);
     try testing.expect(dag.isEmpty());
@@ -156,16 +163,16 @@ test "PredicateDag: eq then non-eq path order" {
     var bad_age = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(10) });
     defer bad_age.deinit(allocator);
 
-    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
     defer matches.deinit(allocator);
     try dag.collectMatches(&ok, &matches, allocator);
-    try testing.expect(matches.contains(1));
+    try testing.expect(listContains(&matches,1));
     matches.clearRetainingCapacity();
     try dag.collectMatches(&bad_status, &matches, allocator);
-    try testing.expect(!matches.contains(1));
+    try testing.expect(!listContains(&matches,1));
     matches.clearRetainingCapacity();
     try dag.collectMatches(&bad_age, &matches, allocator);
-    try testing.expect(!matches.contains(1));
+    try testing.expect(!listContains(&matches,1));
 }
 
 test "PredicateDag: OR clause residual filtering" {
@@ -189,10 +196,10 @@ test "PredicateDag: OR clause residual filtering" {
     // status=active, owner=1 → AND path matches, OR clause passes
     var rec_match = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(1), tth.valInt(0) });
     defer rec_match.deinit(allocator);
-    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
     defer matches.deinit(allocator);
     try dag.collectMatches(&rec_match, &matches, allocator);
-    try testing.expect(matches.contains(1));
+    try testing.expect(listContains(&matches,1));
     try testing.expect(try predicate_dag.residualMatches(&filter.predicate, &rec_match));
 
     // status=active, owner=3 → AND path matches, OR clause fails
@@ -200,7 +207,7 @@ test "PredicateDag: OR clause residual filtering" {
     defer rec_or_fail.deinit(allocator);
     matches.clearRetainingCapacity();
     try dag.collectMatches(&rec_or_fail, &matches, allocator);
-    try testing.expect(matches.contains(1)); // AND path still matches
+    try testing.expect(listContains(&matches,1)); // AND path still matches
     try testing.expect(!try predicate_dag.residualMatches(&filter.predicate, &rec_or_fail)); // OR fails
 
     // status=draft, owner=1 → AND path fails (trie never reaches leaf)
@@ -208,7 +215,7 @@ test "PredicateDag: OR clause residual filtering" {
     defer rec_and_fail.deinit(allocator);
     matches.clearRetainingCapacity();
     try dag.collectMatches(&rec_and_fail, &matches, allocator);
-    try testing.expect(!matches.contains(1));
+    try testing.expect(!listContains(&matches,1));
 
     dag.removeGroup(1, &filter);
     try testing.expect(dag.isEmpty());

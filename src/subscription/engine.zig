@@ -428,55 +428,49 @@ pub const SubscriptionEngine = struct {
 
         const dag = self.dags_by_collection.getPtr(key) orelse return allocator.alloc(Match, 0);
 
-        var matched_before_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer matched_before_ids.deinit(allocator);
-        var matched_after_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer matched_after_ids.deinit(allocator);
+        var matched_before: std.ArrayListUnmanaged(u64) = .empty;
+        defer matched_before.deinit(allocator);
+        var matched_after: std.ArrayListUnmanaged(u64) = .empty;
+        defer matched_after.deinit(allocator);
 
         if (change.old_record) |old| {
-            try dag.collectMatches(&old, &matched_before_ids, allocator);
-            try self.filterResidualMatches(&matched_before_ids, &old, allocator);
+            try dag.collectMatches(&old, &matched_before, allocator);
+            try self.filterResidualMatches(&matched_before, &old);
         }
         if (change.new_record) |new| {
-            try dag.collectMatches(&new, &matched_after_ids, allocator);
-            try self.filterResidualMatches(&matched_after_ids, &new, allocator);
+            try dag.collectMatches(&new, &matched_after, allocator);
+            try self.filterResidualMatches(&matched_after, &new);
         }
 
-        // Union of candidate group ids (AND path + residual OR passed).
-        var candidate_ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer candidate_ids.deinit(allocator);
-        var before_it = matched_before_ids.keyIterator();
-        while (before_it.next()) |gid| try candidate_ids.put(allocator, gid.*, {});
-        var after_it = matched_after_ids.keyIterator();
-        while (after_it.next()) |gid| try candidate_ids.put(allocator, gid.*, {});
+        // Build after-set for O(1) membership checks.
+        var after_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer after_set.deinit(allocator);
+        for (matched_after.items) |gid| try after_set.put(allocator, gid, {});
 
-        var cand_it = candidate_ids.keyIterator();
-        while (cand_it.next()) |gid_ptr| {
-            const gid = gid_ptr.*;
+        // Emit set for all after-matches (enter + within).
+        for (matched_after.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .set_op,
+                });
+            }
+        }
 
-            const matched_before = matched_before_ids.contains(gid);
-            const matches_after = matched_after_ids.contains(gid);
-
-            if (matched_before and !matches_after) {
-                var sub_it = group.subscribers.keyIterator();
-                while (sub_it.next()) |sub| {
-                    try matches.append(allocator, .{
-                        .connection_id = sub.connection_id,
-                        .subscription_id = sub.id,
-                        .op = .remove,
-                    });
-                }
-            } else if (matches_after) {
-                // Record entered the filter or changed within it.
-                var sub_it = group.subscribers.keyIterator();
-                while (sub_it.next()) |sub| {
-                    try matches.append(allocator, .{
-                        .connection_id = sub.connection_id,
-                        .subscription_id = sub.id,
-                        .op = .set_op,
-                    });
-                }
+        // Emit remove for before-only (leave).
+        for (matched_before.items) |gid| {
+            if (after_set.contains(gid)) continue; // within-change, already emitted as set
+            const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .remove,
+                });
             }
         }
 
@@ -486,27 +480,18 @@ pub const SubscriptionEngine = struct {
     /// Drop trie candidates whose residual OR clauses fail (AND path already proven).
     fn filterResidualMatches(
         self: *const SubscriptionEngine,
-        candidates: *std.AutoHashMapUnmanaged(u64, void),
+        candidates: *std.ArrayListUnmanaged(u64),
         record: *const Record,
-        allocator: Allocator,
     ) !void {
-        var to_remove: std.ArrayListUnmanaged(u64) = .empty;
-        defer to_remove.deinit(allocator);
-
-        var it = candidates.keyIterator();
-        while (it.next()) |gid_ptr| {
-            const gid = gid_ptr.*;
-            const group = self.groups.get(gid) orelse {
-                try to_remove.append(allocator, gid);
-                continue;
-            };
-            if (!try predicate_dag.residualMatches(&group.filter.predicate, record)) {
-                try to_remove.append(allocator, gid);
+        var write: usize = 0;
+        for (candidates.items) |gid| {
+            const group = self.groups.get(gid) orelse continue; // drop missing
+            if (try predicate_dag.residualMatches(&group.filter.predicate, record)) {
+                candidates.items[write] = gid;
+                write += 1;
             }
         }
-        for (to_remove.items) |gid| {
-            _ = candidates.remove(gid);
-        }
+        candidates.items = candidates.items[0..write];
     }
 
     /// Evaluates a record against a filter AST.

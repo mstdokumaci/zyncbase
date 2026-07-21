@@ -177,11 +177,11 @@ pub const PredicateDag = struct {
     }
 
     /// Collect group ids whose AND path is satisfied by `record`.
-    /// Caller owns the map and must deinit it. Residual OR checks are the caller's responsibility.
+    /// Caller owns the list and must deinit it. Residual OR checks are the caller's responsibility.
     pub fn collectMatches(
         self: *const PredicateDag,
         record: *const Record,
-        out: *std.AutoHashMapUnmanaged(u64, void),
+        out: *std.ArrayListUnmanaged(u64),
         out_allocator: Allocator,
     ) !void {
         try collectFromNode(&self.root, record, out, out_allocator);
@@ -353,12 +353,12 @@ fn removeGroupBySearch(allocator: Allocator, node: *Node, group_id: u64) bool {
 fn collectFromNode(
     node: *const Node,
     record: *const Record,
-    out: *std.AutoHashMapUnmanaged(u64, void),
+    out: *std.ArrayListUnmanaged(u64),
     allocator: Allocator,
 ) !void {
     var leaf_it = node.leaf_groups.keyIterator();
     while (leaf_it.next()) |gid| {
-        try out.put(allocator, gid.*, {});
+        try out.append(allocator, gid.*);
     }
 
     var eq_it = node.eq_branches.iterator();
