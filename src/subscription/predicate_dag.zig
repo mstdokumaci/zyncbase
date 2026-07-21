@@ -169,8 +169,7 @@ pub const PredicateDag = struct {
         var path_buf: std.ArrayListUnmanaged(Condition) = .empty;
         defer path_buf.deinit(self.allocator);
         buildPath(self.allocator, &filter.predicate, &path_buf) catch {
-            // Path build only allocates; on OOM during remove we still try root-level leaf removal.
-            _ = self.root.leaf_groups.remove(group_id);
+            _ = removeGroupBySearch(self.allocator, &self.root, group_id);
             return;
         };
 
@@ -288,6 +287,66 @@ fn removeAlongPath(
             allocator.destroy(child);
         }
     }
+    return node.isEmpty();
+}
+
+/// Fallback for removeGroup when buildPath OOMs: walk the entire trie,
+/// remove group_id from every leaf, and prune empty subtrees bottom-up.
+fn removeGroupBySearch(allocator: Allocator, node: *Node, group_id: u64) bool {
+    _ = node.leaf_groups.remove(group_id);
+
+    var fields_to_remove: std.ArrayListUnmanaged(usize) = .empty;
+    defer fields_to_remove.deinit(allocator);
+
+    var eq_it = node.eq_branches.iterator();
+    while (eq_it.next()) |field_entry| {
+        var value_map_ptr = field_entry.value_ptr;
+        var values_to_remove: std.ArrayListUnmanaged(Value) = .empty;
+        defer values_to_remove.deinit(allocator);
+
+        var val_it = value_map_ptr.iterator();
+        while (val_it.next()) |val_entry| {
+            if (removeGroupBySearch(allocator, val_entry.value_ptr.*, group_id)) {
+                values_to_remove.append(allocator, val_entry.key_ptr.*) catch break;
+            }
+        }
+        for (values_to_remove.items) |key| {
+            if (value_map_ptr.fetchRemove(key)) |kv| {
+                var k = kv.key;
+                k.deinit(allocator);
+                kv.value.deinit(allocator);
+                allocator.destroy(kv.value);
+            }
+        }
+        if (value_map_ptr.count() == 0) {
+            fields_to_remove.append(allocator, field_entry.key_ptr.*) catch break;
+        }
+    }
+    for (fields_to_remove.items) |field_index| {
+        if (node.eq_branches.fetchRemove(field_index)) |kv| {
+            var map = kv.value;
+            map.deinit(allocator);
+        }
+    }
+
+    var conds_to_remove: std.ArrayListUnmanaged(Condition) = .empty;
+    defer conds_to_remove.deinit(allocator);
+
+    var cond_it = node.cond_branches.iterator();
+    while (cond_it.next()) |entry| {
+        if (removeGroupBySearch(allocator, entry.value_ptr.*, group_id)) {
+            conds_to_remove.append(allocator, entry.key_ptr.*) catch break;
+        }
+    }
+    for (conds_to_remove.items) |key| {
+        if (node.cond_branches.fetchRemove(key)) |kv| {
+            var k = kv.key;
+            k.deinit(allocator);
+            kv.value.deinit(allocator);
+            allocator.destroy(kv.value);
+        }
+    }
+
     return node.isEmpty();
 }
 
