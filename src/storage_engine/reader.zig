@@ -28,6 +28,82 @@ pub const QueryResult = struct {
     }
 };
 
+/// Builds only the bind values for a select query, without the SQL string.
+/// Used on the cache-hit path where the SQL template is already cached.
+/// The values array length doubles as param_count for cache collision safety.
+pub fn buildSelectValues(
+    allocator: Allocator,
+    table_metadata: *const schema_types.Table,
+    namespace_id: i64,
+    filter: *const query_ast.QueryFilter,
+) ![]Value {
+    var values: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer {
+        for (values.items) |v| v.deinit(allocator);
+        values.deinit(allocator);
+    }
+    if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
+
+    // namespace_id
+    try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
+
+    // filter predicate conditions
+    if (!filter.predicate.isEmpty()) {
+        try filter_sql.appendFilterValues(allocator, &values, table_metadata, &filter.predicate);
+    }
+
+    // cursor-based pagination (after)
+    if (filter.after) |cursor| {
+        if (filter.order_by.field_index == schema_system.id_field_index) {
+            try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
+        } else {
+            const sv = try cursor.sort_value.clone(allocator);
+            errdefer sv.deinit(allocator);
+            try values.append(allocator, sv);
+            try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
+        }
+    }
+
+    // limit
+    if (filter.limit) |l| {
+        const effective_limit: u32 = if (l == std.math.maxInt(u32)) l else l + 1;
+        try values.append(allocator, Value{ .scalar = .{ .integer = @intCast(effective_limit) } });
+    }
+
+    return try values.toOwnedSlice(allocator);
+}
+
+/// Builds only the SQL template for a select query, without the bind values.
+/// Used on the cache-miss path to prepare a new statement.
+pub fn buildSelectSql(
+    allocator: Allocator,
+    table_metadata: *const schema_types.Table,
+    filter: *const query_ast.QueryFilter,
+) ![]u8 {
+    var buf = SqlBuf.init();
+    defer buf.deinit(allocator);
+    if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
+    const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
+
+    // 1.. SELECT clause (pre-built)
+    try buf.appendSlice(allocator, table_metadata.select_from_sql);
+
+    // 2.. WHERE clause
+    try buf.appendSlice(allocator, " WHERE ");
+    try sql_build.appendNamespaceFilterSql(allocator, &buf);
+    try appendWhereConditionsSql(allocator, &buf, table_metadata, filter, sort_field_name_quoted);
+
+    // 3.. ORDER BY
+    try sql_build.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
+
+    // 4.. LIMIT
+    if (filter.limit != null) {
+        try buf.appendSlice(allocator, " LIMIT ?");
+    }
+
+    return try buf.toOwnedSlice(allocator);
+}
+
 pub fn buildSelectQuery(
     allocator: Allocator,
     table_metadata: *const schema_types.Table,
@@ -116,6 +192,43 @@ fn appendWhereConditions(
             }
             try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
         }
+    }
+
+    try buf.appendSlice(allocator, ")");
+}
+
+/// SQL-only variant of appendWhereConditions — emits `?` placeholders without values.
+fn appendWhereConditionsSql(
+    allocator: Allocator,
+    buf: *SqlBuf,
+    table_metadata: *const schema_types.Table,
+    filter: *const query_ast.QueryFilter,
+    sort_field_name_quoted: []const u8,
+) !void {
+    const has_conditions = !filter.predicate.isEmpty();
+    if (!has_conditions and filter.after == null) return;
+
+    try buf.appendSlice(allocator, " AND (");
+
+    var added_where = false;
+
+    if (has_conditions) {
+        try filter_sql.appendFilterPredicateSqlPlaceholders(allocator, buf, table_metadata, &filter.predicate);
+        added_where = true;
+    }
+
+    // cursor-based pagination (after)
+    if (filter.after) |cursor| {
+        _ = cursor;
+        if (added_where) try buf.appendSlice(allocator, " AND ");
+
+        try sql_build.appendCursorPredicateSql(
+            allocator,
+            buf,
+            sort_field_name_quoted,
+            filter.order_by.field_index == schema_system.id_field_index,
+            filter.order_by.desc,
+        );
     }
 
     try buf.appendSlice(allocator, ")");

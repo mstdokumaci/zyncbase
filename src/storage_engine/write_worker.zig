@@ -10,6 +10,7 @@ const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
+const write_hasher = @import("write_hasher.zig");
 const query_ast = @import("../query/ast.zig");
 const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
@@ -55,6 +56,17 @@ pub const WriteWorker = struct {
     memory_strategy: *MemoryStrategy,
     conn: sqlite.Db,
     stmt_cache: StatementCache,
+    /// Pre-prepared `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`
+    /// per table, indexed by `table.index`. Used by `getDocumentHelper` (prefetch
+    /// + guard post-check), the hottest read path on the writer. Prepared in
+    /// `StorageEngine.start()`; finalized in `deinit`/`attemptReconnect`.
+    select_document_stmts: []?*sqlite.c.sqlite3_stmt = &.{},
+    /// Pre-prepared stmt for `sql.resolveNamespaceId`. Compile-time SQL literal,
+    /// stable for process lifetime. Prepared in `StorageEngine.start()`.
+    resolve_namespace_stmt: ?*sqlite.c.sqlite3_stmt = null,
+    /// Pre-prepared stmt for `sql.resolveUserId`. Compile-time SQL literal.
+    /// Prepared in `StorageEngine.start()`.
+    resolve_user_stmt: ?*sqlite.c.sqlite3_stmt = null,
     version: std.atomic.Value(u64),
     thread: managedThread(WriteWorker),
     flush_wg: WaitGroup,
@@ -197,6 +209,20 @@ pub const WriteWorker = struct {
 
     pub fn deinit(self: *WriteWorker) void {
         self.json_buf.deinit();
+        // Finalize static stmts before closing the connection.
+        sql.finalizeStaticStmts(self.select_document_stmts);
+        if (self.select_document_stmts.len > 0) {
+            self.allocator.free(self.select_document_stmts);
+            self.select_document_stmts = &.{};
+        }
+        if (self.resolve_namespace_stmt) |s| {
+            _ = sqlite.c.sqlite3_finalize(s);
+            self.resolve_namespace_stmt = null;
+        }
+        if (self.resolve_user_stmt) |s| {
+            _ = sqlite.c.sqlite3_finalize(s);
+            self.resolve_user_stmt = null;
+        }
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
@@ -235,8 +261,8 @@ pub const WriteWorker = struct {
         id: DocId,
     ) !?Record {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return null;
-        const cache_key = std.hash.Wyhash.hash(0, table_metadata.select_document_sql);
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, table_metadata.select_document_sql);
+        const stmt = self.select_document_stmts[table_metadata.index] orelse return error.StatementNotPrepared;
+        var mstmt = try sql.acquireStaticStmt(stmt);
         defer mstmt.release();
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
@@ -902,7 +928,13 @@ pub const WriteWorker = struct {
         var user_doc_id = typed_doc_id.zero;
         var resolution_err: ?anyerror = null;
 
-        if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |ns_id| {
+        const ns_stmt = self.resolve_namespace_stmt orelse {
+            resolution_err = error.StatementNotPrepared;
+            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
+            self.notifyChanges();
+            return;
+        };
+        if (sql.resolveNamespaceId(self.allocator, &self.conn, ns_stmt, sop.namespace)) |ns_id| {
             namespace_id = ns_id;
 
             self.namespace_cache.update(
@@ -920,23 +952,27 @@ pub const WriteWorker = struct {
             };
             const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
 
-            if (sql.resolveUserId(
-                self.allocator,
-                &self.conn,
-                &self.stmt_cache,
-                identity_namespace_id,
-                sop.external_user_id,
-                sop.timestamp,
-            )) |uid| {
-                user_doc_id = uid;
-                self.identity_cache.update(
-                    storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
-                    .{ .user_doc_id = uid },
-                ) catch |err| {
-                    std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
-                };
-            } else |err| {
-                resolution_err = errors.classifyError(err);
+            if (self.resolve_user_stmt) |user_stmt| {
+                if (sql.resolveUserId(
+                    self.allocator,
+                    &self.conn,
+                    user_stmt,
+                    identity_namespace_id,
+                    sop.external_user_id,
+                    sop.timestamp,
+                )) |uid| {
+                    user_doc_id = uid;
+                    self.identity_cache.update(
+                        storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
+                        .{ .user_doc_id = uid },
+                    ) catch |err| {
+                        std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
+                    };
+                } else |err| {
+                    resolution_err = errors.classifyError(err);
+                }
+            } else {
+                resolution_err = error.StatementNotPrepared;
             }
         } else |err| {
             resolution_err = errors.classifyError(err);
@@ -1014,13 +1050,35 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
-        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
-        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
-        const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
+        // Compute structural hash + param count from structure (no SQL build yet).
+        const cache_key = write_hasher.computeUpsertHash(
+            table_metadata.index,
+            table_metadata.is_users_table,
+            op.columns,
+            guard_ptr,
+        );
+        const param_count = write_hasher.computeUpsertParamCount(
+            table_metadata.is_users_table,
+            op.columns.len,
+            guard_ptr,
+        );
+
+        // Probe cache. On hit, skip SQL build entirely.
+        var mstmt = blk: {
+            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
+                break :blk sql.ManagedStmt{ .stmt = stmt };
+            }
+            // Cache miss: build SQL template, prepare, cache.
+            const guard_sql = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
+            const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
+            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
+        };
         defer mstmt.release();
         const stmt = mstmt.stmt;
+
+        // Always render guard values (needed for binding regardless of cache hit/miss).
+        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         var bind_idx: c_int = 1;
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
@@ -1045,10 +1103,8 @@ pub const WriteWorker = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
-        if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+        if (guard_values) |guard_vals| {
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1063,13 +1119,22 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
-        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
-        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
-        const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
+        const cache_key = write_hasher.computeUpdateHash(table_metadata.index, op.columns, guard_ptr);
+        const param_count = write_hasher.computeUpdateParamCount(op.columns.len, guard_ptr);
+
+        var mstmt = blk: {
+            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
+                break :blk sql.ManagedStmt{ .stmt = stmt };
+            }
+            const guard_sql = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
+            const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
+            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
+        };
         defer mstmt.release();
         const stmt = mstmt.stmt;
+
+        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         var bind_idx: c_int = 1;
         for (op.columns) |col| {
@@ -1083,10 +1148,8 @@ pub const WriteWorker = struct {
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
 
-        if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+        if (guard_values) |guard_vals| {
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1101,32 +1164,39 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
-        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
 
-        const guard_fragment = if (rendered_guard) |*rg| rg.sqlSlice() else null;
-        const sql_str: []const u8 = if (guard_fragment) |fragment|
-            try std.mem.concat(arena_alloc, u8, &.{
-                table_metadata.delete_document_sql_prefix,
-                fragment,
-                table_metadata.delete_document_sql_suffix,
-            })
-        else
-            try std.mem.concat(arena_alloc, u8, &.{
-                table_metadata.delete_document_sql_prefix,
-                table_metadata.delete_document_sql_suffix,
-            });
+        const cache_key = write_hasher.computeDeleteHash(table_metadata.index, guard_ptr);
+        const param_count = write_hasher.computeDeleteParamCount(guard_ptr);
 
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
+        var mstmt = blk: {
+            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
+                break :blk sql.ManagedStmt{ .stmt = stmt };
+            }
+            // Cache miss: build SQL by concatenating prefix [+ guard fragment] + suffix.
+            const guard_fragment = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
+            const sql_str: []const u8 = if (guard_fragment) |fragment|
+                try std.mem.concat(arena_alloc, u8, &.{
+                    table_metadata.delete_document_sql_prefix,
+                    fragment,
+                    table_metadata.delete_document_sql_suffix,
+                })
+            else
+                try std.mem.concat(arena_alloc, u8, &.{
+                    table_metadata.delete_document_sql_prefix,
+                    table_metadata.delete_document_sql_suffix,
+                });
+            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
+        };
         defer mstmt.release();
         const stmt = mstmt.stmt;
+
+        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         try sql.bindDocIdNamespace(stmt, &self.conn, 1, op.id, namespace_id);
 
         var bind_idx: c_int = 3;
-        if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+        if (guard_values) |guard_vals| {
+            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);

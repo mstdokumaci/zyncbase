@@ -250,6 +250,7 @@ pub const StorageEngine = struct {
             try connection.configureDatabase(&node.conn, false);
             node.stmt_cache.init(allocator, performance_config.statement_cache_size);
             node.mutex = .{};
+            node.select_document_stmts = &.{};
             initialized += 1;
         }
 
@@ -299,14 +300,19 @@ pub const StorageEngine = struct {
         }
         gpa.free(self.pk_sets);
 
-        // 7. Clean up readers
+        // 7. Clean up readers (finalize static stmts before closing conn)
         for (self.reader_nodes) |*node| {
+            if (node.select_document_stmts.len > 0) {
+                sql.finalizeStaticStmts(node.select_document_stmts);
+                self.allocator.free(node.select_document_stmts);
+                node.select_document_stmts = &.{};
+            }
             node.stmt_cache.deinit(self.allocator);
             node.conn.deinit();
         }
         gpa.free(self.reader_nodes);
 
-        // 8. Clean up the writer and queue
+        // 8. Clean up the writer and queue (static stmts finalized in write_worker.deinit)
         self.write_worker.deinit();
         self.node_pool.deinit();
     }
@@ -336,22 +342,37 @@ pub const StorageEngine = struct {
     /// Log database error with full details
     /// Attempt to reconnect to database with exponential backoff
     fn reconnectWithBackoff(self: *StorageEngine) !void {
-        return connection.reconnectWithBackoff(
-            self.write_worker.db_path,
-            self.write_worker.in_memory,
-            &self.write_worker.conn,
-            self.reader_nodes,
-            self.reconnection_config,
-        );
+        const ctx = connection.ReconnectContext{
+            .allocator = self.allocator,
+            .schema = self.schema,
+            .db_path = self.write_worker.db_path,
+            .in_memory = self.write_worker.in_memory,
+            .writer_conn = &self.write_worker.conn,
+            .writer_select_stmts = &self.write_worker.select_document_stmts,
+            .writer_resolve_ns = &self.write_worker.resolve_namespace_stmt,
+            .writer_resolve_user = &self.write_worker.resolve_user_stmt,
+            .writer_stmt_cache = &self.write_worker.stmt_cache,
+            .reader_pool = self.reader_nodes,
+            .stmt_cache_size = self.write_worker.performance_config.statement_cache_size,
+        };
+        return connection.reconnectWithBackoff(ctx, self.reconnection_config);
     }
 
     fn attemptReconnect(self: *StorageEngine) !void {
-        return connection.attemptReconnect(
-            self.write_worker.db_path,
-            self.write_worker.in_memory,
-            &self.write_worker.conn,
-            self.reader_nodes,
-        );
+        const ctx = connection.ReconnectContext{
+            .allocator = self.allocator,
+            .schema = self.schema,
+            .db_path = self.write_worker.db_path,
+            .in_memory = self.write_worker.in_memory,
+            .writer_conn = &self.write_worker.conn,
+            .writer_select_stmts = &self.write_worker.select_document_stmts,
+            .writer_resolve_ns = &self.write_worker.resolve_namespace_stmt,
+            .writer_resolve_user = &self.write_worker.resolve_user_stmt,
+            .writer_stmt_cache = &self.write_worker.stmt_cache,
+            .reader_pool = self.reader_nodes,
+            .stmt_cache_size = self.write_worker.performance_config.statement_cache_size,
+        };
+        return connection.attemptReconnect(ctx);
     }
 
     pub fn ensureRunning(self: *StorageEngine) !void {
@@ -415,25 +436,80 @@ pub const StorageEngine = struct {
             return error.InvalidState;
         }
 
+        // ─── Bootstrap pk_sets from existing rows ───────────────────────────
+        // One-shot prepare per table: the SELECT "id" FROM "<t>" query is run
+        // exactly once at startup, so it does NOT go through stmt_cache (avoids
+        // polluting the LRU with single-use entries).
         for (self.schema.tables, 0..) |table, table_index| {
             const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
             defer self.allocator.free(sql_str);
 
-            var mstmt = try self.write_worker.stmt_cache.acquire(self.allocator, &self.write_worker.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
-            defer mstmt.release();
+            var dynamic = try self.write_worker.conn.prepareDynamic(sql_str);
+            defer dynamic.deinit();
 
             while (true) {
-                const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+                const rc = sqlite.c.sqlite3_step(dynamic.stmt);
                 if (rc == sqlite.c.SQLITE_DONE) break;
                 if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.write_worker.conn);
 
-                const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
-                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
+                const ptr = sqlite.c.sqlite3_column_blob(dynamic.stmt, 0);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(dynamic.stmt, 0));
                 const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
                 const doc_id = try typed_doc_id.fromBytes(bytes);
 
                 self.pk_sets[table_index].insert(self.allocator, doc_id);
             }
+        }
+
+        // ─── Prepare static stmts (schema is locked, threads not yet spawned) ───
+        // Writer: per-table select_document + the two compile-time resolve stmts.
+        self.write_worker.select_document_stmts =
+            sql.prepareSelectDocumentStmts(self.allocator, &self.write_worker.conn, self.schema) catch |err|
+                return storage_errors.classifyError(err);
+        errdefer {
+            sql.finalizeStaticStmts(self.write_worker.select_document_stmts);
+            self.allocator.free(self.write_worker.select_document_stmts);
+            self.write_worker.select_document_stmts = &.{};
+        }
+
+        self.write_worker.resolve_namespace_stmt =
+            sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_namespace_sql) catch |err|
+                return storage_errors.classifyError(err);
+        errdefer {
+            if (self.write_worker.resolve_namespace_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);
+            self.write_worker.resolve_namespace_stmt = null;
+        }
+
+        // Only prepare the user-resolution stmt if the schema has a "users" table.
+        // Schemas without identity management never call resolveUserId, so the stmt
+        // would fail to prepare (table doesn't exist) and waste a connection resource.
+        if (self.schema.table("users") != null) {
+            self.write_worker.resolve_user_stmt =
+                sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_user_sql) catch |err|
+                    return storage_errors.classifyError(err);
+            errdefer {
+                if (self.write_worker.resolve_user_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);
+                self.write_worker.resolve_user_stmt = null;
+            }
+        }
+
+        // Readers: per-table select_document for each reader node's connection.
+        // Track prepared count so errdefer only finalizes what was actually prepared.
+        var readers_prepared: usize = 0;
+        errdefer {
+            for (self.reader_nodes[0..readers_prepared]) |*prev| {
+                if (prev.select_document_stmts.len > 0) {
+                    sql.finalizeStaticStmts(prev.select_document_stmts);
+                    self.allocator.free(prev.select_document_stmts);
+                    prev.select_document_stmts = &.{};
+                }
+            }
+        }
+        for (self.reader_nodes) |*node| {
+            node.select_document_stmts =
+                sql.prepareSelectDocumentStmts(self.allocator, &node.conn, self.schema) catch |err|
+                    return storage_errors.classifyError(err);
+            readers_prepared += 1;
         }
 
         // Spawn the write thread
