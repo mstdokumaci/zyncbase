@@ -162,11 +162,17 @@ pub const PredicateTrie = struct {
             .conditional => {},
         }
 
-        var path_buf: std.ArrayListUnmanaged(Condition) = .empty;
-        defer path_buf.deinit(self.allocator);
-        buildPath(self.allocator, &filter.predicate, &path_buf) catch return;
+        const conds = filter.predicate.conditions orelse return;
+        var stack_buf: [16]Condition = undefined;
+        const path = if (conds.len <= stack_buf.len)
+            stack_buf[0..conds.len]
+        else
+            self.allocator.alloc(Condition, conds.len) catch return;
+        defer if (conds.len > stack_buf.len) self.allocator.free(path);
 
-        _ = removeAlongPath(self.allocator, &self.root, path_buf.items, 0, group_id);
+        @memcpy(path, conds);
+        std.mem.sort(Condition, path, {}, pathConditionLessThan);
+        _ = removeAlongPath(self.allocator, &self.root, path, 0, group_id);
     }
 
     /// Collect group ids whose AND path is satisfied by `record`.
