@@ -99,8 +99,8 @@ pub const CanonicalFilterContext = struct {
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if ((a == null) != (b == null)) return false;
     if (a == null) return true;
-    const aa = a.?;
-    const bb = b.?;
+    const aa = a orelse unreachable;
+    const bb = b orelse unreachable;
     if (aa.len != bb.len) return false;
     for (aa, 0..) |ca, i| {
         if (!hash_context.eqlCondition(ca, bb[i])) return false;
@@ -111,8 +111,8 @@ fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
 fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
     if ((a == null) != (b == null)) return false;
     if (a == null) return true;
-    const aa = a.?;
-    const bb = b.?;
+    const aa = a orelse unreachable;
+    const bb = b orelse unreachable;
     if (aa.len != bb.len) return false;
     for (aa, 0..) |clause_a, i| {
         if (!eqlConditionsSorted(clause_a, bb[i])) return false;
@@ -162,11 +162,6 @@ pub const SubscriptionEngine = struct {
         self.active_subs.deinit(self.allocator);
     }
 
-    const GroupCreationResult = struct {
-        group_id: u64,
-        first_sub: bool,
-    };
-
     /// Creates a new subscription group, clones the filter, and inserts into all indexes.
     /// Caller (subscribe) is responsible for registering the subscriber in active_subs.
     fn createSubscriptionGroup(
@@ -175,7 +170,7 @@ pub const SubscriptionEngine = struct {
         table_index: usize,
         filter: QueryFilter,
         sub_key: SubscriptionGroup.SubscriberKey,
-    ) !GroupCreationResult {
+    ) !u64 {
         const group_id = self.next_group_id;
         self.next_group_id += 1;
 
@@ -237,10 +232,10 @@ pub const SubscriptionEngine = struct {
         }
         _ = try trie_gop.value_ptr.insertGroup(group_id, &grp_for_trie.filter);
 
-        return .{ .group_id = group_id, .first_sub = true };
+        return group_id;
     }
 
-    /// Registers a new subscriber to a query. Returns true if first sub in group.
+    /// Registers a new subscriber to a query.
     pub fn subscribe(
         self: *SubscriptionEngine,
         namespace_id: i64,
@@ -248,7 +243,7 @@ pub const SubscriptionEngine = struct {
         filter: QueryFilter,
         conn_id: u64,
         sub_id: u64,
-    ) !bool {
+    ) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -260,40 +255,29 @@ pub const SubscriptionEngine = struct {
         const coll_key = CollectionKey{ .namespace_id = namespace_id, .table_index = table_index };
 
         var group_id: u64 = 0;
-        var first_sub = false;
-        var subscriber_in_group = false;
-
         if (self.groups_by_filter.get(filter)) |gid| {
             group_id = gid;
+            var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
+            try group.subscribers.put(self.allocator, sub_key, {});
         } else {
-            const result = try self.createSubscriptionGroup(
+            group_id = try self.createSubscriptionGroup(
                 namespace_id,
                 table_index,
                 filter,
                 sub_key,
             );
-            group_id = result.group_id;
-            first_sub = result.first_sub;
-            subscriber_in_group = true;
         }
 
-        if (!first_sub) {
-            var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
-            try group.subscribers.put(self.allocator, sub_key, {});
-            subscriber_in_group = true;
-        }
-
-        errdefer if (subscriber_in_group) {
+        errdefer {
             if (self.groups.getPtr(group_id)) |grp| {
                 _ = grp.subscribers.remove(sub_key);
-                if (first_sub and grp.subscribers.count() == 0) {
+                if (grp.subscribers.count() == 0) {
                     self.destroyGroupLocked(coll_key, group_id, grp);
                 }
             }
-        };
+        }
 
         try self.active_subs.put(self.allocator, sub_key, group_id);
-        return first_sub;
     }
 
     fn removeGroupFromCollectionIndex(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64) void {
