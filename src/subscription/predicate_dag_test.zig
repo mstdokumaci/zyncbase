@@ -167,3 +167,49 @@ test "PredicateDag: eq then non-eq path order" {
     try dag.collectMatches(&bad_age, &matches, allocator);
     try testing.expect(!matches.contains(1));
 }
+
+test "PredicateDag: OR clause residual filtering" {
+    const allocator = testing.allocator;
+    var dag = PredicateDag.init(allocator);
+    defer dag.deinit();
+
+    // Filter: status=active AND (owner=1 OR owner=2)
+    var filter = try qth.makeFilterWithOrClauses(allocator, &[_]Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    }, &[_][]const Condition{
+        &[_]Condition{
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(2), .field_type = .integer, .items_type = null },
+        },
+    });
+    defer filter.deinit(allocator);
+
+    try testing.expect(try dag.insertGroup(1, &filter));
+
+    // status=active, owner=1 → AND path matches, OR clause passes
+    var rec_match = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(1), tth.valInt(0) });
+    defer rec_match.deinit(allocator);
+    var matches: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer matches.deinit(allocator);
+    try dag.collectMatches(&rec_match, &matches, allocator);
+    try testing.expect(matches.contains(1));
+    try testing.expect(try predicate_dag.residualMatches(&filter.predicate, &rec_match));
+
+    // status=active, owner=3 → AND path matches, OR clause fails
+    var rec_or_fail = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(3), tth.valInt(0) });
+    defer rec_or_fail.deinit(allocator);
+    matches.clearRetainingCapacity();
+    try dag.collectMatches(&rec_or_fail, &matches, allocator);
+    try testing.expect(matches.contains(1)); // AND path still matches
+    try testing.expect(!try predicate_dag.residualMatches(&filter.predicate, &rec_or_fail)); // OR fails
+
+    // status=draft, owner=1 → AND path fails (trie never reaches leaf)
+    var rec_and_fail = try tth.recordFromValues(allocator, &.{ tth.valText("draft"), tth.valInt(1), tth.valInt(0) });
+    defer rec_and_fail.deinit(allocator);
+    matches.clearRetainingCapacity();
+    try dag.collectMatches(&rec_and_fail, &matches, allocator);
+    try testing.expect(!matches.contains(1));
+
+    dag.removeGroup(1, &filter);
+    try testing.expect(dag.isEmpty());
+}

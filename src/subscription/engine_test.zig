@@ -1021,3 +1021,186 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     defer allocator.free(matches_outside);
     try testing.expectEqual(@as(usize, 0), matches_outside.len);
 }
+
+test "SubscriptionEngine: filter with OR clauses match" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var schema = try sth.createSchema(allocator, &.{
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
+            schema_helpers.makeField("owner", .integer),
+        }),
+    });
+    defer schema.deinit();
+
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
+
+    // Filter: status=active AND (owner=1 OR owner=2)
+    var filter = try qth.makeFilterWithOrClauses(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    }, &[_][]const query_ast.Condition{
+        &[_]query_ast.Condition{
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(2), .field_type = .integer, .items_type = null },
+        },
+    });
+    defer filter.deinit(allocator);
+
+    _ = try engine.subscribe(1, table_index, filter, 1, 100);
+
+    // owner=1 → match
+    var rec_owner1 = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(1) });
+    defer rec_owner1.deinit(allocator);
+    const matches_1 = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_owner1,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_1);
+    try testing.expectEqual(@as(usize, 1), matches_1.len);
+    try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_1[0].op);
+
+    // owner=2 → match
+    var rec_owner2 = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(2) });
+    defer rec_owner2.deinit(allocator);
+    const matches_2 = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_owner2,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_2);
+    try testing.expectEqual(@as(usize, 1), matches_2.len);
+    try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_2[0].op);
+
+    // owner=3 → no match (OR clause fails)
+    var rec_owner3 = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(3) });
+    defer rec_owner3.deinit(allocator);
+    const matches_3 = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_owner3,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_3);
+    try testing.expectEqual(@as(usize, 0), matches_3.len);
+
+    // status=draft → no match (AND path fails)
+    var rec_draft = try tth.recordFromValues(allocator, &.{ tth.valText("draft"), tth.valInt(1) });
+    defer rec_draft.deinit(allocator);
+    const matches_draft = try engine.handleRecordChange(.{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = rec_draft,
+        .old_record = null,
+    }, allocator);
+    defer allocator.free(matches_draft);
+    try testing.expectEqual(@as(usize, 0), matches_draft.len);
+}
+
+test "SubscriptionEngine: OR clause leave/enter on update" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var schema = try sth.createSchema(allocator, &.{
+        schema_helpers.makeTable("items", &.{
+            schema_helpers.makeField("status", .text),
+            schema_helpers.makeField("owner", .integer),
+        }),
+    });
+    defer schema.deinit();
+
+    const table_index = (schema.table("items") orelse return error.TestExpectedValue).index;
+
+    // Filter: status=active AND (owner=1 OR owner=2)
+    var filter = try qth.makeFilterWithOrClauses(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    }, &[_][]const query_ast.Condition{
+        &[_]query_ast.Condition{
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+            .{ .field_index = 4, .op = .eq, .value = tth.valInt(2), .field_type = .integer, .items_type = null },
+        },
+    });
+    defer filter.deinit(allocator);
+
+    _ = try engine.subscribe(1, table_index, filter, 1, 100);
+
+    // Update: owner=1 → owner=3 (leaves OR clause) → remove
+    {
+        var old_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(1) });
+        defer old_rec.deinit(allocator);
+        var new_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(3) });
+        defer new_rec.deinit(allocator);
+        const matches = try engine.handleRecordChange(.{
+            .namespace_id = 1,
+            .table_index = table_index,
+            .operation = .update,
+            .new_record = new_rec,
+            .old_record = old_rec,
+        }, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+        try testing.expectEqual(SubscriptionEngine.MatchOp.remove, matches[0].op);
+    }
+
+    // Update: owner=3 → owner=2 (enters OR clause) → set
+    {
+        var old_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(3) });
+        defer old_rec.deinit(allocator);
+        var new_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(2) });
+        defer new_rec.deinit(allocator);
+        const matches = try engine.handleRecordChange(.{
+            .namespace_id = 1,
+            .table_index = table_index,
+            .operation = .update,
+            .new_record = new_rec,
+            .old_record = old_rec,
+        }, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+        try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches[0].op);
+    }
+
+    // Update: owner=1 → owner=2 (within OR clause) → set
+    {
+        var old_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(1) });
+        defer old_rec.deinit(allocator);
+        var new_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(2) });
+        defer new_rec.deinit(allocator);
+        const matches = try engine.handleRecordChange(.{
+            .namespace_id = 1,
+            .table_index = table_index,
+            .operation = .update,
+            .new_record = new_rec,
+            .old_record = old_rec,
+        }, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+        try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches[0].op);
+    }
+
+    // Update: owner=3 → owner=4 (outside OR clause) → no match
+    {
+        var old_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(3) });
+        defer old_rec.deinit(allocator);
+        var new_rec = try tth.recordFromValues(allocator, &.{ tth.valText("active"), tth.valInt(4) });
+        defer new_rec.deinit(allocator);
+        const matches = try engine.handleRecordChange(.{
+            .namespace_id = 1,
+            .table_index = table_index,
+            .operation = .update,
+            .new_record = new_rec,
+            .old_record = old_rec,
+        }, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 0), matches.len);
+    }
+}
