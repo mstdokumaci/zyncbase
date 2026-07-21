@@ -2,12 +2,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
+const hash_context = @import("../query/hash_context.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
 const typed = @import("../typed/types.zig");
 const Record = typed.Record;
-const Value = typed.Value;
+const predicate_trie = @import("predicate_trie.zig");
+const PredicateTrie = predicate_trie.PredicateTrie;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -63,7 +65,7 @@ pub const CanonicalFilterContext = struct {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
-                hashCondition(&ch, c);
+                hash_context.hashCondition(&ch, c);
                 combined +%= ch.final();
             }
             std.hash.autoHash(&hasher, combined);
@@ -75,7 +77,7 @@ pub const CanonicalFilterContext = struct {
                 var combined: u64 = 0;
                 for (clause) |c| {
                     var ch = std.hash.Wyhash.init(0);
-                    hashCondition(&ch, c);
+                    hash_context.hashCondition(&ch, c);
                     combined +%= ch.final();
                 }
                 std.hash.autoHash(&hasher, combined);
@@ -85,7 +87,7 @@ pub const CanonicalFilterContext = struct {
         std.hash.autoHash(&hasher, f.order_by);
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hashValue(&hasher, a.sort_value);
+            hash_context.hashValue(&hasher, a.sort_value);
             std.hash.autoHash(&hasher, a.id);
         }
         return hasher.final();
@@ -101,68 +103,9 @@ pub const CanonicalFilterContext = struct {
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return eqlValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
-    }
-
-    fn hashCondition(hasher: *std.hash.Wyhash, c: Condition) void {
-        std.hash.autoHash(hasher, c.field_index);
-        std.hash.autoHash(hasher, c.op);
-        if (c.value) |v| hashValue(hasher, v);
-        std.hash.autoHash(hasher, c.field_type);
-        std.hash.autoHash(hasher, c.items_type);
-    }
-
-    fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
-        std.hash.autoHash(hasher, std.meta.activeTag(v));
-        switch (v) {
-            .scalar => |s| hashScalarValue(hasher, s),
-            .array => |arr| {
-                for (arr) |item| hashScalarValue(hasher, item);
-            },
-            .nil => {},
-        }
-    }
-
-    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
-        std.hash.autoHash(hasher, std.meta.activeTag(s));
-        switch (s) {
-            .text => |t| hasher.update(t),
-            .doc_id => |id| std.hash.autoHash(hasher, id),
-            .integer => |i| std.hash.autoHash(hasher, i),
-            .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(r))),
-            .boolean => |b| std.hash.autoHash(hasher, b),
-        }
+        return aa.sort_value.eql(bb.sort_value) and std.meta.eql(aa.id, bb.id);
     }
 };
-
-fn eqlValue(a: Value, b: Value) bool {
-    const tag = std.meta.activeTag(a);
-    if (tag != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .scalar => |s| eqlScalarValue(s, b.scalar),
-        .array => |arr| blk: {
-            if (arr.len != b.array.len) break :blk false;
-            for (arr, 0..) |item, i| {
-                if (!eqlScalarValue(item, b.array[i])) break :blk false;
-            }
-            break :blk true;
-        },
-        .nil => true,
-    };
-}
-
-fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
-    const tag = std.meta.activeTag(a);
-    if (tag != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .text => |t| std.mem.eql(u8, t, b.text),
-        .real => |r| blk: {
-            // Standard Zig 0.15 behavior for f64 comparison
-            break :blk r == b.real;
-        },
-        else => std.meta.eql(a, b),
-    };
-}
 
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if (a == null and b == null) return true;
@@ -171,7 +114,7 @@ fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     const bb = b.?;
     if (aa.len != bb.len) return false;
     for (aa, 0..) |ca, i| {
-        if (!eqlCondition(ca, bb[i])) return false;
+        if (!hash_context.eqlCondition(ca, bb[i])) return false;
     }
     return true;
 }
@@ -188,16 +131,6 @@ fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
     return true;
 }
 
-fn eqlCondition(a: Condition, b: Condition) bool {
-    if (a.field_index != b.field_index) return false;
-    if (a.op != b.op) return false;
-    if (a.field_type != b.field_type) return false;
-    if (a.items_type != b.items_type) return false;
-    if (a.value == null and b.value == null) return true;
-    if (a.value == null or b.value == null) return false;
-    return eqlValue(a.value.?, b.value.?);
-}
-
 pub const SubscriptionEngine = struct {
     allocator: Allocator align(16),
     /// filter -> GroupId
@@ -206,6 +139,8 @@ pub const SubscriptionEngine = struct {
     groups: std.AutoHashMapUnmanaged(u64, SubscriptionGroup) = .empty,
     /// collection_key -> ArrayList(GroupId)
     groups_by_collection: std.AutoHashMapUnmanaged(CollectionKey, std.ArrayListUnmanaged(u64)) = .empty,
+    /// collection_key -> condition-prefix trie used for change matching
+    tries_by_collection: std.AutoHashMapUnmanaged(CollectionKey, PredicateTrie) = .empty,
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
     next_group_id: u64 = 1,
@@ -223,6 +158,12 @@ pub const SubscriptionEngine = struct {
             entry.deinit(self.allocator);
         }
         self.groups_by_collection.deinit(self.allocator);
+
+        var it_tries = self.tries_by_collection.valueIterator();
+        while (it_tries.next()) |trie| {
+            trie.deinit();
+        }
+        self.tries_by_collection.deinit(self.allocator);
 
         var it_groups = self.groups.valueIterator();
         while (it_groups.next()) |g| {
@@ -288,6 +229,24 @@ pub const SubscriptionEngine = struct {
             _ = self.groups_by_collection.remove(coll_key);
         };
         try gop.value_ptr.append(self.allocator, group_id);
+        errdefer self.removeGroupFromCollectionIndex(coll_key, group_id);
+
+        // Insert into the per-collection condition-prefix trie.
+        const grp_for_trie = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
+        const trie_gop = try self.tries_by_collection.getOrPut(self.allocator, coll_key);
+        if (!trie_gop.found_existing) {
+            trie_gop.value_ptr.* = PredicateTrie.init(self.allocator);
+        }
+        errdefer {
+            if (self.tries_by_collection.getPtr(coll_key)) |trie| {
+                trie.removeGroup(group_id, &grp_for_trie.filter);
+                if (trie.isEmpty()) {
+                    trie.deinit();
+                    _ = self.tries_by_collection.remove(coll_key);
+                }
+            }
+        }
+        _ = try trie_gop.value_ptr.insertGroup(group_id, &grp_for_trie.filter);
 
         return .{ .group_id = group_id, .first_sub = true };
     }
@@ -339,10 +298,7 @@ pub const SubscriptionEngine = struct {
             if (self.groups.getPtr(group_id)) |grp| {
                 _ = grp.subscribers.remove(sub_key);
                 if (first_sub and grp.subscribers.count() == 0) {
-                    _ = self.groups_by_filter.remove(grp.filter);
-                    self.removeGroupFromCollectionIndex(coll_key, group_id);
-                    grp.deinit(self.allocator);
-                    _ = self.groups.remove(group_id);
+                    self.destroyGroupLocked(coll_key, group_id, grp);
                 }
             }
         };
@@ -366,6 +322,30 @@ pub const SubscriptionEngine = struct {
         }
     }
 
+    fn removeGroupFromTrie(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64, filter: *const QueryFilter) void {
+        if (self.tries_by_collection.getPtr(coll_key)) |trie| {
+            trie.removeGroup(group_id, filter);
+            if (trie.isEmpty()) {
+                trie.deinit();
+                _ = self.tries_by_collection.remove(coll_key);
+            }
+        }
+    }
+
+    /// Tears down a group with zero subscribers from all indexes. Consumes `group`.
+    fn destroyGroupLocked(
+        self: *SubscriptionEngine,
+        coll_key: CollectionKey,
+        group_id: u64,
+        group: *SubscriptionGroup,
+    ) void {
+        _ = self.groups_by_filter.remove(group.filter);
+        self.removeGroupFromTrie(coll_key, group_id, &group.filter);
+        self.removeGroupFromCollectionIndex(coll_key, group_id);
+        group.deinit(self.allocator);
+        _ = self.groups.remove(group_id);
+    }
+
     pub fn unsubscribe(self: *SubscriptionEngine, conn_id: u64, sub_id: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -387,11 +367,8 @@ pub const SubscriptionEngine = struct {
         _ = group.subscribers.remove(sub_key);
 
         if (group.subscribers.count() == 0) {
-            _ = self.groups_by_filter.remove(group.filter);
             const coll_key = CollectionKey{ .namespace_id = group.namespace_id, .table_index = group.table_index };
-            self.removeGroupFromCollectionIndex(coll_key, group_id.value);
-            group.deinit(self.allocator);
-            _ = self.groups.remove(group_id.value);
+            self.destroyGroupLocked(coll_key, group_id.value, group);
         }
     }
 
@@ -449,39 +426,72 @@ pub const SubscriptionEngine = struct {
             .table_index = change.table_index,
         };
 
-        const group_ids = self.groups_by_collection.get(key) orelse return allocator.alloc(Match, 0);
-        for (group_ids.items) |gid| {
+        const trie = self.tries_by_collection.getPtr(key) orelse return allocator.alloc(Match, 0);
+
+        var matched_before: std.ArrayListUnmanaged(u64) = .empty;
+        defer matched_before.deinit(allocator);
+        var matched_after: std.ArrayListUnmanaged(u64) = .empty;
+        defer matched_after.deinit(allocator);
+
+        if (change.old_record) |old| {
+            try trie.collectMatches(&old, &matched_before, allocator);
+            try self.filterResidualMatches(&matched_before, &old);
+        }
+        if (change.new_record) |new| {
+            try trie.collectMatches(&new, &matched_after, allocator);
+            try self.filterResidualMatches(&matched_after, &new);
+        }
+
+        // Build after-set for O(1) membership checks.
+        var after_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer after_set.deinit(allocator);
+        for (matched_after.items) |gid| try after_set.put(allocator, gid, {});
+
+        // Emit set for all after-matches (enter + within).
+        for (matched_after.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .set_op,
+                });
+            }
+        }
 
-            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(&group.filter, &old) else false;
-            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(&group.filter, &new) else false;
-
-            if (matched_before and !matches_after) {
-                // Record left the filter: send remove
-                var sub_it = group.subscribers.keyIterator();
-                while (sub_it.next()) |sub| {
-                    try matches.append(allocator, .{
-                        .connection_id = sub.connection_id,
-                        .subscription_id = sub.id,
-                        .op = .remove,
-                    });
-                }
-            } else if (matches_after) {
-                // Record now matches the filter: send set.
-                // Covers both "record entered the filter" (!matched_before)
-                // and "record changed within the filter" (matched_before).
-                var sub_it = group.subscribers.keyIterator();
-                while (sub_it.next()) |sub| {
-                    try matches.append(allocator, .{
-                        .connection_id = sub.connection_id,
-                        .subscription_id = sub.id,
-                        .op = .set_op,
-                    });
-                }
+        // Emit remove for before-only (leave).
+        for (matched_before.items) |gid| {
+            if (after_set.contains(gid)) continue; // within-change, already emitted as set
+            const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .remove,
+                });
             }
         }
 
         return try matches.toOwnedSlice(allocator);
+    }
+
+    /// Drop trie candidates whose residual OR clauses fail (AND path already proven).
+    fn filterResidualMatches(
+        self: *const SubscriptionEngine,
+        candidates: *std.ArrayListUnmanaged(u64),
+        record: *const Record,
+    ) !void {
+        var write: usize = 0;
+        for (candidates.items) |gid| {
+            const group = self.groups.get(gid) orelse continue; // drop missing
+            if (try predicate_trie.residualMatches(&group.filter.predicate, record)) {
+                candidates.items[write] = gid;
+                write += 1;
+            }
+        }
+        candidates.items = candidates.items[0..write];
     }
 
     /// Evaluates a record against a filter AST.

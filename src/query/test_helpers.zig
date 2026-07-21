@@ -6,6 +6,7 @@ const msgpack_utils = @import("../msgpack_utils.zig");
 const mth = @import("../msgpack_test_helpers.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
+const OrClause = query_ast.OrClause;
 const FieldType = schema_types.FieldType;
 const Payload = msgpack_utils.Payload;
 
@@ -55,6 +56,63 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
     }
 
     filter.predicate.conditions = heap_conds;
+    _ = try filter.predicate.normalize(allocator);
+    return filter;
+}
+
+/// Creates a QueryFilter with AND conditions and OR clauses.
+/// `or_clauses` is a slice of clauses; each clause is OR'd internally,
+/// and the clauses are AND'd together (and with the AND conditions).
+/// Caller owns the memory and must call deinit(allocator).
+pub fn makeFilterWithOrClauses(
+    allocator: std.mem.Allocator,
+    and_conds: []const Condition,
+    or_clauses: []const []const Condition,
+) !QueryFilter {
+    var filter = try makeDefaultFilter(allocator);
+    errdefer filter.deinit(allocator);
+
+    if (and_conds.len > 0) {
+        const heap_conds = try allocator.alloc(Condition, and_conds.len);
+        var count: usize = 0;
+        errdefer {
+            for (heap_conds[0..count]) |*c| c.deinit(allocator);
+            allocator.free(heap_conds);
+        }
+        for (and_conds) |c| {
+            heap_conds[count] = try c.clone(allocator);
+            count += 1;
+        }
+        filter.predicate.conditions = heap_conds;
+    }
+
+    if (or_clauses.len > 0) {
+        const heap_clauses = try allocator.alloc(OrClause, or_clauses.len);
+        var clause_count: usize = 0;
+        errdefer {
+            for (heap_clauses[0..clause_count]) |clause| {
+                for (clause) |*c| c.deinit(allocator);
+                allocator.free(clause);
+            }
+            allocator.free(heap_clauses);
+        }
+        for (or_clauses) |clause_src| {
+            const heap_clause = try allocator.alloc(Condition, clause_src.len);
+            var cond_count: usize = 0;
+            errdefer {
+                for (heap_clause[0..cond_count]) |*c| c.deinit(allocator);
+                allocator.free(heap_clause);
+            }
+            for (clause_src) |c| {
+                heap_clause[cond_count] = try c.clone(allocator);
+                cond_count += 1;
+            }
+            heap_clauses[clause_count] = heap_clause;
+            clause_count += 1;
+        }
+        filter.predicate.or_clauses = heap_clauses;
+    }
+
     _ = try filter.predicate.normalize(allocator);
     return filter;
 }
