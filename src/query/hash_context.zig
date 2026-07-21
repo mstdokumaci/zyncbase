@@ -23,7 +23,7 @@ pub fn hashScalarValue(hasher: *std.hash.Wyhash, s: ScalarValue) void {
         .text => |t| hasher.update(t),
         .doc_id => |id| std.hash.autoHash(hasher, id),
         .integer => |i| std.hash.autoHash(hasher, i),
-        .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(r))),
+        .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(if (r == 0.0) 0.0 else r))),
         .boolean => |b| std.hash.autoHash(hasher, b),
     }
 }

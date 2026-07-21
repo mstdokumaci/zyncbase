@@ -220,3 +220,29 @@ test "PredicateDag: OR clause residual filtering" {
     trie.removeGroup(1, &filter);
     try testing.expect(trie.isEmpty());
 }
+
+test "PredicateTrie: +0.0 and -0.0 share hash bucket" {
+    const allocator = testing.allocator;
+    var trie = PredicateTrie.init(allocator);
+    defer trie.deinit();
+
+    // Insert group with filter: field 3 eq +0.0
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valReal(0.0), .field_type = .real, .items_type = null },
+    });
+    defer filter.deinit(allocator);
+
+    try testing.expect(try trie.insertGroup(1, &filter));
+
+    // Record with -0.0 must find the +0.0 leaf: proves hash canonicalization.
+    var rec = try tth.recordFromValues(allocator, &.{tth.valReal(-0.0)});
+    defer rec.deinit(allocator);
+
+    var matches: std.ArrayListUnmanaged(u64) = .empty;
+    defer matches.deinit(allocator);
+    try trie.collectMatches(&rec, &matches, allocator);
+    try testing.expect(listContains(&matches, 1));
+
+    trie.removeGroup(1, &filter);
+    try testing.expect(trie.isEmpty());
+}
