@@ -264,17 +264,11 @@ fn removeAlongPath(
 
         const child_empty = removeAlongPath(allocator, child, path, index + 1, group_id);
         if (child_empty) {
-            // Remove edge and free child + owned key.
-            var it = value_map_ptr.iterator();
-            while (it.next()) |entry| {
-                if (entry.value_ptr.* == child) {
-                    var key = entry.key_ptr.*;
-                    _ = value_map_ptr.remove(key);
-                    key.deinit(allocator);
-                    child.deinit(allocator);
-                    allocator.destroy(child);
-                    break;
-                }
+            if (value_map_ptr.fetchRemove(value)) |kv| {
+                var key = kv.key;
+                key.deinit(allocator);
+                child.deinit(allocator);
+                allocator.destroy(child);
             }
             if (value_map_ptr.count() == 0) {
                 value_map_ptr.deinit(allocator);
@@ -287,16 +281,11 @@ fn removeAlongPath(
     const child = node.cond_branches.get(step) orelse return node.isEmpty();
     const child_empty = removeAlongPath(allocator, child, path, index + 1, group_id);
     if (child_empty) {
-        var it = node.cond_branches.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == child) {
-                var key = entry.key_ptr.*;
-                _ = node.cond_branches.remove(key);
-                key.deinit(allocator);
-                child.deinit(allocator);
-                allocator.destroy(child);
-                break;
-            }
+        if (node.cond_branches.fetchRemove(step)) |kv| {
+            var key = kv.key;
+            key.deinit(allocator);
+            child.deinit(allocator);
+            allocator.destroy(child);
         }
     }
     return node.isEmpty();
