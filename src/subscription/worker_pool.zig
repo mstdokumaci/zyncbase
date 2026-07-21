@@ -154,17 +154,15 @@ pub const SubscriptionWorker = struct {
             .old_record = change.old_record,
         };
 
-        const id_val = if (change.new_record orelse change.old_record) |record|
-            if (record.values.len > schema_system.id_field_index) record.values[schema_system.id_field_index] else null
-        else
-            null;
-
-        if (id_val == null) {
+        const record = (change.new_record orelse change.old_record) orelse {
+            std.log.err("SubscriptionWorker skipping delta for namespace {d}, table {d} because record has no id", .{ change.namespace_id, change.table_index });
+            return;
+        };
+        if (record.values.len <= schema_system.id_field_index) {
             std.log.err("SubscriptionWorker skipping delta for namespace {d}, table {d} because record has no id", .{ change.namespace_id, change.table_index });
             return;
         }
-
-        const id_val_actual = id_val.?;
+        const id_val = record.values[schema_system.id_field_index];
 
         const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
             std.log.err("SubscriptionWorker acquireArenaDeferred failed: {}", .{err});
@@ -185,7 +183,7 @@ pub const SubscriptionWorker = struct {
 
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
-        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val_actual, alloc, &set_suffix, &remove_suffix)) {
+        if (!encodeDeltaSuffixes(matches, change, table_metadata, id_val, alloc, &set_suffix, &remove_suffix)) {
             handle.release();
             return;
         }
