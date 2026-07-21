@@ -10,7 +10,6 @@ const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
-const write_hasher = @import("write_hasher.zig");
 const query_ast = @import("../query/ast.zig");
 const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
@@ -1050,35 +1049,13 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
+        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        // Compute structural hash + param count from structure (no SQL build yet).
-        const cache_key = write_hasher.computeUpsertHash(
-            table_metadata.index,
-            table_metadata.is_users_table,
-            op.columns,
-            guard_ptr,
-        );
-        const param_count = write_hasher.computeUpsertParamCount(
-            table_metadata.is_users_table,
-            op.columns.len,
-            guard_ptr,
-        );
-
-        // Probe cache. On hit, skip SQL build entirely.
-        var mstmt = blk: {
-            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
-                break :blk sql.ManagedStmt{ .stmt = stmt };
-            }
-            // Cache miss: build SQL template, prepare, cache.
-            const guard_sql = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
-            const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
-            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
-        };
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-
-        // Always render guard values (needed for binding regardless of cache hit/miss).
-        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         var bind_idx: c_int = 1;
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
@@ -1103,8 +1080,10 @@ pub const WriteWorker = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
-        if (guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1119,22 +1098,13 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
+        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
-        const cache_key = write_hasher.computeUpdateHash(table_metadata.index, op.columns, guard_ptr);
-        const param_count = write_hasher.computeUpdateParamCount(op.columns.len, guard_ptr);
-
-        var mstmt = blk: {
-            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
-                break :blk sql.ManagedStmt{ .stmt = stmt };
-            }
-            const guard_sql = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
-            const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
-            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
-        };
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-
-        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         var bind_idx: c_int = 1;
         for (op.columns) |col| {
@@ -1148,8 +1118,10 @@ pub const WriteWorker = struct {
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
 
-        if (guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1164,39 +1136,32 @@ pub const WriteWorker = struct {
         const arena_alloc = self.batch_arena.allocator();
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
+        const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
 
-        const cache_key = write_hasher.computeDeleteHash(table_metadata.index, guard_ptr);
-        const param_count = write_hasher.computeDeleteParamCount(guard_ptr);
+        const guard_fragment = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const sql_str: []const u8 = if (guard_fragment) |fragment|
+            try std.mem.concat(arena_alloc, u8, &.{
+                table_metadata.delete_document_sql_prefix,
+                fragment,
+                table_metadata.delete_document_sql_suffix,
+            })
+        else
+            try std.mem.concat(arena_alloc, u8, &.{
+                table_metadata.delete_document_sql_prefix,
+                table_metadata.delete_document_sql_suffix,
+            });
 
-        var mstmt = blk: {
-            if (self.stmt_cache.get(cache_key, param_count)) |stmt| {
-                break :blk sql.ManagedStmt{ .stmt = stmt };
-            }
-            // Cache miss: build SQL by concatenating prefix [+ guard fragment] + suffix.
-            const guard_fragment = try filter_sql.renderGuardSql(arena_alloc, table_metadata, guard_ptr);
-            const sql_str: []const u8 = if (guard_fragment) |fragment|
-                try std.mem.concat(arena_alloc, u8, &.{
-                    table_metadata.delete_document_sql_prefix,
-                    fragment,
-                    table_metadata.delete_document_sql_suffix,
-                })
-            else
-                try std.mem.concat(arena_alloc, u8, &.{
-                    table_metadata.delete_document_sql_prefix,
-                    table_metadata.delete_document_sql_suffix,
-                });
-            break :blk try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, param_count, sql_str);
-        };
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-
-        const guard_values = try filter_sql.renderGuardValues(arena_alloc, table_metadata, guard_ptr);
 
         try sql.bindDocIdNamespace(stmt, &self.conn, 1, op.id, namespace_id);
 
         var bind_idx: c_int = 3;
-        if (guard_values) |guard_vals| {
-            try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+        if (rendered_guard) |rg| {
+            if (rg.values) |guard_vals| {
+                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
+            }
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);

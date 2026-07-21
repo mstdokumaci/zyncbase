@@ -4,7 +4,6 @@ const query_ast = @import("ast.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
-const FilterPredicate = query_ast.FilterPredicate;
 
 /// Computes a u64 structural hash of a QueryFilter.
 /// The hash identifies the SQL template — it includes all structural
@@ -50,8 +49,7 @@ pub fn computeStructuralHash(filter: *const QueryFilter) u64 {
     return hasher.final();
 }
 
-/// Hashes the structure of a single condition (field, op, types, in-array length).
-pub fn hashConditionStructure(hasher: *std.hash.Wyhash, c: Condition) void {
+fn hashConditionStructure(hasher: *std.hash.Wyhash, c: Condition) void {
     std.hash.autoHash(hasher, c.field_index);
     std.hash.autoHash(hasher, c.op);
     std.hash.autoHash(hasher, c.field_type);
@@ -63,27 +61,6 @@ pub fn hashConditionStructure(hasher: *std.hash.Wyhash, c: Condition) void {
             if (v == .array) {
                 std.hash.autoHash(hasher, v.array.len);
             }
-        }
-    }
-}
-
-/// Hashes the full structure of a FilterPredicate (conditions + or_clauses + state).
-/// Used by the write path to compute a cache key for guarded writes.
-pub fn hashPredicateStructure(hasher: *std.hash.Wyhash, pred: *const FilterPredicate) void {
-    std.hash.autoHash(hasher, pred.state);
-
-    const conds = pred.conditions orelse @as([]const Condition, &.{});
-    std.hash.autoHash(hasher, conds.len);
-    for (conds) |c| {
-        hashConditionStructure(hasher, c);
-    }
-
-    const clauses = pred.or_clauses orelse @as([]const OrClause, &.{});
-    std.hash.autoHash(hasher, clauses.len);
-    for (clauses) |clause| {
-        std.hash.autoHash(hasher, clause.len);
-        for (clause) |c| {
-            hashConditionStructure(hasher, c);
         }
     }
 }

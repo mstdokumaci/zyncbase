@@ -169,8 +169,7 @@ pub fn readDoc(
     var json_buf = sql.JsonBuf.init(allocator);
     defer json_buf.deinit();
 
-    const rec = try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null, &json_buf);
-    return rec;
+    return try reader_mod.execSelectDocument(allocator, &node.conn, dynamic.stmt, id, effective_namespace_id, table_metadata, null, &json_buf);
 }
 
 /// Execute a query directly from SQLite (bypasses cache and guard predicates).

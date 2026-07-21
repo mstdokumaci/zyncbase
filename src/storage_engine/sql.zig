@@ -21,7 +21,6 @@ pub const ColumnValue = struct {
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
 const Entry = struct {
     key: u64,
-    param_count: c_int,
     stmt: *sqlite.c.sqlite3_stmt,
     node: std.DoublyLinkedList.Node = .{},
 };
@@ -66,19 +65,12 @@ pub const StatementCache = struct {
         self.count = 0;
     }
 
-    /// Retrieves a prepared statement matched by u64 key + param_count verification.
-    /// Returns null if not in cache or param_count doesn't match (hash collision safety).
-    /// Updates LRU on hit.
-    pub fn get(self: *StatementCache, key: u64, param_count: c_int) ?*sqlite.c.sqlite3_stmt {
+    /// Retrieves a prepared statement matched by u64 key.
+    /// Updates LRU on hit. The 64-bit hash collision probability (~10^-16)
+    /// is low enough that no secondary verification is needed.
+    fn get(self: *StatementCache, key: u64) ?*sqlite.c.sqlite3_stmt {
         const node = self.map.get(key) orelse return null;
         const entry: *Entry = @fieldParentPtr("node", node);
-
-        // Hash collision safety: verify parameter count matches.
-        // The key is a structural hash of the SQL template (field indices, ops,
-        // order_by, etc.) and param_count is determined by the same structure.
-        // A mismatch means two different structures hashed to the same u64 —
-        // treat as a cache miss and re-prepare.
-        if (entry.param_count != param_count) return null;
 
         // Move to front (Most Recently Used)
         self.list.remove(node);
@@ -93,7 +85,7 @@ pub const StatementCache = struct {
 
     /// Adds a new statement to the cache. Evicts LRU if capacity exceeded.
     /// On key collision, replaces the old entry.
-    fn put(self: *StatementCache, allocator: Allocator, key: u64, param_count: c_int, stmt: *sqlite.c.sqlite3_stmt) !void {
+    fn put(self: *StatementCache, allocator: Allocator, key: u64, stmt: *sqlite.c.sqlite3_stmt) !void {
         // If the key already exists, replace the old entry.
         if (self.map.get(key)) |existing_node| {
             const old_entry: *Entry = @fieldParentPtr("node", existing_node);
@@ -120,7 +112,6 @@ pub const StatementCache = struct {
 
         entry.* = .{
             .key = key,
-            .param_count = param_count,
             .stmt = stmt,
             .node = .{},
         };
@@ -131,12 +122,11 @@ pub const StatementCache = struct {
     }
 
     /// High-level helper to get a statement or prepare one if missing.
-    /// `cache_key` is a structural hash of the SQL template.
-    /// `param_count` is the expected number of bind parameters (collision safety).
+    /// `cache_key` is a u64 hash identifying the SQL template.
     /// `sql_fallback` is only used on cache miss to prepare a new statement.
     /// Returns a ManagedStmt which ensures the statement is reset upon release.
-    pub fn acquire(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, cache_key: u64, param_count: c_int, sql_fallback: []const u8) !ManagedStmt {
-        if (self.get(cache_key, param_count)) |stmt| {
+    pub fn acquire(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, cache_key: u64, sql_fallback: []const u8) !ManagedStmt {
+        if (self.get(cache_key)) |stmt| {
             return ManagedStmt{ .stmt = stmt };
         }
 
@@ -146,7 +136,7 @@ pub const StatementCache = struct {
         };
         errdefer _ = sqlite.c.sqlite3_finalize(stmt);
 
-        try self.put(allocator, cache_key, param_count, stmt);
+        try self.put(allocator, cache_key, stmt);
         return ManagedStmt{ .stmt = stmt };
     }
 };

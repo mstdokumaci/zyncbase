@@ -166,9 +166,14 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
         if (ctx.writer_resolve_ns.*) |s| _ = sqlite.c.sqlite3_finalize(s);
     }
 
-    ctx.writer_resolve_user.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_user_sql);
-    errdefer {
-        if (ctx.writer_resolve_user.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+    // Only prepare the user-resolution stmt if the schema has a "users" table.
+    if (ctx.schema.table("users") != null) {
+        ctx.writer_resolve_user.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_user_sql);
+        errdefer {
+            if (ctx.writer_resolve_user.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+        }
+    } else {
+        ctx.writer_resolve_user.* = null;
     }
 
     // Readers

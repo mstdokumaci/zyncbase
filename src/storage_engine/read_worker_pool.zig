@@ -299,47 +299,29 @@ pub const ReadWorker = struct {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         }
 
-        const arena = self.read_arena.allocator();
-        const sort_field_index = filter.order_by.field_index;
-
-        // Build bind values first (always needed for binding).
-        // The values length doubles as param_count for cache collision safety.
-        const values = read_mod.buildSelectValues(arena, table_metadata, namespace_id, filter) catch {
+        // Arena-backed query build: bulk-freed at next request reset.
+        // Values are bound as transient SQLite params; records allocated via arena.
+        const query_res = read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
+
+        const sort_field_index = filter.order_by.field_index;
 
         // Execute DB read under the node mutex
         self.node.mutex.lock();
         defer self.node.mutex.unlock();
 
-        // Probe cache with (structural_hash, param_count). On hit, SQL build is skipped.
-        // On miss, build SQL template and prepare a new stmt.
-        var mstmt = blk: {
-            if (self.node.stmt_cache.get(filter.structural_hash, @intCast(values.len))) |stmt| {
-                break :blk sql.ManagedStmt{ .stmt = stmt };
-            }
-            // Cache miss: build SQL template, prepare, cache
-            const sql_str = read_mod.buildSelectSql(arena, table_metadata, filter) catch {
-                return .{ .records = &[_]Record{}, .next_cursor_str = null };
-            };
-            break :blk self.node.stmt_cache.acquire(
-                self.allocator,
-                &self.node.conn,
-                filter.structural_hash,
-                @intCast(values.len),
-                sql_str,
-            ) catch {
-                return .{ .records = &[_]Record{}, .next_cursor_str = null };
-            };
+        var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, filter.structural_hash, query_res.sql) catch {
+            return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
         const exec_res = read_mod.execQuery(
-            arena,
+            self.read_arena.allocator(),
             &self.node.conn,
             stmt,
-            values,
+            query_res.values,
             table_metadata,
             filter.limit,
             sort_field_index,
