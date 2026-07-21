@@ -4,6 +4,7 @@ const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlock
 const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const Record = typed.Record;
+const RecordChange = @import("engine.zig").RecordChange;
 
 pub const OwnedRecordChange = struct {
     table_index: usize,
@@ -13,7 +14,7 @@ pub const OwnedRecordChange = struct {
     old_record: ?Record,
     new_record: ?Record,
 
-    pub const Operation = enum { insert, update, delete };
+    pub const Operation = RecordChange.Operation;
 
     pub fn deinit(self: *OwnedRecordChange, allocator: Allocator) void {
         if (self.old_record) |r| r.deinit(allocator);

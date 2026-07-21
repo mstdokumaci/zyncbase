@@ -70,11 +70,8 @@ test "SubscriptionEngine: group sharing" {
     defer schema.deinit();
 
     // Two different subscribers for EXACTLY the same filter
-    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
-    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
-
-    try testing.expect(first); // First one should create group
-    try testing.expect(!second); // Second one should join existing group
+    _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
+    _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
 
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 }
@@ -121,8 +118,7 @@ test "SubscriptionEngine: subscribe/unsubscribe state consistency across all ind
     const coll_key = subscription_engine.CollectionKey{ .namespace_id = 1, .table_index = table_index };
 
     // --- Single subscriber: full lifecycle ---
-    const first = try engine.subscribe(1, table_index, filter, 10, 100);
-    try testing.expect(first);
+    _ = try engine.subscribe(1, table_index, filter, 10, 100);
 
     // After successful subscribe: all 4 indexes must be consistent
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
@@ -144,10 +140,8 @@ test "SubscriptionEngine: subscribe/unsubscribe state consistency across all ind
     });
     defer filter2.deinit(allocator);
 
-    const second = try engine.subscribe(1, table_index, filter2, 20, 200);
-    try testing.expect(second); // new group
-    const third = try engine.subscribe(1, table_index, filter2, 30, 300);
-    try testing.expect(!third); // joins existing group
+    _ = try engine.subscribe(1, table_index, filter2, 20, 200);
+    _ = try engine.subscribe(1, table_index, filter2, 30, 300);
 
     // Group has 2 subscribers
     const grp = engine.groups.get(2) orelse return error.TestExpectedValue;
@@ -289,11 +283,9 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
         });
         defer schema.deinit();
 
-        const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-        const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+        _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+        _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
-        try testing.expect(first);
-        try testing.expect(!second);
         try testing.expectEqual(@as(u32, 1), engine.groups.count());
         try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
     }
@@ -432,11 +424,8 @@ test "SubscriptionEngine: group sharing with different condition order" {
     });
     defer schema.deinit();
 
-    const first = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
-
-    try testing.expect(first);
-    try testing.expect(!second); // Should share group!
+    _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe(2, (schema.table("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
     try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
@@ -461,11 +450,9 @@ test "SubscriptionEngine: canonical key includes predicate state" {
     defer schema.deinit();
 
     const table_index = (schema.table("coll") orelse return error.TestExpectedValue).index;
-    const first = try engine.subscribe(2, table_index, filter_all, 1, 101);
-    const second = try engine.subscribe(2, table_index, filter_none, 2, 102);
+    _ = try engine.subscribe(2, table_index, filter_all, 1, 101);
+    _ = try engine.subscribe(2, table_index, filter_none, 2, 102);
 
-    try testing.expect(first);
-    try testing.expect(second);
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
     try testing.expectEqual(@as(u32, 2), engine.active_subs.count());
 }

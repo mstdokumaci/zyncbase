@@ -54,14 +54,10 @@ fn pathConditionLessThan(_: void, a: Condition, b: Condition) bool {
     if (a.field_index != b.field_index) return a.field_index < b.field_index;
     if (a.op != b.op) return @intFromEnum(a.op) < @intFromEnum(b.op);
     if (a.field_type != b.field_type) return @intFromEnum(a.field_type) < @intFromEnum(b.field_type);
-    const a_items = a.items_type;
-    const b_items = b.items_type;
-    if (a_items != null and b_items != null) {
-        if (a_items.? != b_items.?) return @intFromEnum(a_items.?) < @intFromEnum(b_items.?);
-    } else if (a_items == null and b_items != null) {
-        return true;
-    } else if (a_items != null and b_items == null) {
-        return false;
+    if (a.items_type != b.items_type) {
+        if (a.items_type == null) return true;
+        if (b.items_type == null) return false;
+        return @intFromEnum(a.items_type.?) < @intFromEnum(b.items_type.?);
     }
     return hash_context.conditionValueLessThan(a.value, b.value);
 }
@@ -166,14 +162,17 @@ pub const PredicateTrie = struct {
             .conditional => {},
         }
 
-        var path_buf: std.ArrayListUnmanaged(Condition) = .empty;
-        defer path_buf.deinit(self.allocator);
-        buildPath(self.allocator, &filter.predicate, &path_buf) catch {
-            _ = removeGroupBySearch(self.allocator, &self.root, group_id);
-            return;
-        };
+        const conds = filter.predicate.conditions orelse return;
+        var stack_buf: [16]Condition = undefined;
+        const path = if (conds.len <= stack_buf.len)
+            stack_buf[0..conds.len]
+        else
+            self.allocator.alloc(Condition, conds.len) catch return;
+        defer if (conds.len > stack_buf.len) self.allocator.free(path);
 
-        _ = removeAlongPath(self.allocator, &self.root, path_buf.items, 0, group_id);
+        @memcpy(path, conds);
+        std.mem.sort(Condition, path, {}, pathConditionLessThan);
+        _ = removeAlongPath(self.allocator, &self.root, path, 0, group_id);
     }
 
     /// Collect group ids whose AND path is satisfied by `record`.
@@ -287,98 +286,6 @@ fn removeAlongPath(
             allocator.destroy(child);
         }
     }
-    return node.isEmpty();
-}
-
-/// Fallback for removeGroup when buildPath OOMs: walk the entire trie,
-/// remove group_id from every leaf, and prune empty subtrees bottom-up.
-/// Allocation-free — split into two passes so no temporary buffers are needed.
-fn removeGroupBySearch(allocator: Allocator, node: *Node, group_id: u64) bool {
-    removeFromLeaves(node, group_id);
-    return pruneEmptyChildren(allocator, node);
-}
-
-/// Pass 1: remove group_id from every leaf_groups in the trie.
-fn removeFromLeaves(node: *Node, group_id: u64) void {
-    _ = node.leaf_groups.remove(group_id);
-
-    var eq_it = node.eq_branches.iterator();
-    while (eq_it.next()) |field_entry| {
-        var val_it = field_entry.value_ptr.iterator();
-        while (val_it.next()) |val_entry| {
-            removeFromLeaves(val_entry.value_ptr.*, group_id);
-        }
-    }
-
-    var cond_it = node.cond_branches.iterator();
-    while (cond_it.next()) |entry| {
-        removeFromLeaves(entry.value_ptr.*, group_id);
-    }
-}
-
-/// Pass 2: prune empty children bottom-up. Returns true if `node` is empty after pruning.
-fn pruneEmptyChildren(allocator: Allocator, node: *Node) bool {
-    var fields_to_prune: [16]usize = undefined;
-    var fields_count: usize = 0;
-
-    var eq_it = node.eq_branches.iterator();
-    while (eq_it.next()) |field_entry| {
-        var value_map_ptr = field_entry.value_ptr;
-        var values_to_prune: [16]Value = undefined;
-        var values_count: usize = 0;
-
-        var val_it = value_map_ptr.iterator();
-        while (val_it.next()) |val_entry| {
-            if (pruneEmptyChildren(allocator, val_entry.value_ptr.*)) {
-                if (values_count < values_to_prune.len) {
-                    values_to_prune[values_count] = val_entry.key_ptr.*;
-                    values_count += 1;
-                }
-            }
-        }
-        for (0..values_count) |i| {
-            if (value_map_ptr.fetchRemove(values_to_prune[i])) |kv| {
-                var k = kv.key;
-                k.deinit(allocator);
-                kv.value.deinit(allocator);
-                allocator.destroy(kv.value);
-            }
-        }
-        if (value_map_ptr.count() == 0) {
-            if (fields_count < fields_to_prune.len) {
-                fields_to_prune[fields_count] = field_entry.key_ptr.*;
-                fields_count += 1;
-            }
-        }
-    }
-    for (0..fields_count) |i| {
-        if (node.eq_branches.fetchRemove(fields_to_prune[i])) |kv| {
-            var map = kv.value;
-            map.deinit(allocator);
-        }
-    }
-
-    var conds_to_prune: [16]Condition = undefined;
-    var conds_count: usize = 0;
-
-    var cond_it = node.cond_branches.iterator();
-    while (cond_it.next()) |entry| {
-        if (pruneEmptyChildren(allocator, entry.value_ptr.*)) {
-            if (conds_count < conds_to_prune.len) {
-                conds_to_prune[conds_count] = entry.key_ptr.*;
-                conds_count += 1;
-            }
-        }
-    }
-    for (0..conds_count) |i| {
-        if (node.cond_branches.fetchRemove(conds_to_prune[i])) |kv| {
-            var k = kv.key;
-            k.deinit(allocator);
-            kv.value.deinit(allocator);
-            allocator.destroy(kv.value);
-        }
-    }
-
     return node.isEmpty();
 }
 
