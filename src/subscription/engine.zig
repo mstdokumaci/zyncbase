@@ -8,8 +8,8 @@ const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
 const typed = @import("../typed/types.zig");
 const Record = typed.Record;
-const predicate_dag = @import("predicate_dag.zig");
-const PredicateDag = predicate_dag.PredicateDag;
+const predicate_trie = @import("predicate_trie.zig");
+const PredicateTrie = predicate_trie.PredicateTrie;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -140,7 +140,7 @@ pub const SubscriptionEngine = struct {
     /// collection_key -> ArrayList(GroupId)
     groups_by_collection: std.AutoHashMapUnmanaged(CollectionKey, std.ArrayListUnmanaged(u64)) = .empty,
     /// collection_key -> condition-prefix trie used for change matching
-    dags_by_collection: std.AutoHashMapUnmanaged(CollectionKey, PredicateDag) = .empty,
+    tries_by_collection: std.AutoHashMapUnmanaged(CollectionKey, PredicateTrie) = .empty,
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
     next_group_id: u64 = 1,
@@ -159,11 +159,11 @@ pub const SubscriptionEngine = struct {
         }
         self.groups_by_collection.deinit(self.allocator);
 
-        var it_dags = self.dags_by_collection.valueIterator();
-        while (it_dags.next()) |dag| {
-            dag.deinit();
+        var it_tries = self.tries_by_collection.valueIterator();
+        while (it_tries.next()) |trie| {
+            trie.deinit();
         }
-        self.dags_by_collection.deinit(self.allocator);
+        self.tries_by_collection.deinit(self.allocator);
 
         var it_groups = self.groups.valueIterator();
         while (it_groups.next()) |g| {
@@ -232,21 +232,21 @@ pub const SubscriptionEngine = struct {
         errdefer self.removeGroupFromCollectionIndex(coll_key, group_id);
 
         // Insert into the per-collection condition-prefix trie.
-        const grp_for_dag = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
-        const dag_gop = try self.dags_by_collection.getOrPut(self.allocator, coll_key);
-        if (!dag_gop.found_existing) {
-            dag_gop.value_ptr.* = PredicateDag.init(self.allocator);
+        const grp_for_trie = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
+        const trie_gop = try self.tries_by_collection.getOrPut(self.allocator, coll_key);
+        if (!trie_gop.found_existing) {
+            trie_gop.value_ptr.* = PredicateTrie.init(self.allocator);
         }
         errdefer {
-            if (self.dags_by_collection.getPtr(coll_key)) |dag| {
-                dag.removeGroup(group_id, &grp_for_dag.filter);
-                if (dag.isEmpty()) {
-                    dag.deinit();
-                    _ = self.dags_by_collection.remove(coll_key);
+            if (self.tries_by_collection.getPtr(coll_key)) |trie| {
+                trie.removeGroup(group_id, &grp_for_trie.filter);
+                if (trie.isEmpty()) {
+                    trie.deinit();
+                    _ = self.tries_by_collection.remove(coll_key);
                 }
             }
         }
-        _ = try dag_gop.value_ptr.insertGroup(group_id, &grp_for_dag.filter);
+        _ = try trie_gop.value_ptr.insertGroup(group_id, &grp_for_trie.filter);
 
         return .{ .group_id = group_id, .first_sub = true };
     }
@@ -322,12 +322,12 @@ pub const SubscriptionEngine = struct {
         }
     }
 
-    fn removeGroupFromDag(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64, filter: *const QueryFilter) void {
-        if (self.dags_by_collection.getPtr(coll_key)) |dag| {
-            dag.removeGroup(group_id, filter);
-            if (dag.isEmpty()) {
-                dag.deinit();
-                _ = self.dags_by_collection.remove(coll_key);
+    fn removeGroupFromTrie(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64, filter: *const QueryFilter) void {
+        if (self.tries_by_collection.getPtr(coll_key)) |trie| {
+            trie.removeGroup(group_id, filter);
+            if (trie.isEmpty()) {
+                trie.deinit();
+                _ = self.tries_by_collection.remove(coll_key);
             }
         }
     }
@@ -340,7 +340,7 @@ pub const SubscriptionEngine = struct {
         group: *SubscriptionGroup,
     ) void {
         _ = self.groups_by_filter.remove(group.filter);
-        self.removeGroupFromDag(coll_key, group_id, &group.filter);
+        self.removeGroupFromTrie(coll_key, group_id, &group.filter);
         self.removeGroupFromCollectionIndex(coll_key, group_id);
         group.deinit(self.allocator);
         _ = self.groups.remove(group_id);
@@ -426,7 +426,7 @@ pub const SubscriptionEngine = struct {
             .table_index = change.table_index,
         };
 
-        const dag = self.dags_by_collection.getPtr(key) orelse return allocator.alloc(Match, 0);
+        const trie = self.tries_by_collection.getPtr(key) orelse return allocator.alloc(Match, 0);
 
         var matched_before: std.ArrayListUnmanaged(u64) = .empty;
         defer matched_before.deinit(allocator);
@@ -434,11 +434,11 @@ pub const SubscriptionEngine = struct {
         defer matched_after.deinit(allocator);
 
         if (change.old_record) |old| {
-            try dag.collectMatches(&old, &matched_before, allocator);
+            try trie.collectMatches(&old, &matched_before, allocator);
             try self.filterResidualMatches(&matched_before, &old);
         }
         if (change.new_record) |new| {
-            try dag.collectMatches(&new, &matched_after, allocator);
+            try trie.collectMatches(&new, &matched_after, allocator);
             try self.filterResidualMatches(&matched_after, &new);
         }
 
@@ -486,7 +486,7 @@ pub const SubscriptionEngine = struct {
         var write: usize = 0;
         for (candidates.items) |gid| {
             const group = self.groups.get(gid) orelse continue; // drop missing
-            if (try predicate_dag.residualMatches(&group.filter.predicate, record)) {
+            if (try predicate_trie.residualMatches(&group.filter.predicate, record)) {
                 candidates.items[write] = gid;
                 write += 1;
             }

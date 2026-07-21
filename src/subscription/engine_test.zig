@@ -852,9 +852,9 @@ test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
     _ = try engine.subscribe(1, table_index, filter_c, 3, 300);
 
     try testing.expectEqual(@as(u32, 3), engine.groups.count());
-    try testing.expect(engine.dags_by_collection.get(coll_key) != null);
+    try testing.expect(engine.tries_by_collection.get(coll_key) != null);
     // Shared eq(status) branch under the collection root.
-    try testing.expectEqual(@as(u32, 1), engine.dags_by_collection.get(coll_key).?.root.eq_branches.count());
+    try testing.expectEqual(@as(u32, 1), engine.tries_by_collection.get(coll_key).?.root.eq_branches.count());
 
     // Matches only owner=1
     var rec_a = try tth.recordFromValues(allocator, &.{
@@ -917,12 +917,12 @@ test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
     defer allocator.free(matches_none);
     try testing.expectEqual(@as(usize, 0), matches_none.len);
 
-    // Last unsubscribes tear down the DAG
+    // Last unsubscribes tear down the trie
     engine.unsubscribe(1, 100);
     engine.unsubscribe(2, 200);
-    try testing.expect(engine.dags_by_collection.get(coll_key) != null);
+    try testing.expect(engine.tries_by_collection.get(coll_key) != null);
     engine.unsubscribe(3, 300);
-    try testing.expect(engine.dags_by_collection.get(coll_key) == null);
+    try testing.expect(engine.tries_by_collection.get(coll_key) == null);
     try testing.expectEqual(@as(u32, 0), engine.groups.count());
 }
 

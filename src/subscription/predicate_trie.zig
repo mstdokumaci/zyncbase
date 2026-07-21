@@ -113,27 +113,27 @@ pub const Node = struct {
 /// Per-collection predicate discrimination trie.
 /// Parent/child topology is fully determined by a fixed total order on AND conditions.
 /// Subscribe/unsubscribe only insert/delete along that path — no periodic recalculation.
-pub const PredicateDag = struct {
+pub const PredicateTrie = struct {
     allocator: Allocator,
     root: Node = .{},
 
-    pub fn init(allocator: Allocator) PredicateDag {
+    pub fn init(allocator: Allocator) PredicateTrie {
         return .{ .allocator = allocator };
     }
 
-    pub fn deinit(self: *PredicateDag) void {
+    pub fn deinit(self: *PredicateTrie) void {
         self.root.deinit(self.allocator);
         self.* = undefined;
     }
 
-    pub fn isEmpty(self: *const PredicateDag) bool {
+    pub fn isEmpty(self: *const PredicateTrie) bool {
         return self.root.isEmpty();
     }
 
     /// Insert `group_id` under the canonical AND path of `filter`.
     /// `match_none` filters are not inserted (they never match).
-    /// Returns true if the group was placed in the DAG.
-    pub fn insertGroup(self: *PredicateDag, group_id: u64, filter: *const QueryFilter) !bool {
+    /// Returns true if the group was placed in the trie.
+    pub fn insertGroup(self: *PredicateTrie, group_id: u64, filter: *const QueryFilter) !bool {
         switch (filter.predicate.state) {
             .match_none => return false,
             .match_all => {
@@ -156,7 +156,7 @@ pub const PredicateDag = struct {
     }
 
     /// Remove `group_id` using the same canonical path as insert. Frees empty nodes.
-    pub fn removeGroup(self: *PredicateDag, group_id: u64, filter: *const QueryFilter) void {
+    pub fn removeGroup(self: *PredicateTrie, group_id: u64, filter: *const QueryFilter) void {
         switch (filter.predicate.state) {
             .match_none => return,
             .match_all => {
@@ -179,7 +179,7 @@ pub const PredicateDag = struct {
     /// Collect group ids whose AND path is satisfied by `record`.
     /// Caller owns the list and must deinit it. Residual OR checks are the caller's responsibility.
     pub fn collectMatches(
-        self: *const PredicateDag,
+        self: *const PredicateTrie,
         record: *const Record,
         out: *std.ArrayListUnmanaged(u64),
         out_allocator: Allocator,
@@ -187,7 +187,7 @@ pub const PredicateDag = struct {
         try collectFromNode(&self.root, record, out, out_allocator);
     }
 
-    fn getOrCreateChild(self: *PredicateDag, parent: *Node, step: Condition) !*Node {
+    fn getOrCreateChild(self: *PredicateTrie, parent: *Node, step: Condition) !*Node {
         if (step.op == .eq) {
             const value = step.value orelse return error.MissingConditionValue;
             const field_gop = try parent.eq_branches.getOrPut(self.allocator, step.field_index);
