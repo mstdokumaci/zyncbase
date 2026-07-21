@@ -149,7 +149,7 @@ pub const SubscriptionWorker = struct {
         const record_change = RecordChange{
             .namespace_id = change.namespace_id,
             .table_index = change.table_index,
-            .operation = @enumFromInt(@intFromEnum(change.operation)),
+            .operation = change.operation,
             .new_record = change.new_record,
             .old_record = change.old_record,
         };
