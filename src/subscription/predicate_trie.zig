@@ -292,26 +292,52 @@ fn removeAlongPath(
 
 /// Fallback for removeGroup when buildPath OOMs: walk the entire trie,
 /// remove group_id from every leaf, and prune empty subtrees bottom-up.
+/// Allocation-free — split into two passes so no temporary buffers are needed.
 fn removeGroupBySearch(allocator: Allocator, node: *Node, group_id: u64) bool {
+    removeFromLeaves(node, group_id);
+    return pruneEmptyChildren(allocator, node);
+}
+
+/// Pass 1: remove group_id from every leaf_groups in the trie.
+fn removeFromLeaves(node: *Node, group_id: u64) void {
     _ = node.leaf_groups.remove(group_id);
 
-    var fields_to_remove: std.ArrayListUnmanaged(usize) = .empty;
-    defer fields_to_remove.deinit(allocator);
+    var eq_it = node.eq_branches.iterator();
+    while (eq_it.next()) |field_entry| {
+        var val_it = field_entry.value_ptr.iterator();
+        while (val_it.next()) |val_entry| {
+            removeFromLeaves(val_entry.value_ptr.*, group_id);
+        }
+    }
+
+    var cond_it = node.cond_branches.iterator();
+    while (cond_it.next()) |entry| {
+        removeFromLeaves(entry.value_ptr.*, group_id);
+    }
+}
+
+/// Pass 2: prune empty children bottom-up. Returns true if `node` is empty after pruning.
+fn pruneEmptyChildren(allocator: Allocator, node: *Node) bool {
+    var fields_to_prune: [16]usize = undefined;
+    var fields_count: usize = 0;
 
     var eq_it = node.eq_branches.iterator();
     while (eq_it.next()) |field_entry| {
         var value_map_ptr = field_entry.value_ptr;
-        var values_to_remove: std.ArrayListUnmanaged(Value) = .empty;
-        defer values_to_remove.deinit(allocator);
+        var values_to_prune: [16]Value = undefined;
+        var values_count: usize = 0;
 
         var val_it = value_map_ptr.iterator();
         while (val_it.next()) |val_entry| {
-            if (removeGroupBySearch(allocator, val_entry.value_ptr.*, group_id)) {
-                values_to_remove.append(allocator, val_entry.key_ptr.*) catch break;
+            if (pruneEmptyChildren(allocator, val_entry.value_ptr.*)) {
+                if (values_count < values_to_prune.len) {
+                    values_to_prune[values_count] = val_entry.key_ptr.*;
+                    values_count += 1;
+                }
             }
         }
-        for (values_to_remove.items) |key| {
-            if (value_map_ptr.fetchRemove(key)) |kv| {
+        for (0..values_count) |i| {
+            if (value_map_ptr.fetchRemove(values_to_prune[i])) |kv| {
                 var k = kv.key;
                 k.deinit(allocator);
                 kv.value.deinit(allocator);
@@ -319,27 +345,33 @@ fn removeGroupBySearch(allocator: Allocator, node: *Node, group_id: u64) bool {
             }
         }
         if (value_map_ptr.count() == 0) {
-            fields_to_remove.append(allocator, field_entry.key_ptr.*) catch break;
+            if (fields_count < fields_to_prune.len) {
+                fields_to_prune[fields_count] = field_entry.key_ptr.*;
+                fields_count += 1;
+            }
         }
     }
-    for (fields_to_remove.items) |field_index| {
-        if (node.eq_branches.fetchRemove(field_index)) |kv| {
+    for (0..fields_count) |i| {
+        if (node.eq_branches.fetchRemove(fields_to_prune[i])) |kv| {
             var map = kv.value;
             map.deinit(allocator);
         }
     }
 
-    var conds_to_remove: std.ArrayListUnmanaged(Condition) = .empty;
-    defer conds_to_remove.deinit(allocator);
+    var conds_to_prune: [16]Condition = undefined;
+    var conds_count: usize = 0;
 
     var cond_it = node.cond_branches.iterator();
     while (cond_it.next()) |entry| {
-        if (removeGroupBySearch(allocator, entry.value_ptr.*, group_id)) {
-            conds_to_remove.append(allocator, entry.key_ptr.*) catch break;
+        if (pruneEmptyChildren(allocator, entry.value_ptr.*)) {
+            if (conds_count < conds_to_prune.len) {
+                conds_to_prune[conds_count] = entry.key_ptr.*;
+                conds_count += 1;
+            }
         }
     }
-    for (conds_to_remove.items) |key| {
-        if (node.cond_branches.fetchRemove(key)) |kv| {
+    for (0..conds_count) |i| {
+        if (node.cond_branches.fetchRemove(conds_to_prune[i])) |kv| {
             var k = kv.key;
             k.deinit(allocator);
             kv.value.deinit(allocator);
