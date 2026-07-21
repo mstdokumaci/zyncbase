@@ -97,8 +97,8 @@ pub const CanonicalFilterContext = struct {
 };
 
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
     const aa = a.?;
     const bb = b.?;
     if (aa.len != bb.len) return false;
@@ -109,8 +109,8 @@ fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
 }
 
 fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
     const aa = a.?;
     const bb = b.?;
     if (aa.len != bb.len) return false;
