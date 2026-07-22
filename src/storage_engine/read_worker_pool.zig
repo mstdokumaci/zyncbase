@@ -240,8 +240,6 @@ pub const ReadWorker = struct {
             },
         }
 
-        const sql_query = table_metadata.select_document_sql;
-
         // Snapshot writer version before the DB read to detect concurrent writes
         const seq_before = self.writer_version.load(.acquire);
 
@@ -250,10 +248,9 @@ pub const ReadWorker = struct {
             self.node.mutex.lock();
             defer self.node.mutex.unlock();
 
-            const stmt_key = std.hash.Wyhash.hash(0, sql_query);
-            var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, stmt_key, sql_query) catch {
-                break :blk null;
-            };
+            // Stmts are prepared before the pool starts; null means an invariant violation.
+            const stmt = self.node.select_document_stmts[table_metadata.index] orelse unreachable;
+            var mstmt = sql.acquireStaticStmt(stmt) catch @panic("select_document_stmt not prepared");
             defer mstmt.release();
 
             break :blk read_mod.execSelectDocument(

@@ -55,6 +55,17 @@ pub const WriteWorker = struct {
     memory_strategy: *MemoryStrategy,
     conn: sqlite.Db,
     stmt_cache: StatementCache,
+    /// Pre-prepared `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`
+    /// per table, indexed by `table.index`. Used by `getDocumentHelper` (prefetch
+    /// + guard post-check), the hottest read path on the writer. Prepared in
+    /// `StorageEngine.start()`; finalized in `deinit`/`attemptReconnect`.
+    select_document_stmts: []?*sqlite.c.sqlite3_stmt = &.{},
+    /// Pre-prepared stmt for `sql.resolveNamespaceId`. Compile-time SQL literal,
+    /// stable for process lifetime. Prepared in `StorageEngine.start()`.
+    resolve_namespace_stmt: ?*sqlite.c.sqlite3_stmt = null,
+    /// Pre-prepared stmt for `sql.resolveUserId`. Compile-time SQL literal.
+    /// Prepared in `StorageEngine.start()`.
+    resolve_user_stmt: ?*sqlite.c.sqlite3_stmt = null,
     version: std.atomic.Value(u64),
     thread: managedThread(WriteWorker),
     flush_wg: WaitGroup,
@@ -197,6 +208,20 @@ pub const WriteWorker = struct {
 
     pub fn deinit(self: *WriteWorker) void {
         self.json_buf.deinit();
+        // Finalize static stmts before closing the connection.
+        sql.finalizeStaticStmts(self.select_document_stmts);
+        if (self.select_document_stmts.len > 0) {
+            self.allocator.free(self.select_document_stmts);
+            self.select_document_stmts = &.{};
+        }
+        if (self.resolve_namespace_stmt) |s| {
+            _ = sqlite.c.sqlite3_finalize(s);
+            self.resolve_namespace_stmt = null;
+        }
+        if (self.resolve_user_stmt) |s| {
+            _ = sqlite.c.sqlite3_finalize(s);
+            self.resolve_user_stmt = null;
+        }
         self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
         self.allocator.free(self.db_path);
@@ -235,8 +260,8 @@ pub const WriteWorker = struct {
         id: DocId,
     ) !?Record {
         const table_metadata = self.schema.tableByIndex(table_index) orelse return null;
-        const cache_key = std.hash.Wyhash.hash(0, table_metadata.select_document_sql);
-        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, cache_key, table_metadata.select_document_sql);
+        const stmt = self.select_document_stmts[table_metadata.index] orelse return error.StatementNotPrepared;
+        var mstmt = try sql.acquireStaticStmt(stmt);
         defer mstmt.release();
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
@@ -902,7 +927,13 @@ pub const WriteWorker = struct {
         var user_doc_id = typed_doc_id.zero;
         var resolution_err: ?anyerror = null;
 
-        if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |ns_id| {
+        const ns_stmt = self.resolve_namespace_stmt orelse {
+            resolution_err = error.StatementNotPrepared;
+            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
+            self.notifyChanges();
+            return;
+        };
+        if (sql.resolveNamespaceId(self.allocator, &self.conn, ns_stmt, sop.namespace)) |ns_id| {
             namespace_id = ns_id;
 
             self.namespace_cache.update(
@@ -920,23 +951,27 @@ pub const WriteWorker = struct {
             };
             const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
 
-            if (sql.resolveUserId(
-                self.allocator,
-                &self.conn,
-                &self.stmt_cache,
-                identity_namespace_id,
-                sop.external_user_id,
-                sop.timestamp,
-            )) |uid| {
-                user_doc_id = uid;
-                self.identity_cache.update(
-                    storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
-                    .{ .user_doc_id = uid },
-                ) catch |err| {
-                    std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
-                };
-            } else |err| {
-                resolution_err = errors.classifyError(err);
+            if (self.resolve_user_stmt) |user_stmt| {
+                if (sql.resolveUserId(
+                    self.allocator,
+                    &self.conn,
+                    user_stmt,
+                    identity_namespace_id,
+                    sop.external_user_id,
+                    sop.timestamp,
+                )) |uid| {
+                    user_doc_id = uid;
+                    self.identity_cache.update(
+                        storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
+                        .{ .user_doc_id = uid },
+                    ) catch |err| {
+                        std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
+                    };
+                } else |err| {
+                    resolution_err = errors.classifyError(err);
+                }
+            } else {
+                resolution_err = error.StatementNotPrepared;
             }
         } else |err| {
             resolution_err = errors.classifyError(err);

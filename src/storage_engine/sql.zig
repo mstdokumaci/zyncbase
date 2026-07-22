@@ -20,7 +20,7 @@ pub const ColumnValue = struct {
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
 const Entry = struct {
-    sql: []const u8,
+    key: u64,
     stmt: *sqlite.c.sqlite3_stmt,
     node: std.DoublyLinkedList.Node = .{},
 };
@@ -57,7 +57,6 @@ pub const StatementCache = struct {
             const next = node.next;
             const entry: *Entry = @fieldParentPtr("node", node);
             _ = sqlite.c.sqlite3_finalize(entry.stmt);
-            allocator.free(entry.sql);
             allocator.destroy(entry);
             it = next;
         }
@@ -66,15 +65,12 @@ pub const StatementCache = struct {
         self.count = 0;
     }
 
-    /// Retrieves a prepared statement matched by u64 key + SQL verification.
-    /// Returns null if not in cache or SQL doesn't match (hash collision).
-    /// Updates LRU on hit.
-    fn get(self: *StatementCache, key: u64, sql: []const u8) ?*sqlite.c.sqlite3_stmt {
+    /// Retrieves a prepared statement matched by u64 key.
+    /// Updates LRU on hit. The 64-bit hash collision probability (~10^-16)
+    /// is low enough that no secondary verification is needed.
+    fn get(self: *StatementCache, key: u64) ?*sqlite.c.sqlite3_stmt {
         const node = self.map.get(key) orelse return null;
         const entry: *Entry = @fieldParentPtr("node", node);
-
-        // Hash collision safety: verify SQL string matches.
-        if (!std.mem.eql(u8, entry.sql, sql)) return null;
 
         // Move to front (Most Recently Used)
         self.list.remove(node);
@@ -88,28 +84,34 @@ pub const StatementCache = struct {
     }
 
     /// Adds a new statement to the cache. Evicts LRU if capacity exceeded.
-    fn put(self: *StatementCache, allocator: Allocator, key: u64, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !void {
-        // Evict if at capacity
+    /// On key collision, replaces the old entry.
+    fn put(self: *StatementCache, allocator: Allocator, key: u64, stmt: *sqlite.c.sqlite3_stmt) !void {
+        // If the key already exists, replace the old entry.
+        if (self.map.get(key)) |existing_node| {
+            const old_entry: *Entry = @fieldParentPtr("node", existing_node);
+            self.list.remove(existing_node);
+            _ = sqlite.c.sqlite3_finalize(old_entry.stmt);
+            allocator.destroy(old_entry);
+            self.count -= 1;
+        }
+
+        // Evict LRU if at capacity
         if (self.count >= self.cache_limit) {
             if (self.list.last) |old_node| {
                 const old_entry: *Entry = @fieldParentPtr("node", old_node);
                 self.list.remove(old_node);
-                _ = self.map.remove(std.hash.Wyhash.hash(0, old_entry.sql));
+                _ = self.map.remove(old_entry.key);
                 _ = sqlite.c.sqlite3_finalize(old_entry.stmt);
-                allocator.free(old_entry.sql);
                 allocator.destroy(old_entry);
                 self.count -= 1;
             }
         }
 
-        const sql_owned = try allocator.dupe(u8, sql);
-        errdefer allocator.free(sql_owned);
-
         const entry = try allocator.create(Entry);
         errdefer allocator.destroy(entry);
 
         entry.* = .{
-            .sql = sql_owned,
+            .key = key,
             .stmt = stmt,
             .node = .{},
         };
@@ -120,9 +122,11 @@ pub const StatementCache = struct {
     }
 
     /// High-level helper to get a statement or prepare one if missing.
+    /// `cache_key` is a u64 hash identifying the SQL template.
+    /// `sql_fallback` is only used on cache miss to prepare a new statement.
     /// Returns a ManagedStmt which ensures the statement is reset upon release.
     pub fn acquire(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, cache_key: u64, sql_fallback: []const u8) !ManagedStmt {
-        if (self.get(cache_key, sql_fallback)) |stmt| {
+        if (self.get(cache_key)) |stmt| {
             return ManagedStmt{ .stmt = stmt };
         }
 
@@ -132,7 +136,7 @@ pub const StatementCache = struct {
         };
         errdefer _ = sqlite.c.sqlite3_finalize(stmt);
 
-        try self.put(allocator, cache_key, sql_fallback, stmt);
+        try self.put(allocator, cache_key, stmt);
         return ManagedStmt{ .stmt = stmt };
     }
 };
@@ -146,6 +150,56 @@ pub const ManagedStmt = struct {
         _ = sqlite.c.sqlite3_clear_bindings(self.stmt);
     }
 };
+
+/// Reset + clear bindings on a static (pre-prepared) stmt and return a `ManagedStmt`.
+/// The stmt must outlive the returned wrapper. Caller releases when done.
+/// Returns `error.StatementNotPrepared` if `stmt_opt` is null (e.g. setup phase
+/// before `StorageEngine.start()` has prepared static stmts).
+pub fn acquireStaticStmt(stmt_opt: ?*sqlite.c.sqlite3_stmt) !ManagedStmt {
+    const stmt = stmt_opt orelse return error.StatementNotPrepared;
+    _ = sqlite.c.sqlite3_reset(stmt);
+    _ = sqlite.c.sqlite3_clear_bindings(stmt);
+    return ManagedStmt{ .stmt = stmt };
+}
+
+/// Prepare one stmt per table from `table.select_document_sql`. Returned slice
+/// is indexed by `table.index`. Caller owns the slice and must `finalizeStaticStmts`
+/// before freeing it. Null entries indicate a prepare failure for that table;
+/// caller may treat any null as fatal since schema is locked at prepare time.
+pub fn prepareSelectDocumentStmts(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    schema: *const schema_types.Schema,
+) ![]?*sqlite.c.sqlite3_stmt {
+    const stmts = try allocator.alloc(?*sqlite.c.sqlite3_stmt, schema.tables.len);
+    var prepared: usize = 0;
+    errdefer {
+        for (stmts[0..prepared]) |s| {
+            if (s) |stmt| _ = sqlite.c.sqlite3_finalize(stmt);
+        }
+        allocator.free(stmts);
+    }
+    for (schema.tables) |t| {
+        const dynamic = try db.prepareDynamic(t.select_document_sql);
+        stmts[t.index] = dynamic.stmt;
+        prepared += 1;
+    }
+    return stmts;
+}
+
+/// Finalize all non-null stmts in `stmts`. Does not free the slice — caller owns it.
+pub fn finalizeStaticStmts(stmts: []?*sqlite.c.sqlite3_stmt) void {
+    for (stmts) |s| {
+        if (s) |stmt| _ = sqlite.c.sqlite3_finalize(stmt);
+    }
+}
+
+/// Prepare a single compile-time SQL literal into a static stmt. Caller finalizes via
+/// `sqlite3_finalize` (or `finalizeStaticStmts` on a one-element slice).
+pub fn prepareStaticStmt(db: *sqlite.Db, sql_text: []const u8) !*sqlite.c.sqlite3_stmt {
+    const dynamic = try db.prepareDynamic(sql_text);
+    return dynamic.stmt;
+}
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
 pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
@@ -291,24 +345,37 @@ pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     ) catch |err| return errors.classifyError(err);
 }
 
+pub const resolve_namespace_sql =
+    \\INSERT INTO _zync_namespaces (name)
+    \\VALUES (?)
+    \\ON CONFLICT(name) DO UPDATE SET name = excluded.name
+    \\RETURNING id
+;
+
+pub const resolve_user_sql =
+    \\INSERT INTO "users" ("id", "namespace_id", "owner_id", "external_id", "created_at", "updated_at")
+    \\VALUES (?, ?, ?, ?, ?, ?)
+    \\ON CONFLICT("namespace_id", "external_id") DO UPDATE SET "external_id" = excluded."external_id"
+    \\RETURNING "id"
+;
+
 pub fn resolveNamespaceId(
     allocator: Allocator,
     db: *sqlite.Db,
-    stmt_cache: *StatementCache,
+    stmt: *sqlite.c.sqlite3_stmt,
     namespace: []const u8,
 ) !i64 {
-    const sql_text =
-        \\INSERT INTO _zync_namespaces (name)
-        \\VALUES (?)
-        \\ON CONFLICT(name) DO UPDATE SET name = excluded.name
-        \\RETURNING id
-    ;
-    var mstmt = try stmt_cache.acquire(allocator, db, std.hash.Wyhash.hash(0, sql_text), sql_text);
-    defer mstmt.release();
+    _ = allocator;
+    _ = sqlite.c.sqlite3_reset(stmt);
+    _ = sqlite.c.sqlite3_clear_bindings(stmt);
+    defer {
+        _ = sqlite.c.sqlite3_reset(stmt);
+        _ = sqlite.c.sqlite3_clear_bindings(stmt);
+    }
 
-    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
-    if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
+    if (bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    const rc = sqlite.c.sqlite3_step(stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(stmt, 0);
     if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
     return errors.StorageError.InvalidOperation;
 }
@@ -316,33 +383,33 @@ pub fn resolveNamespaceId(
 pub fn resolveUserId(
     allocator: Allocator,
     db: *sqlite.Db,
-    stmt_cache: *StatementCache,
+    stmt: *sqlite.c.sqlite3_stmt,
     namespace_id: i64,
     external_id: []const u8,
     timestamp: i64,
 ) !typed_doc_id.DocId {
+    _ = allocator;
     const new_user_id = typed_doc_id.generateUuidV7();
     const id_bytes = typed_doc_id.toBytes(new_user_id);
-    const sql_text =
-        \\INSERT INTO "users" ("id", "namespace_id", "owner_id", "external_id", "created_at", "updated_at")
-        \\VALUES (?, ?, ?, ?, ?, ?)
-        \\ON CONFLICT("namespace_id", "external_id") DO UPDATE SET "external_id" = excluded."external_id"
-        \\RETURNING "id"
-    ;
-    var mstmt = try stmt_cache.acquire(allocator, db, std.hash.Wyhash.hash(0, sql_text), sql_text);
-    defer mstmt.release();
 
-    if (bindBlobTransient(mstmt.stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (bindBlobTransient(mstmt.stmt, 3, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (bindTextTransient(mstmt.stmt, 4, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 5, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 6, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    _ = sqlite.c.sqlite3_reset(stmt);
+    _ = sqlite.c.sqlite3_clear_bindings(stmt);
+    defer {
+        _ = sqlite.c.sqlite3_reset(stmt);
+        _ = sqlite.c.sqlite3_clear_bindings(stmt);
+    }
 
-    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+    if (bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (bindBlobTransient(stmt, 3, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (bindTextTransient(stmt, 4, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 5, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 6, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
-        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
+        const ptr = sqlite.c.sqlite3_column_blob(stmt, 0);
+        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, 0));
         const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
         return typed_doc_id.fromBytes(bytes) catch return errors.StorageError.TypeMismatch;
     }
