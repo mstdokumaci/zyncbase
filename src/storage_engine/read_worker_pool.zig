@@ -248,8 +248,9 @@ pub const ReadWorker = struct {
             self.node.mutex.lock();
             defer self.node.mutex.unlock();
 
-            const stmt = self.node.select_document_stmts[table_metadata.index] orelse break :blk null;
-            var mstmt = sql.acquireStaticStmt(stmt) catch break :blk null;
+            // Stmts are prepared before the pool starts; null means an invariant violation.
+            const stmt = self.node.select_document_stmts[table_metadata.index] orelse unreachable;
+            var mstmt = sql.acquireStaticStmt(stmt) catch @panic("select_document_stmt not prepared");
             defer mstmt.release();
 
             break :blk read_mod.execSelectDocument(

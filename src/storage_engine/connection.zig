@@ -126,19 +126,26 @@ pub const ReconnectContext = struct {
 
 /// Finalize all static stmts (writer + readers) and deinit all stmt_caches.
 /// Called before connections are closed so no dangling stmt pointers remain.
+/// Clears slices and nulls out optionals so callers can safely re-prepare.
 fn finalizeAllStmts(ctx: ReconnectContext) void {
     // Writer static stmts
     if (ctx.writer_select_stmts.len > 0) {
         sql.finalizeStaticStmts(ctx.writer_select_stmts.*);
+        ctx.allocator.free(ctx.writer_select_stmts.*);
+        ctx.writer_select_stmts.* = &.{};
     }
     if (ctx.writer_resolve_ns.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+    ctx.writer_resolve_ns.* = null;
     if (ctx.writer_resolve_user.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+    ctx.writer_resolve_user.* = null;
     ctx.writer_stmt_cache.deinit(ctx.allocator);
 
     // Reader static stmts + caches
     for (ctx.reader_pool) |*node| {
         if (node.select_document_stmts.len > 0) {
             sql.finalizeStaticStmts(node.select_document_stmts);
+            ctx.allocator.free(node.select_document_stmts);
+            node.select_document_stmts = &.{};
         }
         node.stmt_cache.deinit(ctx.allocator);
     }
@@ -151,19 +158,17 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
     ctx.writer_stmt_cache.init(ctx.allocator, ctx.stmt_cache_size);
     errdefer ctx.writer_stmt_cache.deinit(ctx.allocator);
 
-    if (ctx.writer_select_stmts.len > 0) {
-        sql.finalizeStaticStmts(ctx.writer_select_stmts.*);
-        ctx.allocator.free(ctx.writer_select_stmts.*);
-    }
     ctx.writer_select_stmts.* = try sql.prepareSelectDocumentStmts(ctx.allocator, ctx.writer_conn, ctx.schema);
     errdefer {
         sql.finalizeStaticStmts(ctx.writer_select_stmts.*);
         ctx.allocator.free(ctx.writer_select_stmts.*);
+        ctx.writer_select_stmts.* = &.{};
     }
 
     ctx.writer_resolve_ns.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_namespace_sql);
     errdefer {
         if (ctx.writer_resolve_ns.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+        ctx.writer_resolve_ns.* = null;
     }
 
     // Only prepare the user-resolution stmt if the schema has a "users" table.
@@ -171,6 +176,7 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
         ctx.writer_resolve_user.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_user_sql);
         errdefer {
             if (ctx.writer_resolve_user.*) |s| _ = sqlite.c.sqlite3_finalize(s);
+            ctx.writer_resolve_user.* = null;
         }
     } else {
         ctx.writer_resolve_user.* = null;
@@ -179,10 +185,6 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
     // Readers
     for (ctx.reader_pool) |*node| {
         node.stmt_cache.init(ctx.allocator, ctx.stmt_cache_size);
-        if (node.select_document_stmts.len > 0) {
-            sql.finalizeStaticStmts(node.select_document_stmts);
-            ctx.allocator.free(node.select_document_stmts);
-        }
         node.select_document_stmts = try sql.prepareSelectDocumentStmts(ctx.allocator, &node.conn, ctx.schema);
     }
 }
@@ -245,6 +247,12 @@ pub fn attemptReconnect(ctx: ReconnectContext) !void {
     try configureDatabase(ctx.writer_conn, true);
 
     // 4. Reopen reader connections
+    var readers_reopened: usize = 0;
+    errdefer {
+        for (ctx.reader_pool[0..readers_reopened]) |*reader_node| {
+            reader_node.conn.deinit();
+        }
+    }
     for (ctx.reader_pool) |*reader_node| {
         reader_node.conn = try sqlite.Db.init(.{
             .mode = sqlite.Db.Mode{ .File = ctx.db_path },
@@ -253,12 +261,8 @@ pub fn attemptReconnect(ctx: ReconnectContext) !void {
             },
             .shared_cache = ctx.in_memory,
         });
+        readers_reopened += 1;
         try configureDatabase(&reader_node.conn, false);
-    }
-    errdefer {
-        for (ctx.reader_pool) |*reader_node| {
-            reader_node.conn.deinit();
-        }
     }
 
     // 5. Re-prepare all static stmts + re-init stmt_caches
