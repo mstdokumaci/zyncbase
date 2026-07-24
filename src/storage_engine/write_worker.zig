@@ -29,8 +29,8 @@ const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
-const BatchEntry = write_queue.BatchEntry;
 const WriteOp = write_queue.WriteOp;
+const getOpTarget = write_queue.getOpTarget;
 const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
@@ -348,19 +348,32 @@ pub const WriteWorker = struct {
         }
     }
 
-    fn executeBatch(
+    fn runTransaction(
         self: *WriteWorker,
         ops: []const WriteOp,
-        pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
+        tx_started: *bool,
         guard_rejected: *std.ArrayListUnmanaged(usize),
+        fail_fast: bool,
     ) !void {
-        try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatch BEGIN");
-        errdefer {
-            execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
-                const classified_err = errors.classifyError(rollback_err);
-                errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
-            };
+        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
+        defer {
+            for (pending_changes.items) |*c| c.deinit(self.allocator);
+            pending_changes.deinit(self.allocator);
         }
+
+        try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "runTransaction BEGIN");
+        tx_started.* = true;
+        errdefer {
+            if (tx_started.*) {
+                execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
+                    const classified_err = errors.classifyError(rollback_err);
+                    errors.logDatabaseError("runTransaction ROLLBACK", classified_err, "");
+                };
+                tx_started.* = false;
+            }
+        }
+
         var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
         defer pk_inserts.deinit(self.allocator);
         var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
@@ -368,47 +381,56 @@ pub const WriteWorker = struct {
 
         var ctx = BatchCtx{
             .self = self,
-            .pending_changes = pending_changes,
+            .pending_changes = &pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
         };
 
         for (ops, 0..) |op, op_idx| {
-            switch (op) {
-                .upsert => |iop| {
-                    const table_metadata = self.schema.tableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
+            const succeeded = switch (op) {
+                .upsert => |iop| blk: {
+                    const table_metadata = self.schema.tableByIndex(iop.table_index) orelse {
+                        std.log.debug("Unknown table index {d} in op #{d}", .{ iop.table_index, op_idx });
+                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                        return StorageError.UnknownTable;
+                    };
                     const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeUpsertEntry(&ctx, iop, namespace_id, table_metadata)) continue;
-                    try guard_rejected.append(self.allocator, op_idx);
+                    break :blk executeUpsertEntry(&ctx, iop, namespace_id, table_metadata);
                 },
-                .update => |uop| {
-                    const table_metadata = self.schema.tableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
+                .update => |uop| blk: {
+                    const table_metadata = self.schema.tableByIndex(uop.table_index) orelse {
+                        std.log.debug("Unknown table index {d} in op #{d}", .{ uop.table_index, op_idx });
+                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                        return StorageError.UnknownTable;
+                    };
                     const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeUpdateEntry(&ctx, uop, namespace_id, table_metadata)) continue;
-                    try guard_rejected.append(self.allocator, op_idx);
+                    break :blk executeUpdateEntry(&ctx, uop, namespace_id, table_metadata);
                 },
-                .delete => |dop| {
-                    const table_metadata = self.schema.tableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
+                .delete => |dop| blk: {
+                    const table_metadata = self.schema.tableByIndex(dop.table_index) orelse {
+                        std.log.debug("Unknown table index {d} in op #{d}", .{ dop.table_index, op_idx });
+                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                        return StorageError.UnknownTable;
+                    };
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema_system.global_namespace_id;
-                    if (try executeDeleteEntry(&ctx, dop, namespace_id, table_metadata)) continue;
-                    try guard_rejected.append(self.allocator, op_idx);
+                    break :blk executeDeleteEntry(&ctx, dop, namespace_id, table_metadata);
                 },
                 else => unreachable,
+            } catch |err| {
+                if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                return err;
+            };
+            if (!succeeded) {
+                try guard_rejected.append(self.allocator, op_idx);
+                // ponytail: fail_fast calibration knob — batch atomic path
+                // (fail_fast=true) aborts on first guard rejection; flush
+                // path continues so a single rejected guard doesn't stall
+                // a flush of N writes.
+                if (fail_fast) return error.PermissionDenied;
             }
         }
 
-        try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatch COMMIT");
-
-        for (pk_inserts.items) |item| {
-            if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].insert(self.allocator, item.id);
-            }
-        }
-        for (pk_deletes.items) |item| {
-            if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].remove(item.id);
-            }
-        }
+        try commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes);
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
@@ -557,42 +579,22 @@ pub const WriteWorker = struct {
 
         var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
         defer eviction_keys.deinit(self.allocator);
-        eviction_keys.ensureTotalCapacity(self.allocator, batch_len) catch |err| {
+        self.buildEvictionKeys(batch.items, &eviction_keys) catch |err| {
             const classified_err = errors.classifyError(err);
-            std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
             self.pushBatchOutcomes(batch.items, null, classified_err);
             batch.clearRetainingCapacity();
             self.endOp(batch_len);
             last_batch_time.* = std.time.milliTimestamp();
             return;
         };
-        for (batch.items) |op| {
-            if (getOpTarget(op)) |target| {
-                const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
-                const key = storage_cache.getCacheKey(table_metadata, target.namespace_id, target.id);
-                eviction_keys.appendAssumeCapacity(key);
-            }
-        }
-
-        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
-        defer {
-            for (pending_changes.items) |*c| c.deinit(self.allocator);
-            pending_changes.deinit(self.allocator);
-        }
 
         var guard_rejected = std.ArrayListUnmanaged(usize).empty;
         defer guard_rejected.deinit(self.allocator);
 
-        const result = executeBatch(self, batch.items, &pending_changes, &guard_rejected);
+        var tx_started = false;
+        const result = runTransaction(self, batch.items, &eviction_keys, &tx_started, &guard_rejected, false);
         if (result) |_| {
-            self.bumpVersion();
-
-            if (eviction_keys.items.len > 0) {
-                self.metadata_cache.bulkEvict(eviction_keys.items);
-            }
-
             self.pushBatchOutcomes(batch.items, guard_rejected.items, null);
-            flushPendingChanges(self, &pending_changes);
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
@@ -741,21 +743,6 @@ pub const WriteWorker = struct {
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
     };
 
-    const OpTarget = struct {
-        table_index: usize,
-        id: DocId,
-        namespace_id: i64,
-    };
-
-    fn getOpTarget(op: WriteOp) ?OpTarget {
-        return switch (op) {
-            .upsert => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
-            .update => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
-            .delete => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
-            else => null,
-        };
-    }
-
     fn bindValueSlice(
         self: *WriteWorker,
         stmt: *sqlite.c.sqlite3_stmt,
@@ -770,7 +757,7 @@ pub const WriteWorker = struct {
 
     fn buildEvictionKeys(
         self: *WriteWorker,
-        entries: []const BatchEntry,
+        entries: []const WriteOp,
         eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
     ) !void {
         eviction_keys.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
@@ -779,64 +766,11 @@ pub const WriteWorker = struct {
             return classified_err;
         };
         for (entries) |entry| {
-            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse continue;
-            const key = storage_cache.getCacheKey(table_metadata, entry.namespace_id, entry.id);
+            const target = getOpTarget(entry) orelse continue;
+            const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
+            const key = storage_cache.getCacheKey(table_metadata, target.namespace_id, target.id);
             eviction_keys.appendAssumeCapacity(key);
         }
-    }
-
-    fn runBatchTransaction(
-        self: *WriteWorker,
-        entries: []const BatchEntry,
-        tx_started: *bool,
-        failed_batch_index: *?usize,
-        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
-    ) !void {
-        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
-        defer {
-            for (pending_changes.items) |*c| c.deinit(self.allocator);
-            pending_changes.deinit(self.allocator);
-        }
-
-        try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "executeBatchOp BEGIN");
-        tx_started.* = true;
-
-        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_inserts.deinit(self.allocator);
-        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_deletes.deinit(self.allocator);
-
-        var ctx = BatchCtx{
-            .self = self,
-            .pending_changes = &pending_changes,
-            .pk_inserts = &pk_inserts,
-            .pk_deletes = &pk_deletes,
-        };
-
-        for (entries, 0..) |entry, entry_idx| {
-            const table_metadata = self.schema.tableByIndex(entry.table_index) orelse {
-                std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
-                failed_batch_index.* = entry_idx;
-                return StorageError.UnknownTable;
-            };
-            const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema_system.global_namespace_id;
-
-            const succeeded = switch (entry.kind) {
-                .upsert => executeUpsertEntry(&ctx, entry, namespace_id, table_metadata),
-                .update => executeUpdateEntry(&ctx, entry, namespace_id, table_metadata),
-                .delete => executeDeleteEntry(&ctx, entry, namespace_id, table_metadata),
-            } catch |err| {
-                failed_batch_index.* = entry_idx;
-                return err;
-            };
-            // Batch ops are atomic: a guard rejection fails the entire batch.
-            if (!succeeded) {
-                failed_batch_index.* = entry_idx;
-                return error.PermissionDenied;
-            }
-        }
-
-        try commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes);
     }
 
     pub fn executeBatchOp(
@@ -848,7 +782,8 @@ pub const WriteWorker = struct {
         const entries = bop.entries;
         var tx_started = false;
         var final_err: ?anyerror = null;
-        var failed_batch_index: ?usize = null;
+        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
+        defer guard_rejected.deinit(self.allocator);
         defer {
             if (tx_started) {
                 execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
@@ -868,6 +803,7 @@ pub const WriteWorker = struct {
             if (@hasField(@TypeOf(bop), "conn_id")) {
                 if (bop.conn_id) |cid| {
                     if (bop.write_id) |wid| {
+                        const failed_batch_index: ?usize = if (guard_rejected.items.len > 0) guard_rejected.items[0] else null;
                         self.pushWriteOutcome(cid, wid, final_err, if (final_err != null) failed_batch_index else null);
                         self.notifyChanges();
                     }
@@ -887,7 +823,7 @@ pub const WriteWorker = struct {
         };
 
         // 2. Execute all entries in a single transaction
-        self.runBatchTransaction(entries, &tx_started, &failed_batch_index, &eviction_keys) catch |err| {
+        self.runTransaction(entries, &eviction_keys, &tx_started, &guard_rejected, true) catch |err| {
             final_err = err;
         };
     }

@@ -373,7 +373,7 @@ pub const StoreService = struct {
         var doc_states = BatchDocStates.init(self.allocator);
         defer doc_states.deinit();
 
-        var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
+        var entries = try self.allocator.alloc(storage_mod.WriteOp, ops.len);
         var initialized: usize = 0;
         var entries_owned = true;
         errdefer if (entries_owned) {
@@ -401,7 +401,8 @@ pub const StoreService = struct {
         }
 
         for (entries) |entry| {
-            _ = self.schema.tableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
+            const target = storage_mod.getOpTarget(entry) orelse continue;
+            _ = self.schema.tableByIndex(target.table_index) orelse return StorageError.UnknownTable;
         }
 
         entries_owned = false;
@@ -510,7 +511,7 @@ pub const StoreService = struct {
         value: msgpack.Payload,
         timestamp: i64,
         doc_states: *BatchDocStates,
-    ) !storage_mod.BatchEntry {
+    ) !storage_mod.WriteOp {
         const path = try self.parseStorePath(path_payload);
 
         if (value != .arr) return error.InvalidPayload;
@@ -547,16 +548,26 @@ pub const StoreService = struct {
 
         const columns_slice = try columns.toOwnedSlice(self.allocator);
 
-        return storage_mod.BatchEntry{
-            .kind = if (is_create) .upsert else .update,
-            .table_index = path.table_index,
-            .id = path.doc_id,
-            .namespace_id = ctx.namespace_id,
-            .owner_doc_id = ctx.owner_doc_id,
-            .columns = columns_slice,
-            .guard_predicate = store_write,
-            .timestamp = timestamp,
-        };
+        if (is_create) {
+            return storage_mod.WriteOp{ .upsert = .{
+                .table_index = path.table_index,
+                .id = path.doc_id,
+                .namespace_id = ctx.namespace_id,
+                .owner_doc_id = ctx.owner_doc_id,
+                .columns = columns_slice,
+                .guard_predicate = store_write,
+                .timestamp = timestamp,
+            } };
+        } else {
+            return storage_mod.WriteOp{ .update = .{
+                .table_index = path.table_index,
+                .id = path.doc_id,
+                .namespace_id = ctx.namespace_id,
+                .columns = columns_slice,
+                .guard_predicate = store_write,
+                .timestamp = timestamp,
+            } };
+        }
     }
 
     fn buildBatchRemoveEntry(
@@ -565,7 +576,8 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         timestamp: i64,
         doc_states: *BatchDocStates,
-    ) !storage_mod.BatchEntry {
+    ) !storage_mod.WriteOp {
+        _ = timestamp;
         const path = try self.parseStorePath(path_payload);
 
         var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
@@ -584,15 +596,11 @@ pub const StoreService = struct {
         const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
         try doc_states.put(key, .deleted);
 
-        return storage_mod.BatchEntry{
-            .kind = .delete,
+        return storage_mod.WriteOp{ .delete = .{
             .table_index = path.table_index,
             .id = path.doc_id,
             .namespace_id = ctx.namespace_id,
-            .owner_doc_id = ctx.owner_doc_id,
-            .columns = &[_]storage_mod.ColumnValue{},
             .guard_predicate = store_write,
-            .timestamp = timestamp,
-        };
+        } };
     }
 };

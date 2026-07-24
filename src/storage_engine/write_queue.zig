@@ -45,22 +45,25 @@ pub const ReconnectionConfig = struct {
     backoff_multiplier: f64 = 2.0,
 };
 
-pub const BatchEntry = struct {
-    kind: enum { upsert, update, delete },
+/// Addressing target extracted from a write op's payload. Used by the flush
+/// and batch paths to build eviction keys without re-switching on the union.
+pub const OpTarget = struct {
     table_index: usize,
     id: typed_doc_id.DocId,
     namespace_id: i64,
-    owner_doc_id: typed_doc_id.DocId,
-    columns: []ColumnValue,
-    guard_predicate: ?query_ast.FilterPredicate = null,
-    timestamp: i64,
-
-    pub fn deinit(self: BatchEntry, allocator: Allocator) void {
-        for (self.columns) |col| col.value.deinit(allocator);
-        if (self.columns.len > 0) allocator.free(self.columns);
-        if (self.guard_predicate) |*pred| pred.freeMemory(allocator);
-    }
 };
+
+/// Extract the (table_index, id, namespace_id) targeted by a write op.
+/// Returns null for variants that don't target a single document row
+/// (checkpoint, resolve_session, batch).
+pub fn getOpTarget(op: WriteOp) ?OpTarget {
+    return switch (op) {
+        .upsert => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+        .update => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+        .delete => |o| .{ .table_index = o.table_index, .id = o.id, .namespace_id = o.namespace_id },
+        else => null,
+    };
+}
 
 pub const WriteOp = union(enum) {
     checkpoint: struct { mode: CheckpointMode, latch: *CheckpointLatch },
@@ -103,7 +106,7 @@ pub const WriteOp = union(enum) {
         is_presence: bool = false,
     },
     batch: struct {
-        entries: []BatchEntry,
+        entries: []WriteOp,
         latch: ?*AckLatch = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,

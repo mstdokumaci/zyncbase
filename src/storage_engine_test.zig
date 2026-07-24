@@ -13,7 +13,7 @@ const send_queue_mod = @import("connection/send_queue.zig");
 const SendQueueEntry = send_queue_mod.Entry;
 
 const BatchOpForTest = struct {
-    entries: []storage_mod.BatchEntry,
+    entries: []storage_mod.WriteOp,
     latch: ?*storage_mod.AckLatch,
 };
 
@@ -67,23 +67,19 @@ const DirectWriterContext = struct {
     }
 };
 
-fn makeDeleteBatchEntries(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.BatchEntry {
+fn makeDeleteBatchOps(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.WriteOp {
     _ = allocator;
-    const entries = try testing.allocator.alloc(storage_mod.BatchEntry, 1);
+    const entries = try testing.allocator.alloc(storage_mod.WriteOp, 1);
     errdefer testing.allocator.free(entries);
-    entries[0] = .{
-        .kind = .delete,
+    entries[0] = .{ .delete = .{
         .table_index = table_index,
         .id = 1,
         .namespace_id = 1,
-        .owner_doc_id = 0,
-        .columns = &[_]storage_mod.ColumnValue{},
-        .timestamp = 0,
-    };
+    } };
     return entries;
 }
 
-fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEntry, latch: *storage_mod.AckLatch) void {
+fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp, latch: *storage_mod.AckLatch) void {
     var last_batch_time: i64 = 0;
     const op = BatchOpForTest{
         .entries = entries,
@@ -356,7 +352,7 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
     try ctx.init(allocator, table);
     defer ctx.deinit();
 
-    const entries = try makeDeleteBatchEntries(allocator, 999);
+    const entries = try makeDeleteBatchOps(allocator, 999);
     var latch = storage_mod.AckLatch{};
     ctx.engine.write_worker.beginOp();
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
@@ -378,7 +374,7 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
     try ctx.init(allocator, table);
     defer ctx.deinit();
 
-    const entries = try makeDeleteBatchEntries(allocator, 999);
+    const entries = try makeDeleteBatchOps(allocator, 999);
     var latch = storage_mod.AckLatch{};
     const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();

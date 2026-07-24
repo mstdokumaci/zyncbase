@@ -11,7 +11,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `src/storage_engine.zig` | Public storage facade and re-exports for storage submodules. |
 | `src/storage_engine/connection.zig` | SQLite configuration, WAL/checkpoint helpers, and reconnect behavior. |
 | `src/storage_engine/write_worker.zig` | `WriteWorker` type: dedicated writer OS thread, SPSC write queue, WaitGroup flush backpressure, Notifier, mutation methods, and committed change production. |
-| `src/storage_engine/write_queue.zig` | `WriteOp` union, `write_queue_type` alias (`spscQueue(WriteOp, IndexPool)`), `BatchEntry`, checkpoint types, and `ReconnectionConfig`. |
+| `src/storage_engine/write_queue.zig` | `WriteOp` union, `write_queue_type` alias (`spscQueue(WriteOp, IndexPool)`), `getOpTarget` helper, checkpoint types, and `ReconnectionConfig`. |
 | `src/storage_engine/reader.zig` | Select/query execution, record decoding, and query result ownership. |
 | `src/storage_engine/read_worker_pool.zig` | `ReadWorkerPool` and `ReadWorker`: dedicated reader OS threads using `managedThread` and `workerPool`. Consume `ReadRequest`, encode responses, push to `SendQueue`. |
 | `src/storage_engine/read_buffer.zig` | `ReadRequest`, `ReadResponse` types and `read_request_queue` alias (`spmcBlockingQueue(ReadRequest)`). |
