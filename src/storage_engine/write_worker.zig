@@ -30,7 +30,6 @@ const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;
 const WriteOp = write_queue.WriteOp;
-const getOpTarget = write_queue.getOpTarget;
 const write_queue_type = write_queue.write_queue_type;
 const StatementCache = sql.StatementCache;
 const StorageError = errors.StorageError;
@@ -351,7 +350,6 @@ pub const WriteWorker = struct {
     fn runTransaction(
         self: *WriteWorker,
         ops: []const WriteOp,
-        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
         tx_started: *bool,
         guard_rejected: *std.ArrayListUnmanaged(usize),
         fail_fast: bool,
@@ -360,6 +358,14 @@ pub const WriteWorker = struct {
         defer {
             for (pending_changes.items) |*c| c.deinit(self.allocator);
             pending_changes.deinit(self.allocator);
+        }
+
+        var pending_cache_ops = std.ArrayListUnmanaged(CacheOp).empty;
+        defer {
+            for (pending_cache_ops.items) |*op| {
+                if (op.record) |r| r.deinit(self.allocator);
+            }
+            pending_cache_ops.deinit(self.allocator);
         }
 
         try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "runTransaction BEGIN");
@@ -384,6 +390,7 @@ pub const WriteWorker = struct {
             .pending_changes = &pending_changes,
             .pk_inserts = &pk_inserts,
             .pk_deletes = &pk_deletes,
+            .pending_cache_ops = &pending_cache_ops,
         };
 
         for (ops, 0..) |op, op_idx| {
@@ -434,11 +441,11 @@ pub const WriteWorker = struct {
             }
         }
 
-        try commitBatchAndApply(self, tx_started, eviction_keys, &pk_inserts, &pk_deletes, &pending_changes);
+        try commitBatchAndApply(self, tx_started, &pk_inserts, &pk_deletes, &pending_changes, &pending_cache_ops);
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
-    /// PK tracking, change log push, and guard-conflict detection.
+    /// PK tracking, metadata-cache update/eviction, change log push, and guard-conflict detection.
     /// `old_record` / `new_record` ownership is consumed here — caller must
     /// not deinit them afterwards regardless of the return value.
     /// Returns true on success (row was affected or no guard conflict),
@@ -446,7 +453,7 @@ pub const WriteWorker = struct {
     fn applyWriteResult(
         self: *WriteWorker,
         ctx: *BatchCtx,
-        table_index: usize,
+        table_metadata: *const schema_types.Table,
         namespace_id: i64,
         doc_id: typed_doc_id.DocId,
         has_guard: bool,
@@ -456,10 +463,36 @@ pub const WriteWorker = struct {
         new_record: ?Record,
     ) !bool {
         if (new_record != null or (pk_delete and old_record != null)) {
-            // Row was affected — track PK and push change.
+            // Row was affected — track PK, push change, and track cache operation.
             errdefer {
                 if (old_record) |r| r.deinit(self.allocator);
                 if (new_record) |r| r.deinit(self.allocator);
+            }
+            const table_index = table_metadata.index;
+            const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, doc_id);
+            if (new_record) |nr| {
+                if (nr.clone(self.allocator)) |cloned| {
+                    errdefer cloned.deinit(self.allocator);
+                    try ctx.pending_cache_ops.append(self.allocator, .{
+                        .key = cache_key,
+                        .kind = .update,
+                        .record = cloned,
+                    });
+                } else |err| {
+                    const classified_err = errors.classifyError(err);
+                    std.log.warn("Failed to clone record for cache write-through: {}", .{classified_err});
+                    try ctx.pending_cache_ops.append(self.allocator, .{
+                        .key = cache_key,
+                        .kind = .evict,
+                        .record = null,
+                    });
+                }
+            } else if (pk_delete and old_record != null) {
+                try ctx.pending_cache_ops.append(self.allocator, .{
+                    .key = cache_key,
+                    .kind = .evict,
+                    .record = null,
+                });
             }
             if (pk_insert and old_record == null) {
                 try ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
@@ -519,7 +552,7 @@ pub const WriteWorker = struct {
             return false;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
     }
 
     /// Unified update handler shared by both write paths. See executeUpsertEntry.
@@ -544,7 +577,7 @@ pub const WriteWorker = struct {
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
+        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
     }
 
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
@@ -569,7 +602,7 @@ pub const WriteWorker = struct {
             return true;
         }
 
-        return applyWriteResult(self, ctx, entry.table_index, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
+        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
     }
 
     pub fn flushBatch(
@@ -581,22 +614,11 @@ pub const WriteWorker = struct {
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-        var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-        defer eviction_keys.deinit(self.allocator);
-        self.buildEvictionKeys(batch.items, &eviction_keys) catch |err| {
-            const classified_err = errors.classifyError(err);
-            self.pushBatchOutcomes(batch.items, null, classified_err);
-            batch.clearRetainingCapacity();
-            self.endOp(batch_len);
-            last_batch_time.* = std.time.milliTimestamp();
-            return;
-        };
-
         var guard_rejected = std.ArrayListUnmanaged(usize).empty;
         defer guard_rejected.deinit(self.allocator);
 
         var tx_started = false;
-        const result = runTransaction(self, batch.items, &eviction_keys, &tx_started, &guard_rejected, false);
+        const result = runTransaction(self, batch.items, &tx_started, &guard_rejected, false);
         if (result) |_| {
             self.pushBatchOutcomes(batch.items, guard_rejected.items, null);
         } else |err| {
@@ -740,11 +762,18 @@ pub const WriteWorker = struct {
 
     const PkTracking = struct { table_index: usize, id: DocId };
 
+    const CacheOp = struct {
+        key: MetadataCacheKey,
+        kind: enum { update, evict },
+        record: ?Record,
+    };
+
     const BatchCtx = struct {
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pk_inserts: *std.ArrayListUnmanaged(PkTracking),
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
+        pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
     };
 
     fn bindValueSlice(
@@ -756,24 +785,6 @@ pub const WriteWorker = struct {
         for (values) |val| {
             try sql.bindValue(val, &self.conn, stmt, bind_idx.*, &self.json_buf);
             bind_idx.* += 1;
-        }
-    }
-
-    fn buildEvictionKeys(
-        self: *WriteWorker,
-        entries: []const WriteOp,
-        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
-    ) !void {
-        eviction_keys.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
-            const classified_err = errors.classifyError(err);
-            std.log.err("Failed to allocate eviction keys for batch op: {}", .{classified_err});
-            return classified_err;
-        };
-        for (entries) |entry| {
-            const target = getOpTarget(entry) orelse continue;
-            const table_metadata = self.schema.tableByIndex(target.table_index) orelse continue;
-            const key = storage_cache.getCacheKey(table_metadata, target.namespace_id, target.id);
-            eviction_keys.appendAssumeCapacity(key);
         }
     }
 
@@ -818,16 +829,8 @@ pub const WriteWorker = struct {
             last_batch_time.* = std.time.milliTimestamp();
         }
 
-        // 1. Build eviction keys from all entries
-        var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-        defer eviction_keys.deinit(self.allocator);
-        self.buildEvictionKeys(entries, &eviction_keys) catch |err| {
-            final_err = err;
-            return;
-        };
-
-        // 2. Execute all entries in a single transaction
-        self.runTransaction(entries, &eviction_keys, &tx_started, &guard_rejected, true) catch |err| {
+        // Execute all entries in a single transaction
+        self.runTransaction(entries, &tx_started, &guard_rejected, true) catch |err| {
             final_err = err;
         };
     }
@@ -835,17 +838,31 @@ pub const WriteWorker = struct {
     fn commitBatchAndApply(
         self: *WriteWorker,
         tx_started: *bool,
-        eviction_keys: *std.ArrayListUnmanaged(MetadataCacheKey),
         pk_inserts: *std.ArrayListUnmanaged(PkTracking),
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
     ) !void {
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");
         tx_started.* = false;
         self.bumpVersion();
 
-        if (eviction_keys.items.len > 0) {
-            self.metadata_cache.bulkEvict(eviction_keys.items);
+        for (pending_cache_ops.items) |*op| {
+            switch (op.kind) {
+                .update => {
+                    if (op.record) |r| {
+                        self.metadata_cache.update(op.key, r) catch |err| {
+                            const classified_err = errors.classifyError(err);
+                            std.log.err("Failed to update metadata cache: {}", .{classified_err});
+                            r.deinit(self.allocator);
+                        };
+                        op.record = null;
+                    }
+                },
+                .evict => {
+                    _ = self.metadata_cache.evict(op.key);
+                },
+            }
         }
 
         for (pk_inserts.items) |item| {
