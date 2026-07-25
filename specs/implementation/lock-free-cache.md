@@ -10,7 +10,7 @@ The lock-free cache is a reusable read-mostly cache primitive. It is used where 
 |------|----------------|
 | `src/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
 | `src/storage_engine/cache.zig` | Storage metadata cache key/value types built on the cache primitive. |
-| `src/jwt_validator.zig` | JWKS/cache usage for authentication. |
+| `src/authentication/jwt_validator.zig` | JWKS/cache usage for authentication. |
 | `src/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
 
 ## Important Types

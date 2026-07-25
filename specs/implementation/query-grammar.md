@@ -12,6 +12,7 @@ This document specifies the pipeline that parses wire-encoded query tuples, norm
 |------|----------------|
 | `src/query/ast.zig` | Defines Zig AST representation for query filters, sort descriptors, and operators. |
 | `src/query/parser.zig` | Deserializes MessagePack tuples into query ASTs, validating fields against schemas. |
+| `src/query/hasher.zig`, `src/query/hash_context.zig` | Structural hashing/equality for parsed query filters and conditions. |
 | `src/query/eval.zig` | Evaluates AST predicates in-memory (used by authorization and sub engines). |
 | `src/storage_engine/filter_sql.zig` | Lowers query predicates to SQLite parameterized `WHERE` clauses. |
 | `src/storage_engine/reader.zig` | Prepares and binds SQLite query statements, executing pagination and queries. |
@@ -100,6 +101,7 @@ The AST conditions map directly to SQLite query clauses and parameters during tr
 | `lte`        | `column_name <= ?` |
 | `startsWith` | `column_name LIKE ? || '%'` |
 | `endsWith`   | `column_name LIKE '%' || ?` |
+| `contains`   | `column_name LIKE '%' || ? || '%' ESCAPE '\'` |
 | `in`         | `column_name IN (?, ?, ...)` |
 | `notIn`      | `column_name NOT IN (?, ?, ...)` |
 | `isNull`     | `column_name IS NULL` |

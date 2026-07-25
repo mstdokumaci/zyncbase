@@ -12,8 +12,9 @@ Security is layered: transport admission, parser/resource limits, authentication
 | `src/uwebsockets_wrapper.zig`, `src/uws_bridge.cpp` | Transport callbacks and origin/frame admission surface. |
 | `src/message_handler.zig` | Rate limiting, parser error handling, scoped session gate, and error propagation. |
 | `src/connection/violations.zig` | Repeated malformed/security-violation tracking. |
-| `src/connection/ticket_exchange.zig` | HTTP ticket exchange and session projection. |
-| `src/jwt_validator.zig` | JWT/JWKS validation and key caching. |
+| `src/authentication/ticket_exchange.zig` | HTTP ticket exchange, ticket redemption, anonymous auth, and session projection. |
+| `src/authentication/jwt_validator.zig` | JWT/JWKS validation and key caching. |
+| `src/authentication/session.zig` | Trusted base-session representation used by scoped authorization. |
 | `src/authorization/*` | Namespace, store, write, read, and presence authorization. |
 | `src/wire/decode.zig` | Envelope/request extraction and message shape validation. |
 | `src/msgpack_utils.zig` | MessagePack decoding limits and helpers. |

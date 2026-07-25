@@ -12,22 +12,23 @@
 | `src/wire/decode.zig` | Zero/low-allocation envelope and payload extractors for supported message types. |
 | `src/wire/encode.zig` | Success, query, schema sync, write acknowledgement, presence, and error encoders. |
 | `src/connection/state.zig` | Per-connection state, send outbox, scoped session fields, and subscription ownership. |
-| `src/connection/session_resolver.zig` | Background namespace/user resolution and stale-result protection. |
+| `src/authorization/session_resolver.zig` | Background namespace/user resolution completion and stale-result protection. |
 | `src/store_service.zig` | Store mutations, queries, pagination, and scope lookup. |
-| `src/presence/manager.zig` | Presence writes, snapshots, and subscriber fanout source state. |
+| `src/presence/service.zig` | Event-loop facade for enqueueing presence operations and disconnect cleanup. |
+| `src/presence/manager.zig` | Presence writes, snapshots, and subscriber fanout source state owned by the presence worker. |
 | `src/authorization/*` | Namespace, read, write, and presence authorization decisions. |
 
 ## Important Types
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `MessageHandler` | `MemoryStrategy`, `Connection`, `StoreService`, `PresenceManager`, `SubscriptionEngine`, `AuthConfig`, `Schema`, `JwtValidator` | Owns request handling and all domain dispatch from a decoded wire envelope. |
+| `MessageHandler` | `MemoryStrategy`, `Connection`, `StoreService`, `PresenceService`, `SubscriptionEngine`, `AuthConfig`, `Schema`, `JwtValidator` | Owns request handling and all domain dispatch from a decoded wire envelope. |
 | `Connection` | `Outbox`, `Session`, `WebSocket`, allocator | Holds mutable per-client state, scoped namespace/user ids, pending namespace resolution, and connection subscriptions. |
 | `ConnectionViolationTracker` | Security config | Counts malformed/security-sensitive messages and closes abusive connections. |
 | `wire.Envelope` | MessagePack extractor | Carries `type` and `id`, the only fields needed before routing. |
 | `StoreService` | `StorageEngine`, `Schema`, `Authorization` | Executes store reads/writes and resolves namespace/user scope. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Tracks store subscriptions and evaluates record changes for fanout. |
-| `PresenceManager` | Presence schema, subscribers | Maintains user/shared presence state and produces snapshots/broadcasts. |
+| `PresenceService` | `PresenceWorker`, schema, authorization | Accepts presence requests on the event loop and hands work to the dedicated presence thread. |
 
 ## Request Lifecycle
 
@@ -37,7 +38,7 @@
 4. Classify the message type with `classifyMsgType`.
 5. Route to the store, auth, or presence handler.
 6. Send an immediate response when the route completes synchronously.
-7. Return `null` for asynchronous scope resolution; the resolver later sends the response if the `scope_seq` is still current.
+7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current.
 8. Convert route failures through `wire.getWireError` and send a canonical error response.
 
 ## Supported Routes

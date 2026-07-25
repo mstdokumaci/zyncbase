@@ -14,14 +14,15 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/connection/manager.zig` | Connection registry and cross-thread send helper. |
 | `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
 | `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
-| `src/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
+| `src/connection/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
 | `src/subscription/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
 | `src/subscription/worker_pool.zig` | Pool of `SubscriptionWorker` threads; each worker drains one shard of `ChangeQueue`. |
-| `src/subscription_engine.zig` | Shared subscription registry and record-change matching. |
+| `src/subscription/engine.zig` | Shared subscription registry and record-change matching. |
 | `src/presence/worker.zig` | Dedicated `PresenceWorker` thread; SPSC input queue of `PresenceOp`; drains ops, mutates `PresenceManager`, encodes and pushes broadcasts to `SendQueue`. |
 | `src/threading/managed_thread.zig` | Generic background thread wrapper with atomic shutdown flag, condvar, signal/broadcast, and safe join. |
 | `src/threading/worker_pool.zig` | Generic slice of workers supporting `start()` / `stop()` lifecycles. |
 | `src/threading/notifier.zig` | Typed function-pointer + context pair for waking the uWS event loop from any thread. |
+| `src/threading/latch.zig` | One-shot async result primitive used by background coordination paths. |
 | `src/threading/wait_group.zig` | Atomic counter + condvar for tracking in-flight operations; used in `WriteWorker` for flush backpressure. |
 | `src/queues/mpsc_queue.zig` | Generic lock-free MPSC queue (linked list, atomic tail swap). |
 | `src/queues/spmc_blocking_queue.zig` | Generic SPMC blocking queue (mutex + CV + linked list). |
@@ -95,7 +96,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
 - Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
 - No request may publish subscription or write acknowledgements before the corresponding storage commit.
-- StoreSubscribe registration happens only after the initial query completes successfully (in `MessageHandler` before the read request is enqueued).
+- StoreSubscribe registration happens synchronously in `MessageHandler` before the initial read request is enqueued, so committed changes cannot be missed while the snapshot is being read.
 - Read response records are allocated by reader threads; after encoding to MessagePack bytes, reader threads free records and push owned bytes to `SendQueue`. The event loop frees encoded bytes after sending.
 - Namespace resolution results must be ignored when superseded by a newer namespace request.
 - Connection teardown must be idempotent enough to tolerate concurrent disconnect and background completion.

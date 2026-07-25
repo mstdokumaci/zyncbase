@@ -11,6 +11,8 @@ ZyncBase exposes a purely cursor-driven pagination topology over offset-based eq
 | File | Responsibility |
 |------|----------------|
 | `src/query/parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
+| `src/typed/types.zig`, `src/typed/doc_id.zig` | Cursor sort-value representation and 16-byte document id packing. |
+| `src/sql/build.zig` | Builds cursor predicates and deterministic order clauses. |
 | `src/storage_engine/reader.zig` | Builds compound SQL selection predicates and executes tie-breaking pagination queries. |
 | `src/store_service.zig` | Marshals cursor bounds between client requests and storage queries. |
 
@@ -18,8 +20,8 @@ ZyncBase exposes a purely cursor-driven pagination topology over offset-based eq
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
-| `PageRequest` | `Cursor`, limit, direction | Struct container for page size, direction, and cursor boundary. |
+| `typed.Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
+| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active `orderBy`. |
 
 ---
 
@@ -32,7 +34,7 @@ const cursorTuple = [sort_value, docIdBin16];
 const nextCursor = base64(msgpackEncode(cursorTuple));
 ```
 
-- `sort_value`: The value of the sorting column for the last element on the page (scalar primitive or null).
+- `sort_value`: The value of the sorting column for the last element on the page. Cursor sort values cannot be null.
 - `docIdBin16`: The 16-byte binary UUIDv7 of the last element on the page.
 
 ---
@@ -44,8 +46,9 @@ When querying with a cursor, ZyncBase compiles the compound sorting criteria usi
 ### Ascending Sort Query
 
 ```sql
-SELECT value_msgpack FROM "collection"
-WHERE _namespace = ?
+SELECT ...
+FROM "collection"
+WHERE "namespace_id" = ?
   AND (
     sort_column > ? 
     OR (sort_column = ? AND id > ?)
@@ -57,8 +60,9 @@ LIMIT ?
 ### Descending Sort Query
 
 ```sql
-SELECT value_msgpack FROM "collection"
-WHERE _namespace = ?
+SELECT ...
+FROM "collection"
+WHERE "namespace_id" = ?
   AND (
     sort_column < ? 
     OR (sort_column = ? AND id < ?)
@@ -76,6 +80,8 @@ The SQL queries require positional arguments. Parameters must be bound in the ex
 | **Ascending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
 | **Descending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
 
+When the active sort field is the system `id` field, the cursor predicate is simplified to `id > ?` or `id < ?`; only `[namespace_id, last_doc_uuid, page_limit]` is bound.
+
 ---
 
 ## Live Windowing (`loadMore`)
@@ -83,6 +89,7 @@ The SQL queries require positional arguments. Parameters must be bound in the ex
 - Active query subscriptions (`StoreSubscribe`) materialise real-time updates at the top of the collection view.
 - To paginate backward or fetch historically older elements, the SDK synthesises a query cursor based on the last row currently present in the client-side array.
 - A `StoreLoadMore` request uses this cursor to fetch the next batch from the database without disrupting the active subscription's push listener.
+- The SDK may include `table_index` with `StoreLoadMore` for response context, but the server resolves the retained query by `subId`.
 
 ---
 

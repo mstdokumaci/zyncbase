@@ -12,6 +12,7 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 | `src/uwebsockets_wrapper.zig` | Zig-facing wrapper types for app, socket, handlers, send status, and message type. |
 | `src/uws_bridge.cpp` | C/C++ bridge that binds uWebSockets callbacks to Zig-callable functions. |
 | `src/uws_wrapper.h` | C ABI declarations shared by Zig and the C++ bridge. |
+| `src/uws_timer.zig` | uWS loop timer wrapper used for token sweeping, JWKS refresh, and graceful-shutdown timers. |
 | `src/connection/manager.zig` | Connection registry and targeted send helper. |
 | `src/connection/state.zig` | Per-connection WebSocket handle, outbox, session state, and send/close behavior. |
 | `src/message_handler.zig` | Message callback consumer and request router. |
@@ -41,8 +42,8 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 
 ## Connection Lifecycle
 
-1. HTTP ticket exchange creates a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).
-2. WebSocket upgrade is accepted only for the configured endpoint and origin policy.
+1. `server.zig` registers HTTP `POST /auth/ticket`; successful requests create a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).
+2. WebSocket upgrade is accepted only for the configured endpoint, origin policy, and valid `ticket` query parameter.
 3. The bridge allocates/registers a `Connection` and attaches socket user data.
 4. The server sends connection/schema bootstrap pushes as required by the active protocol.
 5. Binary frames are delivered to `MessageHandler.handleMessage`.

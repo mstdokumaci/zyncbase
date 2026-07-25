@@ -9,17 +9,19 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 - **1:1 SDK mapping** — Every client SDK method maps to exactly one message type. No overloaded messages.
 - **Correlate by ID** — Every client request has a unique `id`. The server response echoes it.
 - **Pushes are unsolicited** — Server-initiated messages (subscription deltas, presence broadcasts) have their own types and do not carry a request `id`.
-- **Extend, never break** — New fields can be added to any message type. Unknown fields are ignored. See [Extensibility](#extensibility).
+- **Spec and SDK move together** — Wire changes are allowed in the green-field stage, but server, SDK, tests, and this spec must be updated together.
 
 ## Source Files
 
 | File | Responsibility |
 |------|----------------|
-| `src/wire.zig` | Public wire module facade and re-exports. |
+| `src/wire/*.zig` | Public wire module facade and wire submodules. |
 | `src/wire/decode.zig` | MessagePack envelope and request extractors. |
 | `src/wire/encode.zig` | Response, schema sync, subscription delta, write outcome, and presence encoders. |
 | `src/wire/errors.zig` | Internal Zig error to public wire-code mapping. |
 | `src/wire/comptime.zig` | Compile-time MessagePack key/value encoding helpers. |
+| `src/wire/msgpack_skip.zig`, `src/msgpack_utils.zig` | MessagePack skip helpers, parser limits, and low-level decoding utilities. |
+| `src/typed/doc_id.zig` | 16-byte document id packing and parsing used by binary wire fields. |
 | `src/message_handler.zig` | Message classification, scoped-session gates, and route dispatch. |
 | `sdk/typescript/src/connection_wire.ts` | SDK-side wire encoding/decoding boundary. |
 
@@ -92,7 +94,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove operations. |
 | `StoreQuery` | `table_index`, optional query fields | Ready store scope. | Execute a one-shot store query. |
 | `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
-| `StoreLoadMore` | `subId`, `nextCursor` | Ready store scope and known subscription. | Page historical results for an active subscription. |
+| `StoreLoadMore` | `subId`, `nextCursor`, optional `table_index` | Ready store scope and known subscription. | Page historical results for an active subscription. The server resolves the retained query by `subId`; SDKs may include `table_index` as response-context metadata. |
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |

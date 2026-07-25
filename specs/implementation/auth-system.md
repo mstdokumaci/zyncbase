@@ -13,16 +13,21 @@ ZyncBase employs a declarative, stateless authorization model configured via `au
 | `src/authorization/types.zig` | Internal representation of declarative rule arrays and conditions. |
 | `src/authorization/parse.zig` | JSON deserialization, validation, and schema consistency checking. |
 | `src/authorization/pattern.zig` | Colon-separated namespace segment parsing, matching, and wildcard binding. |
-| `src/authorization.zig` | Main entry point for matching connections to namespace and store rule definitions. |
+| `src/authorization/evaluate.zig` | Evaluation context, variable resolution, literals, and comparison execution. |
+| `src/authorization/store.zig` | Store read/write authorization entry points and predicate construction. |
+| `src/authorization/presence.zig` | Presence read/write/shared-write authorization entry points. |
+| `src/authorization/defaults.zig` | Implicit playground authorization rules used when no file is configured. |
+| `src/authorization/session_resolver.zig` | Event-loop consumer for background namespace/user scope resolution results. |
 
 ## Important Types
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `AuthRules` | allocator | Root container for `namespaces` and `store` rule lists. |
+| `AuthConfig` | allocator | Root container for `namespaces` and `store` rule lists. |
 | `NamespaceRule` | pattern, conditions | Matches client-requested namespaces and dictates read/write/shared access. |
 | `StoreRule` | collection name, conditions | Gates CRUD operations on SQLite tables via path and row-level checks. |
 | `MatchPattern` | segment buffers | Parses namespace templates (e.g. `tenant:{tenant_id}`) and extracts route variables. |
+| `EvalContext` | session, namespace, payload/doc data | Resolves `$session`, `$namespace`, `$path`, `$value`, `$data`, and `$doc` operands. |
 
 ---
 
@@ -116,6 +121,8 @@ Rules utilize a subset of the store query predicate model:
 | `gt`, `gte`, `lt`, `lte` | Range bounds comparison | RAM or SQL |
 | `in`, `notIn` | Value membership in array claims | RAM or SQL |
 | `contains` | Check if array field contains value | RAM or SQL |
+| `startsWith`, `endsWith` | String prefix/suffix comparison | RAM or SQL |
+| `isNull`, `isNotNull` | Field/null existence comparison | RAM or SQL |
 | `and`, `or` | Condition groupings | RAM or SQL |
 
 ---

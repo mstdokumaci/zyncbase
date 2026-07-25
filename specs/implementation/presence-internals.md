@@ -8,7 +8,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | File | Responsibility |
 |------|----------------|
-| `src/presence.zig` | Public presence module re-exports. |
+| `src/presence/service.zig` | Event-loop facade that validates/enqueues presence operations and cleanup requests. |
 | `src/presence/manager.zig` | Presence state, user/shared snapshots, writes, removals, and subscriber tables. |
 | `src/presence/record.zig` | Typed presence record encoding/decoding and field validation. |
 | `src/presence/subscriber.zig` | Presence subscriber ids and subscriber tables. |
@@ -24,6 +24,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `PresenceManager` | schema, typed values, subscribers | Owns in-memory user/shared presence state and snapshot construction. |
+| `PresenceService` | `PresenceWorker`, authorization, connection ids | Accepts event-loop requests and enqueues typed `PresenceOp` work for the dedicated worker. |
 | `PresenceWorker` | `managedThread(PresenceWorker)`, `spscQueue(PresenceOp, AllocPool)`, `PresenceManager`, `SendQueue`, `Notifier` | Dedicated OS thread; drains `PresenceOp` queue, mutates `PresenceManager`, encodes snapshots/broadcasts, pushes owned bytes to `SendQueue`. |
 | `PresenceOp` | `Allocator` | Typed union of presence operations: `set_user`, `set_shared`, `remove_user`, `subscribe_user`, `subscribe_shared`, `unsubscribe_user`, `unsubscribe_shared`, `remove_all_for_connection`. Each op carries an allocator for correct teardown. |
 | `PresenceRecord` | `Schema.PresenceField`, `typed.Value` | Validates and stores typed presence field values. |
@@ -52,7 +53,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 - Presence messages and push names are owned by [Wire Protocol](./wire-protocol.md).
 - Presence field ids and dictionary shape come from schema sync; do not duplicate the integer encoding catalog here.
-- Presence writes use typed field validation from the schema.
+- Presence writes use schema field ids and runtime type validation from the schema.
 - User and shared channels are separate push streams.
 
 ## Authorization
@@ -76,12 +77,12 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Flush interval | 50 ms | How often the dispatcher drains pending presence updates. |
+| Flush cadence | Work-batch drain | The worker drains available queued ops when signaled, flushes generated snapshots/broadcasts after the drained batch, and performs a final drain on shutdown. |
 | Grace period | 5,000 ms | Time before an empty namespace's shared state is evicted after the last user leaves. |
 | Field limit | 500 per tier | Hard limit on flat presence fields per user/shared tier. |
 | Latency target | Sub-100 ms | Presence operations should complete within 100 ms end-to-end. |
 
-**Overflow policy**: Presence writes are fire-and-forget. If the dispatcher cannot keep up, updates are dropped rather than queued unboundedly. This is safe because presence is ephemeral and the next update will supersede.
+**Overflow policy**: Presence writes are fire-and-forget after authorization. If enqueue/allocation fails at the service boundary, the failure is logged and that ephemeral operation is dropped rather than blocking the event loop indefinitely.
 
 ## Threading Model
 

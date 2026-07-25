@@ -66,8 +66,8 @@ A `Condition` maps to one of three JSON formats:
 | **Comparison Object** | `{ "LHS": { "Operator": "RHS" } }` | Relational check (e.g. `{ "$doc.owner_id": { "eq": "$session.userId" } }`). |
 
 - **LHS**: Must be a context variable (`$session`, `$doc`, `$namespace`, `$path`, `$value`, `$data`).
-- **Operator**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `notIn`, `contains`.
-- **RHS**: A raw literal value or context variable.
+- **Operator**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `startsWith`, `endsWith`, `in`, `notIn`, `isNull`, `isNotNull`.
+- **RHS**: A raw literal value or context variable. It is omitted for `isNull` and `isNotNull`.
 
 ---
 

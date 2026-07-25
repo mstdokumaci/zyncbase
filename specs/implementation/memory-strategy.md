@@ -18,8 +18,9 @@
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `MemoryStrategy` | parent allocator, `Connection` | Owns the thread-safe GPA plus pooled arenas and pooled connection objects. |
+| `MemoryStrategy` | parent allocator, `Connection` | Owns the thread-safe GPA plus pooled arenas, deferred arena handles, and pooled connection objects. |
 | `MemoryStrategy.Config` | pool capacities | Defines production/test pool sizing. |
+| `ArenaHandle` | arena pool, atomic release state | Owns request/deferred arena memory that must cross an async thread boundary before release. |
 | `IndexPool(T)` | atomics, allocator callbacks | Fixed-capacity pool with tagged free-stack and active-count leak assertion. |
 | `std.heap.ArenaAllocator` | GPA allocator | Handles request-temporary allocations released in bulk. |
 | `Connection` | connection allocator | High-churn transport/session state reused through the connection pool. |
@@ -30,6 +31,7 @@
 |------------------|-------|----------|
 | Server subsystems, schemas, caches, subscription registries | `MemoryStrategy.generalAllocator()` | Server lifetime or explicit subsystem lifetime. |
 | Message decode trees, temporary query/auth buffers, response encoding buffers | Request arena from `acquireArena` | One `handleMessage` call or dispatcher operation. |
+| Async encoded payloads and cross-thread send buffers | Deferred arena handle from `acquireArenaDeferred` | Until the receiver calls `ArenaHandle.release()`. |
 | Connection objects | `connection_pool` | Active WebSocket connection; reset before returning to pool. |
 | Connection-owned strings/session state | Connection allocator/state | Until scope reset, disconnect, or connection release. |
 | Background bounded buffers | Owning subsystem | Fixed capacity; overflow policy must be explicit. |

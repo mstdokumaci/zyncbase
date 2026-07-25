@@ -10,7 +10,7 @@ This document defines the schema, properties, and constraints for the server run
 
 | File | Responsibility |
 |------|----------------|
-| `src/config_loader.zig` | Loads JSON configurations, interpolates environment variables, and validates settings. |
+| `src/config_loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
 | `src/config_loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
 
 ## Important Types
@@ -19,7 +19,7 @@ This document defines the schema, properties, and constraints for the server run
 |------|--------------|----------------|
 | `Config` | `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig` | Root configuration structure representing the complete JSON layout. |
 | `ServerConfig` | none | Host, port, and interface binding parameters. |
-| `AuthConfig` | `jwt` config keys | JWT signature algorithms, issuer, audience, and grace periods. |
+| `AuthConfig` | `jwt`, `ticket`, `anonymous`, `session` config keys | JWT validation, ticket exchange, anonymous-auth, projected claims, and token grace periods. |
 | `SecurityConfig` | none | Allowed origins, rate limiting bounds, message caps, and violation thresholds. |
 | `LoggingConfig` | none | Output format (JSON/text) and minimum log level threshold. |
 | `PerformanceConfig` | none | Ring buffer sizes, SQL statement cache capacities, and write-batching parameters. |
@@ -40,7 +40,6 @@ This document defines the schema, properties, and constraints for the server run
 | `dataDir` | `string` | `"./data"` | Directory path for persistence (SQLite, WAL). Supports env expansion. |
 | `schema` | `string \| object` | `"./schema.json"` | Path to schema JSON or inline schema object. If missing, runs with users-only schema. |
 | `authorization` | `string` | `null` | Path to `authorization.json` file. If missing, runs with playground default. |
-| `environment` | `string` | `"development"` | Server environment mode (`development`, `production`). |
 
 ### `server` Settings
 
@@ -49,15 +48,38 @@ This document defines the schema, properties, and constraints for the server run
 | `port` | `number` | `3000` | Port to bind (1-65535). |
 | `host` | `string` | `"0.0.0.0"` | Bind address host interface. |
 
-### `authentication` Settings
+### `authentication.jwt` Settings
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `jwt.secret` | `string` | `null` | Key for HMAC tokens (`HS256`, `HS384`, `HS512`). Supports env variables. |
-| `jwt.algorithm` | `string` | `"HS256"` | Supported signature checking: `HS256`, `HS384`, `HS512`, `RS256`. |
-| `jwt.issuer` | `string` | `null` | Validates `iss` claim on incoming JWTs if specified. |
-| `jwt.audience` | `string` | `null` | Validates `aud` claim on incoming JWTs if specified. |
-| `session.tokenGracePeriodSeconds`| `number` | `30` | Grace period (in seconds) allowed after token expiry before WS close. |
+| `secret` | `string` | `null` | Key for HMAC tokens (`HS256`, `HS384`, `HS512`). Supports env variables. |
+| `algorithm` | `string` | `"HS256"` | Supported signature checking: `HS256`, `HS384`, `HS512`, `RS256`. |
+| `issuer` | `string` | `null` | Validates `iss` claim on incoming JWTs if specified. |
+| `audience` | `string` | `null` | Validates `aud` claim on incoming JWTs if specified. |
+| `jwksUrl` | `string` | `null` | JWKS endpoint used by RSA validation and periodic refresh. |
+| `subjectClaim` | `string` | `"sub"` | Claim used as the external subject. |
+
+### `authentication.ticket` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `secret` | `string` | `null` | 32-byte ticket signing secret. If omitted, a runtime secret is generated. |
+| `ttlSeconds` | `number` | `60` | Short-lived WebSocket ticket lifetime. |
+| `singleUse` | `boolean` | `true` | When true, redeemed tickets cannot be used again. |
+
+### `authentication.anonymous` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `enabled` | `boolean` | `false` | Allows anonymous subjects through the HTTP ticket exchange. |
+| `subjectPrefix` | `string` | `"anon:"` | Required prefix for anonymous subjects. |
+
+### `authentication.session` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `claims` | `object<string,string>` | `{}` | Maps JWT claim names to `$session` variable names. |
+| `tokenGracePeriodSeconds` | `number` | `30` | Grace period allowed after token expiry before WebSocket close. |
 
 ### `security` Settings
 
@@ -92,7 +114,7 @@ This document defines the schema, properties, and constraints for the server run
 ## Configuration Invariants
 
 - **Format**: Valid JSON.
-- **Strictness**: Unknown keys at the top level or within section objects will be ignored with a logged warning.
+- **Strictness**: Config loading is permissive; unknown top-level and section keys are ignored by the loader helpers rather than rejected.
 - **Unit Defaults**: All duration/timeout parameters are parsed in milliseconds unless explicitly noted.
 - **Variable Substitution**: String values support environment variable injection via `${VAR_NAME}` syntax.
 
@@ -104,7 +126,7 @@ Validation checks occur during server bootstrap in `validateConfig`:
 - Port range checks (1-65535).
 - Capacity, buffer size, and batch boundary checks (must be > 0).
 - Directory write capability checks on `dataDir`.
-- Missing or unreadable configuration files fail bootstrap immediately.
+- Missing config file path loads defaults. Missing schema file falls back to the implicit users-only schema. A configured authorization file must be readable; if omitted, the implicit playground rules are used.
 - Specific config error codes are detailed in [Error Taxonomy](./error-taxonomy.md).
 
 ---

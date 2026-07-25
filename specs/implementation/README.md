@@ -45,8 +45,8 @@ Some concerns span multiple subsystems. The canonical owner for each flow is:
 
 | Concern | Canonical Owner | Key Mechanism | Thread Boundary |
 |---------|----------------|---------------|-----------------|
-| Namespace resolution | `connection/session_resolver.zig` | `SessionResolutionBuffer` (lock-free ring) | Writer thread → Event loop |
-| Subscription lifecycle | `subscription/engine.zig` | `ChangeBuffer` (lock-free ring, 8192 cap) | Writer thread → Event loop |
+| Namespace resolution | `authorization/session_resolver.zig` | `SessionResolutionBuffer` with stale `scope_seq` checks | Writer thread → Event loop |
+| Subscription lifecycle | `subscription/engine.zig` | Connection-local subscription ids and shared registry | Event loop + subscription workers |
 | Write acknowledgement | `storage_engine/write_worker.zig` | `SendQueue` (lock-free MPSC) | Writer thread (producer) → Event loop (consumer, drains in post-handler) |
 | Subscription fanout | `subscription/worker_pool.zig` | `ChangeQueue` (sharded SPMC blocking queue) | Writer thread (producer) → `SubscriptionWorkerPool` workers (consumers) |
 | Error propagation | `wire/errors.zig` | `getWireError()` switch table | Synchronous + async via `SendQueue` |
@@ -88,4 +88,3 @@ Each owner file documents the full flow; other files link rather than duplicate.
 - [Auth System](./auth-system.md) - Declarative authorization model and presence authorization boundary.
 - [Error Taxonomy](./error-taxonomy.md) - Canonical public error catalog and retry categories.
 - [Sanitizers](./sanitizers.md) - TSan/GPA/ASan expectations and CI pass/fail rules.
-

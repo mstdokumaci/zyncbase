@@ -2,7 +2,7 @@
 
 **Drivers**: [ADR-003](../architecture/adrs.md#adr-003-configuration-first-design-zero-zig), [ADR-011](../architecture/adrs.md#adr-011-data-ownership-and-namespace-tenancy), [ADR-012](../architecture/adrs.md#adr-012-typed-array-fields-as-canonical-sorted-sets), [Storage](./storage.md), [Query Grammar](./query-grammar.md)
 
-This document defines the schema configuration format (`schema.json`), system table behavior, validation constraints, and serialization layout for storage and wire communication.
+This document defines the schema configuration format (`schema.json`), system table behavior, accepted metadata keys, and serialization layout for storage and wire communication.
 
 ---
 
@@ -14,7 +14,10 @@ This document defines the schema configuration format (`schema.json`), system ta
 | `src/schema/parse.zig` | Deserializes `schema.json`, validates naming rules, and performs dependency validation. |
 | `src/schema/format.zig` | Serializes schema definitions for JSON export or remote sync payloads. |
 | `src/schema/system.zig` | Injects implicit system tables (e.g. `users`) and implicit presence models. |
-| `src/ddl_generator.zig` | Translates the parsed schema state into relational SQLite `CREATE TABLE` and `CREATE INDEX` queries. |
+| `src/schema/index.zig` | Builds dense table/field lookup maps used by storage and wire dictionaries. |
+| `src/schema/field_path.zig` | Normalizes dotted paths and nested field names to flat column names. |
+| `src/sql/ddl.zig` | Translates parsed schema state into relational SQLite `CREATE TABLE` and `CREATE INDEX` queries. |
+| `src/sql/build.zig`, `src/sql/buf.zig` | SQL fragment builders and quoting helpers shared by storage. |
 
 ## Important Types
 
@@ -22,8 +25,24 @@ This document defines the schema configuration format (`schema.json`), system ta
 |------|--------------|----------------|
 | `Schema` | `Table` map, `PresenceSchema` | Root runtime schema context. |
 | `Table` | `Field` map, required field list | Metadata for a persistent collection (e.g. `namespaced` state). |
-| `Field` | type enum, constraints | Metadata for a table column, foreign keys, and indices. |
+| `Field` | type enum, metadata | Metadata for a table column, foreign keys, array element type, and indices. |
 | `PresenceSchema` | user field map, shared field map | Typed ephemeral presence layout definitions. |
+| `SchemaIndex` | table and field maps | Dense lookup structure used by integer wire routing and query parsing. |
+
+---
+
+## Root Schema Properties
+
+Schema configuration is rooted, not a bare table map:
+
+| Key | Type | Required | Description |
+|:---|:---:|:---:|:---|
+| `version` | `string` | yes | Schema version string. |
+| `store` | `object` | yes | Map of table names to table definitions. |
+| `presence` | `object` | no | User/shared presence field definitions. If omitted, a minimal implicit presence schema is synthesized. |
+| `metadata` | `object` | no | Preserved schema metadata for operators/tools. |
+
+`Config.schema` may be either an inline object with this shape or a string path to a JSON file with this shape.
 
 ---
 
@@ -47,6 +66,8 @@ This document defines the schema configuration format (`schema.json`), system ta
 | `onDelete` | `string` | `"restrict"` | Foreign key delete rule: `set_null`, `cascade`, `restrict`. |
 | `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). |
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
+| `metadata` | `object` | `null` | Preserved field metadata for tooling and generated clients. |
+| `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum` | mixed | `null` | Accepted as reserved validation keywords by the parser, but not represented in runtime `Field` state or enforced on writes. |
 
 ---
 
@@ -59,7 +80,7 @@ This document defines the schema configuration format (`schema.json`), system ta
 | `number` | `REAL` | Flat column | 64-bit floating point value. |
 | `boolean` | `INTEGER` | Flat column | Boolean value (stored as 0 or 1). |
 | `array` | `BLOB` | Flat column | Persistent canonical sorted-set representation. |
-| `object` | (None) | Flat columns | Nested variables are flattened using `__` separator. |
+| `object` | (None) | Flat columns | Parser-only container. Nested leaves are flattened using `__` separator. |
 
 ---
 
@@ -76,9 +97,12 @@ The `users` collection is a special, hybrid system table:
 
 ```json
 {
-  "users": {
-    "namespaced": false,
-    "fields": {}
+  "version": "1.0.0",
+  "store": {
+    "users": {
+      "namespaced": false,
+      "fields": {}
+    }
   }
 }
 ```
@@ -88,7 +112,7 @@ The `users` collection is a special, hybrid system table:
 ## Naming & Storage Invariants
 
 - **Table/Field Identifiers**: Must match `[A-Za-z][A-Za-z0-9_]*`.
-- **Flat Mapping**: Nested objects are flattened into database columns using double-underscore `__` separator bounds (e.g., `profile__userId`).
+- **Flat Mapping**: Nested objects are flattened into database columns using double-underscore `__` separators (e.g., `profile__userId`).
 - **Reserved Prefixes**: Namespaces starting with `_zync_` are reserved for internal database systems. Identifier keys must not contain `__`.
 - **Built-in Columns**: Every table implicitly includes `id` (`BLOB(16)`), `namespace_id` (`INTEGER`), `owner_id` (`BLOB(16)`), `created_at` (`INTEGER`), and `updated_at` (`INTEGER`).
 - **Field Limit**: Each table supports a maximum of 1024 fields (including flattened nested fields, excluding system columns).
@@ -112,17 +136,6 @@ The `users` collection is a special, hybrid system table:
 | `user` | `object` | Map of presence fields owned per connected user. |
 | `shared` | `object` | Map of namespace-level shared presence fields. |
 
-### Presence Field Validation Keywords
-
-Presence fields support validation keywords:
-
-| Keyword | Applicable Types | Description |
-|:---|:---:|:---|
-| `enum` | `string`, `integer` | Restricts values to allowed list. |
-| `pattern` | `string` | Regex validation. |
-| `minLength` / `maxLength` | `string` | Character bounds. |
-| `minimum` / `maximum` | `integer`, `number` | Numeric bounds. |
-
 ### Implicit Presence Schema Layout
 
 If `presence` is omitted from `schema.json`, the server synthesizes the following layout:
@@ -131,7 +144,7 @@ If `presence` is omitted from `schema.json`, the server synthesizes the followin
 {
   "presence": {
     "user": {
-      "status": { "type": "string", "enum": ["active", "idle", "away"] }
+      "status": { "type": "string" }
     },
     "shared": {}
   }
@@ -149,19 +162,11 @@ At boot, the server flattens presence definitions to index arrays sent to client
 
 ---
 
-## Supported Validation Constraints
+## Metadata and Reserved Validation Keywords
 
-ZyncBase parses and enforces the following JSON schema validation properties on the write path:
+`metadata` objects are preserved at schema, table, and field boundaries for generated clients and operator tooling.
 
-| Constraint Key | Applicable Field Types | Description / Validation Behaviour |
-|:---|:---:|:---|
-| `enum` | `string`, `integer` | Restricts values to a fixed list of allowed options. |
-| `pattern` | `string` | Regex pattern matching check. |
-| `format` | `string` | Predefined validation formats (e.g. `email`, `uuid`, `ipv4`). |
-| `minLength` | `string` | Minimum character length constraints. |
-| `maxLength` | `string` | Maximum character length constraints. |
-| `minimum` | `integer`, `number` | Minimum numeric value bounds (inclusive). |
-| `maximum` | `integer`, `number` | Maximum numeric value bounds (inclusive). |
+The parser accepts validation-key names (`enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`) so schema files can reserve future constraints without tripping unknown-key rejection. The current runtime write path enforces structural type compatibility, required fields, references, arrays, and system-column rules; it does not enforce these validation keywords.
 
 ---
 

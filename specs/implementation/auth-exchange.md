@@ -10,18 +10,21 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 
 | File | Responsibility |
 |------|----------------|
-| `src/connection/ticket_exchange.zig` | Generates, parses, and validates single-use auth tickets. |
-| `src/jwt_validator.zig` | JWT validation, signature verification, and JWKS metadata retrieval. |
-| `src/server.zig` | Gathers credentials via HTTP `/auth/ticket` and upgrade query string. |
-| `src/authorization.zig` | Evaluates `$session` variables against current permission states. |
+| `src/authentication/ticket_exchange.zig` | Handles HTTP auth requests, generates tickets, validates ticket redemption, and projects sessions. |
+| `src/authentication/jwt_validator.zig` | JWT validation, signature verification, JWKS loading/refresh, and claim projection. |
+| `src/authentication/session.zig` | Runtime base session type shared by ticket exchange, connections, and authorization. |
+| `src/authentication/base64_utils.zig` | Base64url helpers used by JWT and ticket parsing. |
+| `src/server.zig` | Registers HTTP `/auth/ticket`, WebSocket upgrade ticket verification, token sweep, and JWKS refresh timers. |
+| `src/authorization/session_resolver.zig` | Completes background namespace/user resolution on the event loop. |
+| `src/authorization/evaluate.zig` | Evaluates projected `$session` variables against auth rules. |
 
 ## Important Types
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `TicketExchange` | cryptographic keys, allocator | Manages single-use tickets, tracking issued and spent states. |
+| `TicketExchange` | ticket secret, JWT validator, allocator | Manages short-lived tickets, optional single-use redemption tracking, JWT validation, and anonymous subject admission. |
 | `Session` | allocator | Holds projected JWT claims, authentication scopes, and user identities. |
-| `JWTClaims` | JSON parser | Decoded structure containing external subject, tenant, role, and custom scopes. |
+| `ValidatedToken` | JSON parser, validator config | Decoded and verified JWT output containing external subject, expiry, and projected claims. |
 
 ---
 
@@ -41,7 +44,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 |:---|:---|:---|:---|:---|
 | **1. Ticket Request (JWT)** | `POST /auth/ticket` | `Authorization: Bearer <external_jwt>` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Validates JWT (signature, issuer, aud, exp, algorithms). Projects claims. |
 | **1. Ticket Request (Anon)** | `POST /auth/ticket` | `{"anonymousSubject": "anon:6c6f8b0d..."}` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Checks if anonymous auth is enabled. Validates subject entropy. |
-| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state. Hydrates base session. |
+| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state when enabled. Hydrates base session. |
 | **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | Scoped `ok` with store/presence session mappings | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). |
 
 ---
@@ -78,9 +81,9 @@ During the connection lifecycle and handshake upgrade, authentication and valida
 
 ## Rules
 
-- JWTs must never be placed directly in WebSocket query parameters; a single-use ticket is mandatory.
+- JWTs must never be placed directly in WebSocket query parameters; a short-lived ticket is mandatory.
 - Ticket expiry must be short-lived (e.g., ≤ 60 seconds).
-- Re-use of a ticket must result in an immediate auth failure.
+- Ticket redemption is single-use when `authentication.ticket.singleUse` is enabled; this is the default and expected production setting.
 - A failed token refresh must immediately terminate the WebSocket connection.
 - No user profile fields are resolved during authorization evaluation; ZyncBase only resolves the internal `users.id` mapping.
 

@@ -10,11 +10,13 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 |------|----------------|
 | `src/query/ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
 | `src/query/parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
+| `src/query/hasher.zig`, `src/query/hash_context.zig` | Structural query hashing/equality for subscription grouping and SQL-template reuse. |
 | `src/storage_engine/filter_sql.zig` | AST-to-SQL predicate lowering and bound value ownership. |
-| `src/storage_engine/sql.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
+| `src/sql/build.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
 | `src/storage_engine/reader.zig` | Query execution and row decoding. |
 | `src/query/eval.zig` | In-memory predicate evaluation for subscription matching. |
 | `src/subscription/engine.zig` | Subscription grouping, query retention, and record-change matching. |
+| `src/subscription/predicate_trie.zig` | Trie-based equality-condition index used by subscription matching. |
 | `src/store_service.zig` | Store-facing query, subscribe, and load-more operations. |
 
 ## Important Types
@@ -28,6 +30,7 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 | `ParserError` | wire/schema validation | Internal parser failure set mapped through public error taxonomy. |
 | `RenderedPredicate` | SQL fragment, bound values | Result of lowering AST predicates for SQLite. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Keeps active queries and evaluates committed changes. |
+| `PredicateTrie` | normalized `Condition` keys | Indexes AND equality conditions so committed changes can prune candidate subscriptions before residual evaluation. |
 | `CursorResult` | records, next cursor | Store-service result for paginated reads. |
 
 ## Responsibilities
@@ -64,7 +67,7 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 |----------|-------|-------|
 | Batch write ops limit | 500 | Maximum operations in a single `StoreBatch` call. |
 | Cursor overfetch | +1 row | `LIMIT` is overfetched by 1 for accurate `hasMore` detection. |
-| Subscription condition matching | 64 max as sets | Maximum conditions matched as sets during filter equality comparison. |
+| Subscription condition matching | Predicate trie + residual evaluation | AND equality branches are indexed; OR/range/residual conditions are evaluated through the query evaluator. |
 | Default query limit | None (unbounded) | Client must supply `limit` for bounded queries. |
 
 **Overflow policy**: Batch operations exceeding 500 ops return `BATCH_TOO_LARGE`. Queries without a `limit` are unbounded; clients should always supply a limit for predictable performance.

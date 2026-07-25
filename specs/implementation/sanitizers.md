@@ -13,7 +13,8 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 | `build.zig` | Configures compiler instrumentation options for sanitizers (`-fsanitize=thread`). |
 | `src/memory_safety_property_test.zig` | Fuzzes boundary conditions to trigger GPA leak detection. |
 | `src/lock_free_cache_leak_test.zig` | Validates that retired cache nodes are correctly destroyed under stress load. |
-| `src/subscription/engine_thread_safety_test.zig` | Stresses subscription engines to detect concurrency races under TSan. |
+| `src/queues/mpsc_queue_thread_safety_test.zig` | Stresses cross-thread MPSC send-queue behavior under TSan. |
+| `src/queues/spmc_blocking_queue_thread_safety_test.zig` | Stresses blocking fanout queues under TSan. |
 
 ---
 
@@ -30,6 +31,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 
 - **Zero Race Tolerance**: Any TSan warning emitted to `stderr` during testing is treated as a CI failure.
 - **Zero Leak Tolerance**: The presence of any memory leak report from GPA at exit fails the build pipeline.
+- **Command coverage**: `bun run test:tsan` runs `zig build test -Dsanitize=thread --summary all`; `bun run test:safe` runs the safe-mode Zig test suite.
 - **Valgrind coverage**: Exercised on the C interop interface boundaries (uWebSockets, SQLite) to trace allocations outside the Zig runtime.
 
 ---

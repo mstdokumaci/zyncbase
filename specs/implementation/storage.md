@@ -15,11 +15,15 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `src/storage_engine/reader.zig` | Select/query execution, record decoding, and query result ownership. |
 | `src/storage_engine/read_worker_pool.zig` | `ReadWorkerPool` and `ReadWorker`: dedicated reader OS threads using `managedThread` and `workerPool`. Consume `ReadRequest`, encode responses, push to `SendQueue`. |
 | `src/storage_engine/read_buffer.zig` | `ReadRequest`, `ReadResponse` types and `read_request_queue` alias (`spmcBlockingQueue(ReadRequest)`). |
-| `src/storage_engine/sql.zig` | SQL construction and SQLite binding helpers. |
+| `src/sql/build.zig` | SQL construction helpers for SELECT, cursor predicates, ordering, and DML fragments. |
+| `src/sql/buf.zig` | SQL buffer and identifier quoting helpers. |
+| `src/sql/ddl.zig` | Schema-to-DDL translation. |
 | `src/storage_engine/filter_sql.zig` | Query predicate lowering to SQL fragments and bound values. |
 | `src/storage_engine/cache.zig` | Namespace/identity metadata cache keys and values. |
 | `src/storage_engine/errors.zig` | SQLite error classification into internal storage errors. |
-| `src/ddl_generator.zig` | Schema-to-DDL translation. |
+| `src/storage_engine/pk_set.zig` | Primary-key set helpers for write/delete/query support. |
+| `src/typed/types.zig`, `src/typed/codec.zig`, `src/typed/doc_id.zig` | Runtime typed values, binary codecs, and 16-byte document id support. |
+| `src/checkpoint_worker.zig` | Background WAL checkpoint scheduling and execution. |
 | `src/migration_detector.zig`, `src/migration_executor.zig` | Schema change detection and migration execution. |
 | `src/store_service.zig` | Application-facing store API on top of storage. |
 
@@ -124,7 +128,7 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 
 | Buffer | Capacity | Notes |
 |--------|----------|-------|
-| Change buffer | 8,192 | Ring buffer for record changes (power of 2 for cheap modulo). |
+| Change queue | Sharded linked-list SPMC | Writer pushes committed record changes by `(namespace_id, table_index, doc_id)` shard for subscription workers. |
 | Session resolution buffer | 256 + 512 overflow | Ring buffer for namespace/user resolutions. |
 | Read request queue | Unbounded (linked list) | SPMC blocking queue for async read requests. |
 

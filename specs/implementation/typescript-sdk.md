@@ -23,6 +23,8 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 | `sdk/typescript/src/doc_id.ts`, `sdk/typescript/src/uuid.ts` | Document id validation, packing/unpacking, and UUIDv7 generation. |
 | `sdk/typescript/src/auth.ts`, `sdk/typescript/src/anonymous.ts` | Auth endpoint derivation and anonymous subject helpers. |
 | `sdk/typescript/src/types.ts` | Public SDK types and interfaces. |
+| `sdk/typescript/src/index.ts` | Public export barrel. |
+| `sdk/typescript/cli/generate.ts` | CLI schema/type generation entry point. |
 
 ## Important Types
 
@@ -68,5 +70,6 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 
 - A wire message change must update `connection_wire.ts`, server `src/wire/*`, [Wire Protocol](./wire-protocol.md), and relevant tests together.
 - A public API type change must update `types.ts` and `index.ts` exports together.
+- SDK distribution changes must keep `sdk/typescript/src/index.ts`, emitted declarations, and the CLI build entry aligned.
 - Store and presence APIs stay separate; do not reintroduce presence through store paths.
 - SDK docs should name modules/types and responsibilities, not mirror implementation code.
