@@ -21,16 +21,6 @@ pub const RenderedPredicate = struct {
         }
         self.* = .{ .sql = null, .values = null };
     }
-
-    pub fn sqlSlice(self: *const RenderedPredicate) ?[]const u8 {
-        return self.sql;
-    }
-
-    pub fn takeValues(self: *RenderedPredicate) ?[]Value {
-        const values = self.values;
-        self.values = null;
-        return values;
-    }
 };
 
 pub fn appendClonedValue(

@@ -15,7 +15,6 @@ const authorization_types = @import("authorization/types.zig");
 const authorization_store = @import("authorization/store.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
-const ReadKind = storage_mod.ReadKind;
 const ReadRequest = storage_mod.ReadRequest;
 const DocId = typed_doc_id.DocId;
 
@@ -206,7 +205,7 @@ pub const StoreService = struct {
         table_index: usize,
         parsed: msgpack.Payload,
     ) !void {
-        var read_req = try self.prepareQueryRead(ctx, table_index, parsed, null, .query);
+        var read_req = try self.prepareQueryRead(ctx, table_index, parsed, null);
         errdefer read_req.deinit(ctx.allocator);
         try self.enqueueRead(read_req);
     }
@@ -235,7 +234,6 @@ pub const StoreService = struct {
         table_index: usize,
         parsed: msgpack.Payload,
         sub_id: ?u64,
-        kind: ReadKind,
     ) !ReadRequest {
         const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
@@ -264,7 +262,6 @@ pub const StoreService = struct {
         return ReadRequest{
             .conn_id = ctx.conn_id,
             .msg_id = ctx.msg_id,
-            .kind = kind,
             .table_index = table_index,
             .namespace_id = ctx.namespace_id,
             .filter = filter,
@@ -307,7 +304,6 @@ pub const StoreService = struct {
         return ReadRequest{
             .conn_id = ctx.conn_id,
             .msg_id = ctx.msg_id,
-            .kind = .load_more,
             .table_index = table_index,
             .namespace_id = namespace_id,
             .filter = filter_clone,

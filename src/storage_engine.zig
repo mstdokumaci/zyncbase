@@ -35,7 +35,6 @@ const CheckpointStats = write_queue.CheckpointStats;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
-pub const ReadKind = read_buffer.ReadKind;
 const DocId = typed_doc_id.DocId;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;

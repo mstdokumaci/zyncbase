@@ -85,7 +85,7 @@ fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
     defer predicate.deinit(allocator);
     predicate_owned = false;
 
-    try std.testing.expect(rendered.sqlSlice() != null);
+    try std.testing.expect(rendered.sql != null);
     const rendered_values = rendered.values orelse return error.TestExpectedValue;
     try std.testing.expectEqual(@as(usize, 2), rendered_values.len);
 }

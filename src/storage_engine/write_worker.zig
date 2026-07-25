@@ -990,7 +990,7 @@ pub const WriteWorker = struct {
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
-        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const guard_sql = if (rendered_guard) |*rg| rg.sql else null;
         const sql_str = try sql.buildUpsertDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
@@ -1039,7 +1039,7 @@ pub const WriteWorker = struct {
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
-        const guard_sql = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const guard_sql = if (rendered_guard) |*rg| rg.sql else null;
         const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
 
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
@@ -1078,7 +1078,7 @@ pub const WriteWorker = struct {
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
 
-        const guard_fragment = if (rendered_guard) |*rg| rg.sqlSlice() else null;
+        const guard_fragment = if (rendered_guard) |*rg| rg.sql else null;
         const sql_str: []const u8 = if (guard_fragment) |fragment|
             try std.mem.concat(arena_alloc, u8, &.{
                 table_metadata.delete_document_sql_prefix,
