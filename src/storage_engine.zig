@@ -472,8 +472,8 @@ pub const StorageEngine = struct {
         }
 
         self.write_worker.resolve_namespace_stmt =
-            sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_namespace_sql) catch |err|
-                return storage_errors.classifyError(err);
+            (self.write_worker.conn.prepareDynamic(sql.resolve_namespace_sql) catch |err|
+                return storage_errors.classifyError(err)).stmt;
         errdefer {
             if (self.write_worker.resolve_namespace_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);
             self.write_worker.resolve_namespace_stmt = null;
@@ -484,8 +484,8 @@ pub const StorageEngine = struct {
         // would fail to prepare (table doesn't exist) and waste a connection resource.
         if (self.schema.table("users") != null) {
             self.write_worker.resolve_user_stmt =
-                sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_user_sql) catch |err|
-                    return storage_errors.classifyError(err);
+                (self.write_worker.conn.prepareDynamic(sql.resolve_user_sql) catch |err|
+                    return storage_errors.classifyError(err)).stmt;
         }
         errdefer {
             if (self.write_worker.resolve_user_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);

@@ -873,7 +873,7 @@ pub const WriteWorker = struct {
             self.notifyChanges();
             return;
         };
-        if (sql.resolveNamespaceId(self.allocator, &self.conn, ns_stmt, sop.namespace)) |ns_id| {
+        if (sql.resolveNamespaceId(&self.conn, ns_stmt, sop.namespace)) |ns_id| {
             namespace_id = ns_id;
 
             self.namespace_cache.update(
@@ -893,7 +893,6 @@ pub const WriteWorker = struct {
 
             if (self.resolve_user_stmt) |user_stmt| {
                 if (sql.resolveUserId(
-                    self.allocator,
                     &self.conn,
                     user_stmt,
                     identity_namespace_id,

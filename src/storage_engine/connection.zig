@@ -165,7 +165,7 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
         ctx.writer_select_stmts.* = &.{};
     }
 
-    ctx.writer_resolve_ns.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_namespace_sql);
+    ctx.writer_resolve_ns.* = (try ctx.writer_conn.prepareDynamic(sql.resolve_namespace_sql)).stmt;
     errdefer {
         if (ctx.writer_resolve_ns.*) |s| _ = sqlite.c.sqlite3_finalize(s);
         ctx.writer_resolve_ns.* = null;
@@ -173,7 +173,7 @@ fn prepareAllStmts(ctx: ReconnectContext) !void {
 
     // Only prepare the user-resolution stmt if the schema has a "users" table.
     if (ctx.schema.table("users") != null) {
-        ctx.writer_resolve_user.* = try sql.prepareStaticStmt(ctx.writer_conn, sql.resolve_user_sql);
+        ctx.writer_resolve_user.* = (try ctx.writer_conn.prepareDynamic(sql.resolve_user_sql)).stmt;
         errdefer {
             if (ctx.writer_resolve_user.*) |s| _ = sqlite.c.sqlite3_finalize(s);
             ctx.writer_resolve_user.* = null;

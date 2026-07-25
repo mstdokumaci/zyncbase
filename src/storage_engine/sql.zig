@@ -36,10 +36,9 @@ pub const StatementCache = struct {
 
     pub fn init(self: *StatementCache, allocator: Allocator, cache_limit: usize) void {
         _ = allocator;
-        const list = LruList{};
         self.* = .{
             .map = .empty,
-            .list = list,
+            .list = .{},
             .count = 0,
             .cache_limit = cache_limit,
         };
@@ -130,10 +129,7 @@ pub const StatementCache = struct {
             return ManagedStmt{ .stmt = stmt };
         }
 
-        const stmt = blk: {
-            const dynamic = try db.prepareDynamic(sql_fallback);
-            break :blk dynamic.stmt;
-        };
+        const stmt = (try db.prepareDynamic(sql_fallback)).stmt;
         errdefer _ = sqlite.c.sqlite3_finalize(stmt);
 
         try self.put(allocator, cache_key, stmt);
@@ -192,13 +188,6 @@ pub fn finalizeStaticStmts(stmts: []?*sqlite.c.sqlite3_stmt) void {
     for (stmts) |s| {
         if (s) |stmt| _ = sqlite.c.sqlite3_finalize(stmt);
     }
-}
-
-/// Prepare a single compile-time SQL literal into a static stmt. Caller finalizes via
-/// `sqlite3_finalize` (or `finalizeStaticStmts` on a one-element slice).
-pub fn prepareStaticStmt(db: *sqlite.Db, sql_text: []const u8) !*sqlite.c.sqlite3_stmt {
-    const dynamic = try db.prepareDynamic(sql_text);
-    return dynamic.stmt;
 }
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
@@ -360,18 +349,13 @@ pub const resolve_user_sql =
 ;
 
 pub fn resolveNamespaceId(
-    allocator: Allocator,
     db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
+    stmt_raw: *sqlite.c.sqlite3_stmt,
     namespace: []const u8,
 ) !i64 {
-    _ = allocator;
-    _ = sqlite.c.sqlite3_reset(stmt);
-    _ = sqlite.c.sqlite3_clear_bindings(stmt);
-    defer {
-        _ = sqlite.c.sqlite3_reset(stmt);
-        _ = sqlite.c.sqlite3_clear_bindings(stmt);
-    }
+    var mstmt = try acquireStaticStmt(stmt_raw);
+    defer mstmt.release();
+    const stmt = mstmt.stmt;
 
     if (bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     const rc = sqlite.c.sqlite3_step(stmt);
@@ -381,23 +365,18 @@ pub fn resolveNamespaceId(
 }
 
 pub fn resolveUserId(
-    allocator: Allocator,
     db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
+    stmt_raw: *sqlite.c.sqlite3_stmt,
     namespace_id: i64,
     external_id: []const u8,
     timestamp: i64,
 ) !typed_doc_id.DocId {
-    _ = allocator;
+    var mstmt = try acquireStaticStmt(stmt_raw);
+    defer mstmt.release();
+    const stmt = mstmt.stmt;
+
     const new_user_id = typed_doc_id.generateUuidV7();
     const id_bytes = typed_doc_id.toBytes(new_user_id);
-
-    _ = sqlite.c.sqlite3_reset(stmt);
-    _ = sqlite.c.sqlite3_clear_bindings(stmt);
-    defer {
-        _ = sqlite.c.sqlite3_reset(stmt);
-        _ = sqlite.c.sqlite3_clear_bindings(stmt);
-    }
 
     if (bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
