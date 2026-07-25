@@ -1,8 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const reader = @import("reader.zig");
 const connection = @import("connection.zig");
+const reader = @import("reader.zig");
+
 const errors = @import("errors.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
@@ -57,7 +58,7 @@ pub const WriteWorker = struct {
     /// Pre-prepared `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`
     /// per table, indexed by `table.index`. Used by `getDocumentHelper` (prefetch
     /// + guard post-check), the hottest read path on the writer. Prepared in
-    /// `StorageEngine.start()`; finalized in `deinit`/`attemptReconnect`.
+    /// `StorageEngine.start()`; finalized in `deinit`.
     select_document_stmts: []?*sqlite.c.sqlite3_stmt = &.{},
     /// Pre-prepared stmt for `sql.resolveNamespaceId`. Compile-time SQL literal,
     /// stable for process lifetime. Prepared in `StorageEngine.start()`.
@@ -205,11 +206,9 @@ pub const WriteWorker = struct {
         return &self.conn;
     }
 
-    pub fn deinit(self: *WriteWorker) void {
-        self.json_buf.deinit();
-        // Finalize static stmts before closing the connection.
-        sql.finalizeStaticStmts(self.select_document_stmts);
+    pub fn finalizeStmts(self: *WriteWorker) void {
         if (self.select_document_stmts.len > 0) {
+            sql.finalizeStaticStmts(self.select_document_stmts);
             self.allocator.free(self.select_document_stmts);
             self.select_document_stmts = &.{};
         }
@@ -222,6 +221,11 @@ pub const WriteWorker = struct {
             self.resolve_user_stmt = null;
         }
         self.stmt_cache.deinit(self.allocator);
+    }
+
+    pub fn deinit(self: *WriteWorker) void {
+        self.json_buf.deinit();
+        self.finalizeStmts();
         self.conn.deinit();
         self.allocator.free(self.db_path);
         while (self.queue.pop()) |op| {

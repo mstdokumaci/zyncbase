@@ -33,18 +33,6 @@ pub const CheckpointLatch = latch_mod.latch(CheckpointStats); // zwanzig-disable
 /// Latch for batch ops that only need ack/err.
 pub const AckLatch = latch_mod.latch(void); // zwanzig-disable-line: identifier-style
 
-/// Configuration for reconnection logic.
-pub const ReconnectionConfig = struct {
-    /// Maximum number of reconnection attempts
-    max_attempts: u32 = 5,
-    /// Initial backoff delay in milliseconds
-    initial_backoff_ms: u64 = 100,
-    /// Maximum backoff delay in milliseconds
-    max_backoff_ms: u64 = 5000,
-    /// Multiplier for exponential backoff
-    backoff_multiplier: f64 = 2.0,
-};
-
 /// Addressing target extracted from a write op's payload. Used by the flush
 /// and batch paths to build eviction keys without re-switching on the union.
 pub const OpTarget = struct {

@@ -288,10 +288,6 @@ pub const ReadWorker = struct {
                     cache_record.deinit(self.allocator);
                     std.log.err("ReadWorker: cache.update failed: {}", .{err});
                 };
-                // Double-check: if a write snuck in during the cache update, evict stale entry
-                if (self.writer_version.load(.acquire) != seq_before) {
-                    _ = self.metadata_cache.evict(cache_key);
-                }
             }
             return record;
         }
