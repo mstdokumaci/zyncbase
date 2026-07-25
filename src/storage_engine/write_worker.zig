@@ -445,7 +445,7 @@ pub const WriteWorker = struct {
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
-    /// PK tracking, change log push, and guard-conflict detection.
+    /// PK tracking, metadata-cache update/eviction, change log push, and guard-conflict detection.
     /// `old_record` / `new_record` ownership is consumed here — caller must
     /// not deinit them afterwards regardless of the return value.
     /// Returns true on success (row was affected or no guard conflict),
@@ -472,6 +472,7 @@ pub const WriteWorker = struct {
             const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, doc_id);
             if (new_record) |nr| {
                 if (nr.clone(self.allocator)) |cloned| {
+                    errdefer cloned.deinit(self.allocator);
                     try ctx.pending_cache_ops.append(self.allocator, .{
                         .key = cache_key,
                         .kind = .update,
