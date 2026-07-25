@@ -415,7 +415,11 @@ pub const WriteWorker = struct {
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema_system.global_namespace_id;
                     break :blk executeDeleteEntry(&ctx, dop, namespace_id, table_metadata);
                 },
-                else => unreachable,
+                else => {
+                    std.log.debug("Unsupported WriteOp variant at op #{d}", .{op_idx});
+                    if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                    return StorageError.InvalidOperation;
+                },
             } catch |err| {
                 if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
                 return err;

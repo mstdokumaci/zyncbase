@@ -388,6 +388,30 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
 }
 
+test "StorageEngine: low-level batch writer rejects unsupported ops and rolls back" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    var latch_ckpt = storage_mod.CheckpointLatch{};
+    const entries = try allocator.alloc(storage_mod.WriteOp, 1);
+    entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
+    var latch = storage_mod.AckLatch{};
+    const version_before = ctx.engine.write_worker.version.load(.acquire);
+    ctx.engine.write_worker.beginOp();
+    executeBatchForTest(&ctx, entries, &latch);
+
+    try testing.expectError(storage_mod.StorageError.InvalidOperation, latch.wait());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
+    try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
+
+    try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
+}
+
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
