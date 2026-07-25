@@ -321,6 +321,14 @@ pub fn fetchRecord(
     return null;
 }
 
+/// Step the cursor once without decoding. Returns true if another row is available.
+pub fn stepHasMore(db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt) !bool {
+    const rc = sqlite.c.sqlite3_step(stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return true;
+    if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
+    return false;
+}
+
 pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     db.exec(
         "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
