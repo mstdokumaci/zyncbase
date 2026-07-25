@@ -61,7 +61,7 @@ Important: Project is still in early development stage. Give no consideration to
 - **Compress Specs:** `npm run specs:compress` (Syncs `specs/` to `specs_llm/`)
 
 ## Linting
-- **Run Linter:** `bun run lint` (Run after every small zig code change, so the errors won't accumulate)
+- **Run Linter:** `bun run lint` (Takes ~3 minutes to complete, be patient.)
 - **Biome Check:** `bunx biome check --write`
 
 # Actions Upon Task Completion

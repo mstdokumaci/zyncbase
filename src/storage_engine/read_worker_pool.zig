@@ -25,9 +25,9 @@ const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
 const ReaderNode = connection.ReaderNode;
 
-fn cleanupRequest(req: ReadRequest) void {
+fn cleanupRequest(req: ReadRequest, alloc: Allocator) void {
     var mutable_req = req;
-    mutable_req.deinit(mutable_req.allocator);
+    mutable_req.deinit(alloc);
 }
 
 fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
@@ -152,7 +152,7 @@ pub const ReadWorker = struct {
         while (self.request_queue.popTimed(0)) |request| {
             const handle = self.memory_strategy.acquireArenaDeferred() catch |acq_err| {
                 std.log.err("ReadWorker: failed to acquire arena for shutdown: {}", .{acq_err});
-                cleanupRequest(request);
+                cleanupRequest(request, self.allocator);
                 self.notifier.notify();
                 continue;
             };
@@ -163,7 +163,7 @@ pub const ReadWorker = struct {
                 .message = "shutdown",
             }) catch |err| {
                 std.log.err("ReadWorker: failed to encode shutdown error: {}", .{err});
-                cleanupRequest(request);
+                cleanupRequest(request, self.allocator);
                 self.notifier.notify();
                 continue;
             };
@@ -172,7 +172,7 @@ pub const ReadWorker = struct {
                 std.log.err("ReadWorker: failed to push shutdown error: {}", .{err});
                 handle.release();
             };
-            cleanupRequest(request);
+            cleanupRequest(request, self.allocator);
             self.notifier.notify();
         }
     }
@@ -181,7 +181,7 @@ pub const ReadWorker = struct {
         var req = request;
 
         const table_metadata = self.schema.tableByIndex(req.table_index) orelse {
-            req.deinit(req.allocator);
+            req.deinit(self.allocator);
             // SAFETY: Table metadata is undefined because the table index was not found.
             return .{
                 .conn_id = req.conn_id,
@@ -204,7 +204,7 @@ pub const ReadWorker = struct {
                 id,
                 effective_namespace_id,
             ) catch |err| {
-                req.deinit(req.allocator);
+                req.deinit(self.allocator);
                 return .{
                     .conn_id = req.conn_id,
                     .msg_id = req.msg_id,
@@ -216,7 +216,7 @@ pub const ReadWorker = struct {
                 };
             };
             const response = self.buildResponse(req, table_metadata, record);
-            req.deinit(req.allocator);
+            req.deinit(self.allocator);
             return response;
         }
 
@@ -233,7 +233,7 @@ pub const ReadWorker = struct {
             .next_cursor_str = result.next_cursor_str,
             .sub_id = req.sub_id,
         };
-        req.deinit(req.allocator);
+        req.deinit(self.allocator);
         return response;
     }
 

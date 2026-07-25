@@ -266,7 +266,6 @@ pub const StoreService = struct {
             .namespace_id = ctx.namespace_id,
             .filter = filter,
             .sub_id = sub_id,
-            .allocator = ctx.allocator,
         };
     }
 
@@ -308,7 +307,6 @@ pub const StoreService = struct {
             .namespace_id = namespace_id,
             .filter = filter_clone,
             .sub_id = sub_id,
-            .allocator = ctx.allocator,
         };
     }
 
