@@ -473,10 +473,9 @@ test "StoreService: query - basic search" {
     });
     defer filter_map.free(allocator);
 
-    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null, .query);
+    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null);
     defer read_req.deinit(allocator);
 
-    try testing.expectEqual(storage_mod.ReadKind.query, read_req.kind);
     try testing.expectEqual(table_index, read_req.table_index);
     try testing.expectEqual(@as(i64, 1), read_req.namespace_id);
     try testing.expectEqual(@as(?u64, null), read_req.sub_id);
@@ -503,7 +502,7 @@ test "StoreService: query - orderBy and limit" {
     });
     defer filter_map.free(allocator);
 
-    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null, .query);
+    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null);
     defer read_req.deinit(allocator);
 
     try testing.expectEqual(@as(?u32, 2), read_req.filter.limit);
@@ -526,7 +525,7 @@ test "StoreService: query - negative cases" {
         const tbl_md = app.schema.table("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
-        const err = service.prepareQueryRead(ctx, 999, filter_map, null, .query);
+        const err = service.prepareQueryRead(ctx, 999, filter_map, null);
         try testing.expectError(error.UnknownTable, err);
     }
 
@@ -537,7 +536,7 @@ test "StoreService: query - negative cases" {
             .conditions = .{.{ @as(usize, 999), 0, "val" }},
         });
         defer filter_map.free(allocator);
-        const err = service.prepareQueryRead(ctx, app.tableIndex("data"), filter_map, null, .query);
+        const err = service.prepareQueryRead(ctx, app.tableIndex("data"), filter_map, null);
         try testing.expectError(error.UnknownField, err);
     }
 }
@@ -562,7 +561,7 @@ test "StoreService: queryMore - pagination" {
     defer filter_map.free(allocator);
 
     // Prepare an initial subscribe read request to get a properly parsed filter
-    var initial_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, sub_id, .subscribe);
+    var initial_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, sub_id);
     defer initial_req.deinit(allocator);
 
     // Encode a synthetic cursor for the load-more request.
@@ -584,7 +583,6 @@ test "StoreService: queryMore - pagination" {
     );
     defer load_more_req.deinit(allocator);
 
-    try testing.expectEqual(storage_mod.ReadKind.load_more, load_more_req.kind);
     try testing.expectEqual(sub_id, load_more_req.sub_id.?);
     try testing.expect(load_more_req.filter.after != null);
 }

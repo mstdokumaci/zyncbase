@@ -437,7 +437,7 @@ pub const MessageHandler = struct {
             .namespace = namespace,
             .namespace_id = session.namespace_id,
             .allocator = self.allocator,
-        }, table_index, parsed, sub_id, .subscribe);
+        }, table_index, parsed, sub_id);
         errdefer read_req.deinit(self.allocator);
 
         // Register subscription synchronously before async read so notifications are not missed.

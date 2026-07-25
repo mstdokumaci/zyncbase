@@ -7,12 +7,9 @@ const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlock
 
 const Record = typed.Record;
 
-pub const ReadKind = enum { query, subscribe, load_more };
-
 pub const ReadRequest = struct {
     conn_id: u64,
     msg_id: u64,
-    kind: ReadKind,
     table_index: usize,
     namespace_id: i64,
     filter: query_ast.QueryFilter,

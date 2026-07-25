@@ -9,27 +9,13 @@ const SqlList = @import("../sql/buf.zig").SqlList;
 const Value = typed.Value;
 
 pub const RenderedPredicate = struct {
-    sql: ?[]const u8,
-    values: ?[]Value,
+    sql: []const u8,
+    values: []Value,
 
     pub fn deinit(self: *RenderedPredicate, allocator: Allocator) void {
-        if (self.values) |values| {
-            typed.deinitValueSlice(allocator, values);
-        }
-        if (self.sql) |sql| {
-            allocator.free(sql);
-        }
-        self.* = .{ .sql = null, .values = null };
-    }
-
-    pub fn sqlSlice(self: *const RenderedPredicate) ?[]const u8 {
-        return self.sql;
-    }
-
-    pub fn takeValues(self: *RenderedPredicate) ?[]Value {
-        const values = self.values;
-        self.values = null;
-        return values;
+        typed.deinitValueSlice(allocator, self.values);
+        allocator.free(self.sql);
+        self.* = .{ .sql = &.{}, .values = &.{} };
     }
 };
 

@@ -174,14 +174,11 @@ pub fn execQuery(
         }
     }
 
-    const has_more = if (requested_limit) |limit_u32| blk: {
-        const limit: usize = @intCast(limit_u32);
-        break :blk records_list.items.len > limit;
-    } else false;
+    const limit: ?usize = if (requested_limit) |l| @intCast(l) else null;
+    const has_more = if (limit) |lim| records_list.items.len > lim else false;
 
-    if (requested_limit) |limit_u32| {
-        const limit: usize = @intCast(limit_u32);
-        while (records_list.items.len > limit) {
+    if (limit) |lim| {
+        while (records_list.items.len > lim) {
             if (records_list.pop()) |extra_record| {
                 var record = extra_record;
                 record.deinit(allocator);
@@ -196,10 +193,9 @@ pub fn execQuery(
     }
 
     var next_cursor_str: ?[]const u8 = null;
-    if (has_more) {
-        const limit: usize = @intCast(requested_limit.?);
-        if (limit > 0) {
-            const last_record = owned_records[limit - 1];
+    if (limit) |lim| {
+        if (has_more and lim > 0) {
+            const last_record = owned_records[lim - 1];
             const sort_val = last_record.values[sort_field_index];
             const id_val = last_record.values[schema_system.id_field_index];
             if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;

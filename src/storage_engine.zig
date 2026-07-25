@@ -28,14 +28,13 @@ pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
 const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
-pub const BatchEntry = write_queue.BatchEntry;
+pub const getOpTarget = write_queue.getOpTarget;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
 pub const AckLatch = write_queue.AckLatch;
 const CheckpointStats = write_queue.CheckpointStats;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ReadResponse = read_buffer.ReadResponse;
-pub const ReadKind = read_buffer.ReadKind;
 const DocId = typed_doc_id.DocId;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
@@ -473,8 +472,8 @@ pub const StorageEngine = struct {
         }
 
         self.write_worker.resolve_namespace_stmt =
-            sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_namespace_sql) catch |err|
-                return storage_errors.classifyError(err);
+            (self.write_worker.conn.prepareDynamic(sql.resolve_namespace_sql) catch |err|
+                return storage_errors.classifyError(err)).stmt;
         errdefer {
             if (self.write_worker.resolve_namespace_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);
             self.write_worker.resolve_namespace_stmt = null;
@@ -485,8 +484,8 @@ pub const StorageEngine = struct {
         // would fail to prepare (table doesn't exist) and waste a connection resource.
         if (self.schema.table("users") != null) {
             self.write_worker.resolve_user_stmt =
-                sql.prepareStaticStmt(&self.write_worker.conn, sql.resolve_user_sql) catch |err|
-                    return storage_errors.classifyError(err);
+                (self.write_worker.conn.prepareDynamic(sql.resolve_user_sql) catch |err|
+                    return storage_errors.classifyError(err)).stmt;
         }
         errdefer {
             if (self.write_worker.resolve_user_stmt) |s| _ = sqlite.c.sqlite3_finalize(s);

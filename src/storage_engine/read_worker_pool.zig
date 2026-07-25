@@ -199,12 +199,23 @@ pub const ReadWorker = struct {
             schema_system.global_namespace_id;
 
         if (isPointLookup(&req.filter, schema_system.id_field_index)) |id| {
-            const result = self.executeSelectDocument(
+            const record = self.executeSelectDocument(
                 table_metadata,
                 id,
                 effective_namespace_id,
-            );
-            const response = self.buildResponse(req, table_metadata, result);
+            ) catch |err| {
+                req.deinit(req.allocator);
+                return .{
+                    .conn_id = req.conn_id,
+                    .msg_id = req.msg_id,
+                    .table = table_metadata,
+                    .records = &[_]Record{},
+                    .next_cursor_str = null,
+                    .sub_id = req.sub_id,
+                    .err = err,
+                };
+            };
+            const response = self.buildResponse(req, table_metadata, record);
             req.deinit(req.allocator);
             return response;
         }
@@ -214,29 +225,31 @@ pub const ReadWorker = struct {
             effective_namespace_id,
             &req.filter,
         );
-        const response = self.buildQueryResponse(req, table_metadata, result);
+        const response = ReadResponse{
+            .conn_id = req.conn_id,
+            .msg_id = req.msg_id,
+            .table = table_metadata,
+            .records = result.records,
+            .next_cursor_str = result.next_cursor_str,
+            .sub_id = req.sub_id,
+        };
         req.deinit(req.allocator);
         return response;
     }
-
-    const SelectDocumentResult = struct { record: ?Record };
 
     fn executeSelectDocument(
         self: *ReadWorker,
         table_metadata: *const schema_types.Table,
         id: DocId,
         namespace_id: i64,
-    ) SelectDocumentResult {
+    ) !?Record {
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, null)) {
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key)) {
             .miss => {},
-            .guard_failed => return .{ .record = null },
             .hit => |hit| {
                 defer hit.handle.release();
-                const cloned = hit.record.clone(self.read_arena.allocator()) catch
-                    return .{ .record = null };
-                return .{ .record = cloned };
+                return try hit.record.clone(self.read_arena.allocator());
             },
         }
 
@@ -253,7 +266,7 @@ pub const ReadWorker = struct {
             var mstmt = sql.acquireStaticStmt(stmt) catch @panic("select_document_stmt not prepared");
             defer mstmt.release();
 
-            break :blk read_mod.execSelectDocument(
+            break :blk try read_mod.execSelectDocument(
                 self.read_arena.allocator(),
                 &self.node.conn,
                 mstmt.stmt,
@@ -262,14 +275,14 @@ pub const ReadWorker = struct {
                 table_metadata,
                 null,
                 &self.json_buf,
-            ) catch null;
+            );
         };
 
         // Cache update outside the node mutex — lock-free cache, version-gated
         if (result) |record| {
             if (self.writer_version.load(.acquire) == seq_before) {
                 const cache_record = record.clone(self.allocator) catch {
-                    return .{ .record = record };
+                    return record;
                 };
                 self.metadata_cache.update(cache_key, cache_record) catch |err| {
                     cache_record.deinit(self.allocator);
@@ -280,9 +293,9 @@ pub const ReadWorker = struct {
                     _ = self.metadata_cache.evict(cache_key);
                 }
             }
-            return .{ .record = record };
+            return record;
         }
-        return .{ .record = null };
+        return null;
     }
 
     const SelectQueryResult = struct {
@@ -341,9 +354,9 @@ pub const ReadWorker = struct {
         self: *ReadWorker,
         request: ReadRequest,
         table_metadata: *const schema_types.Table,
-        result: SelectDocumentResult,
+        record_opt: ?Record,
     ) ReadResponse {
-        if (result.record) |record| {
+        if (record_opt) |record| {
             const records = self.read_arena.allocator().alloc(Record, 1) catch {
                 return .{
                     .conn_id = request.conn_id,
@@ -370,24 +383,6 @@ pub const ReadWorker = struct {
             .table = table_metadata,
             .records = &[_]Record{},
             .next_cursor_str = null,
-            .sub_id = request.sub_id,
-        };
-    }
-
-    fn buildQueryResponse(
-        self: *ReadWorker,
-        request: ReadRequest,
-        table_metadata: *const schema_types.Table,
-        result: SelectQueryResult,
-    ) ReadResponse {
-        _ = self;
-
-        return .{
-            .conn_id = request.conn_id,
-            .msg_id = request.msg_id,
-            .table = table_metadata,
-            .records = result.records,
-            .next_cursor_str = result.next_cursor_str,
             .sub_id = request.sub_id,
         };
     }
