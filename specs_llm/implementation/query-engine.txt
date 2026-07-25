@@ -1,12 +1,14 @@
 Query Engine [ADR-013] [ADR-014]-subscription [Query Grammar Pagination [Storage converts SDK query requests typed validates schema lowers storage-backed reads to SQLite SQL reuses predicate semantics in-memory subscription filtering Source Files| File | Responsibility |
 |------|----------------|
-| `src/query_ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
-| `src/query_parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
+| `src/query/ast.zig` | Canonical query AST: operators, conditions, sort descriptors, predicates, filters. |
+| `src/query/parser.zig` | MessagePack query decoding, schema field resolution, cursor encode/decode helpers. |
+| `src/query/hasher.zig`, `src/query/hash_context.zig` | Structural query hashing/equality for subscription grouping and SQL-template reuse. |
 | `src/storage_engine/filter_sql.zig` | AST-to-SQL predicate lowering and bound value ownership. |
-| `src/storage_engine/sql.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
+| `src/sql/build.zig` | SELECT, namespace, cursor, and ordering SQL helpers. |
 | `src/storage_engine/reader.zig` | Query execution and row decoding. |
-| `src/filter_eval.zig` | In-memory predicate evaluation for subscription matching. |
-| `src/subscription_engine.zig` | Subscription grouping, query retention, and record-change matching. |
+| `src/query/eval.zig` | In-memory predicate evaluation for subscription matching. |
+| `src/subscription/engine.zig` | Subscription grouping, query retention, and record-change matching. |
+| `src/subscription/predicate_trie.zig` | Trie-based equality-condition index used by subscription matching. |
 | `src/store_service.zig` | Store-facing query, subscribe, and load-more operations. |
 
 ## Important Types
@@ -20,11 +22,12 @@ Query Engine [ADR-013] [ADR-014]-subscription [Query Grammar Pagination [Storage
 | `ParserError` | wire/schema validation | Internal parser failure set mapped through public error taxonomy. |
 | `RenderedPredicate` | SQL fragment, bound values | Result of lowering AST predicates for SQLite. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Keeps active queries and evaluates committed changes. |
+| `PredicateTrie` | normalized `Condition` keys | Indexes AND equality conditions so committed changes can prune candidate subscriptions before residual evaluation. |
 | `CursorResult` | records, next cursor | Store-service result for paginated reads. |
-Responsibilities Decode query tuples operators operands Validate table names operator compatibility sort fields cursor shape Preserve semantic model storage reads subscription filtering Generate stable ordering cursor predicates paginated reads Apply authorization predicates before storage execution Retain subscription queries changes Query Flow extracts wire request store Authorization builds optional read predicate_parser parses filter_service.zig passes filter auth predicate to storage Storage lowers predicates executes SELECT Results encoded.encodeQuery Subscriptions retain parsed query use_eval.zig for changes Invariants Query grammar owned duplicate catalogs SQL lowering in-memory filtering agree operator Cursor tokens tied sort order reject mismatched values Namespace filters authorization predicates before returning records Subscription matching uses committed changes speculative writes Parser/internal errors map Taxonomy Performance Contract| Property | Value | Notes |
+Responsibilities Decode query tuples operators operands Validate table names operator compatibility sort fields cursor shape Preserve semantic model storage reads subscription filtering Generate stable ordering cursor predicates paginated reads Apply authorization predicates before storage execution Retain subscription queries changes Query Flow extracts wire request store Authorization builds optional read predicate `parser.zig parses filter_service.zig passes filter auth predicate to storage Storage lowers predicates executes SELECT Results encoded.encodeQuery Subscriptions retain parsed query use `eval.zig for changes Invariants Query grammar owned duplicate SQL lowering in-memory filtering agree operator Cursor tokens sort order reject mismatched values Namespace filters authorization predicates before returning records Subscription matching uses committed changes speculative writes Parser/internal errors map Taxonomy Performance Contract| Property | Value | Notes |
 |----------|-------|-------|
 | Batch write ops limit | 500 | Maximum operations in a single `StoreBatch` call. |
 | Cursor overfetch | +1 row | `LIMIT` is overfetched by 1 for accurate `hasMore` detection. |
-| Subscription condition matching | 64 max as sets | Maximum conditions matched as sets during filter equality comparison. |
+| Subscription condition matching | Predicate trie + residual evaluation | AND equality branches are indexed; OR/range/residual conditions are evaluated through the query evaluator. |
 | Default query limit | None (unbounded) | Client must supply `limit` for bounded queries. |
 Batch operations exceeding 500 ops return `BATCH_TOO_LARGE Queries without unbounded supply limit predictable performance See [Query Grammar [Cursor Pagination [Storage [TypeScript SDK

@@ -1,22 +1,25 @@
 Authentication Exchange [ADR-015-session-management), [ADR-016-authentication-authorization-trust-boundary), [Memory Strategy [Security ZyncBase **resource not identity provider validates credentials projects trusted claims into$session issues connection tickets executes authorization in Zig. Source Files| File | Responsibility |
 |------|----------------|
-| `src/connection/ticket_exchange.zig` | Generates, parses, and validates single-use auth tickets. |
-| `src/jwt_validator.zig` | JWT validation, signature verification, and JWKS metadata retrieval. |
-| `src/server.zig` | Gathers credentials via HTTP `/auth/ticket` and upgrade query string. |
-| `src/authorization.zig` | Evaluates `$session` variables against current permission states. |
+| `src/authentication/ticket_exchange.zig` | Handles HTTP auth requests, generates tickets, validates ticket redemption, and projects sessions. |
+| `src/authentication/jwt_validator.zig` | JWT validation, signature verification, JWKS loading/refresh, and claim projection. |
+| `src/authentication/session.zig` | Runtime base session type shared by ticket exchange, connections, and authorization. |
+| `src/authentication/base64_utils.zig` | Base64url helpers used by JWT and ticket parsing. |
+| `src/server.zig` | Registers HTTP `/auth/ticket`, WebSocket upgrade ticket verification, token sweep, and JWKS refresh timers. |
+| `src/authorization/session_resolver.zig` | Completes background namespace/user resolution on the event loop. |
+| `src/authorization/evaluate.zig` | Evaluates projected `$session` variables against auth rules. |
 
 ## Important Types
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `TicketExchange` | cryptographic keys, allocator | Manages single-use tickets, tracking issued and spent states. |
+| `TicketExchange` | ticket secret, JWT validator, allocator | Manages short-lived tickets, optional single-use redemption tracking, JWT validation, and anonymous subject admission. |
 | `Session` | allocator | Holds projected JWT claims, authentication scopes, and user identities. |
-| `JWTClaims` | JSON parser | Decoded structure containing external subject, tenant, role, and custom scopes. |
+| `ValidatedToken` | JSON parser, validator config | Decoded and verified JWT output containing external subject, expiry, and projected claims. |
 $session unified source truth for ZyncBase authorization Rules inspect raw JWTs Configured claim projection external JWT SDK-generated high-entropy subject `isAnonymous = true$session.userId internal `users.id resolved SQLite never raw JWT anonymous Fixed resolved scope until auth refresh namespace switching re-resolution Connection Lifecycle Steps| Step | Protocol & Endpoint | Request Payload / Header | Response Payload / Output | Action / Validation |
 |:---|:---|:---|:---|:---|
 | **1. Ticket Request (JWT)** | `POST /auth/ticket` | `Authorization: Bearer <external_jwt>` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Validates JWT (signature, issuer, aud, exp, algorithms). Projects claims. |
 | **1. Ticket Request (Anon)** | `POST /auth/ticket` | `{"anonymousSubject": "anon:6c6f8b0d..."}` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Checks if anonymous auth is enabled. Validates subject entropy. |
-| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state. Hydrates base session. |
+| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state when enabled. Hydrates base session. |
 | **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | Scoped `ok` with store/presence session mappings | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). |
 Token Refresh rotate sessions WebSocket client updates security credentials| Direction | Message Type | Fields | Action / Validation |
 |:---|:---|:---|:---|
@@ -34,4 +37,4 @@ Handshake Error Mapping connection handshake authentication validation errors ma
 | WebSocket Upgrade | Origin not in `allowedOrigins` | HTTP 403 `FORBIDDEN` |
 | `AuthRefresh` | New JWT invalid or expired | `ServerDisconnect` `AUTH_FAILED`, connection closed |
 | `AuthRefresh` | Subject mismatch (different user) | `ServerDisconnect` `AUTH_FAILED`, connection closed |
-Rules JWTs in WebSocket query parameters single-use ticket mandatory Ticket expiry short-lived ≤ 60 Re-use ticket immediate auth failure failed token refresh WebSocket connection No user profile fields resolved during authorization evaluation ZyncBase resolves internal `users.id` mapping [Error Taxonomy [Security [Message Handler
+Rules JWTs in WebSocket query parameters short-lived ticket mandatory Ticket expiry short-lived 60 Ticket redemption single-use when `authentication.ticket.singleUse enabled default production setting failed token refresh WebSocket connection No user profile fields resolved during authorization evaluation ZyncBase resolves internal `users.id` mapping [Error Taxonomy [Security [Message Handler

@@ -1,6 +1,6 @@
 Presence Internals [ADR-017-sdk-api-surface-020-two-tier-presence [Wire Protocol [Auth System-system Presence in-memory typed two-tier system User presence keyed/user shared presence keyed field Presence writes fire-and-forget unless wire request malformed unauthorized Source Files| File | Responsibility |
 |------|----------------|
-| `src/presence.zig` | Public presence module re-exports. |
+| `src/presence/service.zig` | Event-loop facade that validates/enqueues presence operations and cleanup requests. |
 | `src/presence/manager.zig` | Presence state, user/shared snapshots, writes, removals, and subscriber tables. |
 | `src/presence/record.zig` | Typed presence record encoding/decoding and field validation. |
 | `src/presence/subscriber.zig` | Presence subscriber ids and subscriber tables. |
@@ -16,6 +16,7 @@ Presence Internals [ADR-017-sdk-api-surface-020-two-tier-presence [Wire Protocol
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `PresenceManager` | schema, typed values, subscribers | Owns in-memory user/shared presence state and snapshot construction. |
+| `PresenceService` | `PresenceWorker`, authorization, connection ids | Accepts event-loop requests and enqueues typed `PresenceOp` work for the dedicated worker. |
 | `PresenceWorker` | `managedThread(PresenceWorker)`, `spscQueue(PresenceOp, AllocPool)`, `PresenceManager`, `SendQueue`, `Notifier` | Dedicated OS thread; drains `PresenceOp` queue, mutates `PresenceManager`, encodes snapshots/broadcasts, pushes owned bytes to `SendQueue`. |
 | `PresenceOp` | `Allocator` | Typed union of presence operations: `set_user`, `set_shared`, `remove_user`, `subscribe_user`, `subscribe_shared`, `unsubscribe_user`, `unsubscribe_shared`, `remove_all_for_connection`. Each op carries an allocator for correct teardown. |
 | `PresenceRecord` | `Schema.PresenceField`, `typed.Value` | Validates and stores typed presence field values. |
@@ -30,13 +31,13 @@ Presence Internals [ADR-017-sdk-api-surface-020-two-tier-presence [Wire Protocol
 |------|-----|--------|--------|
 | User presence | namespace id + user doc id + connection id | The owning connection writes/removes its own fields. | Subscribers receive user snapshots and join/update/leave broadcasts. |
 | Shared presence | namespace id + shared field | Authorized connections write shared fields. | Shared subscribers receive full shared snapshots and update broadcasts. |
-Lifecycle Client resolves presence namespace Server authorizes access records session write user fields shared fields subscribes to presence channels Server sends snapshots broadcasts updates Disconnect `PresenceRemove clears presence emits leave/update broadcasts Wire Contract Presence messages push names owned by Protocol Presence field ids dictionary shape from schema sync use typed field validation schema User shared channels separate push streams Authorization Namespace admission namespace rules User presence writes scoped resolved session user Shared writes require authorization Authorization server-side only fail-closed Public errors owned [Error Taxonomy Invariants Presence state memory-only not persisted SQLite writes mutate store records subscription state User cleanup disconnect idempotent Subscriptions removed during disconnect teardown Snapshots broadcasts use schema field ids store APIs user-facing SDK shape separate Performance Contract| Property | Value | Notes |
+Lifecycle Client resolves presence namespace Server authorizes access records session write user fields shared fields subscribes to presence channels Server sends snapshots broadcasts updates Disconnect `PresenceRemove clears presence emits leave/update broadcasts Wire Contract Presence messages push names owned by Protocol Presence field ids dictionary shape from schema sync writes use schema ids runtime validation User shared channels separate push streams Authorization Namespace admission uses namespace rules User presence writes scoped resolved session user Shared writes require authorization Authorization server-side only fail-closed Public errors owned [Error Taxonomy Invariants Presence state memory-only not persisted SQLite writes mutate store records subscription state User cleanup disconnect idempotent Subscriptions during disconnect teardown Snapshots broadcasts use schema field ids store APIs user-facing SDK shape separate Performance Contract| Property | Value | Notes |
 |----------|-------|-------|
-| Flush interval | 50 ms | How often the dispatcher drains pending presence updates. |
+| Flush cadence | Work-batch drain | The worker drains available queued ops when signaled, flushes generated snapshots/broadcasts after the drained batch, and performs a final drain on shutdown. |
 | Grace period | 5,000 ms | Time before an empty namespace's shared state is evicted after the last user leaves. |
 | Field limit | 500 per tier | Hard limit on flat presence fields per user/shared tier. |
 | Latency target | Sub-100 ms | Presence operations should complete within 100 ms end-to-end. |
-**Overflow Presence writes fire-and-forget dispatcher keep updates dropped safe presence ephemeral next update supersede Threading Model| Subsystem | Thread | Synchronization | Ownership Boundary |
+Presence writes fire-forget after authorization enqueue/allocation fails service boundary logged operation dropped blocking event loop Threading Model| Subsystem | Thread | Synchronization | Ownership Boundary |
 |-----------|--------|-----------------|-------------------|
 | `PresenceManager` | `PresenceWorker` thread | `data_mutex: std.Thread.Mutex` | All mutable presence state is behind a single mutex; `PresenceWorker` is the sole mutator. |
 | `PresenceWorker` input queue | `PresenceWorker` thread (consumer) + event loop (producer via `enqueue()`) | `managedThread` mutex + condvar; SPSC queue (`spscQueue(PresenceOp, AllocPool)`) | One producer (event loop), one consumer (`PresenceWorker`). `enqueue()` holds `thread.mutex` while pushing and signals `thread.cond`. |

@@ -34,7 +34,7 @@ Condition Structure` maps three JSON formats:| Format Type | JSON Layout | Evalu
 | **Boolean Literal** | `true` or `false` | Absolute grant or denial. |
 | **Logical Group** | `{ "and": [...] }` or `{ "or": [...] }` | Evaluates nested array conditions recursively. |
 | **Comparison Object** | `{ "LHS": { "Operator": "RHS" } }` | Relational check (e.g. `{ "$doc.owner_id": { "eq": "$session.userId" } }`). |
-**LHS** context variable$session **Operator** `eq `ne `gt `lt `in `contains **RHS** raw literal value context variable Variable Scope Evaluation Matrix ZyncBase evaluates variables two execution paths Instant stateless check memory incoming variables **Predicate Row-level$doc comparisons converted `FilterPredicate shape storage engine renders predicate SQL query clauses| Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$data` (presence) | `$doc` (existing row) |
+**LHS** context variable$session$value **Operator** `eq `lt `contains `startsWith `endsWith `in `notIn `isNull **RHS** raw literal value context variable omitted `isNull `isNotNull Variable Scope Evaluation Matrix ZyncBase evaluates variables execution paths Evaluation** Instant stateless check memory incoming variables **Predicate Lowering** Row-level$doc comparisons converted `FilterPredicate shape storage engine renders predicate SQL query clauses| Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$data` (presence) | `$doc` (existing row) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |

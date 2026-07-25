@@ -1,6 +1,8 @@
 Cursor Pagination [ADR-013]-language), [ADR-014]-subscription [Query Engine]-engine [Storage].md ZyncBase exposes cursor-driven pagination topology offset-based equivalents Cursor pagination scales provides deterministic sequence navigation positions Source Files| File | Responsibility |
 |------|----------------|
-| `src/query_parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
+| `src/query/parser.zig` | Decodes Base64 cursor strings and validates sorted page requirements. |
+| `src/typed/types.zig`, `src/typed/doc_id.zig` | Cursor sort-value representation and 16-byte document id packing. |
+| `src/sql/build.zig` | Builds cursor predicates and deterministic order clauses. |
 | `src/storage_engine/reader.zig` | Builds compound SQL selection predicates and executes tie-breaking pagination queries. |
 | `src/store_service.zig` | Marshals cursor bounds between client requests and storage queries. |
 
@@ -8,14 +10,15 @@ Cursor Pagination [ADR-013]-language), [ADR-014]-subscription [Query Engine]-eng
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
-| `PageRequest` | `Cursor`, limit, direction | Struct container for page size, direction, and cursor boundary. |
+| `typed.Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
+| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active `orderBy`. |
 Opaque Cursor Layout `nextCursor token opaque Base64 MessagePack-encoded tuple```typescript
 const cursorTuple = [sort_value, docIdBin16];
 const nextCursor = base64(msgpackEncode(cursorTuple));
-````sort_value sorting column last element primitive `docIdBin16 16-byte binary UUIDv7 last element SQL Compilation Parameter Binding querying cursor ZyncBase compiles compound sorting criteria `OR` logic colliding values database index usage Ascending Sort Query```sql
-SELECT value_msgpack FROM "collection"
-WHERE _namespace = ?
+```_value sorting column last element Cursor values null `docIdBin16 16-byte binary UUIDv7 last element SQL Compilation Parameter Binding querying cursor ZyncBase compiles compound sorting criteria `OR` logic colliding values database index usage Ascending Sort Query```sql
+SELECT ...
+FROM "collection"
+WHERE "namespace_id" = ?
   AND (
     sort_column > ? 
     OR (sort_column = ? AND id > ?)
@@ -23,8 +26,9 @@ WHERE _namespace = ?
 ORDER BY sort_column ASC, id ASC
 LIMIT ?
 ```Descending Query```sql
-SELECT value_msgpack FROM "collection"
-WHERE _namespace = ?
+SELECT ...
+FROM "collection"
+WHERE "namespace_id" = ?
   AND (
     sort_column < ? 
     OR (sort_column = ? AND id < ?)
@@ -35,4 +39,4 @@ LIMIT ?
 |:---|:---|:---|
 | **Ascending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
 | **Descending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
-Live Windowing`loadMore` Active query subscriptions materialise real-time updates top collection view paginate backward fetch older elements SDK synthesises query cursor last client-side array `StoreLoadMore` request uses cursor fetch next batch database without disrupting subscription push listener [Query Engine [Storage [TypeScript SDK
+active sort field system `id field cursor predicate simplified `id > or <[namespace_id last_doc_uuid page_limit Live Windowing`loadMore Active query subscriptions materialise real-time updates top collection view paginate backward fetch older elements SDK synthesises query cursor last client-side array `StoreLoadMore request uses cursor fetch next batch without disrupting subscription push listener SDK `table_index` `StoreLoadMore server resolves retained query by `subId` [Query Engine [Storage [TypeScript SDK

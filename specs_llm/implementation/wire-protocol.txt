@@ -1,10 +1,12 @@
-Wire Protocol [ADR-008-encoding),-009-routing [ADR-014-subscription [ADR-018-acknowledgement-consistency-semantics), [ADR-020]-two-tier-presence-system document implementation contract ZyncBase's WebSocket messages names message types stable fields source files routing rules query operators schema dictionaries error codes owner specs Design Principles **1:1 SDK mapping** method maps one message type No overloaded messages **Correlate by client request unique `id server response echoes unsolicited** Server-initiated messages own types carry request `id` **Extend never New fields added message type Unknown fields ignored [Extensibility Source Files| File | Responsibility |
+Wire Protocol [ADR-008-encoding),-009-routing [ADR-014-subscription [ADR-018-acknowledgement-consistency-semantics),-020]-two-tier-presence-system document implementation contract ZyncBase's WebSocket messages names message types stable fields source files routing rules query operators schema dictionaries error codes owner specs Design Principles **1:1 SDK mapping** SDK method maps one message type No overloaded messages **Correlate by client request unique `id server response echoes unsolicited** Server-initiated messages own types carry request `id` **Spec SDK move Wire changes allowed green-field stage server SDK tests spec updated together Source Files| File | Responsibility |
 |------|----------------|
-| `src/wire.zig` | Public wire module facade and re-exports. |
+| `src/wire/*.zig` | Public wire module facade and wire submodules. |
 | `src/wire/decode.zig` | MessagePack envelope and request extractors. |
 | `src/wire/encode.zig` | Response, schema sync, subscription delta, write outcome, and presence encoders. |
 | `src/wire/errors.zig` | Internal Zig error to public wire-code mapping. |
 | `src/wire/comptime.zig` | Compile-time MessagePack key/value encoding helpers. |
+| `src/wire/msgpack_skip.zig`, `src/msgpack_utils.zig` | MessagePack skip helpers, parser limits, and low-level decoding utilities. |
+| `src/typed/doc_id.zig` | 16-byte document id packing and parsing used by binary wire fields. |
 | `src/message_handler.zig` | Message classification, scoped-session gates, and route dispatch. |
 | `sdk/typescript/src/connection_wire.ts` | SDK-side wire encoding/decoding boundary. |
 
@@ -30,7 +32,20 @@ Transport Encoding| Property | Contract |
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
-Client Messages include `type `id fields additional message-specific| Message | Fields | Scope/session rule | Responsibility |
+| Value encoding | Integer-keyed field maps are encoded as pair-arrays: `[[field_index, value], ...]`. See [Value Encoding](#value-encoding). |
+Value Encoding values integer-keyed field maps data query result encoded as wire MessagePack array 2-element arrays_index value `field_index uint dense positional index table `SchemaSync `value` typed MessagePack value unchanged encoding doc-id packing type container changes not values locations| Location | Direction | Format |
+|----------|-----------|--------|
+| `StoreSet.value` | C→S | pair-array |
+| `StoreBatch` set-op `op[2]` | C→S | pair-array |
+| `StoreDelta` set-op `value` | S→C | pair-array |
+| Query result row (`ok.value[]`) | S→C | pair-array |
+| `PresenceSet.data` | C→S | pair-array |
+| `PresenceSetShared.data` | C→S | pair-array |
+| `PresenceBroadcast` user `data` | S→C | pair-array |
+| `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
+| `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
+| `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
+Duplicate field index pair-array processed last-wins Ordering pairs unordered assume sorted-by-index Empty `[]` valid no fields Client Messages include `type `id fields message-specific| Message | Fields | Scope/session rule | Responsibility |
 |---------|--------|--------------------|----------------|
 | `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
 | `StoreSet` | `path`, `value`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path. |
@@ -38,7 +53,7 @@ Client Messages include `type `id fields additional message-specific| Message | 
 | `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove operations. |
 | `StoreQuery` | `table_index`, optional query fields | Ready store scope. | Execute a one-shot store query. |
 | `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
-| `StoreLoadMore` | `subId`, `nextCursor` | Ready store scope and known subscription. | Page historical results for an active subscription. |
+| `StoreLoadMore` | `subId`, `nextCursor`, optional `table_index` | Ready store scope and known subscription. | Page historical results for an active subscription. The server resolves the retained query by `subId`; SDKs may include `table_index` as response-context metadata. |
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |

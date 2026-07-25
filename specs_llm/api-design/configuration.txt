@@ -384,7 +384,7 @@ await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
 const users = await zyncbase.query('users', {
   where: { 'address.location.lat': { gte: 37 } }
 })
-```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings Efficient querying indexes on flattened columns Unlimited nesting depth for `store fields column limit ~2000 Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 Field names contain `__` flattening separator `presence` fields support **arbitrary nesting depth** to 500 flat fields per tier ZyncBase supports with constraints Simple arrays```json
+```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings Efficient querying SQLite indexes on flattened columns Unlimited nesting depth for fields to 1024 fields per table Clean client-side experience manual flattening Nested objects contain arrays leaf level recursion depth limited by maximum fields per table (1024) Field names contain `__` flattening separator `presence` fields support **arbitrary nesting depth** to 500 flat fields per tier ZyncBase supports constraints Simple arrays```json
 {
   "store": {
     "tasks": {
