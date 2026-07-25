@@ -3,8 +3,6 @@ const sqlite = @import("sqlite");
 
 /// Specific error types for different database failure scenarios.
 pub const StorageError = error{
-    /// Database connection was lost
-    ConnectionLost,
     /// Failed to reconnect after multiple attempts
     ReconnectionFailed,
     /// Database constraint was violated (e.g. unique constraint)
@@ -17,10 +15,6 @@ pub const StorageError = error{
     DatabaseLocked,
     /// Invalid database operation
     InvalidOperation,
-    /// Transaction is already active
-    TransactionAlreadyActive,
-    /// No active transaction
-    NoActiveTransaction,
     /// Table not found in schema
     UnknownTable,
     /// Field not found in table schema

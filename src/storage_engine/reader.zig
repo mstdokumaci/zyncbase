@@ -193,9 +193,8 @@ pub fn execQuery(
     }
 
     var next_cursor_str: ?[]const u8 = null;
-    if (has_more) {
-        const lim = limit.?;
-        if (lim > 0) {
+    if (limit) |lim| {
+        if (has_more and lim > 0) {
             const last_record = owned_records[lim - 1];
             const sort_val = last_record.values[sort_field_index];
             const id_val = last_record.values[schema_system.id_field_index];

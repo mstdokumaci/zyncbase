@@ -1021,9 +1021,7 @@ pub const WriteWorker = struct {
         bind_idx += 1;
 
         if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+            try self.bindValueSlice(stmt, &bind_idx, rg.values);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1059,9 +1057,7 @@ pub const WriteWorker = struct {
         bind_idx += 2;
 
         if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+            try self.bindValueSlice(stmt, &bind_idx, rg.values);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
@@ -1099,9 +1095,7 @@ pub const WriteWorker = struct {
 
         var bind_idx: c_int = 3;
         if (rendered_guard) |rg| {
-            if (rg.values) |guard_vals| {
-                try self.bindValueSlice(stmt, &bind_idx, guard_vals);
-            }
+            try self.bindValueSlice(stmt, &bind_idx, rg.values);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
