@@ -229,9 +229,8 @@ pub const ReadWorker = struct {
     ) SelectDocumentResult {
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key, null)) {
+        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key)) {
             .miss => {},
-            .guard_failed => return .{ .record = null },
             .hit => |hit| {
                 defer hit.handle.release();
                 const cloned = hit.record.clone(self.read_arena.allocator()) catch
