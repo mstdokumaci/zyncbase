@@ -450,6 +450,11 @@ pub const EngineTestContext = struct {
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
         self.engine.deinit();
         self.schema.deinit();
+        // Drain send_queue before memory_strategy so arena handles are released
+        // back to the pool before the active_count assertion fires.
+        if (self.test_context.send_queue) |*sq| {
+            while (sq.pop()) |entry| entry.deinit();
+        }
         std.debug.assert(self.memory_strategy.deinit() == .ok);
         if (cleanup) {
             self.test_context.deinit();

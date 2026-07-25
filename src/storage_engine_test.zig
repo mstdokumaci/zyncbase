@@ -969,3 +969,75 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
     const val = record.?.values[val_field_idx];
     try testing.expectEqualStrings("original", val.scalar.text);
 }
+
+test "StorageEngine: write-through cache populates cache post-commit and handles guard rejection without invalidation" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("val", .text),
+        schema_helpers.makeField("author_id", .doc_id),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "write-through-cache-test", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const namespace_id: i64 = 100;
+    const doc_id: typed_doc_id.DocId = 1;
+
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+
+    const author_a: typed_doc_id.DocId = 50;
+    const author_b: typed_doc_id.DocId = 51;
+
+    const cache_key = @import("storage_engine/cache.zig").getCacheKey(table_meta, namespace_id, doc_id);
+
+    // 1. Initial upsert: Should write-through to metadata_cache
+    const columns = [_]sth.ColumnValue{
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+    };
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    // Verify cache hit immediately after write without reading DB
+    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+        .miss => return error.TestUnexpectedResult,
+        .hit => |hit| {
+            defer hit.handle.release();
+            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
+        },
+    }
+
+    // 2. Rejecting guard: Cache should RETAIN existing entry (no eviction)
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "rejected_val" } } }};
+    const conn_id: u64 = 555;
+    const write_id: [16]u8 = .{7} ** 16;
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    // Verify cache still holds "initial_val" and was NOT evicted
+    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+        .miss => return error.TestUnexpectedResult,
+        .hit => |hit| {
+            defer hit.handle.release();
+            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
+        },
+    }
+
+    // 3. Delete: Should evict entry post-commit
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    // Verify cache is now a miss
+    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+        .miss => {},
+        .hit => return error.TestUnexpectedResult,
+    }
+}
