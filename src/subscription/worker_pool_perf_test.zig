@@ -138,6 +138,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
     // would silently measure a 0-match fast-path and pass all timing thresholds trivially.
     for (0..warmup) |_| {
         const handle = try ctx.memory_strategy.acquireArenaDeferred();
+        errdefer handle.release();
         const alloc = handle.allocator();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
         try testing.expectEqual(@as(usize, 5000), matches.len);
@@ -157,6 +158,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
 
     for (0..iterations) |_| {
         const handle = try ctx.memory_strategy.acquireArenaDeferred();
+        errdefer handle.release();
         const alloc = handle.allocator();
 
         // Single timer with lap() so inter-stage bookkeeping is included in the
