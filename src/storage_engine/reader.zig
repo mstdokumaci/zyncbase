@@ -166,23 +166,20 @@ pub fn execQuery(
         records_list.deinit(allocator);
     }
 
+    const limit: ?usize = if (requested_limit) |l| @intCast(l) else null;
+    var has_more: bool = false;
+
     while (true) {
+        if (limit) |lim| {
+            if (records_list.items.len == lim) {
+                has_more = try sql.stepHasMore(db, stmt);
+                break;
+            }
+        }
         if (try sql.fetchRecord(allocator, db, stmt, table_metadata)) |rec| {
             try records_list.append(allocator, rec);
         } else {
             break;
-        }
-    }
-
-    const limit: ?usize = if (requested_limit) |l| @intCast(l) else null;
-    const has_more = if (limit) |lim| records_list.items.len > lim else false;
-
-    if (limit) |lim| {
-        while (records_list.items.len > lim) {
-            if (records_list.pop()) |extra_record| {
-                var record = extra_record;
-                record.deinit(allocator);
-            } else unreachable;
         }
     }
 

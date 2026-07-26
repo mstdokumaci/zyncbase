@@ -14,10 +14,9 @@ pub const ReadRequest = struct {
     namespace_id: i64,
     filter: query_ast.QueryFilter,
     sub_id: ?u64 = null,
-    allocator: Allocator,
 
-    pub fn deinit(self: *ReadRequest, _: Allocator) void {
-        self.filter.deinit(self.allocator);
+    pub fn deinit(self: *ReadRequest, alloc: Allocator) void {
+        self.filter.deinit(alloc);
     }
 };
 

@@ -26,7 +26,6 @@ pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
-const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const getOpTarget = write_queue.getOpTarget;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
@@ -61,7 +60,6 @@ pub const StorageEngine = struct {
     state: std.atomic.Value(State),
     next_reader_idx: std.atomic.Value(usize),
     migration_active: std.atomic.Value(bool),
-    reconnection_config: ReconnectionConfig,
     node_pool: MemoryStrategy.IndexPool(write_queue_type.Node),
     schema: *const Schema,
     metadata_cache: metadata_cache_type,
@@ -126,7 +124,6 @@ pub const StorageEngine = struct {
             // SAFETY: Initialized below
             .identity_cache = undefined,
             .migration_active = std.atomic.Value(bool).init(false),
-            .reconnection_config = .{},
             .write_worker = .{
                 .allocator = allocator,
                 .memory_strategy = memory_strategy,
@@ -231,8 +228,7 @@ pub const StorageEngine = struct {
         var initialized: usize = 0;
         errdefer {
             for (reader_nodes[0..initialized]) |*node| {
-                node.stmt_cache.deinit(allocator);
-                node.conn.deinit();
+                node.deinit(allocator);
             }
             allocator.free(reader_nodes);
         }
@@ -258,8 +254,7 @@ pub const StorageEngine = struct {
 
     fn destroyReaderPool(allocator: Allocator, reader_nodes: []ReaderNode) void {
         for (reader_nodes) |*node| {
-            node.stmt_cache.deinit(allocator);
-            node.conn.deinit();
+            node.deinit(allocator);
         }
         allocator.free(reader_nodes);
     }
@@ -299,15 +294,9 @@ pub const StorageEngine = struct {
         }
         gpa.free(self.pk_sets);
 
-        // 7. Clean up readers (finalize static stmts before closing conn)
+        // 7. Clean up readers
         for (self.reader_nodes) |*node| {
-            if (node.select_document_stmts.len > 0) {
-                sql.finalizeStaticStmts(node.select_document_stmts);
-                self.allocator.free(node.select_document_stmts);
-                node.select_document_stmts = &.{};
-            }
-            node.stmt_cache.deinit(self.allocator);
-            node.conn.deinit();
+            node.deinit(self.allocator);
         }
         gpa.free(self.reader_nodes);
 
@@ -335,43 +324,6 @@ pub const StorageEngine = struct {
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
         return connection.getWalSize(self.allocator, self.write_worker.db_path, self.write_worker.in_memory);
-    }
-
-    /// Classify SQLite error into our specific error types
-    /// Log database error with full details
-    /// Attempt to reconnect to database with exponential backoff
-    fn reconnectWithBackoff(self: *StorageEngine) !void {
-        const ctx = connection.ReconnectContext{
-            .allocator = self.allocator,
-            .schema = self.schema,
-            .db_path = self.write_worker.db_path,
-            .in_memory = self.write_worker.in_memory,
-            .writer_conn = &self.write_worker.conn,
-            .writer_select_stmts = &self.write_worker.select_document_stmts,
-            .writer_resolve_ns = &self.write_worker.resolve_namespace_stmt,
-            .writer_resolve_user = &self.write_worker.resolve_user_stmt,
-            .writer_stmt_cache = &self.write_worker.stmt_cache,
-            .reader_pool = self.reader_nodes,
-            .stmt_cache_size = self.write_worker.performance_config.statement_cache_size,
-        };
-        return connection.reconnectWithBackoff(ctx, self.reconnection_config);
-    }
-
-    fn attemptReconnect(self: *StorageEngine) !void {
-        const ctx = connection.ReconnectContext{
-            .allocator = self.allocator,
-            .schema = self.schema,
-            .db_path = self.write_worker.db_path,
-            .in_memory = self.write_worker.in_memory,
-            .writer_conn = &self.write_worker.conn,
-            .writer_select_stmts = &self.write_worker.select_document_stmts,
-            .writer_resolve_ns = &self.write_worker.resolve_namespace_stmt,
-            .writer_resolve_user = &self.write_worker.resolve_user_stmt,
-            .writer_stmt_cache = &self.write_worker.stmt_cache,
-            .reader_pool = self.reader_nodes,
-            .stmt_cache_size = self.write_worker.performance_config.statement_cache_size,
-        };
-        return connection.attemptReconnect(ctx);
     }
 
     pub fn ensureRunning(self: *StorageEngine) !void {
