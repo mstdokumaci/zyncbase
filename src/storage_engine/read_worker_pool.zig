@@ -237,7 +237,7 @@ pub const ReadWorker = struct {
         return response;
     }
 
-    fn executeSelectDocument(
+    pub fn executeSelectDocument(
         self: *ReadWorker,
         table_metadata: *const schema_types.Table,
         id: DocId,
