@@ -154,8 +154,8 @@ test "ReadWorker: cache miss → cache hit" {
     // while tolerating machine/allocator variance.
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
-    const miss_limit: u64 = if (is_tsan) 144_000 else if (is_debug) 36_000 else 12_000;
-    const hit_limit: u64 = if (is_tsan) 120_000 else if (is_debug) 30_000 else 10_000;
+    const miss_limit: u64 = if (is_tsan) 48_000 else if (is_debug) 24_000 else 12_000;
+    const hit_limit: u64 = if (is_tsan) 40_000 else if (is_debug) 20_000 else 10_000;
     try testing.expect(miss_ns < miss_limit);
     try testing.expect(hit_ns < hit_limit);
 
