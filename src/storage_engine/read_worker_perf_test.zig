@@ -10,6 +10,7 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const EngineTestContext = sth.EngineTestContext;
 const ReadWorker = @import("read_worker_pool.zig").ReadWorker;
+const builtin = @import("builtin");
 
 const items_table = schema_helpers.makeTable("items", &.{
     schema_helpers.makeField("val", .integer),
@@ -148,6 +149,15 @@ test "ReadWorker: cache miss → cache hit" {
 
     // Cache hit must be at least as fast as cache miss.
     try testing.expect(hit_ns <= miss_ns);
+
+    // Absolute thresholds: generous 5-10x baseline to catch regressions
+    // while tolerating machine/allocator variance.
+    const is_debug = builtin.mode == .Debug;
+    const is_tsan = builtin.sanitize_thread;
+    const miss_limit: u64 = if (is_tsan) 132_000 else if (is_debug) 33_000 else 11_000;
+    const hit_limit: u64 = if (is_tsan) 108_000 else if (is_debug) 27_000 else 9_000;
+    try testing.expect(miss_ns < miss_limit);
+    try testing.expect(hit_ns < hit_limit);
 
     // Print raw timings (ns) for manual inspection.
     std.debug.print("ReadWorker cache: miss={d:.0} ns, hit={d:.0} ns, speedup={d:.2}x", .{
