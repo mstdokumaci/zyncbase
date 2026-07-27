@@ -127,6 +127,7 @@ test "ReadWorker: cache miss → cache hit" {
     // Insert row into SQLite. The metadata cache is cold for this key, so
     // executeSelectDocument should go to SQLite and populate the cache.
     try insertRow(allocator, &ctx, table_metadata, doc_id, 100);
+    ctx.engine.stopReaderPool();
 
     const worker = firstWorker(&ctx.engine);
 
@@ -201,6 +202,7 @@ test "ReadWorker: version-gated cache update" {
 
     // Insert row and let cache populate via a normal read.
     try insertRow(allocator, &ctx, table_metadata, doc_id, 10);
+    ctx.engine.stopReaderPool();
 
     const worker = firstWorker(&ctx.engine);
 
