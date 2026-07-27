@@ -133,10 +133,15 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
     const warmup: usize = 5;
 
     // Warm up (also confirms matching + dispatch + drain paths run end-to-end).
+    // The expectEqual below guards the structural assumption: 500 groups × 20 subs × 50%
+    // match rate = 5,000 matches. Without this, a broken filter or subscription setup
+    // would silently measure a 0-match fast-path and pass all timing thresholds trivially.
     for (0..warmup) |_| {
         const handle = try ctx.memory_strategy.acquireArenaDeferred();
+        errdefer handle.release();
         const alloc = handle.allocator();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
+        try testing.expectEqual(@as(usize, 5000), matches.len);
         const id_val = new_record.values[schema_system.id_field_index];
         const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
@@ -153,27 +158,31 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
 
     for (0..iterations) |_| {
         const handle = try ctx.memory_strategy.acquireArenaDeferred();
+        errdefer handle.release();
         const alloc = handle.allocator();
 
+        // Single timer with lap() so inter-stage bookkeeping is included in the
+        // total rather than silently lost to repeated Timer.start() syscalls.
         var t = try std.time.Timer.start();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
-        total_a += t.read();
+        total_a += t.lap();
 
         const id_val = new_record.values[schema_system.id_field_index];
-        t = try std.time.Timer.start();
         const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
-        total_b += t.read();
+        total_b += t.lap();
 
-        t = try std.time.Timer.start();
+        // Note: notifier callback is a counter increment, not a futex/semaphore
+        // wake — C understates the real OS-level notification cost in production.
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
-        total_c += t.read();
+        total_c += t.lap();
 
-        t = try std.time.Timer.start();
-        // final pop releases the arena back to the pool.
+        // Same-thread cache-warm drain. Real consumer is on a separate thread with
+        // cache-cold access — D understates production consumer latency.
+        // The final pop releases the arena back to the pool.
         while (ctx.send_queue.pop()) |entry| {
             entry.deinit();
         }
-        total_d += t.read();
+        total_d += t.lap();
     }
 
     const inv_iters: f64 = 1.0 / @as(f64, @floatFromInt(iterations));
@@ -184,21 +193,26 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
     const avg_total = avg_a + avg_b + avg_c + avg_d;
 
     std.debug.print(
-        "\nFanout (10k subs / 5k matches) per stage [ms]: matching(A)={d:.3} suffix(B)={d:.3} dispatch(C)={d:.3} drain(D)={d:.3} total={d:.3}\n",
+        "Fanout (10k subs / 5k matches) per stage [ms]: matching(A)={d:.3} suffix(B)={d:.3} dispatch(C)={d:.3} drain(D)={d:.3} total={d:.3}\n",
         .{ avg_a, avg_b, avg_c, avg_d, avg_total },
     );
 
     // Baseline (10k subs / 5k matches), per-iteration avg [ms]:
-    //   ReleaseFast: A~0.04  C~0.36  D~0.11  total~0.52  (pool-parameterized MPSC queue)
-    //   Debug:       A~0.21  C~16.9  D~14    total~31.1  (pool-parameterized MPSC queue, 500 iters)
-    //   TSan:        A~1.6   C~37.2  D~21.6  total~60.4  (pool-parameterized MPSC queue, 500 iters)
+    //   ReleaseFast: A~0.04  B~0.01  C~0.36  D~0.11  total~0.52  (pool-parameterized MPSC queue)
+    //   Debug:       A~0.21  B~0.05  C~16.9  D~14    total~31.1  (pool-parameterized MPSC queue, 500 iters)
+    //   TSan:        A~1.6   B~0.10  C~37.2  D~21.6  total~60.4  (pool-parameterized MPSC queue, 500 iters)
     // Thresholds carry ~2x headroom over the Debug/TSan baseline to absorb machine/allocator
     // variance while still catching regressions, especially in the pool-backed dispatch stage C.
+    // Note: C/D production costs are higher than measured here (see loop comments above).
     const target_a: f64 = if (is_tsan) 3.5 else if (is_debug) 0.5 else 0.15;
+    const target_b: f64 = if (is_tsan) 2.0 else if (is_debug) 0.5 else 0.05;
     const target_c: f64 = if (is_tsan) 60.0 else if (is_debug) 35.0 else 0.9;
+    const target_d: f64 = if (is_tsan) 50.0 else if (is_debug) 30.0 else 0.3;
     const target_total: f64 = if (is_tsan) 120.0 else if (is_debug) 65.0 else 1.0;
 
     try testing.expect(avg_a < target_a);
+    try testing.expect(avg_b < target_b);
     try testing.expect(avg_c < target_c);
+    try testing.expect(avg_d < target_d);
     try testing.expect(avg_total < target_total);
 }
