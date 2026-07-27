@@ -455,11 +455,7 @@ pub const EngineTestContext = struct {
         if (self.test_context.send_queue) |*sq| {
             while (sq.pop()) |entry| entry.deinit();
         }
-        const ms_check = self.memory_strategy.deinit();
-        if (ms_check != .ok) {
-            std.debug.print("MemoryStrategy leak detected! check={}\n", .{ms_check});
-        }
-        std.debug.assert(ms_check == .ok);
+        std.debug.assert(self.memory_strategy.deinit() == .ok);
         if (cleanup) {
             self.test_context.deinit();
         } else {
