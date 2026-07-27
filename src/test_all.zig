@@ -38,6 +38,7 @@ test {
     _ = @import("threading/notifier_test.zig");
     _ = @import("threading/wait_group_test.zig");
     _ = @import("threading/latch_test.zig");
+    _ = @import("connection/send_path_perf_test.zig");
     _ = @import("connection/manager_test.zig");
     _ = @import("connection/state_test.zig");
     _ = @import("connection/violations_test.zig");
