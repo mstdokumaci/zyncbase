@@ -167,5 +167,9 @@ test "WriteWorker: flushBatch throughput" {
     try testing.expect(r100.avg_drain < target_drain_100);
 
     // Batch amortization: per-op cost must decrease as batch size grows.
-    try testing.expect(r100.avg_flush / 100.0 < r10.avg_flush / 10.0);
+    // Skipped under TSan: its per-access shadow-memory tracking scales
+    // superlinearly with batch size, distorting the amortization signal.
+    if (!is_tsan) {
+        try testing.expect(r100.avg_flush / 100.0 < r10.avg_flush / 10.0);
+    }
 }
