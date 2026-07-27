@@ -45,12 +45,13 @@ fn insertRow(
     id: DocId,
     val: i64,
 ) !void {
+    const ww_alloc = ctx.engine.write_worker.allocator;
     var batch = std.ArrayListUnmanaged(WriteOp).empty;
     defer {
-        for (batch.items) |op| op.deinit(allocator);
+        for (batch.items) |op| op.deinit(ww_alloc);
         batch.deinit(allocator);
     }
-    try batch.append(allocator, makeUpsertOp(allocator, table_metadata, id, 1, val));
+    try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, 1, val));
     ctx.engine.write_worker.flush_wg.add(batch.items.len);
     var last_batch_time = std.time.milliTimestamp();
     ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
