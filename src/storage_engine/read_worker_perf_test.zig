@@ -180,7 +180,11 @@ fn runSelectQuerySweep(
         const query_res = try read_mod.buildSelectQuery(worker.read_arena.allocator(), table_metadata, namespace_id, filter);
 
         worker.node.mutex.lock();
+        defer worker.node.mutex.unlock();
+
         var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
+        defer mstmt.release();
+
         const exec_res = try read_mod.execQuery(
             worker.read_arena.allocator(),
             &worker.node.conn,
@@ -191,8 +195,6 @@ fn runSelectQuerySweep(
             sort_field_index,
             &worker.json_buf,
         );
-        mstmt.release();
-        worker.node.mutex.unlock();
 
         try testing.expectEqual(expected_rows, exec_res.records.len);
 
@@ -249,6 +251,43 @@ fn runSelectQuerySweep(
         .avg_b_ms = @as(f64, @floatFromInt(total_b)) / iter_f / 1_000_000.0,
         .avg_c_ms = @as(f64, @floatFromInt(total_c)) / iter_f / 1_000_000.0,
     };
+}
+
+/// Helper to build a priority < threshold filter, run the sweep, print results, and assert threshold.
+fn runPrioritySweep(
+    allocator: Allocator,
+    worker: *ReadWorker,
+    table_metadata: *const sth.Table,
+    priority_field_index: usize,
+    threshold: i64,
+    expected_rows: usize,
+    iterations: usize,
+    total_limit: f64,
+) !void {
+    var filter = try qth.makeFilterWithConditions(allocator, &.{
+        .{
+            .field_index = priority_field_index,
+            .op = .lt,
+            .value = tth.valInt(threshold),
+            .field_type = .integer,
+            .items_type = null,
+        },
+    });
+    defer filter.deinit(allocator);
+    filter.limit = 1000;
+    filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+
+    const result = try runSelectQuerySweep(worker, table_metadata, &filter, expected_rows, iterations);
+    const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
+    std.debug.print("selectQuery (rows={d}) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
+        expected_rows,
+        result.avg_a_ms,
+        result.avg_b_ms,
+        result.avg_c_ms,
+        total,
+    });
+
+    try testing.expect(total < total_limit);
 }
 
 const ConcurrentThreadCtx = struct {
@@ -498,87 +537,14 @@ test "ReadWorker: selectQuery throughput" {
     const is_tsan = builtin.sanitize_thread;
     const iterations: usize = if (is_tsan) 50 else if (is_debug) 100 else 500;
 
-    // Sweep config: rows=10, priority < 5
-    {
-        var filter = try qth.makeFilterWithConditions(allocator, &.{
-            .{
-                .field_index = 4,
-                .op = .lt,
-                .value = tth.valInt(5),
-                .field_type = .integer,
-                .items_type = null,
-            },
-        });
-        defer filter.deinit(allocator);
-        filter.limit = 1000;
-        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+    const priority_field_index = table_metadata.fieldIndex("priority") orelse unreachable;
 
-        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 10, iterations);
-        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
-        std.debug.print("selectQuery (rows=10) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
-            result.avg_a_ms,
-            result.avg_b_ms,
-            result.avg_c_ms,
-            total,
-        });
+    // Sweep: rows=10, priority < 5
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 1.8 else if (is_debug) 0.6 else 0.2);
 
-        const total_limit: f64 = if (is_tsan) 1.8 else if (is_debug) 0.6 else 0.2;
-        try testing.expect(total < total_limit);
-    }
+    // Sweep: rows=50, priority < 25
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 3.6 else if (is_debug) 1.2 else 0.4);
 
-    // Sweep config: rows=50, priority < 25
-    {
-        var filter = try qth.makeFilterWithConditions(allocator, &.{
-            .{
-                .field_index = 4,
-                .op = .lt,
-                .value = tth.valInt(25),
-                .field_type = .integer,
-                .items_type = null,
-            },
-        });
-        defer filter.deinit(allocator);
-        filter.limit = 1000;
-        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
-
-        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 50, iterations);
-        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
-        std.debug.print("selectQuery (rows=50) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
-            result.avg_a_ms,
-            result.avg_b_ms,
-            result.avg_c_ms,
-            total,
-        });
-
-        const total_limit: f64 = if (is_tsan) 3.6 else if (is_debug) 1.2 else 0.4;
-        try testing.expect(total < total_limit);
-    }
-
-    // Sweep config: rows=100, priority < 50
-    {
-        var filter = try qth.makeFilterWithConditions(allocator, &.{
-            .{
-                .field_index = 4,
-                .op = .lt,
-                .value = tth.valInt(50),
-                .field_type = .integer,
-                .items_type = null,
-            },
-        });
-        defer filter.deinit(allocator);
-        filter.limit = 1000;
-        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
-
-        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 100, iterations);
-        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
-        std.debug.print("selectQuery (rows=100) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
-            result.avg_a_ms,
-            result.avg_b_ms,
-            result.avg_c_ms,
-            total,
-        });
-
-        const total_limit: f64 = if (is_tsan) 6.3 else if (is_debug) 2.1 else 0.7;
-        try testing.expect(total < total_limit);
-    }
+    // Sweep: rows=100, priority < 50
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 6.3 else if (is_debug) 2.1 else 0.7);
 }
