@@ -12,9 +12,22 @@ const EngineTestContext = sth.EngineTestContext;
 const ReadWorker = @import("read_worker_pool.zig").ReadWorker;
 const storage_cache = @import("cache.zig");
 const builtin = @import("builtin");
+const query_ast = @import("../query/ast.zig");
+const qth = @import("../query/test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
+const read_mod = @import("reader.zig");
+const wire_encode = @import("../wire/encode.zig");
+const query_hasher = @import("../query/hasher.zig");
 
 const items_table = schema_helpers.makeTable("items", &.{
     schema_helpers.makeField("val", .integer),
+});
+
+const query_table = schema_helpers.makeTable("items", &.{
+    schema_helpers.makeField("name", .text),
+    schema_helpers.makeField("priority", .integer),
+    schema_helpers.makeField("active", .integer),
+    schema_helpers.makeField("tags", .text),
 });
 
 fn makeUpsertOp(
@@ -63,10 +76,179 @@ fn insertRow(
     while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
 }
 
+/// Construct a multi-column upsert WriteOp for the query_table (name, priority, active, tags).
+fn makeQueryUpsertOp(
+    allocator: Allocator,
+    table: *const sth.Table,
+    id: DocId,
+    namespace_id: i64,
+) WriteOp {
+    const name_index = table.fieldIndex("name") orelse unreachable;
+    const priority_index = table.fieldIndex("priority") orelse unreachable;
+    const active_index = table.fieldIndex("active") orelse unreachable;
+    const tags_index = table.fieldIndex("tags") orelse unreachable;
+
+    const columns = allocator.alloc(ColumnValue, 4) catch @panic("oom");
+
+    // name = "item-{id}"
+    const name_str = std.fmt.allocPrint(allocator, "item-{d}", .{id}) catch @panic("oom");
+    columns[0] = .{ .index = name_index, .value = .{ .scalar = .{ .text = name_str } } };
+
+    // priority = id % 100
+    const id_i64: i64 = @intCast(id);
+    const priority: i64 = @rem(id_i64, 100);
+    columns[1] = .{ .index = priority_index, .value = .{ .scalar = .{ .integer = priority } } };
+
+    // active = id % 2
+    const active: i64 = @rem(id_i64, 2);
+    columns[2] = .{ .index = active_index, .value = .{ .scalar = .{ .integer = active } } };
+
+    // tags = "tag-data-for-testing" (fixed string, must be owned by allocator)
+    const tags_str = allocator.dupe(u8, "tag-data-for-testing") catch @panic("oom");
+    columns[3] = .{ .index = tags_index, .value = .{ .scalar = .{ .text = tags_str } } };
+
+    return .{ .upsert = .{
+        .table_index = table.index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .owner_doc_id = typed_doc_id.zero,
+        .columns = columns,
+        .timestamp = std.time.timestamp(),
+    } };
+}
+
+/// Bulk-insert 200 deterministic rows into the query_table via a single flushBatch call.
+fn insertQueryRows(
+    allocator: Allocator,
+    ctx: *EngineTestContext,
+    table_metadata: *const sth.Table,
+) !void {
+    const ww_alloc = ctx.engine.write_worker.allocator;
+    var batch = std.ArrayListUnmanaged(WriteOp).empty;
+    defer {
+        for (batch.items) |op| op.deinit(ww_alloc);
+        batch.deinit(allocator);
+    }
+
+    // Append 200 upsert ops into the batch.
+    for (0..200) |i| {
+        const id: DocId = @intCast(i);
+        try batch.append(allocator, makeQueryUpsertOp(ww_alloc, table_metadata, id, 1));
+    }
+
+    // Flush the entire batch at once.
+    ctx.engine.write_worker.flush_wg.add(batch.items.len);
+    var last_batch_time = std.time.milliTimestamp();
+    ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
+
+    // Drain change_queue and send_queue so nothing leaks.
+    while (ctx.test_context.change_queue.?.shards[0].popTimed(0)) |job| {
+        var j = job;
+        j.deinit(allocator);
+    }
+    while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
+}
+
 /// Return a ReadWorker from the pool's first worker (pool must be running).
 fn firstWorker(engine: *StorageEngine) *ReadWorker {
     const pool = engine.read_worker_pool.?; // zwanzig-disable-line: optional-unwrap
     return &pool.pool.workers[0];
+}
+
+const SweepResult = struct {
+    avg_a_ms: f64,
+    avg_b_ms: f64,
+    avg_c_ms: f64,
+};
+
+/// Run warmup + timed iterations of the select query pipeline (buildSelectQuery → execQuery → encodeQuery).
+/// Returns per-stage average times in milliseconds.
+fn runSelectQuerySweep(
+    worker: *ReadWorker,
+    table_metadata: *const sth.Table,
+    filter: *const query_ast.QueryFilter,
+    expected_rows: usize,
+    iterations: usize,
+) !SweepResult {
+    const namespace_id: i64 = 1;
+    const sort_field_index = filter.order_by.field_index;
+
+    // --- Warmup: 5 iterations asserting correct row count ---
+    for (0..5) |_| {
+        _ = worker.read_arena.reset(.retain_capacity);
+
+        const query_res = try read_mod.buildSelectQuery(worker.read_arena.allocator(), table_metadata, namespace_id, filter);
+
+        worker.node.mutex.lock();
+        var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
+        const exec_res = try read_mod.execQuery(
+            worker.read_arena.allocator(),
+            &worker.node.conn,
+            mstmt.stmt,
+            query_res.values,
+            table_metadata,
+            filter.limit,
+            sort_field_index,
+            &worker.json_buf,
+        );
+        mstmt.release();
+        worker.node.mutex.unlock();
+
+        try testing.expectEqual(expected_rows, exec_res.records.len);
+
+        _ = try wire_encode.encodeQuery(worker.read_arena.allocator(), .{
+            .msg_id = 1,
+            .records = exec_res.records,
+            .table = table_metadata,
+        });
+    }
+
+    // --- Timed iterations ---
+    var total_a: u64 = 0;
+    var total_b: u64 = 0;
+    var total_c: u64 = 0;
+
+    for (0..iterations) |_| {
+        _ = worker.read_arena.reset(.retain_capacity);
+
+        var timer = try std.time.Timer.start();
+
+        // Stage A: buildSelectQuery
+        const query_res = try read_mod.buildSelectQuery(worker.read_arena.allocator(), table_metadata, namespace_id, filter);
+        total_a += timer.lap();
+
+        // Stage B: mutex.lock → stmt_cache.acquire → execQuery → stmt.release → mutex.unlock
+        worker.node.mutex.lock();
+        var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
+        const exec_res = try read_mod.execQuery(
+            worker.read_arena.allocator(),
+            &worker.node.conn,
+            mstmt.stmt,
+            query_res.values,
+            table_metadata,
+            filter.limit,
+            sort_field_index,
+            &worker.json_buf,
+        );
+        mstmt.release();
+        worker.node.mutex.unlock();
+        total_b += timer.lap();
+
+        // Stage C: encodeQuery
+        _ = try wire_encode.encodeQuery(worker.read_arena.allocator(), .{
+            .msg_id = 1,
+            .records = exec_res.records,
+            .table = table_metadata,
+        });
+        total_c += timer.lap();
+    }
+
+    const iter_f: f64 = @floatFromInt(iterations);
+    return SweepResult{
+        .avg_a_ms = @as(f64, @floatFromInt(total_a)) / iter_f / 1_000_000.0,
+        .avg_b_ms = @as(f64, @floatFromInt(total_b)) / iter_f / 1_000_000.0,
+        .avg_c_ms = @as(f64, @floatFromInt(total_c)) / iter_f / 1_000_000.0,
+    };
 }
 
 const ConcurrentThreadCtx = struct {
@@ -290,5 +472,113 @@ test "ReadWorker: concurrent readers — no data race" {
             std.debug.print("\nthread {d} error: {}\n", .{ i, err });
             return error.TestUnexpectedResult;
         }
+    }
+}
+
+test "ReadWorker: selectQuery throughput" {
+    const allocator = testing.allocator;
+    var ctx: EngineTestContext = undefined;
+    try ctx.initWithPerformance(allocator, "read_select_query", &.{query_table}, .{}, .{
+        .in_memory = true,
+        .reader_pool_size = 1,
+    });
+    defer ctx.deinit();
+
+    const table_metadata = try ctx.tableMetadata("items");
+
+    // Insert 200 deterministic rows.
+    try insertQueryRows(allocator, &ctx, table_metadata);
+
+    // Stop reader pool, get worker directly.
+    ctx.engine.stopReaderPool();
+    const worker = firstWorker(&ctx.engine);
+
+    // Mode-aware iteration counts.
+    const is_debug = builtin.mode == .Debug;
+    const is_tsan = builtin.sanitize_thread;
+    const iterations: usize = if (is_tsan) 50 else if (is_debug) 100 else 500;
+
+    // Sweep config: rows=10, priority < 5
+    {
+        var filter = try qth.makeFilterWithConditions(allocator, &.{
+            .{
+                .field_index = 4,
+                .op = .lt,
+                .value = tth.valInt(5),
+                .field_type = .integer,
+                .items_type = null,
+            },
+        });
+        defer filter.deinit(allocator);
+        filter.limit = 1000;
+        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+
+        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 10, iterations);
+        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
+        std.debug.print("selectQuery (rows=10) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
+            result.avg_a_ms,
+            result.avg_b_ms,
+            result.avg_c_ms,
+            total,
+        });
+
+        const total_limit: f64 = if (is_tsan) 1.8 else if (is_debug) 0.6 else 0.2;
+        try testing.expect(total < total_limit);
+    }
+
+    // Sweep config: rows=50, priority < 25
+    {
+        var filter = try qth.makeFilterWithConditions(allocator, &.{
+            .{
+                .field_index = 4,
+                .op = .lt,
+                .value = tth.valInt(25),
+                .field_type = .integer,
+                .items_type = null,
+            },
+        });
+        defer filter.deinit(allocator);
+        filter.limit = 1000;
+        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+
+        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 50, iterations);
+        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
+        std.debug.print("selectQuery (rows=50) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
+            result.avg_a_ms,
+            result.avg_b_ms,
+            result.avg_c_ms,
+            total,
+        });
+
+        const total_limit: f64 = if (is_tsan) 3.6 else if (is_debug) 1.2 else 0.4;
+        try testing.expect(total < total_limit);
+    }
+
+    // Sweep config: rows=100, priority < 50
+    {
+        var filter = try qth.makeFilterWithConditions(allocator, &.{
+            .{
+                .field_index = 4,
+                .op = .lt,
+                .value = tth.valInt(50),
+                .field_type = .integer,
+                .items_type = null,
+            },
+        });
+        defer filter.deinit(allocator);
+        filter.limit = 1000;
+        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+
+        const result = try runSelectQuerySweep(worker, table_metadata, &filter, 100, iterations);
+        const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;
+        std.debug.print("selectQuery (rows=100) [ms]: build(A)={d:.3} exec(B)={d:.3} encode(C)={d:.3} total={d:.3}\n", .{
+            result.avg_a_ms,
+            result.avg_b_ms,
+            result.avg_c_ms,
+            total,
+        });
+
+        const total_limit: f64 = if (is_tsan) 6.3 else if (is_debug) 2.1 else 0.7;
+        try testing.expect(total < total_limit);
     }
 }
