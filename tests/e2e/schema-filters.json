@@ -7,10 +7,12 @@
 					"type": "string"
 				},
 				"priority": {
-					"type": "integer"
+					"type": "integer",
+					"indexed": true
 				},
 				"active": {
-					"type": "boolean"
+					"type": "boolean",
+					"indexed": true
 				},
 				"tags": {
 					"type": "array",
@@ -24,7 +26,8 @@
 					"type": "string"
 				},
 				"score": {
-					"type": "number"
+					"type": "number",
+					"indexed": true
 				},
 				"ratings": {
 					"type": "array",
