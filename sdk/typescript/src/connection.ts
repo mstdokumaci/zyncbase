@@ -1,4 +1,6 @@
 // Connection Manager
+
+import { decodeMulti } from "@msgpack/msgpack";
 import { acquireTicket } from "./auth.js";
 import {
 	ConnectionWireCodec,
@@ -425,9 +427,18 @@ export class ConnectionManager {
 	}
 
 	private async processInbound(data: ArrayBuffer | Uint8Array): Promise<void> {
-		const msg = this.wire.decode(data);
-		if (!msg) return;
+		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+		try {
+			for (const raw of decodeMulti(arr)) {
+				const msg = this.wire.decodeMessage(raw);
+				if (msg) await this.dispatchInbound(msg);
+			}
+		} catch {
+			// Decode error — malformed frame, skip
+		}
+	}
 
+	private async dispatchInbound(msg: InboundMessage): Promise<void> {
 		const id = "id" in msg ? msg.id : "push";
 		if (this.options.debug) {
 			console.log(`[SDK] << ${msg.type} (id=${id}):`, JSON.stringify(msg));
@@ -455,10 +466,6 @@ export class ConnectionManager {
 			case "PresenceBroadcast":
 			case "SharedStateBroadcast":
 				this.presenceBroadcastHandler?.(msg);
-				break;
-			case "WriteCommitted":
-			case "WriteError":
-				// Routed to StoreImpl via messageHandler below.
 				break;
 		}
 

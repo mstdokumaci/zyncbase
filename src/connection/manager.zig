@@ -5,6 +5,7 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const Schema = @import("../schema/types.zig").Schema;
 const send_queue_type = @import("send_queue.zig").send_queue;
+const SendQueueEntry = @import("send_queue.zig").Entry;
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
@@ -44,6 +45,9 @@ pub const ConnectionManager = struct {
     /// Notifier fired when the last connection closes during shutdown.
     last_conn_notifier: Notifier = .{},
 
+    /// Arena for temporary allocations during drainSendQueue batched processing.
+    drain_arena: std.heap.ArenaAllocator,
+
     pub fn init(
         self: *ConnectionManager,
         allocator: Allocator,
@@ -65,11 +69,13 @@ pub const ConnectionManager = struct {
             .max_connections = max_connections,
             .schema_sync_msg = schema_sync_msg,
             .token_grace_period_seconds = token_grace_period_seconds,
+            .drain_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
     pub fn deinit(self: *ConnectionManager) void {
         self.stopTokenSweepTimer();
+        self.drain_arena.deinit();
 
         self.mutex.lock();
         var it = self.map.valueIterator();
@@ -265,27 +271,76 @@ pub const ConnectionManager = struct {
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
+    /// Groups entries by conn_id and sends one concatenated message per connection.
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
-        while (send_queue.pop()) |entry| {
-            defer entry.deinit();
+        _ = self.drain_arena.reset(.retain_capacity);
+        const alloc = self.drain_arena.allocator();
 
-            const conn = self.acquireConnection(entry.conn_id) catch |err| {
-                std.log.warn("Connection {} not found during send queue drain: {}", .{ entry.conn_id, err });
+        // Phase 1: pop all entries, group by conn_id
+        const Group = struct {
+            entries: std.ArrayListUnmanaged(SendQueueEntry),
+        };
+        var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
+
+        while (send_queue.pop()) |entry| {
+            const g = groups.getOrPut(alloc, entry.conn_id) catch {
+                entry.deinit();
+                continue;
+            };
+            if (!g.found_existing) g.value_ptr.* = .{ .entries = .empty };
+            g.value_ptr.entries.append(alloc, entry) catch {
+                entry.deinit();
+                continue;
+            };
+        }
+
+        // Phase 2: per connection, concatenate and send
+        var it = groups.iterator();
+        while (it.next()) |kv| {
+            const conn_id = kv.key_ptr.*;
+            const group = kv.value_ptr;
+
+            // Skip empty groups
+            if (group.entries.items.len == 0) continue;
+
+            const conn = self.acquireConnection(conn_id) catch {
+                // Connection gone — release all entries' arenas
+                for (group.entries.items) |e| e.deinit();
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            conn.send(entry.data) catch |err| switch (err) {
+            // Compute total size
+            var total: usize = 0;
+            for (group.entries.items) |e| total += e.data.len;
+
+            // Build concatenated buffer in drain arena
+            const buf = alloc.alloc(u8, total) catch {
+                for (group.entries.items) |e| e.deinit();
+                continue;
+            };
+
+            var offset: usize = 0;
+            for (group.entries.items) |e| {
+                @memcpy(buf[offset..][0..e.data.len], e.data);
+                offset += e.data.len;
+            }
+
+            // Release original arenas — data has been copied into drain arena
+            for (group.entries.items) |e| e.deinit();
+
+            // Send — one ws.send() per connection instead of one per entry
+            conn.send(buf) catch |err| switch (err) {
                 error.Dropped => {
-                    std.log.warn("Connection {} dropped by uWS, closing", .{entry.conn_id});
+                    std.log.warn("Connection {} dropped by uWS, closing", .{conn_id});
                     conn.ws.close();
                 },
                 error.Full => {
-                    std.log.warn("Connection {} outbox full (slow client), closing", .{entry.conn_id});
+                    std.log.warn("Connection {} outbox full (slow client), closing", .{conn_id});
                     conn.ws.close();
                 },
                 else => {
-                    std.log.err("Connection {} unexpected send error: {}", .{ entry.conn_id, err });
+                    std.log.err("Connection {} unexpected send error: {}", .{ conn_id, err });
                     conn.ws.close();
                 },
             };

@@ -94,16 +94,19 @@ export class ConnectionWireCodec {
 	}
 
 	decode(data: ArrayBuffer | Uint8Array): InboundMessage | null {
-		let msg: InboundMessage;
+		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+		let raw: unknown;
 		try {
-			msg = decode(
-				data instanceof ArrayBuffer ? new Uint8Array(data) : data,
-			) as InboundMessage;
+			raw = decode(arr);
 		} catch {
 			return null;
 		}
+		return this.decodeMessage(raw);
+	}
 
-		if (!msg || typeof msg !== "object" || !("type" in msg)) return null;
+	decodeMessage(raw: unknown): InboundMessage | null {
+		if (!raw || typeof raw !== "object" || !("type" in raw)) return null;
+		const msg = raw as InboundMessage;
 		if (msg.type === "StoreDelta") return this.decodeDelta(msg);
 		if (msg.type === "PresenceBroadcast")
 			return this.decodePresenceBroadcast(msg);
