@@ -428,13 +428,20 @@ export class ConnectionManager {
 
 	private async processInbound(data: ArrayBuffer | Uint8Array): Promise<void> {
 		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+		const frames = decodeMulti(arr);
 		try {
-			for (const raw of decodeMulti(arr)) {
-				const msg = this.wire.decodeMessage(raw);
-				if (msg) await this.dispatchInbound(msg);
+			for (let next = frames.next(); !next.done; next = frames.next()) {
+				try {
+					const msg = this.wire.decodeMessage(next.value);
+					if (msg) await this.dispatchInbound(msg);
+				} catch (err) {
+					if (this.options.debug) {
+						console.error("[SDK] Error processing inbound frame:", err);
+					}
+				}
 			}
 		} catch {
-			// Decode error — malformed frame, skip
+			// Decode error — malformed data, skip entire batch
 		}
 	}
 

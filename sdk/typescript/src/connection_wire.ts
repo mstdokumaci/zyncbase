@@ -30,6 +30,18 @@ import type {
 	StoreUnsubscribe,
 } from "./types.js";
 
+const VALID_INBOUND_TYPES = new Set<InboundMessage["type"]>([
+	"ok",
+	"error",
+	"StoreDelta",
+	"SchemaSync",
+	"Connected",
+	"WriteCommitted",
+	"WriteError",
+	"PresenceBroadcast",
+	"SharedStateBroadcast",
+]);
+
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
 export type OutboundRequest =
@@ -107,11 +119,18 @@ export class ConnectionWireCodec {
 	decodeMessage(raw: unknown): InboundMessage | null {
 		if (!raw || typeof raw !== "object" || !("type" in raw)) return null;
 		const msg = raw as InboundMessage;
-		if (msg.type === "StoreDelta") return this.decodeDelta(msg);
-		if (msg.type === "PresenceBroadcast")
-			return this.decodePresenceBroadcast(msg);
-		if (msg.type === "SharedStateBroadcast")
-			return this.decodeSharedStateBroadcast(msg);
+		if (!VALID_INBOUND_TYPES.has(msg.type)) return null;
+		switch (msg.type) {
+			case "StoreDelta":
+				if (!Array.isArray(msg.ops)) return null;
+				return this.decodeDelta(msg);
+			case "PresenceBroadcast":
+				if (!Array.isArray(msg.users)) return null;
+				return this.decodePresenceBroadcast(msg);
+			case "SharedStateBroadcast":
+				if (!Array.isArray(msg.data)) return null;
+				return this.decodeSharedStateBroadcast(msg);
+		}
 		return msg;
 	}
 
