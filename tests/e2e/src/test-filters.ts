@@ -285,10 +285,7 @@ async function waitForAllFiredAndConverged(
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 
-	while (true) {
-		if (clients.every((c) => c.itemsFired && c.eventsFired)) {
-			break;
-		}
+	while (!clients.every((c) => c.itemsFired && c.eventsFired)) {
 		if (Date.now() > deadline) {
 			const notFired = clients
 				.filter((c) => !c.itemsFired || !c.eventsFired)
