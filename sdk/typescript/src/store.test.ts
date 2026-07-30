@@ -213,6 +213,57 @@ describe("StoreImpl", () => {
 		]);
 	});
 
+	test("loadMore decodes raw tuple rows via decodeLoadMoreRows", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["users"],
+			fields: [["id", "name"]],
+			fieldFlags: [[0, 0]],
+		});
+		const { store, messages } = makeStore(
+			[
+				{
+					type: "ok",
+					id: 1,
+					subId: 9,
+					value: [{ id: "u1", name: "Ada" }],
+					hasMore: true,
+					nextCursor: "next",
+				},
+				{
+					type: "ok",
+					id: 2,
+					value: [
+						[
+							[0, "u2"],
+							[1, "Grace"],
+						],
+					],
+					hasMore: false,
+					nextCursor: null,
+				},
+			],
+			schema,
+		);
+		const snapshots: JsonValue[][] = [];
+
+		const handle = store.subscribe("users", {}, (value) =>
+			snapshots.push(value),
+		);
+		await flushPromises();
+		await handle.loadMore();
+
+		expect(messages[1]).toEqual({
+			type: "StoreLoadMore",
+			subId: 9,
+			nextCursor: "next",
+		});
+		expect(snapshots.at(-1)).toEqual([
+			{ id: "u1", name: "Ada" },
+			{ id: "u2", name: "Grace" },
+		]);
+	});
+
 	test("set with confirm committed returns a promise that resolves on WriteCommitted event", async () => {
 		const { store, conn, push } = makeStore();
 		let capturedWriteId: string | undefined;

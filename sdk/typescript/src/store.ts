@@ -45,6 +45,7 @@ interface SubscribeState {
 	nextCursor: string | null;
 	hasMore: boolean;
 	closed: boolean;
+	inFlight: Promise<void> | null;
 }
 
 export class StoreImpl {
@@ -191,6 +192,7 @@ export class StoreImpl {
 			nextCursor: null,
 			hasMore: false,
 			closed: false,
+			inFlight: null,
 		};
 
 		const handle: SubscriptionHandle = {
@@ -204,18 +206,35 @@ export class StoreImpl {
 			},
 			loadMore: async () => {
 				if (state.subId === null || state.nextCursor === null) return;
-				const ok = await this.conn.dispatch(
-					buildLoadMore(state.subId, state.nextCursor),
-				);
-				state.nextCursor = ok.nextCursor ?? null;
-				state.hasMore = ok.hasMore ?? false;
-				handle.hasMore = state.hasMore;
-				if (state.subId !== null && ok.value !== undefined) {
-					this.tracker.dispatchInitialSnapshot(
-						state.subId,
-						[collection],
-						this.decodeLoadMoreRows(ok.value, collection),
+				if (state.inFlight !== null) {
+					await state.inFlight;
+					return;
+				}
+				// ponytail: serialize concurrent loadMore calls per subscription
+				const subId = state.subId;
+				const nextCursor = state.nextCursor;
+				const promise = (async () => {
+					const ok = await this.conn.dispatch(buildLoadMore(subId, nextCursor));
+					const decoded = this.decodeLoadMoreRows(
+						ok.value as JsonValue,
+						collection,
 					);
+					state.nextCursor = ok.nextCursor ?? null;
+					state.hasMore = ok.hasMore ?? false;
+					handle.hasMore = state.hasMore;
+					if (state.subId !== null && decoded !== undefined) {
+						this.tracker.dispatchInitialSnapshot(
+							state.subId,
+							[collection],
+							decoded,
+						);
+					}
+				})();
+				state.inFlight = promise;
+				try {
+					await promise;
+				} finally {
+					state.inFlight = null;
 				}
 			},
 		};
