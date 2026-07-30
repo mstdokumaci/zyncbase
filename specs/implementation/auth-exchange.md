@@ -22,7 +22,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `TicketExchange` | ticket secret, JWT validator, allocator | Manages short-lived tickets, optional single-use redemption tracking, JWT validation, and anonymous subject admission. |
+| `TicketExchange` | ticket secret, JWT validator, allocator | Manages short-lived tickets, single-use redemption tracking, JWT validation, and anonymous subject admission. |
 | `Session` | allocator | Holds projected JWT claims, authentication scopes, and user identities. |
 | `ValidatedToken` | JSON parser, validator config | Decoded and verified JWT output containing external subject, expiry, and projected claims. |
 
@@ -44,7 +44,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 |:---|:---|:---|:---|:---|
 | **1. Ticket Request (JWT)** | `POST /auth/ticket` | `Authorization: Bearer <external_jwt>` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Validates JWT (signature, issuer, aud, exp, algorithms). Projects claims. |
 | **1. Ticket Request (Anon)** | `POST /auth/ticket` | `{"anonymousSubject": "anon:6c6f8b0d..."}` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Checks if anonymous auth is enabled. Validates subject entropy. |
-| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state when enabled. Hydrates base session. |
+| **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state. Hydrates base session. |
 | **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | Scoped `ok` with store/presence session mappings | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). |
 
 ---
