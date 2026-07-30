@@ -34,10 +34,7 @@ import { generateUUIDv7 } from "./uuid.js";
 
 /** The subset of ConnectionManager that StoreImpl depends on. */
 export interface StoreConnection {
-	dispatch(
-		msg: OutboundRequest,
-		responseTableIndex?: number,
-	): Promise<OkResponse>;
+	dispatch(msg: OutboundRequest): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	readonly schemaDictionary: SchemaDictionary;
@@ -207,10 +204,8 @@ export class StoreImpl {
 			},
 			loadMore: async () => {
 				if (state.subId === null || state.nextCursor === null) return;
-				const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
 				const ok = await this.conn.dispatch(
 					buildLoadMore(state.subId, state.nextCursor),
-					tableIndex,
 				);
 				state.nextCursor = ok.nextCursor ?? null;
 				state.hasMore = ok.hasMore ?? false;
@@ -219,7 +214,7 @@ export class StoreImpl {
 					this.tracker.dispatchInitialSnapshot(
 						state.subId,
 						[collection],
-						ok.value as JsonValue,
+						this.decodeLoadMoreRows(ok.value, collection),
 					);
 				}
 			},
@@ -328,6 +323,21 @@ export class StoreImpl {
 		} catch (err) {
 			this.emitAndThrow(err, fallbackMessage);
 		}
+	}
+
+	// ponytail: decode raw LoadMore rows when responseTableIndex wasn't piggybacked
+	private decodeLoadMoreRows(value: JsonValue, collection: string): JsonValue {
+		if (
+			!Array.isArray(value) ||
+			value.length === 0 ||
+			!Array.isArray(value[0])
+		) {
+			return value;
+		}
+		const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
+		return (value as Array<Array<[number, unknown]>>).map((row) =>
+			this.conn.schemaDictionary.decodeValue(tableIndex, row),
+		) as JsonValue;
 	}
 
 	private dispatchUnsubscribe(subId: number): void {

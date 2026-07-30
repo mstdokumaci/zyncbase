@@ -53,16 +53,6 @@ function makeStore(
 	const disconnectHandlers: Array<() => void> = [];
 
 	const schema = schemaDictionary ?? new SchemaDictionary();
-	if (!schema.isReady()) {
-		const origGetTableIndex = schema.getTableIndex.bind(schema);
-		schema.getTableIndex = (name: string) => {
-			try {
-				return origGetTableIndex(name);
-			} catch {
-				return 0;
-			}
-		};
-	}
 
 	const conn: StoreConnection = {
 		dispatch: async (msg: OutboundRequest): Promise<OkResponse> => {
