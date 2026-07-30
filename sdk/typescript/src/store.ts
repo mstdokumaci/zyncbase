@@ -207,9 +207,6 @@ export class StoreImpl {
 				const ok = await this.conn.dispatch(
 					buildLoadMore(state.subId, state.nextCursor),
 				);
-				state.nextCursor = ok.nextCursor ?? null;
-				state.hasMore = ok.hasMore ?? false;
-				handle.hasMore = state.hasMore;
 				if (state.subId !== null && ok.value !== undefined) {
 					this.tracker.dispatchInitialSnapshot(
 						state.subId,
@@ -217,6 +214,9 @@ export class StoreImpl {
 						this.decodeLoadMoreRows(ok.value, collection),
 					);
 				}
+				state.nextCursor = ok.nextCursor ?? null;
+				state.hasMore = ok.hasMore ?? false;
+				handle.hasMore = state.hasMore;
 			},
 		};
 
@@ -330,7 +330,11 @@ export class StoreImpl {
 		if (
 			!Array.isArray(value) ||
 			value.length === 0 ||
-			!Array.isArray(value[0])
+			!Array.isArray(value[0]) ||
+			value[0].length === 0 ||
+			!Array.isArray(value[0][0]) ||
+			value[0][0].length !== 2 ||
+			typeof value[0][0][0] !== "number"
 		) {
 			return value;
 		}
