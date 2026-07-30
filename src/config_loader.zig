@@ -27,7 +27,6 @@ pub const Config = struct {
         jwt_subject_claim: []const u8,
         ticket_secret: ?[]const u8 = null,
         ticket_ttl_seconds: u32 = 60,
-        ticket_single_use: bool = true,
         anonymous_enabled: bool = false,
         anonymous_subject_prefix: []const u8,
         session: SessionConfig = .{},
@@ -282,7 +281,6 @@ pub const ConfigLoader = struct {
         const ticket_obj = (try json_read.getObject(auth_obj, "ticket")) orelse return;
         try json_read.setString(allocator, &auth.ticket_secret, ticket_obj, "secret");
         try json_read.setInt(u32, &auth.ticket_ttl_seconds, ticket_obj, "ttlSeconds");
-        try json_read.setBool(&auth.ticket_single_use, ticket_obj, "singleUse");
     }
 
     fn parseAuthAnonymous(allocator: Allocator, auth: *Config.AuthConfig, auth_obj: std.json.ObjectMap) !void {

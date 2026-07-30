@@ -69,8 +69,7 @@ Main server configuration file.
   "authentication": {
     "ticket": {
       "secret": "${TICKET_SECRET}",
-      "ttlSeconds": 60,
-      "singleUse": true
+      "ttlSeconds": 60
     },
     "jwt": {
       "secret": "${JWT_SECRET}",
@@ -195,8 +194,7 @@ Authentication source and ticket settings. ZyncBase validates external identity 
   "authentication": {
     "ticket": {
       "secret": "${TICKET_SECRET}",
-      "ttlSeconds": 60,
-      "singleUse": true
+      "ttlSeconds": 60
     },
     "jwt": {
       "secret": "${JWT_SECRET}",
@@ -228,7 +226,6 @@ Authentication source and ticket settings. ZyncBase validates external identity 
 
 - `secret` - Signing secret for ZyncBase tickets. If omitted, the server may generate an ephemeral secret, which invalidates outstanding tickets on restart.
 - `ttlSeconds` - Ticket lifetime before WebSocket upgrade. Tickets should be short-lived because they travel in the WebSocket URL.
-- `singleUse` - Whether a ticket can be redeemed only once. Production deployments should keep this enabled.
 
 **JWT Settings:**
 
