@@ -134,9 +134,7 @@ export class ConnectionWireCodec {
 		context?: PendingRequestContext,
 	): OkResponse {
 		if (
-			(context?.type === "StoreQuery" ||
-				context?.type === "StoreSubscribe" ||
-				context?.type === "StoreLoadMore") &&
+			(context?.type === "StoreQuery" || context?.type === "StoreSubscribe") &&
 			typeof context.responseTableIndex === "number" &&
 			Array.isArray(ok.value)
 		) {
