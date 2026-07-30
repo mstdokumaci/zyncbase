@@ -14,7 +14,6 @@ pub const TicketExchange = struct {
     allocator: Allocator,
     ticket_secret: [32]u8,
     ttl_seconds: u32,
-    single_use: bool,
     jwt_validator: ?*JwtValidator,
     anonymous_enabled: bool,
     anonymous_prefix: []const u8,
@@ -30,7 +29,6 @@ pub const TicketExchange = struct {
         allocator: Allocator,
         ticket_secret_opt: ?[]const u8,
         ttl_seconds: u32,
-        single_use: bool,
         jwt_validator: ?*JwtValidator,
         anonymous_enabled: bool,
         anonymous_prefix: ?[]const u8,
@@ -59,7 +57,6 @@ pub const TicketExchange = struct {
             .allocator = allocator,
             .ticket_secret = secret_key,
             .ttl_seconds = ttl_seconds,
-            .single_use = single_use,
             .jwt_validator = jwt_validator,
             .anonymous_enabled = anonymous_enabled,
             .anonymous_prefix = prefix,
@@ -98,7 +95,7 @@ pub const TicketExchange = struct {
             return error.TokenExpired;
         }
 
-        try self.redeemIfSingleUse(extracted.jti, extracted.exp, now);
+        try self.redeemTicket(extracted.jti, extracted.exp, now);
 
         const external_id_slice = extracted.external_id orelse extracted.sub;
         const external_id = try allocator.dupe(u8, external_id_slice);
@@ -126,9 +123,7 @@ pub const TicketExchange = struct {
         };
     }
 
-    fn redeemIfSingleUse(self: *TicketExchange, jti: []const u8, exp: i64, now: i64) !void {
-        if (!self.single_use) return;
-
+    fn redeemTicket(self: *TicketExchange, jti: []const u8, exp: i64, now: i64) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 

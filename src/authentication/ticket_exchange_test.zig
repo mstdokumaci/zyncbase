@@ -7,14 +7,13 @@ const typed = @import("../typed/types.zig");
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 const empty_claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{};
 
-test "TicketExchange: generate and verify single-use ticket" {
+test "TicketExchange: generate and verify ticket" {
     const allocator = testing.allocator;
 
     const exchange = try TicketExchange.init(
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,
-        true, // single_use = true
         null,
         false,
         null,
@@ -36,35 +35,6 @@ test "TicketExchange: generate and verify single-use ticket" {
     try testing.expectError(error.AuthFailed, exchange.verifyTicket(allocator, ticket));
 }
 
-test "TicketExchange: generate and verify multi-use ticket" {
-    const allocator = testing.allocator;
-
-    const exchange = try TicketExchange.init(
-        allocator,
-        "test-ticket-signing-secret-key-32b",
-        60,
-        false, // single_use = false
-        null,
-        false,
-        null,
-        false,
-        &empty_claims_mapping,
-    );
-    defer exchange.deinit();
-
-    const subject = "user_bob";
-    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
-    defer allocator.free(ticket);
-
-    var verified_session = try exchange.verifyTicket(allocator, ticket);
-    defer verified_session.deinit(allocator);
-    try testing.expectEqualStrings(subject, verified_session.external_id);
-
-    var verified_session_2 = try exchange.verifyTicket(allocator, ticket);
-    defer verified_session_2.deinit(allocator);
-    try testing.expectEqualStrings(subject, verified_session_2.external_id);
-}
-
 test "TicketExchange: expired ticket verification fails" {
     const allocator = testing.allocator;
 
@@ -72,7 +42,6 @@ test "TicketExchange: expired ticket verification fails" {
         allocator,
         "test-ticket-signing-secret-key-32b",
         0, // ttl_seconds = 0
-        true,
         null,
         false,
         null,
@@ -99,7 +68,6 @@ test "TicketExchange: validate anonymous subject" {
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,
-        true,
         null,
         true, // anonymous_enabled = true
         "anon:",
@@ -121,7 +89,6 @@ test "TicketExchange: validate anonymous subject" {
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,
-        true,
         null,
         false, // anonymous_enabled = false
         "anon:",

@@ -390,7 +390,6 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             auth_cfg.ticket_secret,
             auth_cfg.ticket_ttl_seconds,
-            auth_cfg.ticket_single_use,
             if (self.jwt_validator) |*jv| jv else null,
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,

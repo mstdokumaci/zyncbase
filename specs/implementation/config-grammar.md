@@ -65,7 +65,6 @@ This document defines the schema, properties, and constraints for the server run
 |:---|:---:|:---|:---|
 | `secret` | `string` | `null` | 32-byte ticket signing secret. If omitted, a runtime secret is generated. |
 | `ttlSeconds` | `number` | `60` | Short-lived WebSocket ticket lifetime. |
-| `singleUse` | `boolean` | `true` | When true, redeemed tickets cannot be used again. |
 
 ### `authentication.anonymous` Settings
 
