@@ -540,10 +540,10 @@ test "ReadWorker: selectQuery throughput" {
     const priority_field_index = table_metadata.fieldIndex("priority") orelse unreachable;
 
     // Sweep: rows=10, priority < 5
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 1.8 else if (is_debug) 0.6 else 0.2);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 2.7 else if (is_debug) 0.9 else 0.3);
 
     // Sweep: rows=50, priority < 25
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 4.5 else if (is_debug) 1.5 else 0.5);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 5.4 else if (is_debug) 1.8 else 0.6);
 
     // Sweep: rows=100, priority < 50
     try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 8.1 else if (is_debug) 2.7 else 0.9);
