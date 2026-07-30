@@ -207,6 +207,9 @@ export class StoreImpl {
 				const ok = await this.conn.dispatch(
 					buildLoadMore(state.subId, state.nextCursor),
 				);
+				state.nextCursor = ok.nextCursor ?? null;
+				state.hasMore = ok.hasMore ?? false;
+				handle.hasMore = state.hasMore;
 				if (state.subId !== null && ok.value !== undefined) {
 					this.tracker.dispatchInitialSnapshot(
 						state.subId,
@@ -214,9 +217,6 @@ export class StoreImpl {
 						this.decodeLoadMoreRows(ok.value, collection),
 					);
 				}
-				state.nextCursor = ok.nextCursor ?? null;
-				state.hasMore = ok.hasMore ?? false;
-				handle.hasMore = state.hasMore;
 			},
 		};
 
@@ -325,19 +325,23 @@ export class StoreImpl {
 		}
 	}
 
-	// ponytail: decode raw LoadMore rows when responseTableIndex wasn't piggybacked
 	private decodeLoadMoreRows(value: JsonValue, collection: string): JsonValue {
 		if (
 			!Array.isArray(value) ||
 			value.length === 0 ||
-			!Array.isArray(value[0]) ||
-			value[0].length === 0 ||
-			!Array.isArray(value[0][0]) ||
-			value[0][0].length !== 2 ||
-			typeof value[0][0][0] !== "number"
+			!Array.isArray(value[0])
 		) {
 			return value;
 		}
+		const isValid = (value as Array<unknown>).every(
+			(row) =>
+				Array.isArray(row) &&
+				row.length > 0 &&
+				(row as Array<unknown>).every(
+					(t) => Array.isArray(t) && t.length === 2 && typeof t[0] === "number",
+				),
+		);
+		if (!isValid) return value;
 		const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
 		return (value as Array<Array<[number, unknown]>>).map((row) =>
 			this.conn.schemaDictionary.decodeValue(tableIndex, row),
