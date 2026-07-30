@@ -34,7 +34,10 @@ import { generateUUIDv7 } from "./uuid.js";
 
 /** The subset of ConnectionManager that StoreImpl depends on. */
 export interface StoreConnection {
-	dispatch(msg: OutboundRequest): Promise<OkResponse>;
+	dispatch(
+		msg: OutboundRequest,
+		responseTableIndex?: number,
+	): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	readonly schemaDictionary: SchemaDictionary;
@@ -204,8 +207,10 @@ export class StoreImpl {
 			},
 			loadMore: async () => {
 				if (state.subId === null || state.nextCursor === null) return;
+				const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
 				const ok = await this.conn.dispatch(
-					buildLoadMore(state.subId, state.nextCursor, collection),
+					buildLoadMore(state.subId, state.nextCursor),
+					tableIndex,
 				);
 				state.nextCursor = ok.nextCursor ?? null;
 				state.hasMore = ok.hasMore ?? false;
