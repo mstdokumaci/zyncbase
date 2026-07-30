@@ -27,14 +27,13 @@ pub const ConnectionManager = struct {
     /// Mutex for protecting the map during concurrent access
     mutex: std.Thread.Mutex,
 
-    /// Maximum number of concurrent connections allowed
-    max_connections: usize = 100_000,
+    max_connections: usize,
 
     /// Pre-encoded SchemaSync message sent to every new connection on open.
     schema_sync_msg: []const u8,
 
     /// Grace period for expired tokens (seconds), used by the timer sweep.
-    token_grace_period_seconds: u32 = 0,
+    token_grace_period_seconds: u32,
 
     /// uWS timer for periodic token expiry sweeps (replaces timestamp poll).
     token_sweep_timer: ?*c.struct_us_timer_t = null,
@@ -226,25 +225,29 @@ pub const ConnectionManager = struct {
         return conn;
     }
 
+    fn sendOrClose(conn: *Connection, data: []const u8) void {
+        conn.send(data) catch |err| switch (err) {
+            error.Dropped => {
+                std.log.warn("Connection {} dropped by uWS, closing", .{conn.id});
+                conn.ws.close();
+            },
+            error.Full => {
+                std.log.warn("Connection {} outbox full (slow client), closing", .{conn.id});
+                conn.ws.close();
+            },
+            else => {
+                std.log.err("Connection {} unexpected send error: {}", .{ conn.id, err });
+                conn.ws.close();
+            },
+        };
+    }
+
     /// Broadcast helper as a method on ConnectionManager.
     pub fn sendToConnection(self: *ConnectionManager, conn_id: u64, data: []const u8) void {
         const conn = self.acquireConnection(conn_id) catch return;
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-        conn.send(data) catch |err| switch (err) {
-            error.Dropped => {
-                std.log.warn("Connection {} dropped by uWS, closing", .{conn_id});
-                conn.ws.close();
-            },
-            error.Full => {
-                std.log.warn("Connection {} outbox full (slow client), closing", .{conn_id});
-                conn.ws.close();
-            },
-            else => {
-                std.log.err("Connection {} unexpected send error: {}", .{ conn_id, err });
-                conn.ws.close();
-            },
-        };
+        sendOrClose(conn, data);
     }
 
     /// Called by the uWS drain callback. Flushes queued delta messages for the given connection.
@@ -330,20 +333,7 @@ pub const ConnectionManager = struct {
             for (group.entries.items) |e| e.deinit();
 
             // Send — one ws.send() per connection instead of one per entry
-            conn.send(buf) catch |err| switch (err) {
-                error.Dropped => {
-                    std.log.warn("Connection {} dropped by uWS, closing", .{conn_id});
-                    conn.ws.close();
-                },
-                error.Full => {
-                    std.log.warn("Connection {} outbox full (slow client), closing", .{conn_id});
-                    conn.ws.close();
-                },
-                else => {
-                    std.log.err("Connection {} unexpected send error: {}", .{ conn_id, err });
-                    conn.ws.close();
-                },
-            };
+            sendOrClose(conn, buf);
         }
     }
 
