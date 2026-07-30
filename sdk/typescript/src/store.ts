@@ -205,12 +205,14 @@ export class StoreImpl {
 				state.subId = null;
 			},
 			loadMore: async () => {
-				if (state.subId === null || state.nextCursor === null) return;
-				if (state.inFlight !== null) {
-					await state.inFlight;
-					return;
+				while (true) {
+					if (state.subId === null || state.nextCursor === null) return;
+					if (state.inFlight !== null) {
+						await state.inFlight;
+						continue;
+					}
+					break;
 				}
-				// ponytail: serialize concurrent loadMore calls per subscription
 				const subId = state.subId;
 				const nextCursor = state.nextCursor;
 				const promise = (async () => {
