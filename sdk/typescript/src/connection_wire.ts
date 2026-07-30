@@ -93,11 +93,6 @@ export class ConnectionWireCodec {
 				? wireMessage.table_index
 				: undefined;
 
-		if (debugMessage.type === "StoreLoadMore" && "table_index" in wireMessage) {
-			const { table_index: _, ...rest } = wireMessage;
-			wireMessage = rest;
-		}
-
 		return {
 			bytes: encode(wireMessage) as Uint8Array,
 			context: { type: debugMessage.type, responseTableIndex },
@@ -139,9 +134,7 @@ export class ConnectionWireCodec {
 		context?: PendingRequestContext,
 	): OkResponse {
 		if (
-			(context?.type === "StoreQuery" ||
-				context?.type === "StoreSubscribe" ||
-				context?.type === "StoreLoadMore") &&
+			(context?.type === "StoreQuery" || context?.type === "StoreSubscribe") &&
 			typeof context.responseTableIndex === "number" &&
 			Array.isArray(ok.value)
 		) {
@@ -220,11 +213,7 @@ export class ConnectionWireCodec {
 			wire = this.encodeStoreSetRemove(wire, type);
 		} else if (type === "StoreBatch") {
 			wire = this.encodeStoreBatch(wire);
-		} else if (
-			type === "StoreQuery" ||
-			type === "StoreSubscribe" ||
-			type === "StoreLoadMore"
-		) {
+		} else if (type === "StoreQuery" || type === "StoreSubscribe") {
 			wire = this.encodeStoreQuerySubscribe(wire);
 		}
 		return wire;

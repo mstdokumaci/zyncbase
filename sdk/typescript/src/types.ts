@@ -194,7 +194,6 @@ export interface StoreLoadMore {
 	id: number;
 	subId: number;
 	nextCursor: string;
-	table_index?: string | number;
 }
 
 // ─── Outbound wire messages: presence ─────────────────────────────────────────

@@ -45,6 +45,7 @@ interface SubscribeState {
 	nextCursor: string | null;
 	hasMore: boolean;
 	closed: boolean;
+	inFlight: Promise<void> | null;
 }
 
 export class StoreImpl {
@@ -191,6 +192,7 @@ export class StoreImpl {
 			nextCursor: null,
 			hasMore: false,
 			closed: false,
+			inFlight: null,
 		};
 
 		const handle: SubscriptionHandle = {
@@ -203,19 +205,38 @@ export class StoreImpl {
 				state.subId = null;
 			},
 			loadMore: async () => {
-				if (state.subId === null || state.nextCursor === null) return;
-				const ok = await this.conn.dispatch(
-					buildLoadMore(state.subId, state.nextCursor, collection),
-				);
-				state.nextCursor = ok.nextCursor ?? null;
-				state.hasMore = ok.hasMore ?? false;
-				handle.hasMore = state.hasMore;
-				if (state.subId !== null && ok.value !== undefined) {
-					this.tracker.dispatchInitialSnapshot(
-						state.subId,
-						[collection],
+				while (true) {
+					if (state.subId === null || state.nextCursor === null) return;
+					if (state.inFlight !== null) {
+						await state.inFlight;
+						continue;
+					}
+					break;
+				}
+				const subId = state.subId;
+				const nextCursor = state.nextCursor;
+				const promise = (async () => {
+					const ok = await this.conn.dispatch(buildLoadMore(subId, nextCursor));
+					const decoded = this.decodeLoadMoreRows(
 						ok.value as JsonValue,
+						collection,
 					);
+					state.nextCursor = ok.nextCursor ?? null;
+					state.hasMore = ok.hasMore ?? false;
+					handle.hasMore = state.hasMore;
+					if (state.subId !== null && decoded !== undefined) {
+						this.tracker.dispatchInitialSnapshot(
+							state.subId,
+							[collection],
+							decoded,
+						);
+					}
+				})();
+				state.inFlight = promise;
+				try {
+					await promise;
+				} finally {
+					state.inFlight = null;
 				}
 			},
 		};
@@ -323,6 +344,29 @@ export class StoreImpl {
 		} catch (err) {
 			this.emitAndThrow(err, fallbackMessage);
 		}
+	}
+
+	private decodeLoadMoreRows(value: JsonValue, collection: string): JsonValue {
+		if (
+			!Array.isArray(value) ||
+			value.length === 0 ||
+			!Array.isArray(value[0])
+		) {
+			return value;
+		}
+		const isValid = (value as Array<unknown>).every(
+			(row) =>
+				Array.isArray(row) &&
+				row.length > 0 &&
+				(row as Array<unknown>).every(
+					(t) => Array.isArray(t) && t.length === 2 && typeof t[0] === "number",
+				),
+		);
+		if (!isValid) return value;
+		const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
+		return (value as Array<Array<[number, unknown]>>).map((row) =>
+			this.conn.schemaDictionary.decodeValue(tableIndex, row),
+		) as JsonValue;
 	}
 
 	private dispatchUnsubscribe(subId: number): void {

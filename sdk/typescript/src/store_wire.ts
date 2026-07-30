@@ -258,14 +258,8 @@ export function buildUnsubscribe(subId: number): Omit<StoreUnsubscribe, "id"> {
 export function buildLoadMore(
 	subId: number,
 	nextCursor: string,
-	collection: string,
 ): Omit<StoreLoadMore, "id"> {
-	return {
-		type: "StoreLoadMore",
-		subId,
-		nextCursor,
-		table_index: collection,
-	};
+	return { type: "StoreLoadMore", subId, nextCursor };
 }
 
 export function shapeGetResult(
