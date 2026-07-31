@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
-
 pub const WireError = struct {
     code: []const u8,
     message: []const u8,

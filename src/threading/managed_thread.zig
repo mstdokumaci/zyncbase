@@ -1,5 +1,4 @@
 const std = @import("std");
-
 pub fn managedThread(comptime Context: type) type { // zwanzig-disable-line: unused-parameter
     return struct {
         thread: ?std.Thread = null,

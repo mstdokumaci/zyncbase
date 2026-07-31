@@ -7,7 +7,6 @@ const uws = @import("../uwebsockets_wrapper.zig");
 
 const Allocator = std.mem.Allocator;
 const WebSocket = uws.WebSocket;
-
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 
 // Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).

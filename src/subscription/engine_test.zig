@@ -10,7 +10,6 @@ const subscription_engine = @import("engine.zig");
 
 const testing = std.testing;
 const SubscriptionEngine = subscription_engine.SubscriptionEngine;
-
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);

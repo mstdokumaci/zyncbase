@@ -8,7 +8,6 @@ const typed_doc_id = @import("../typed/doc_id.zig");
 const ColumnValue = @import("sql.zig").ColumnValue;
 
 const Allocator = std.mem.Allocator;
-
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers
     passive,

@@ -7,9 +7,7 @@ const SqlList = @import("../sql/buf.zig").SqlList;
 const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const Value = typed.Value;
-
 pub const RenderedPredicate = struct {
     sql: []const u8,
     values: []Value,

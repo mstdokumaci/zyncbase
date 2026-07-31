@@ -12,7 +12,6 @@ const makePresencePatch = th.makePresencePatch;
 const makeTestSharedFields = th.makeTestSharedFields;
 const zeroDocId = typed_doc_id.zero;
 const docIdFromBytes = typed_doc_id.fromBytes;
-
 test "PresenceManager - setUser creates record and queues pending update" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);

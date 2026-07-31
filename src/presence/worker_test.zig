@@ -12,7 +12,6 @@ const makeTestUserFields = th.makeTestUserFields;
 const freeTestFields = th.freeTestFields;
 const makePresencePatch = th.makePresencePatch;
 const makeTestSharedSingleField = th.makeTestSharedSingleField;
-
 fn notifierFn(ctx: ?*anyopaque) void {
     const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(ctx));
     _ = counter.fetchAdd(1, .monotonic);

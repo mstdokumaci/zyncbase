@@ -4,7 +4,6 @@ const query_ast = @import("ast.zig");
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
 const Record = typed.Record;
-
 pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Record) !bool {
     switch (predicate.state) {
         .match_all => return true,

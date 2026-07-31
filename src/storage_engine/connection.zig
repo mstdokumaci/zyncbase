@@ -7,10 +7,8 @@ const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
 
 const Allocator = std.mem.Allocator;
-
 const CheckpointMode = write_queue.CheckpointMode;
 const CheckpointStats = write_queue.CheckpointStats;
-
 pub const ReaderNode = struct {
     conn: sqlite.Db,
     mutex: std.Thread.Mutex,

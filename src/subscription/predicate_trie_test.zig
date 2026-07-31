@@ -8,7 +8,6 @@ const predicate_trie = @import("predicate_trie.zig");
 const testing = std.testing;
 const Condition = query_ast.Condition;
 const PredicateTrie = predicate_trie.PredicateTrie;
-
 fn listContains(list: *const std.ArrayListUnmanaged(u64), val: u64) bool {
     for (list.items) |item| {
         if (item == val) return true;

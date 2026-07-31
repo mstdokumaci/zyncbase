@@ -1,5 +1,4 @@
 const std = @import("std");
-
 pub const ThreadBudgetError = error{
     InsufficientCpuCores,
 };

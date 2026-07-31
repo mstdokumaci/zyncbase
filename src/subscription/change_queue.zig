@@ -7,7 +7,6 @@ const RecordChange = @import("engine.zig").RecordChange;
 
 const Allocator = std.mem.Allocator;
 const Record = typed.Record;
-
 pub const OwnedRecordChange = struct {
     table_index: usize,
     namespace_id: i64,

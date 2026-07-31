@@ -10,7 +10,6 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
-
 pub const EvalContext = struct {
     allocator: Allocator,
     session_user_id: ?typed_doc_id.DocId = null,

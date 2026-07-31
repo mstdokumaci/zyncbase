@@ -1,18 +1,17 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
+const UserEntry = @import("../presence/manager.zig").UserEntry;
+const PresenceManager = @import("../presence/manager.zig").PresenceManager;
+const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 const WireError = @import("errors.zig").WireError;
-const UserEntry = @import("../presence/manager.zig").UserEntry;
 
 const Allocator = std.mem.Allocator;
-
-// === Comptime-encoded wire keys and values ===
-
 const Keys = struct {
     pub const @"type" = comptimeEncodeKey("type");
     pub const id = comptimeEncodeKey("id");
@@ -517,9 +516,6 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 }
 
 // === Presence encoding ===
-
-const PresenceManager = @import("../presence/manager.zig").PresenceManager;
-const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;

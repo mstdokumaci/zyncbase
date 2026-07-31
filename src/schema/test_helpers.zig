@@ -15,10 +15,6 @@ const schema_types = @import("types.zig");
 const Schema = schema_types.Schema;
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const send_queue_type = send_queue_mod.send_queue;
-
-// ─── Low-level Field and Table builders ──────────────────────────────────────
-// These hide name_quoted — tests should never need to know about SQL quoting.
-
 fn initField(
     name: []const u8,
     name_quoted: []const u8,

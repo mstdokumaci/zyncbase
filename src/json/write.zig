@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-
 const escape_table = blk: {
     var table: [256]?[]const u8 = undefined;
     for (&table, 0..) |*entry, i| {

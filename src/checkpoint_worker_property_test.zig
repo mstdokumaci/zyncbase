@@ -4,13 +4,6 @@ const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 
 const testing = std.testing;
-
-// 1. No data loss occurs during checkpoint
-// 2. WAL size decreases or stays same after successful checkpoint
-// 3. Checkpoint metrics accurately reflect operation
-// 4. Failed checkpoints don't corrupt database state
-// 5. Concurrent reads can continue during checkpoint
-
 test "checkpoint: integrity - no data loss occurs during checkpoint" {
     const allocator = testing.allocator;
 

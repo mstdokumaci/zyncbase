@@ -4,7 +4,6 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
 const buf_mod = @import("buf.zig");
 const build = @import("build.zig");
-
 test "appendProjectedColumnsSql projects all fields with proper quoting" {
     const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};

@@ -7,7 +7,6 @@ const testing = std.testing;
 const createMockWebSocket = helpers.createMockWebSocket;
 const destroyMockWebSocket = helpers.destroyMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
-
 test "connection: state deallocation on close" {
     // This property test verifies that for any connection that closes,
     // all associated connection state is deallocated properly.

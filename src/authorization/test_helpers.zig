@@ -11,7 +11,6 @@ const NamespaceRule = authorization_types.NamespaceRule;
 const StoreRule = authorization_types.StoreRule;
 const PatternSegment = authorization_types.PatternSegment;
 const AuthConfig = authorization_types.AuthConfig;
-
 pub fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
     var schema = try makeAuthTestSchema(allocator);
     defer schema.deinit();

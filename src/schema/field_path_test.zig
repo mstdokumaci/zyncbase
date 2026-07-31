@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const field_path = @import("field_path.zig");
-
 test "field_path join: empty prefix returns copy of segment" {
     const allocator = std.testing.allocator;
     const result = try field_path.join(allocator, "", "city");

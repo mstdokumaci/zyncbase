@@ -11,7 +11,6 @@ const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const Session = @import("session.zig").Session;
 
 const Allocator = std.mem.Allocator;
-
 pub const TicketExchange = struct {
     allocator: Allocator,
     ticket_secret: [32]u8,

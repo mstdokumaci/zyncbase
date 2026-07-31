@@ -1,9 +1,8 @@
-// zlint-disable
-
+// zlint-disable no-print
 const builtin = @import("builtin");
 const std = @import("std");
-const testing = std.testing;
 
+const testing = std.testing;
 pub const std_options: std.Options = .{
     .logFn = log,
 };

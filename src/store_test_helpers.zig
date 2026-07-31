@@ -4,7 +4,6 @@ const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-
 pub fn createStoreSetMessageWithPayload(
     allocator: std.mem.Allocator,
     id: u64,

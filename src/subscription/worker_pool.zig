@@ -20,7 +20,6 @@ const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 const Allocator = std.mem.Allocator;
 const MatchOp = SubscriptionEngine.MatchOp;
 const Payload = msgpack.Payload;
-
 pub const SubscriptionWorkerPool = struct {
     pool: workerPool(SubscriptionWorker),
     change_queue: *ChangeQueue,

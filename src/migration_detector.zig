@@ -4,7 +4,6 @@ const sqlite = @import("sqlite");
 
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
-
 pub const ChangeKind = enum { create_table, add_column, change_type, remove_column };
 
 pub const Change = struct {

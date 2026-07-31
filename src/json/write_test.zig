@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const write_mod = @import("write.zig");
-
 test "writeEscapedString escapes special characters" {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);

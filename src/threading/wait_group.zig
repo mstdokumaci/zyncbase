@@ -1,5 +1,4 @@
 const std = @import("std");
-
 pub const WaitGroup = struct {
     count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     cond: std.Thread.Condition = .{},

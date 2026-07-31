@@ -9,7 +9,6 @@ const ddl_generator = @import("sql/ddl.zig");
 
 const MigrationDetector = migration_detector.MigrationDetector;
 const ChangeKind = migration_detector.ChangeKind;
-
 fn openMemDb() !sqlite.Db {
     return sqlite.Db.init(.{
         .mode = .Memory,

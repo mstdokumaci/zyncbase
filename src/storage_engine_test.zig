@@ -14,7 +14,6 @@ const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
-
 const BatchOpForTest = struct {
     entries: []storage_mod.WriteOp,
     latch: ?*storage_mod.AckLatch,

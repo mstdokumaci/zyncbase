@@ -11,7 +11,6 @@ const PresenceService = @import("service.zig").PresenceService;
 const th = @import("test_helpers.zig");
 
 const testing = std.testing;
-
 fn makeServiceTestSchema(allocator: std.mem.Allocator) !schema_types.Schema {
     return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{
         .{ .name = "posts", .fields = &[_][]const u8{"visibility"}, .types = &[_]schema_types.FieldType{.text} },

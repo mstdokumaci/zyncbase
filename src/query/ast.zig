@@ -7,7 +7,6 @@ const hash_context = @import("hash_context.zig");
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
-
 pub const Operator = enum(u8) {
     eq = 0,
     ne = 1,

@@ -6,7 +6,6 @@ const query_ast = @import("ast.zig");
 const Condition = query_ast.Condition;
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
-
 pub fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
     std.hash.autoHash(hasher, std.meta.activeTag(v));
     switch (v) {

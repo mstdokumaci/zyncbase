@@ -3,9 +3,7 @@ const std = @import("std");
 const doc_id = @import("doc_id.zig");
 
 const Allocator = std.mem.Allocator;
-
 pub const DocId = doc_id.DocId;
-
 pub const Record = struct {
     values: []Value,
 

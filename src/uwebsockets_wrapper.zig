@@ -1,16 +1,14 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const authentication_session = @import("authentication/session.zig");
-
-const Allocator = std.mem.Allocator;
-const Session = authentication_session.Session;
-
-// C imports for ZyncBase's uWebSockets bridge.
 pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
 
+const authentication_session = @import("authentication/session.zig");
+
+const Allocator = std.mem.Allocator;
+const Session = authentication_session.Session;
 const SocketUserData = struct {
     server: *WebSocketServer,
     session: ?Session,

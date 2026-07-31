@@ -18,7 +18,6 @@ const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
 
 const Allocator = std.mem.Allocator;
-
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
 const metadata_cache_type = storage_cache.metadata_cache_type;
@@ -26,7 +25,6 @@ const req_queue_type = read_buffer.read_request_queue;
 const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
 const ReaderNode = connection.ReaderNode;
-
 fn cleanupRequest(req: ReadRequest, alloc: Allocator) void {
     var mutable_req = req;
     mutable_req.deinit(alloc);

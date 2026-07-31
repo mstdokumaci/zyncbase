@@ -3,7 +3,6 @@ const std = @import("std");
 const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 pub const Session = struct {
     external_id: []const u8,
     is_anonymous: bool,

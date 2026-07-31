@@ -10,7 +10,6 @@ const query_parser = @import("parser.zig");
 const qth = @import("test_helpers.zig");
 
 const testing = std.testing;
-
 test "basic query filter parsing" {
     const allocator = testing.allocator;
 

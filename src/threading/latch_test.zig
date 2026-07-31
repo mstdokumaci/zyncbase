@@ -3,7 +3,6 @@ const std = @import("std");
 const latch = @import("latch.zig").latch;
 
 const testing = std.testing;
-
 const error_latch = latch(void);
 
 test "latch(void): resolve unblocks wait" {

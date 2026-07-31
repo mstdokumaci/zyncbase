@@ -23,7 +23,6 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const Allocator = std.mem.Allocator;
 const WriteWorker = write_worker_mod.WriteWorker;
 const Schema = schema_types.Schema;
-
 pub const StorageError = storage_errors.StorageError;
 pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
@@ -41,7 +40,6 @@ const DocId = typed_doc_id.DocId;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
-
 var unique_id_counter = std.atomic.Value(usize).init(0);
 
 pub const StorageEngine = struct {

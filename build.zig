@@ -50,22 +50,22 @@ pub fn build(b: *std.Build) void {
     const lint_step = b.step("lint", "Run zwanzig code quality check");
     lint_step.dependOn(&run_zw.step);
 
-    const zimport_sort_exe = b.addExecutable(.{
-        .name = "zimport_sort",
+    const zsort_exe = b.addExecutable(.{
+        .name = "zsort",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zimport_sort.zig"),
+            .root_source_file = b.path("tools/zsort.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
         }),
     });
 
-    const run_check_imports = b.addRunArtifact(zimport_sort_exe);
+    const run_check_imports = b.addRunArtifact(zsort_exe);
     run_check_imports.addArgs(&.{ "check", "src" });
 
     const check_imports_step = b.step("check-imports", "Check Zig import ordering");
     check_imports_step.dependOn(&run_check_imports.step);
 
-    const run_fix_imports = b.addRunArtifact(zimport_sort_exe);
+    const run_fix_imports = b.addRunArtifact(zsort_exe);
     run_fix_imports.addArgs(&.{ "fix", "src" });
 
     const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering");

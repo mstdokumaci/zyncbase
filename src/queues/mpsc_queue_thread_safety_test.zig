@@ -4,7 +4,6 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
 
 const testing = std.testing;
-
 const TestEntry = struct {
     id: u64,
     msg: []const u8,

@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-
 pub fn spmcBlockingQueue(comptime T: type) type {
     _ = @typeName(T);
     return struct {

@@ -3,7 +3,6 @@ const std = @import("std");
 const WaitGroup = @import("wait_group.zig").WaitGroup;
 
 const testing = std.testing;
-
 test "WaitGroup: add and done" {
     var wg = WaitGroup.init();
     try testing.expectEqual(@as(usize, 0), wg.value());

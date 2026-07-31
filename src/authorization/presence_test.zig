@@ -8,7 +8,6 @@ const authorization_presence = @import("presence.zig");
 const auth_helpers = @import("test_helpers.zig");
 
 const testing = std.testing;
-
 test "authorizePresenceWrite enforces presenceWrite condition" {
     const allocator = testing.allocator;
     const json =

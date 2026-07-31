@@ -7,7 +7,6 @@ const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 pub const MetadataCacheKey = struct {
     namespace_id: i64,
     table_index: usize,

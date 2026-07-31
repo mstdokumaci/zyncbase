@@ -2,7 +2,6 @@ const memory_strategy = @import("../memory_strategy.zig");
 const mpscQueue = @import("../queues/mpsc_queue.zig").mpscQueue;
 
 const ArenaHandle = memory_strategy.ArenaHandle;
-
 pub const Entry = struct {
     conn_id: u64,
     data: []const u8,

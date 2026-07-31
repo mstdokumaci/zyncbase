@@ -14,12 +14,10 @@ const filter_sql = @import("filter_sql.zig");
 const sql = @import("sql.zig");
 
 const Allocator = std.mem.Allocator;
-
 const DocId = typed_doc_id.DocId;
 const Cursor = typed.Cursor;
 const Record = typed.Record;
 const Value = typed.Value;
-
 pub const QueryResult = struct {
     sql: []const u8,
     values: []Value,

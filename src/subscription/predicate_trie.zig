@@ -6,7 +6,6 @@ const hash_context = @import("../query/hash_context.zig");
 const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
 const Operator = query_ast.Operator;

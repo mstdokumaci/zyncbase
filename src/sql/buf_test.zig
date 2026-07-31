@@ -4,7 +4,6 @@ const sql_buf = @import("buf.zig");
 
 const SqlBuf = sql_buf.SqlBuf;
 const SqlList = sql_buf.SqlList;
-
 test "append and appendSlice accumulate bytes" {
     var b = SqlBuf.init();
     defer b.deinit(std.testing.allocator);

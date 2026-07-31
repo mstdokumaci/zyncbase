@@ -7,10 +7,8 @@ const doc_id = @import("doc_id.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const ScalarValue = types.ScalarValue;
 const Value = types.Value;
-
 pub fn writeMsgPack(value: Value, writer: anytype) !void {
     switch (value) {
         .nil => try msgpack.encode(.nil, writer),

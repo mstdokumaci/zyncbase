@@ -3,7 +3,6 @@ const std = @import("std");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const SqlBuf = @import("buf.zig").SqlBuf;
-
 pub const DDLGenerator = struct {
     allocator: std.mem.Allocator,
 

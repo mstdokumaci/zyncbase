@@ -7,7 +7,6 @@ const test_helpers = @import("test_helpers.zig");
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
-
 test "ConnectionManager - init and deinit" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;

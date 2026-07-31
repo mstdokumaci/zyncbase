@@ -6,6 +6,7 @@ const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+const query_ast = @import("ast.zig");
 
 const Schema = schema_types.Schema;
 const typedValueFromPayload = typed_codec.fromPayload;
@@ -13,13 +14,10 @@ const writeValueMsgPack = typed_codec.writeMsgPack;
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 const Cursor = typed.Cursor;
-
-const query_ast = @import("ast.zig");
 const Operator = query_ast.Operator;
 const Condition = query_ast.Condition;
 const SortDescriptor = query_ast.SortDescriptor;
 const QueryFilter = query_ast.QueryFilter;
-
 pub const ParserError = error{
     InvalidMessageFormat,
     InvalidConditionFormat,

@@ -20,7 +20,6 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const DocId = typed_doc_id.DocId;
 const EngineTestContext = sth.EngineTestContext;
-
 const items_table = schema_helpers.makeTable("items", &.{
     schema_helpers.makeField("val", .integer),
 });

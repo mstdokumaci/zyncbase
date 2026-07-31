@@ -8,7 +8,6 @@ const system = @import("system.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const all_field_keys = [_][]const u8{
     "type", "indexed", "references", "onDelete",  "items",     "fields",  "metadata",
     "enum", "pattern", "format",     "minLength", "maxLength", "minimum", "maximum",

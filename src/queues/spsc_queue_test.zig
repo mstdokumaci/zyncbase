@@ -4,10 +4,8 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const spscQueue = @import("spsc_queue.zig").spscQueue;
 
 const testing = std.testing;
-
 const queue_type = spscQueue(u32, MemoryStrategy.AllocPool); // zwanzig-disable-line: identifier-style
 const pool_type = MemoryStrategy.AllocPool(queue_type.Node);
-
 fn failingPoolFn(comptime Node: type) type { // zwanzig-disable-line: unused-parameter identifier-style
     return struct {
         const Self = @This();

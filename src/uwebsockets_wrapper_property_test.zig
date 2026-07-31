@@ -9,19 +9,6 @@ const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 const testing = std.testing;
 const createMockWebSocket = helpers.createMockWebSocket;
 const destroyMockWebSocket = helpers.destroyMockWebSocket;
-
-// This property test verifies that WebSocket callbacks are invoked for all connection events:
-// - on_open callback is invoked when a connection opens
-// - on_message callback is invoked when a message is received
-// - on_close callback is invoked when a connection closes
-//
-// The test verifies that:
-// 1. Each registered callback is invoked exactly once per event
-// 2. Callbacks receive correct parameters (WebSocket pointer, user data)
-// 3. Message callbacks receive correct message content and type
-// 4. Close callbacks receive correct close code and message
-// 5. Callbacks are not invoked if not registered
-
 test "ws: callbacks invoked for all events" {
     const allocator = testing.allocator;
 

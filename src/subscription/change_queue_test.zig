@@ -5,7 +5,6 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 
 const testing = std.testing;
-
 test "ChangeQueue: computeShard determinism and range" {
     const alloc = testing.allocator;
     var queue = try ChangeQueue.init(alloc, 8);

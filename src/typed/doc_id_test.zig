@@ -3,7 +3,6 @@ const std = @import("std");
 const doc_id = @import("doc_id.zig");
 
 const testing = std.testing;
-
 test "doc_id: byte and hex roundtrips" {
 
     // toBytes/fromBytes roundtrip

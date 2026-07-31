@@ -1,5 +1,4 @@
 const std = @import("std");
-
 pub const SkipError = error{ InvalidMessageFormat, MaxDepthExceeded };
 
 const Action = union(enum) {

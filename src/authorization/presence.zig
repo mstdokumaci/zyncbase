@@ -9,7 +9,6 @@ const pattern_mod = @import("pattern.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
 pub fn authorizePresenceWrite(
     allocator: Allocator,
     config: *const types.AuthConfig,

@@ -2,7 +2,6 @@ const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
-
 pub fn makeTestUserFields(allocator: std.mem.Allocator) ![]const schema_types.PresenceField {
     const fields = try allocator.alloc(schema_types.PresenceField, 3);
     errdefer allocator.free(fields);

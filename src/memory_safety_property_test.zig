@@ -5,7 +5,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
-
 test "memory: safety and pool invariants" {
     // Each test sub-block now uses its own isolated GPA to pinpoint leaks.
     // Test 1: GeneralPurposeAllocator for long-lived allocations

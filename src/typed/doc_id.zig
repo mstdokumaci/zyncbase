@@ -1,5 +1,4 @@
 const std = @import("std");
-
 pub const DocIdError = error{
     InvalidLength,
     InvalidHex,

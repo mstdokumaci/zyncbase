@@ -11,7 +11,6 @@ const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
 
 const testing = std.testing;
-
 fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metadata: *const schema_types.Table) !std.AutoHashMap(typed_doc_id.DocId, void) {
     var ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
     errdefer ids.deinit();

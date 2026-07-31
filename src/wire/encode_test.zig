@@ -14,9 +14,7 @@ const wire_errors = @import("errors.zig");
 const helpers = @import("test_helpers.zig");
 
 const testing = std.testing;
-
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
-
 test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
     const response = try wire_encode.encodeSuccess(allocator, 12345);

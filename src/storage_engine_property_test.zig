@@ -7,7 +7,6 @@ const tth = @import("typed/test_helpers.zig");
 
 const testing = std.testing;
 const StorageEngine = sth.StorageEngine;
-
 test "storage: engine initialization errors" {
     const allocator = testing.allocator;
     var ms: sth.MemoryStrategy = undefined;

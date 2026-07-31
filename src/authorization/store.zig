@@ -12,7 +12,6 @@ const pattern_mod = @import("pattern.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
 pub const StoreReadInput = struct {
     config: *const types.AuthConfig,
     table: *const schema_types.Table,

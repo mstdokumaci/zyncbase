@@ -10,8 +10,6 @@ const uws_timer = @import("../uws_timer.zig");
 const base64_utils = @import("base64_utils.zig");
 
 const Allocator = std.mem.Allocator;
-
-/// Maps JWT RSA/PSS algorithm names to their OpenSSL hash digest names.
 const rsa_hash_alg = std.StaticStringMap([:0]const u8).initComptime(.{
     .{ "RS256", "SHA256" }, .{ "PS256", "SHA256" },
     .{ "RS384", "SHA384" }, .{ "PS384", "SHA384" },

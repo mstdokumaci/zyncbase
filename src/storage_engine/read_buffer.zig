@@ -6,9 +6,7 @@ const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const Record = typed.Record;
-
 pub const ReadRequest = struct {
     conn_id: u64,
     msg_id: u64,

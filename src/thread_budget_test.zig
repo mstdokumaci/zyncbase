@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
-
 test "ThreadBudget with 3 cores" {
     const budget = try ThreadBudget.init(3);
     try std.testing.expectEqual(@as(usize, 1), budget.readers);

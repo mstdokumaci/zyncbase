@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const Config = @import("config_loader.zig").Config;
-const ConfigLoader = @import("config_loader.zig").ConfigLoader;
-
 const c = @cImport({
     @cInclude("stdlib.h");
 });
+
+const Config = @import("config_loader.zig").Config;
+const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const schema_helpers = @import("schema/test_helpers.zig");
 
 // Configuration validation properties

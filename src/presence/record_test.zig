@@ -8,7 +8,6 @@ const testing = std.testing;
 const makeTestUserFields = th.makeTestUserFields;
 const freeTestFields = th.freeTestFields;
 const makePresencePatch = th.makePresencePatch;
-
 test "PresenceRecord - init creates all-null slots" {
     const allocator = testing.allocator;
     var record = try PresenceRecord.init(allocator, 3);

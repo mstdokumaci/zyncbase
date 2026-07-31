@@ -2,35 +2,33 @@ const std = @import("std");
 
 const sqlite = @import("sqlite");
 
-const connection = @import("connection.zig");
-const reader = @import("reader.zig");
-
-const Allocator = std.mem.Allocator;
-
-const errors = @import("errors.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
-const typed = @import("../typed/types.zig");
-const schema_types = @import("../schema/types.zig");
-const schema_system = @import("../schema/system.zig");
-const sql = @import("sql.zig");
-const filter_sql = @import("filter_sql.zig");
-const query_ast = @import("../query/ast.zig");
-const storage_cache = @import("cache.zig");
-const write_queue = @import("write_queue.zig");
-const change_queue_mod = @import("../subscription/change_queue.zig");
-const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
-const ChangeQueue = change_queue_mod.ChangeQueue;
 const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
-const wire_errors = @import("../wire/errors.zig");
-const wire_encode = @import("../wire/encode.zig");
+const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
+const query_ast = @import("../query/ast.zig");
+const schema_system = @import("../schema/system.zig");
+const schema_types = @import("../schema/types.zig");
+const change_queue_mod = @import("../subscription/change_queue.zig");
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
+const storage_cache = @import("cache.zig");
+const connection = @import("connection.zig");
+const errors = @import("errors.zig");
+const filter_sql = @import("filter_sql.zig");
 const PkSet = @import("pk_set.zig").PkSet;
+const reader = @import("reader.zig");
+const sql = @import("sql.zig");
+const write_queue = @import("write_queue.zig");
 
+const Allocator = std.mem.Allocator;
+const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
+const ChangeQueue = change_queue_mod.ChangeQueue;
 const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
 const Record = typed.Record;

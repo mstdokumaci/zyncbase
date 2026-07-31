@@ -1,16 +1,16 @@
 const std = @import("std");
 
-const testing = std.testing;
-
 const helpers = @import("app_test_helpers.zig");
-const AppTestContext = helpers.AppTestContext;
-const parseResponse = helpers.parseResponse;
-const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_utils.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
+const doc_id_bytes = @import("typed/doc_id.zig").toBytes(1);
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
+const testing = std.testing;
+const AppTestContext = helpers.AppTestContext;
+const parseResponse = helpers.parseResponse;
+const routeWithArena = helpers.routeWithArena;
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
@@ -265,7 +265,6 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     try buf.append(allocator, 0x92); // fixarray(2)
     try buf.append(allocator, 0xcf);
     try writer.writeInt(u64, table.index, .big);
-    const doc_id_bytes = @import("typed/doc_id.zig").toBytes(1);
     try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
     try msgpack.writeMsgPackStr(writer, "value");
     try msgpack.writeMsgPackStr(writer, "hello");

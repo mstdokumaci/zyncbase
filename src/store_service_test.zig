@@ -14,7 +14,6 @@ const typed_doc_id = @import("typed/doc_id.zig");
 
 const testing = std.testing;
 const StorageError = storage_mod.StorageError;
-
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .namespace_id = namespace_id,

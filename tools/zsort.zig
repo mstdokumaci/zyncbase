@@ -11,6 +11,7 @@ const Import = struct {
     end: usize,
     path: []const u8,
     class: u2,
+    stray: bool = false,
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
         _ = ctx;
@@ -86,7 +87,7 @@ fn extractPath(source: []const u8, needle: []const u8) ?[]const u8 {
 }
 
 fn isTopLevelImportLine(line: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, line, " \t");
+    const trimmed = std.mem.trimLeft(u8, line, " \t\n\r");
     if (trimmed.len == 0) return true;
     if (std.mem.startsWith(u8, trimmed, "//")) return true;
 
@@ -118,6 +119,10 @@ fn findImportBlockEnd(source: []const u8) usize {
     while (pos < source.len) {
         const line_end = findLineEnd(source, pos);
         const line = source[pos..line_end];
+        if (std.mem.indexOf(u8, line, "@cImport(")) |cimport_pos| {
+            pos = findCImportEnd(source, pos + cimport_pos);
+            continue;
+        }
         if (!isTopLevelImportLine(line)) return pos;
         pos = line_end;
     }
@@ -159,6 +164,15 @@ fn hasBannedPatterns(source: []const u8) ?[]const u8 {
     return null;
 }
 
+fn braceDepth(source: []const u8, pos: usize) usize {
+    var depth: usize = 0;
+    for (source[0..pos]) |c| {
+        if (c == '{') depth += 1;
+        if (c == '}') depth -|= 1;
+    }
+    return depth;
+}
+
 fn collectImports(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -169,7 +183,10 @@ fn collectImports(
 
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, source, pos, "@import(")) |found| {
-        if (found >= block_end) break;
+        if (braceDepth(source, found) > 0) {
+            pos = found + "@import(".len;
+            continue;
+        }
         const line_start = findLineStart(source, found);
         const line_end = findLineEnd(source, found);
         const path = extractPath(source[found..], "@import(") orelse {
@@ -181,13 +198,17 @@ fn collectImports(
             .end = line_end,
             .path = path,
             .class = classify(path),
+            .stray = found >= block_end,
         });
         pos = line_end;
     }
 
     pos = 0;
     while (std.mem.indexOfPos(u8, source, pos, "@cImport(")) |found| {
-        if (found >= block_end) break;
+        if (braceDepth(source, found) > 0) {
+            pos = found + "@cImport(".len;
+            continue;
+        }
         const line_start = findLineStart(source, found);
         const block_end_cimport = findCImportEnd(source, found);
         try imports.append(allocator, .{
@@ -195,6 +216,7 @@ fn collectImports(
             .end = block_end_cimport,
             .path = "<cimport>",
             .class = CLASS_VENDOR,
+            .stray = found >= block_end,
         });
         pos = block_end_cimport;
     }
@@ -209,35 +231,56 @@ fn buildSortedImportText(
     sorted_imports: []const Import,
     block_end: usize,
 ) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer buf.deinit(allocator);
+    var imports_buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer imports_buf.deinit(allocator);
 
     var prev_class: ?u2 = null;
     for (sorted_imports) |imp| {
         if (prev_class != null and prev_class.? != imp.class) {
-            try buf.append(allocator, '\n');
+            try imports_buf.append(allocator, '\n');
         }
         prev_class = imp.class;
         const text = source[imp.start..imp.end];
-        const trimmed = std.mem.trimRight(u8, text, " \t\n\r");
+        const trimmed = std.mem.trim(u8, text, " \t\n\r");
         if (trimmed.len > 0) {
-            try buf.appendSlice(allocator, trimmed);
-            try buf.append(allocator, '\n');
+            try imports_buf.appendSlice(allocator, trimmed);
+            try imports_buf.append(allocator, '\n');
         }
     }
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    var preamble_lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer preamble_lines.deinit(allocator);
 
     var derived_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer derived_lines.deinit(allocator);
 
+    var trailing_comments: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer trailing_comments.deinit(allocator);
+
+    var seen_content: bool = false;
     var pos: usize = 0;
     while (pos < block_end) {
         const le = findLineEnd(source, pos);
         const line = source[pos..le];
         const trimmed = std.mem.trimLeft(u8, line, " \t");
-        if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
+        if (trimmed.len == 0) {
             pos = le;
             continue;
         }
+        if (std.mem.startsWith(u8, trimmed, "//")) {
+            if (!seen_content) {
+                try preamble_lines.append(allocator, line);
+            } else {
+                try trailing_comments.append(allocator, line);
+            }
+            pos = le;
+            continue;
+        }
+        seen_content = true;
+        trailing_comments.clearRetainingCapacity();
         if (std.mem.startsWith(u8, trimmed, "const ") or std.mem.startsWith(u8, trimmed, "pub const ")) {
             if (std.mem.indexOf(u8, trimmed, "@import(") == null and
                 std.mem.indexOf(u8, trimmed, "@cImport(") == null)
@@ -248,9 +291,29 @@ fn buildSortedImportText(
         pos = le;
     }
 
+    // preamble first
+    for (preamble_lines.items) |line| {
+        try buf.appendSlice(allocator, line);
+    }
+    if (preamble_lines.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
+        try buf.append(allocator, '\n');
+    }
+
+    // sorted imports
+    try buf.appendSlice(allocator, imports_buf.items);
+
+    // derived lines
     if (derived_lines.items.len > 0) {
         try buf.append(allocator, '\n');
         for (derived_lines.items) |line| {
+            try buf.appendSlice(allocator, line);
+        }
+    }
+
+    // trailing comments
+    if (trailing_comments.items.len > 0) {
+        try buf.append(allocator, '\n');
+        for (trailing_comments.items) |line| {
             try buf.appendSlice(allocator, line);
         }
     }
@@ -293,6 +356,10 @@ fn walkDir(
         const full_path = try std.fs.path.join(allocator, &.{ base_path, entry.path });
         try files.append(allocator, full_path);
     }
+}
+
+fn hasSkipComment(source: []const u8) bool {
+    return std.mem.indexOf(u8, source, "// zsort: skip") != null;
 }
 
 pub fn main() !void {
@@ -347,6 +414,8 @@ pub fn main() !void {
             continue;
         };
 
+        if (hasSkipComment(source)) continue;
+
         const block_end = findImportBlockEnd(source);
         var result = try collectImports(allocator, source, block_end);
         defer result.deinit(allocator);
@@ -358,6 +427,31 @@ pub fn main() !void {
             banned_count += 1;
         }
 
+        var stray_imports = std.ArrayListUnmanaged(Import).empty;
+        defer stray_imports.deinit(allocator);
+        for (result.items) |imp| {
+            if (imp.stray) {
+                try stray_imports.append(allocator, imp);
+            }
+        }
+        var rest = source[block_end..];
+        var filtered_rest_owned: ?[]u8 = null;
+        if (stray_imports.items.len > 0) {
+            std.sort.pdq(Import, stray_imports.items, {}, struct {
+                fn lt(_: void, a: Import, b: Import) bool { return a.start < b.start; }
+            }.lt);
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            var pos: usize = block_end;
+            for (stray_imports.items) |imp| {
+                try buf.appendSlice(allocator, source[pos..imp.start]);
+                pos = imp.end;
+            }
+            try buf.appendSlice(allocator, source[pos..]);
+            filtered_rest_owned = try buf.toOwnedSlice(allocator);
+            rest = filtered_rest_owned.?;
+        }
+        defer if (filtered_rest_owned) |fr| allocator.free(fr);
+
         const new_imports = buildSortedImportText(allocator, source, result.items, block_end) catch |err| {
             std.debug.print("Error building sorted imports for {s}: {s}\n", .{ file_path, @errorName(err) });
             error_count += 1;
@@ -366,12 +460,12 @@ pub fn main() !void {
         defer allocator.free(new_imports);
 
         const original_block = source[0..block_end];
-        if (std.mem.eql(u8, original_block, new_imports)) continue;
+        if (std.mem.eql(u8, original_block, new_imports) and stray_imports.items.len == 0) continue;
 
         changed_count += 1;
 
         if (mode == .fix) {
-            const full_new = std.mem.concat(allocator, u8, &.{ new_imports, source[block_end..] }) catch |err| {
+            const full_new = std.mem.concat(allocator, u8, &.{ new_imports, rest }) catch |err| {
                 std.debug.print("Error allocating for {s}: {s}\n", .{ file_path, @errorName(err) });
                 error_count += 1;
                 continue;

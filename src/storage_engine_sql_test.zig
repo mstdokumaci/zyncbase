@@ -17,7 +17,6 @@ const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const Value = typed.Value;
-
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};

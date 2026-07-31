@@ -4,7 +4,6 @@ const msgpack = @import("../msgpack_utils.zig");
 const msgpack_skip = @import("msgpack_skip.zig");
 
 const Payload = msgpack.Payload;
-
 pub const Envelope = struct {
     type: []const u8,
     id: u64,

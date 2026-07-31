@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const read = @import("read.zig");
-
 test "getString returns string and rejects non-string" {
     var p = try read.parseValue(std.testing.allocator,
         \\{"name":"alice","age":30,"flag":true,"nothing":null}

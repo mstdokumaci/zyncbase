@@ -7,7 +7,6 @@ const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-
 const TestSslPaths = struct {
     allocator: Allocator,
     cert_path: []u8,

@@ -5,10 +5,6 @@ const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const storage_mod = @import("storage_engine.zig");
 
 const testing = std.testing;
-
-// Unit tests for CheckpointWorker
-// These tests verify specific examples and edge cases
-
 test "CheckpointWorker: initialization" {
     const allocator = testing.allocator;
 

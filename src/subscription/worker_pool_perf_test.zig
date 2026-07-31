@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
@@ -16,7 +17,6 @@ const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 const SubscriptionWorker = @import("worker_pool.zig").SubscriptionWorker;
 
 const testing = std.testing;
-
 const TestContext = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,
@@ -127,7 +127,6 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         .old_record = null,
     };
 
-    const builtin = @import("builtin");
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
 

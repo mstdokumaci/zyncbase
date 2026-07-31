@@ -3,12 +3,10 @@ const std = @import("std");
 const types = @import("types.zig");
 
 const testing = std.testing;
-
 const Value = types.Value;
 const ScalarValue = types.ScalarValue;
 const Record = types.Record;
 const Cursor = types.Cursor;
-
 test "Value: clone preserves eql and ownership" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -5,13 +5,9 @@ const decode = @import("decode.zig");
 const helpers = @import("test_helpers.zig");
 
 const testing = std.testing;
-
 const encodePayload = helpers.encodePayload;
 const writeFixStr = helpers.writeFixStr;
 const writeFixMapHeader = helpers.writeFixMapHeader;
-
-// === Fast Decoder Tests (extracted from src/wire_test.zig) ===
-
 test "extractEnvelopeFast: valid envelope" {
     const allocator = testing.allocator;
 

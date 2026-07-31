@@ -3,7 +3,6 @@ const std = @import("std");
 const DocId = @import("../typed/doc_id.zig").DocId;
 
 const Allocator = std.mem.Allocator;
-
 pub const PkSet = struct {
     set: std.AutoHashMapUnmanaged(DocId, void),
     lock: std.Thread.RwLock,

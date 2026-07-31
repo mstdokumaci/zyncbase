@@ -10,7 +10,6 @@ const authorization_evaluate = @import("evaluate.zig");
 
 const Allocator = std.mem.Allocator;
 const DocId = typed_doc_id.DocId;
-
 pub const SessionResolver = struct {
     connection_manager: *ConnectionManager,
     memory_strategy: *MemoryStrategy,

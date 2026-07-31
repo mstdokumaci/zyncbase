@@ -3,11 +3,6 @@ const std = @import("std");
 const msgpack_utils = @import("msgpack_utils.zig");
 
 const testing = std.testing;
-
-// ============================================================
-// writeMsgPackStr tests
-// ============================================================
-
 test "msgpack_utils: writeMsgPackStr fixstr (≤31 bytes)" {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(testing.allocator);

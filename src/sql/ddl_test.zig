@@ -10,7 +10,6 @@ const DDLGenerator = ddl_generator.DDLGenerator;
 const Field = schema_types.Field;
 const FieldType = schema_types.FieldType;
 const OnDelete = schema_types.OnDelete;
-
 test "ddl_generator: generate DDL for a known table" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);

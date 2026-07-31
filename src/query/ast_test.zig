@@ -8,7 +8,6 @@ const query_ast = @import("ast.zig");
 const Operator = query_ast.Operator;
 const ValueShape = query_ast.ValueShape;
 const Value = typed.Value;
-
 test "operatorExpectsValueShape op x field-type matrix" {
     // Every (op, field_type) combination resolves to a single expected shape,
     // or to UnsupportedOperatorForFieldType. This is the authoritative matrix

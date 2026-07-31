@@ -9,7 +9,6 @@ const schema_types = @import("schema/types.zig");
 const ddl_generator = @import("sql/ddl.zig");
 
 const MigrationExecutor = migration_executor.MigrationExecutor;
-
 const zero_doc_id = [_]u8{0} ** 16;
 
 fn openMemDb() !sqlite.Db {

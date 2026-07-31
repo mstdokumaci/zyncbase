@@ -13,12 +13,8 @@ const auth_helpers = @import("test_helpers.zig");
 const authorization_types = @import("types.zig");
 
 const testing = std.testing;
-
 const EvalContext = authorization_evaluate.EvalContext;
 const ScalarValue = typed.ScalarValue;
-
-// ─── Doc Predicate Tests ────────────────────────────────────────────────────
-
 test "buildDocPredicate produces filter predicate for $doc comparison" {
     const allocator = testing.allocator;
     const json =

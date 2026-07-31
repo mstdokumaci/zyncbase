@@ -2,11 +2,6 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 const ObjectMap = std.json.ObjectMap;
-
-// ---------------------------------------------------------------------------
-// High-level parsing helpers
-// ---------------------------------------------------------------------------
-
 pub fn parseValue(allocator: Allocator, json_text: []const u8) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
 }

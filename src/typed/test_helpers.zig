@@ -5,7 +5,6 @@ const typed = @import("types.zig");
 const Value = typed.Value;
 const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
-
 pub fn valText(t: []const u8) Value {
     return .{ .scalar = .{ .text = t } };
 }

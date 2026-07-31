@@ -15,7 +15,6 @@ const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 const SubscriptionWorkerPool = @import("worker_pool.zig").SubscriptionWorkerPool;
 
 const testing = std.testing;
-
 const TestContext = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,

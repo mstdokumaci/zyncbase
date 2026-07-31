@@ -5,7 +5,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema/test_helpers.zig");
 const Schema = @import("schema/types.zig").Schema;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-
 pub const Context = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,

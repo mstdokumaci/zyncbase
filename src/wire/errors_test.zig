@@ -4,7 +4,6 @@ const msgpack = @import("../msgpack_utils.zig");
 const wire_errors = @import("errors.zig");
 
 const testing = std.testing;
-
 test "getWireError: returns non-empty comptime-encoded keys" {
     const err1 = wire_errors.getWireError(error.UnknownTable);
     try testing.expect(err1.code.len > 0);

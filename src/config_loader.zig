@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
+const json_read = @import("json/read.zig");
 
+const Allocator = std.mem.Allocator;
 pub const Config = struct {
     server: ServerConfig,
     authentication: AuthConfig,
@@ -214,8 +215,6 @@ pub const ConfigLoader = struct {
 
         return result.toOwnedSlice(allocator);
     }
-
-    const json_read = @import("json/read.zig");
 
     fn buildConfig(allocator: Allocator, json: std.json.Value) !Config {
         var config = Config{
