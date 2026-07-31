@@ -69,11 +69,24 @@ for (const f of all) {
     }
 }
 
-// reachableBy
+// reachableBy (with transitive re-export propagation)
 const reachable = new Map();
 for (const f of all) reachable.set(f.path, new Set());
 for (const f of all) for (const imp of imports.get(f.path)) reachable.get(imp).add(f.path);
-for (const f of all) for (const [,r] of reexports.get(f.path)) for (const imp of reachable.get(f.path)) reachable.get(r.sf).add(imp);
+let changed = true;
+while (changed) {
+    changed = false;
+    for (const f of all) {
+        for (const [,r] of reexports.get(f.path)) {
+            for (const imp of reachable.get(f.path)) {
+                if (!reachable.get(r.sf).has(imp)) {
+                    reachable.get(r.sf).add(imp);
+                    changed = true;
+                }
+            }
+        }
+    }
+}
 
 let ecount = 0; for (const [,s] of imports) ecount += s.size;
 log(`Import edges: ${ecount}`);
@@ -82,7 +95,7 @@ log(`Import edges: ${ecount}`);
 function nostrings(t) { return t.replace(/"(?:[^"\\]|\\.)*"/g, '""'); }
 
 // ---- PUB DECL EXTRACTION ----
-const containerRe = /(?:pub\s+)?const\s+(\w+)\s*=\s*(?:packed\s+)?(struct|enum|union(?:\(enum\))?)\s*(\{)/;
+const containerRe = /(?:pub\s+)?const\s+(\w+)\s*=\s*(?:packed\s+|extern\s+)?(struct|enum|union(?:\(enum\))?)\s*(\{)/;
 const pubRe = /pub\s+(fn|const|var|struct|enum|union(?:\(enum\))?)\s+(\w+)/g;
 
 log("Extracting decls...");
@@ -127,7 +140,7 @@ for (const f of prod) {
             decls.push({
                 file: f.path, line: i+1, name, kind: pm[1],
                 parent: scope.length > 0 ? scope[scope.length-1].name : null,
-                isReexport: line.includes("@import"),
+                isReexport: line.includes("@import") || reexports.get(f.path).has(name),
             });
         }
 
@@ -186,6 +199,7 @@ for (const d of decls) {
 
     const legal = new Set([d.file, ...(reachable.get(d.file) || [])]);
     let prodCount = 0, testCount = 0;
+    const selfText = nostrings(nocomment(fileByPath.get(d.file).text));
 
     for (const fp of legal) {
         const f = fileByPath.get(fp);
@@ -197,7 +211,7 @@ for (const d of decls) {
             // Nested: only qualified Parent.name
             const qn = d.parent + "." + d.name;
             if (isSelf) {
-                if (hasWordOutsideLines(f.text, qn, [d.line])) { prodCount++; continue; }
+                if (hasWordOutsideLines(selfText, qn, [d.line])) { prodCount++; continue; }
             } else {
                 if (hasWord(f.text, qn)) {
                     if (fileType.get(fp) === "prod") prodCount++; else testCount++;
@@ -205,7 +219,7 @@ for (const d of decls) {
             }
         } else {
             if (isSelf) {
-                if (hasWordOutsideLines(f.text, d.name, [d.line])) prodCount++;
+                if (hasWordOutsideLines(selfText, d.name, [d.line])) prodCount++;
             } else {
                 if (hasWord(f.text, d.name)) {
                     if (fileType.get(fp) === "prod") prodCount++;
@@ -226,7 +240,7 @@ function hasWordOutsideLines(text, word, skipLines) {
         const after = idx + word.length < text.length ? text.charCodeAt(idx + word.length) : 0;
         if (!isIdentChar(before) && !isIdentChar(after)) {
             const lineIdx = (text.substring(0, idx).match(/\n/g) || []).length;
-            if (!skipLines.includes(lineIdx)) return true;
+            if (!skipLines.includes(lineIdx + 1)) return true;
         }
         idx = text.indexOf(word, idx + word.length);
     }
