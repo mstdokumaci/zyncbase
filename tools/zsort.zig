@@ -629,12 +629,12 @@ pub fn main() !void {
         const block_end = findImportBlockEnd(source);
         const result = try collectImports(fa, source, block_end);
 
-        if (result.items.len == 0) continue;
-
         if (hasBannedPatterns(source)) |msg| {
             std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
             banned_count += 1;
         }
+
+        if (result.items.len == 0) continue;
 
         var stray_imports = std.ArrayListUnmanaged(Import).empty;
         for (result.items) |imp| {
@@ -653,7 +653,8 @@ pub fn main() !void {
             var buf: std.ArrayListUnmanaged(u8) = .empty;
             var pos: usize = block_end;
             for (stray_imports.items) |imp| {
-                try buf.appendSlice(fa, source[pos..imp.start]);
+                const removal_start = if (imp.comment_start) |cs| cs else imp.start;
+                try buf.appendSlice(fa, source[pos..removal_start]);
                 pos = imp.end;
             }
             try buf.appendSlice(fa, source[pos..]);
@@ -691,7 +692,11 @@ pub fn main() !void {
                 error_count += 1;
                 continue;
             };
-            try af.finish();
+            af.finish() catch |err| {
+                std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
+                error_count += 1;
+                continue;
+            };
             std.debug.print("Fixed: {s}\n", .{file_path});
         } else {
             showDiff(file_path, original_block, new_imports);

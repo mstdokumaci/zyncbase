@@ -93,7 +93,7 @@ let ecount = 0; for (const [,s] of imports) ecount += s.size;
 log(`Import edges: ${ecount}`);
 
 // ---- NOSTRINGS (for declaration parsing) ----
-function nostrings(t) { return t.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""'); }
+function nostrings(t) { return t.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/^\s*\\\\.*$/gm, ""); }
 
 // ---- PUB DECL EXTRACTION ----
 const containerRe = /(?:pub\s+)?const\s+(\w+)\s*=\s*(?:packed\s+|extern\s+)?(struct|enum|union(?:\(enum\))?)\s*(\{)/;

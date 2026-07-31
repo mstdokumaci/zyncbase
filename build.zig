@@ -64,6 +64,7 @@ pub fn build(b: *std.Build) void {
 
     const check_imports_step = b.step("check-imports", "Check Zig import ordering");
     check_imports_step.dependOn(&run_check_imports.step);
+    lint_step.dependOn(&run_check_imports.step);
 
     const run_fix_imports = b.addRunArtifact(zsort_exe);
     run_fix_imports.addArgs(&.{ "fix", "src" });

@@ -138,9 +138,11 @@ test "buildSortedImportText: basic sort" {
     const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, block_end);
     defer std.testing.allocator.free(result);
 
-    try std.testing.expect(std.mem.indexOf(u8, result, "bar") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "foo") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "std") != null);
+    const pos_std = std.mem.indexOf(u8, result, "std") orelse return error.TestUnexpectedResult;
+    const pos_bar = std.mem.indexOf(u8, result, "bar") orelse return error.TestUnexpectedResult;
+    const pos_foo = std.mem.indexOf(u8, result, "foo") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(pos_std < pos_bar);
+    try std.testing.expect(pos_bar < pos_foo);
 }
 
 test "buildSortedImportText: idempotent fix twice" {
