@@ -32,7 +32,6 @@ pub const ReaderNode = connection.ReaderNode;
 pub const WriteOp = write_queue.WriteOp;
 pub const getOpTarget = write_queue.getOpTarget;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
-pub const AckLatch = write_queue.AckLatch;
 const CheckpointStats = write_queue.CheckpointStats;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
