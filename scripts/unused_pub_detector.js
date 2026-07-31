@@ -218,9 +218,13 @@ for (const d of decls) {
         if (d.parent) {
             const qn = d.parent + "." + d.name;
             if (isSelf) {
-                if (hasWordOutsideLines(selfText, qn, [d.line])) { prodCount++; continue; }
+                if (hasWordOutsideLines(selfText, qn, [d.line])) prodCount++
+                else if (hasWord(selfText, d.parent) && hasWordOutsideLines(selfText, d.name, [d.line])) prodCount++;
             } else {
-                if (hasWord(getStripped(f), qn)) {
+                const fText = getStripped(f);
+                if (hasWord(fText, qn)) {
+                    if (fileType.get(fp) === "prod") prodCount++; else testCount++;
+                } else if (hasWord(fText, d.parent) && hasWord(fText, d.name)) {
                     if (fileType.get(fp) === "prod") prodCount++; else testCount++;
                 }
             }
