@@ -1,15 +1,17 @@
 const std = @import("std");
-const testing = std.testing;
+
+const msgpack = @import("../msgpack_utils.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const PresenceManager = @import("manager.zig").PresenceManager;
 const th = @import("test_helpers.zig");
+
+const testing = std.testing;
 const makeTestUserFields = th.makeTestUserFields;
 const freeTestFields = th.freeTestFields;
 const makePresencePatch = th.makePresencePatch;
 const makeTestSharedFields = th.makeTestSharedFields;
-const PresenceManager = @import("manager.zig").PresenceManager;
-const typed_doc_id = @import("../typed/doc_id.zig");
 const zeroDocId = typed_doc_id.zero;
 const docIdFromBytes = typed_doc_id.fromBytes;
-const msgpack = @import("../msgpack_utils.zig");
 
 test "PresenceManager - setUser creates record and queues pending update" {
     const allocator = testing.allocator;

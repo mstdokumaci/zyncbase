@@ -1,10 +1,5 @@
-/// field_path.zig — canonical helpers for the `__`-separated flat field path format.
-///
-/// Internally, nested field names are stored as flat strings joined with `__`
-/// (e.g. `"address__city"`).  User-facing schema JSON uses dot-notation
-/// (e.g. `"address.city"`).  All joining, splitting, and normalization lives
-/// here so every callsite stays in sync.
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 /// Join `prefix` and `segment` with `__`.

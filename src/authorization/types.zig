@@ -1,7 +1,9 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const typed = @import("../typed/types.zig");
+
 const query_ast = @import("../query/ast.zig");
+const typed = @import("../typed/types.zig");
+
+const Allocator = std.mem.Allocator;
 const Value = typed.Value;
 
 /// Result of matching namespace against pattern.

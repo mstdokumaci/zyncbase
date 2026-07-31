@@ -1,14 +1,16 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
 const hash_context = @import("../query/hash_context.zig");
+const typed = @import("../typed/types.zig");
+const predicate_trie = @import("predicate_trie.zig");
+
+const Allocator = std.mem.Allocator;
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
-const typed = @import("../typed/types.zig");
 const Record = typed.Record;
-const predicate_trie = @import("predicate_trie.zig");
 const PredicateTrie = predicate_trie.PredicateTrie;
 
 /// Unique identifier for a subscription as seen by the client

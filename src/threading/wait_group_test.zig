@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const WaitGroup = @import("wait_group.zig").WaitGroup;
+
+const testing = std.testing;
 
 test "WaitGroup: add and done" {
     var wg = WaitGroup.init();

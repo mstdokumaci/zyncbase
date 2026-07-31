@@ -1,10 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const types = @import("types.zig");
-const schema_types = @import("../schema/types.zig");
+
 const query_ast = @import("../query/ast.zig");
+const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const evaluate_mod = @import("evaluate.zig");
+const types = @import("types.zig");
+
+const Allocator = std.mem.Allocator;
 
 const EvalContext = evaluate_mod.EvalContext;
 const Value = typed.Value;

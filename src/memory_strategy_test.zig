@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+
+const testing = std.testing;
 
 test "MemoryStrategy: init and deinit" {
     const allocator = testing.allocator;

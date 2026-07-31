@@ -1,9 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const sqlite = @import("sqlite");
+
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
+
+const Allocator = std.mem.Allocator;
 
 const CheckpointMode = write_queue.CheckpointMode;
 const CheckpointStats = write_queue.CheckpointStats;

@@ -1,8 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
-const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
+
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const storage_mod = @import("storage_engine.zig");
+
+const testing = std.testing;
 
 // Unit tests for CheckpointWorker
 // These tests verify specific examples and edge cases

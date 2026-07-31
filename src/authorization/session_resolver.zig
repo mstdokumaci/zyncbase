@@ -1,13 +1,15 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const ConnectionManager = @import("../connection/manager.zig").ConnectionManager;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const typed_doc_id = @import("../typed/doc_id.zig");
-const DocId = typed_doc_id.DocId;
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
 const authorization_evaluate = @import("evaluate.zig");
+
+const Allocator = std.mem.Allocator;
+const DocId = typed_doc_id.DocId;
 
 pub const SessionResolver = struct {
     connection_manager: *ConnectionManager,

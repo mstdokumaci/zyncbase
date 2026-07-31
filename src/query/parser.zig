@@ -1,11 +1,13 @@
 const std = @import("std");
+
 const msgpack = @import("../msgpack_utils.zig");
-const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
-const Schema = schema_types.Schema;
+const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
-const typed = @import("../typed/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+
+const Schema = schema_types.Schema;
 const typedValueFromPayload = typed_codec.fromPayload;
 const writeValueMsgPack = typed_codec.writeMsgPack;
 const ScalarValue = typed.ScalarValue;

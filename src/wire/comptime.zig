@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const msgpack = @import("../msgpack_utils.zig");
 
 pub fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-line: unused-parameter

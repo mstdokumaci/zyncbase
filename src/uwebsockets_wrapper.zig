@@ -1,7 +1,9 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const std = @import("std");
+
 const authentication_session = @import("authentication/session.zig");
+
+const Allocator = std.mem.Allocator;
 const Session = authentication_session.Session;
 
 // C imports for ZyncBase's uWebSockets bridge.
@@ -56,15 +58,8 @@ pub const WebSocketServer = struct {
         idle_timeout: u16 = 120,
     };
 
-    pub const Error = error{
-        FailedToCreateApp,
-        ListenFailed,
-        InvalidConfig,
-        OutOfMemory,
-    };
-
     /// Initialize WebSocket server
-    pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
+    pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) !void {
         const host_z = allocator.dupeZ(u8, config.host) catch return error.OutOfMemory;
         errdefer allocator.free(host_z);
 

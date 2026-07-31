@@ -1,15 +1,17 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const typed_doc_id = @import("../typed/doc_id.zig");
-const msgpack = @import("../msgpack_utils.zig");
-const PresenceManager = @import("manager.zig").PresenceManager;
-const wire_encode = @import("../wire/encode.zig");
+
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const msgpack = @import("../msgpack_utils.zig");
+const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
+const typed_doc_id = @import("../typed/doc_id.zig");
+const wire_encode = @import("../wire/encode.zig");
+const PresenceManager = @import("manager.zig").PresenceManager;
+
+const Allocator = std.mem.Allocator;
 
 /// A presence operation enqueued by the event loop for the dispatcher thread.
 /// The `allocator` field owns any heap-allocated data inside `op` (e.g. cloned

@@ -1,6 +1,8 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+
+const Allocator = std.mem.Allocator;
 
 /// Lock-free cache for parallel reads across all CPU cores.
 /// Generic over type T, allowing specialized storage for AuthResponses, MsgPack payloads, etc.

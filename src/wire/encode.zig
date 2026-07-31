@@ -1,12 +1,15 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const msgpack = @import("../msgpack_utils.zig");
-const typed = @import("../typed/types.zig");
+const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const schema_types = @import("../schema/types.zig");
-const WireError = @import("errors.zig").WireError;
+const typed = @import("../typed/types.zig");
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
+const WireError = @import("errors.zig").WireError;
+const UserEntry = @import("../presence/manager.zig").UserEntry;
+
+const Allocator = std.mem.Allocator;
 
 // === Comptime-encoded wire keys and values ===
 
@@ -28,11 +31,9 @@ const Keys = struct {
     pub const fields = comptimeEncodeKey("fields");
     pub const field_flags = comptimeEncodeKey("fieldFlags");
     pub const write_id = comptimeEncodeKey("writeId");
-    pub const details = comptimeEncodeKey("details");
     pub const phase = comptimeEncodeKey("phase");
     pub const batch_index = comptimeEncodeKey("batchIndex");
     pub const session = comptimeEncodeKey("session");
-    pub const token = comptimeEncodeKey("token");
     pub const presence_user_fields = comptimeEncodeKey("presenceUserFields");
     pub const presence_shared_fields = comptimeEncodeKey("presenceSharedFields");
     pub const event = comptimeEncodeKey("event");
@@ -604,7 +605,7 @@ pub fn encodePresenceUserSnapshot(
     allocator: Allocator,
     msg_id: u64,
     sub_id: u64,
-    users: []const @import("../presence/manager.zig").UserEntry,
+    users: []const UserEntry,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);

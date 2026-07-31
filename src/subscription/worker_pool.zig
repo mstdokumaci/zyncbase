@@ -1,23 +1,25 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const ChangeQueue = @import("change_queue.zig").ChangeQueue;
-const ChangeJob = @import("change_queue.zig").ChangeJob;
-const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
-const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
-const RecordChange = @import("engine.zig").RecordChange;
-const MatchOp = SubscriptionEngine.MatchOp;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
+
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("../msgpack_utils.zig");
-const Payload = msgpack.Payload;
+const schema_system = @import("../schema/system.zig");
+const schema_types = @import("../schema/types.zig");
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
-const schema_types = @import("../schema/types.zig");
-const schema_system = @import("../schema/system.zig");
-const managedThread = @import("../threading/managed_thread.zig").managedThread;
-const workerPool = @import("../threading/worker_pool.zig").workerPool;
-const Notifier = @import("../threading/notifier.zig").Notifier;
+const ChangeJob = @import("change_queue.zig").ChangeJob;
+const ChangeQueue = @import("change_queue.zig").ChangeQueue;
+const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
+const RecordChange = @import("engine.zig").RecordChange;
+const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+
+const Allocator = std.mem.Allocator;
+const MatchOp = SubscriptionEngine.MatchOp;
+const Payload = msgpack.Payload;
 
 pub const SubscriptionWorkerPool = struct {
     pool: workerPool(SubscriptionWorker),

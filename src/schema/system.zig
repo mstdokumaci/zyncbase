@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const types = @import("types.zig");
 
 pub const global_namespace_id: i64 = 0;

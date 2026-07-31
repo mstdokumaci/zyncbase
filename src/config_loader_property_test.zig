@@ -1,6 +1,7 @@
 const std = @import("std");
-const ConfigLoader = @import("config_loader.zig").ConfigLoader;
+
 const Config = @import("config_loader.zig").Config;
+const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 
 const c = @cImport({
     @cInclude("stdlib.h");

@@ -1,8 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
+
+const typed_doc_id = @import("../typed/doc_id.zig");
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
-const typed_doc_id = @import("../typed/doc_id.zig");
+
+const testing = std.testing;
 
 test "ChangeQueue: computeShard determinism and range" {
     const alloc = testing.allocator;

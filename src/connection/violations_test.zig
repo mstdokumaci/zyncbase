@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
-const ViolationTracker = @import("violations.zig").ConnectionViolationTracker;
+
 const test_helpers = @import("test_helpers.zig");
+const ViolationTracker = @import("violations.zig").ConnectionViolationTracker;
+
+const testing = std.testing;
 
 test "ConnectionViolationTracker: basic functionality" {
     const allocator = testing.allocator;

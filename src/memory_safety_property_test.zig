@@ -1,8 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+
 const Connection = @import("connection/state.zig").Connection;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+
+const testing = std.testing;
 
 test "memory: safety and pool invariants" {
     // Each test sub-block now uses its own isolated GPA to pinpoint leaks.

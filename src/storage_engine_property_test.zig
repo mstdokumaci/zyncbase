@@ -1,9 +1,11 @@
 const std = @import("std");
-const testing = std.testing;
-const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
+
 const qth = @import("query/test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed/test_helpers.zig");
+
+const testing = std.testing;
 const StorageEngine = sth.StorageEngine;
 
 test "storage: engine initialization errors" {

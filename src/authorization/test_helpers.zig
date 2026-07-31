@@ -1,10 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const authorization_parse = @import("parse.zig");
-const authorization_defaults = @import("defaults.zig");
-const authorization_types = @import("types.zig");
-const schema_types = @import("../schema/types.zig");
+
 const schema_helpers = @import("../schema/test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
+const authorization_defaults = @import("defaults.zig");
+const authorization_parse = @import("parse.zig");
+const authorization_types = @import("types.zig");
+
+const Allocator = std.mem.Allocator;
 const NamespaceRule = authorization_types.NamespaceRule;
 const StoreRule = authorization_types.StoreRule;
 const PatternSegment = authorization_types.PatternSegment;

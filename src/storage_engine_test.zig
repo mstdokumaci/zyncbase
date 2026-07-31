@@ -1,15 +1,18 @@
 const std = @import("std");
-const testing = std.testing;
-const sth = @import("storage_engine_test_helpers.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
-const qth = @import("query/test_helpers.zig");
-const tth = @import("typed/test_helpers.zig");
-const storage_mod = @import("storage_engine.zig");
-const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
-const query_ast = @import("query/ast.zig");
-const typed = @import("typed/types.zig");
-const typed_doc_id = @import("typed/doc_id.zig");
+
 const send_queue_mod = @import("connection/send_queue.zig");
+const query_ast = @import("query/ast.zig");
+const qth = @import("query/test_helpers.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
+const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
+const storage_mod = @import("storage_engine.zig");
+const storage_cache = @import("storage_engine/cache.zig");
+const sth = @import("storage_engine_test_helpers.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const tth = @import("typed/test_helpers.zig");
+const typed = @import("typed/types.zig");
+
+const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
 
 const BatchOpForTest = struct {
@@ -993,7 +996,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     const author_a: typed_doc_id.DocId = 50;
     const author_b: typed_doc_id.DocId = 51;
 
-    const cache_key = @import("storage_engine/cache.zig").getCacheKey(table_meta, namespace_id, doc_id);
+    const cache_key = storage_cache.getCacheKey(table_meta, namespace_id, doc_id);
 
     // 1. Initial upsert: Should write-through to metadata_cache
     const columns = [_]sth.ColumnValue{
@@ -1004,7 +1007,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache hit immediately after write without reading DB
-    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (storage_cache.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1023,7 +1026,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache still holds "initial_val" and was NOT evicted
-    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (storage_cache.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1036,7 +1039,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache is now a miss
-    switch (@import("storage_engine/cache.zig").getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (storage_cache.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
         .miss => {},
         .hit => return error.TestUnexpectedResult,
     }

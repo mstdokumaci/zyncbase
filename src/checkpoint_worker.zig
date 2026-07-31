@@ -1,7 +1,9 @@
 const std = @import("std");
+
 const storage_mod = @import("storage_engine.zig");
-const Allocator = std.mem.Allocator;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
+
+const Allocator = std.mem.Allocator;
 
 /// CheckpointWorker manages SQLite WAL checkpointing to prevent unbounded WAL growth
 /// and ensure predictable performance. It monitors WAL file size and age, triggering

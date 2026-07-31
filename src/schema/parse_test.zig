@@ -1,7 +1,8 @@
 const std = @import("std");
+
 const schema_parse = @import("parse.zig");
-const schema_types = @import("types.zig");
 const schema_helpers = @import("test_helpers.zig");
+const schema_types = @import("types.zig");
 
 test "schema_parse: rejects malformed root shape" {
     const allocator = std.testing.allocator;

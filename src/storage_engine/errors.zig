@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const sqlite = @import("sqlite");
 
 /// Specific error types for different database failure scenarios.

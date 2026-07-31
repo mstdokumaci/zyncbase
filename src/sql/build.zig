@@ -1,9 +1,11 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const types = @import("../schema/types.zig");
+
 const system = @import("../schema/system.zig");
+const types = @import("../schema/types.zig");
 const SqlBuf = @import("buf.zig").SqlBuf;
 const SqlList = @import("buf.zig").SqlList;
+
+const Allocator = std.mem.Allocator;
 
 /// Appends the standard column projection list to `buf`.
 /// Array fields are wrapped in json() to ensure text output from JSONB storage.

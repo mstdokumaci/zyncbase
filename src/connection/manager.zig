@@ -1,18 +1,20 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const Connection = @import("state.zig").Connection;
+
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const Schema = @import("../schema/types.zig").Schema;
-const send_queue_type = @import("send_queue.zig").send_queue;
-const SendQueueEntry = @import("send_queue.zig").Entry;
-const wire_encode = @import("../wire/encode.zig");
-const wire_errors = @import("../wire/errors.zig");
-const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
-const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const c = @import("../uwebsockets_wrapper.zig").c;
+const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const uws_timer = @import("../uws_timer.zig");
+const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
+const SendQueueEntry = @import("send_queue.zig").Entry;
+const send_queue_type = @import("send_queue.zig").send_queue;
+const Connection = @import("state.zig").Connection;
+
+const Allocator = std.mem.Allocator;
 
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).

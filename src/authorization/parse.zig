@@ -1,12 +1,14 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const types = @import("types.zig");
-const pattern_mod = @import("pattern.zig");
-const doc_predicate = @import("doc_predicate.zig");
-const schema_types = @import("../schema/types.zig");
-const query_ast = @import("../query/ast.zig");
-const typed = @import("../typed/types.zig");
+
 const json_read = @import("../json/read.zig");
+const query_ast = @import("../query/ast.zig");
+const schema_types = @import("../schema/types.zig");
+const typed = @import("../typed/types.zig");
+const doc_predicate = @import("doc_predicate.zig");
+const pattern_mod = @import("pattern.zig");
+const types = @import("types.zig");
+
+const Allocator = std.mem.Allocator;
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 

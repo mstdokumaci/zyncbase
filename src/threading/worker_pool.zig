@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 pub fn workerPool(comptime Worker: type) type { // zwanzig-disable-line: unused-parameter

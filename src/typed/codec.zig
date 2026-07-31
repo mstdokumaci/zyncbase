@@ -1,10 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const doc_id = @import("doc_id.zig");
+
+const json_write = @import("../json/write.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
+const doc_id = @import("doc_id.zig");
 const types = @import("types.zig");
-const json_write = @import("../json/write.zig");
+
+const Allocator = std.mem.Allocator;
 
 const ScalarValue = types.ScalarValue;
 const Value = types.Value;

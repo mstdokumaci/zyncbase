@@ -1,9 +1,11 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const query_ast = @import("../query/ast.zig");
 const query_eval = @import("../query/eval.zig");
 const hash_context = @import("../query/hash_context.zig");
 const typed = @import("../typed/types.zig");
+
+const Allocator = std.mem.Allocator;
 
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;

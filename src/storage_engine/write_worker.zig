@@ -1,8 +1,11 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const sqlite = @import("sqlite");
+
 const connection = @import("connection.zig");
 const reader = @import("reader.zig");
+
+const Allocator = std.mem.Allocator;
 
 const errors = @import("errors.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -26,6 +29,7 @@ const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConf
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
+const PkSet = @import("pk_set.zig").PkSet;
 
 const DocId = typed_doc_id.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
@@ -76,7 +80,7 @@ pub const WriteWorker = struct {
     metadata_cache: *storage_cache.metadata_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
-    pk_sets: []@import("pk_set.zig").PkSet,
+    pk_sets: []PkSet,
     schema: *const schema_types.Schema,
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
