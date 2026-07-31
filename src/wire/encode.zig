@@ -1,8 +1,9 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
-const UserEntry = @import("../presence/manager.zig").UserEntry;
-const PresenceManager = @import("../presence/manager.zig").PresenceManager;
+const presence_mgr = @import("../presence/manager.zig");
+const UserEntry = presence_mgr.UserEntry;
+const PresenceManager = presence_mgr.PresenceManager;
 const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");

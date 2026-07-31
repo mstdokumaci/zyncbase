@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
     const zw_exe = zw.artifact("zwanzig");
 
     const run_zw = b.addRunArtifact(zw_exe);
-    run_zw.addArgs(&.{ "--format", "text", "src" });
+    run_zw.addArgs(&.{ "--format", "text", "src", "tools" });
 
     const lint_step = b.step("lint", "Run zwanzig code quality check");
     lint_step.dependOn(&run_zw.step);
@@ -100,6 +100,16 @@ pub fn build(b: *std.Build) void {
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
+    const zsort_test_exe = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/zsort_test.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const run_zsort_test = b.addRunArtifact(zsort_test_exe);
+    test_step.dependOn(&run_zsort_test.step);
+
     const test_slowest_step = b.step("test-slowest", "Run all tests and report the slowest ones");
     const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
     const run_slow_tests = b.addRunArtifact(slow_tests);
@@ -124,6 +134,7 @@ pub fn build(b: *std.Build) void {
 
     const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     check_step.dependOn(&test_check.step);
+    check_step.dependOn(&zsort_exe.step);
 }
 
 fn setupTest(

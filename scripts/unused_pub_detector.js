@@ -14,7 +14,8 @@ const all = [];
     for (const e of fs.readdirSync(d, {withFileTypes:true})) {
         if (e.isDirectory()) { walk(path.join(d, e.name)); continue; }
         if (!e.name.endsWith(".zig")) continue;
-        all.push({ path: canonical(path.join(d, e.name)), text: fs.readFileSync(path.join(d, e.name), "utf-8") });
+        const abs = path.join(d, e.name);
+        all.push({ path: canonical(abs), abspath: abs, text: fs.readFileSync(abs, "utf-8") });
     }
 })(SRC);
 
@@ -42,7 +43,7 @@ for (const f of all) {
         let m;
         while ((m = impRe.exec(ln)) !== null) {
             if (EXTERNAL.has(m[2])) continue;
-            const sf = canonical(path.resolve(path.dirname(f.path), m[2]));
+            const sf = canonical(path.resolve(path.dirname(f.abspath), m[2]));
             imports.get(f.path).add(sf);
             if (m[3]) {
                 bindings.get(f.path).set(m[1], { sf, si: m[3] });
@@ -92,7 +93,7 @@ let ecount = 0; for (const [,s] of imports) ecount += s.size;
 log(`Import edges: ${ecount}`);
 
 // ---- NOSTRINGS (for declaration parsing) ----
-function nostrings(t) { return t.replace(/"(?:[^"\\]|\\.)*"/g, '""'); }
+function nostrings(t) { return t.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""'); }
 
 // ---- PUB DECL EXTRACTION ----
 const containerRe = /(?:pub\s+)?const\s+(\w+)\s*=\s*(?:packed\s+|extern\s+)?(struct|enum|union(?:\(enum\))?)\s*(\{)/;
@@ -190,6 +191,13 @@ function hasWord(text, word) {
     return false;
 }
 
+// ---- STRIPPED TEXT CACHE (precomputed per-file, reused for self+ref checks) ----
+const strippedCache = new Map();
+function getStripped(f) {
+    if (!strippedCache.has(f.path)) strippedCache.set(f.path, nostrings(nocomment(f.text)));
+    return strippedCache.get(f.path);
+}
+
 let vc = 0;
 for (const d of decls) {
     vc++;
@@ -199,7 +207,7 @@ for (const d of decls) {
 
     const legal = new Set([d.file, ...(reachable.get(d.file) || [])]);
     let prodCount = 0, testCount = 0;
-    const selfText = nostrings(nocomment(fileByPath.get(d.file).text));
+    const selfText = getStripped(fileByPath.get(d.file));
 
     for (const fp of legal) {
         const f = fileByPath.get(fp);
@@ -208,12 +216,11 @@ for (const d of decls) {
         const isSelf = fp === d.file;
 
         if (d.parent) {
-            // Nested: only qualified Parent.name
             const qn = d.parent + "." + d.name;
             if (isSelf) {
                 if (hasWordOutsideLines(selfText, qn, [d.line])) { prodCount++; continue; }
             } else {
-                if (hasWord(f.text, qn)) {
+                if (hasWord(getStripped(f), qn)) {
                     if (fileType.get(fp) === "prod") prodCount++; else testCount++;
                 }
             }
@@ -221,7 +228,7 @@ for (const d of decls) {
             if (isSelf) {
                 if (hasWordOutsideLines(selfText, d.name, [d.line])) prodCount++;
             } else {
-                if (hasWord(f.text, d.name)) {
+                if (hasWord(getStripped(f), d.name)) {
                     if (fileType.get(fp) === "prod") prodCount++;
                     else testCount++;
                 }
