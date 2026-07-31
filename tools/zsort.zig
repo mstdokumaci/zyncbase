@@ -378,7 +378,7 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     if (args.len < 3) {
-        std.debug.print("Usage: zimport_sort [check|fix] <dir|file>\n", .{});
+        std.debug.print("Usage: zsort [check|fix] <dir|file>\n", .{});
         std.process.exit(1);
     }
 
@@ -447,7 +447,9 @@ pub fn main() !void {
         var filtered_rest_owned: ?[]u8 = null;
         if (stray_imports.items.len > 0) {
             std.sort.pdq(Import, stray_imports.items, {}, struct {
-                fn lt(_: void, a: Import, b: Import) bool { return a.start < b.start; }
+                fn lt(_: void, a: Import, b: Import) bool {
+                    return a.start < b.start;
+                }
             }.lt);
             var buf: std.ArrayListUnmanaged(u8) = .empty;
             var pos: usize = block_end;
