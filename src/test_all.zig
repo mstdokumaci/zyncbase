@@ -67,14 +67,14 @@ test {
     _ = @import("lock_free_cache_leak_test.zig");
     _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_worker_test.zig");
-    _ = @import("config_loader_test.zig");
+    _ = @import("config/loader_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("message_handler_property_test.zig");
-    _ = @import("config_loader_property_test.zig");
+    _ = @import("config/loader_property_test.zig");
     _ = @import("checkpoint_worker_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
     _ = @import("storage_engine_property_test.zig");

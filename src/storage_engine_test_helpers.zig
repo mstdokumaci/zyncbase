@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const config_loader = @import("config_loader.zig");
+const config_loader = @import("config/state.zig");
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const query_ast = @import("query/ast.zig");
 const schema_index = @import("schema/index.zig");

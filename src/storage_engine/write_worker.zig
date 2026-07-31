@@ -3,7 +3,7 @@ const std = @import("std");
 const sqlite = @import("sqlite");
 
 const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
-const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
+const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");

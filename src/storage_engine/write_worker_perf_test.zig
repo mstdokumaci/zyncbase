@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const config_loader = @import("../config_loader.zig");
+const config_loader = @import("../config/state.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");

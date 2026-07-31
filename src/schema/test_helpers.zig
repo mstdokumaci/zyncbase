@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const config_loader = @import("../config_loader.zig");
+const config_loader = @import("../config/state.zig");
 const send_queue_mod = @import("../connection/send_queue.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const migration_detector = @import("../migration_detector.zig");
