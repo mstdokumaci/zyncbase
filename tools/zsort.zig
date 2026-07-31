@@ -105,8 +105,15 @@ fn isTopLevelImportLine(line: []const u8) bool {
         const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
         const before_eq = trimmed[0..eq];
         if (std.mem.indexOfScalar(u8, before_eq, ':') != null) return false;
-        const rhs = trimmed[eq + 1 ..];
-        return std.mem.indexOfScalar(u8, rhs, '.') != null;
+        const rhs = std.mem.trimLeft(u8, trimmed[eq + 1 ..], " \t");
+        if (rhs.len == 0 or (!std.ascii.isAlphabetic(rhs[0]) and rhs[0] != '_')) return false;
+        var has_dot = false;
+        for (rhs) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '_') return false;
+            if (c == '.') has_dot = true;
+        }
+        if (!has_dot) return false;
+        return true;
     }
 
     if (std.mem.startsWith(u8, trimmed, "_ = @import")) return true;
@@ -273,6 +280,21 @@ fn buildSortedImportText(
                 };
                 const rhs_raw = trimmed[eq + 1 ..];
                 const rhs = std.mem.trim(u8, rhs_raw, " \t;\n\r");
+                if (rhs.len == 0 or (!std.ascii.isAlphabetic(rhs[0]) and rhs[0] != '_')) {
+                    pos = le;
+                    continue;
+                }
+                var valid_rhs = true;
+                for (rhs) |c| {
+                    if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '_') {
+                        valid_rhs = false;
+                        break;
+                    }
+                }
+                if (!valid_rhs) {
+                    pos = le;
+                    continue;
+                }
                 const dot = std.mem.indexOfScalar(u8, rhs, '.') orelse {
                     pos = le;
                     continue;
