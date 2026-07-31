@@ -405,5 +405,6 @@ pub fn main() !void {
         const stdout_file2 = std.fs.File.stdout();
         var stdout_w2 = stdout_file2.writer(&obuf2);
         stdout_w2.interface.print("\nFixed {} files, {} errors\n", .{ changed_count, error_count }) catch {};
+        if (changed_count > 0) std.process.exit(1);
     }
 }
