@@ -231,31 +231,11 @@ fn buildSortedImportText(
     sorted_imports: []const Import,
     block_end: usize,
 ) ![]const u8 {
-    var imports_buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer imports_buf.deinit(allocator);
-
-    var prev_class: ?u2 = null;
-    for (sorted_imports) |imp| {
-        if (prev_class != null and prev_class.? != imp.class) {
-            try imports_buf.append(allocator, '\n');
-        }
-        prev_class = imp.class;
-        const text = source[imp.start..imp.end];
-        const trimmed = std.mem.trim(u8, text, " \t\n\r");
-        if (trimmed.len > 0) {
-            try imports_buf.appendSlice(allocator, trimmed);
-            try imports_buf.append(allocator, '\n');
-        }
-    }
-
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer buf.deinit(allocator);
+    var extra_imports: std.ArrayListUnmanaged(Import) = .empty;
+    defer extra_imports.deinit(allocator);
 
     var preamble_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer preamble_lines.deinit(allocator);
-
-    var derived_lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer derived_lines.deinit(allocator);
 
     var trailing_comments: std.ArrayListUnmanaged([]const u8) = .empty;
     defer trailing_comments.deinit(allocator);
@@ -268,7 +248,7 @@ fn buildSortedImportText(
     while (pos < block_end) {
         const le = findLineEnd(source, pos);
         const line = source[pos..le];
-        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        const trimmed = std.mem.trimLeft(u8, line, " \t\n\r");
         if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
             if (!seen_content) {
                 try preamble_lines.append(allocator, line);
@@ -287,13 +267,55 @@ fn buildSortedImportText(
             if (std.mem.indexOf(u8, trimmed, "@import(") == null and
                 std.mem.indexOf(u8, trimmed, "@cImport(") == null)
             {
-                try derived_lines.append(allocator, line);
+                const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse {
+                    pos = le;
+                    continue;
+                };
+                const rhs_raw = trimmed[eq + 1 ..];
+                const rhs = std.mem.trim(u8, rhs_raw, " \t;\n\r");
+                const dot = std.mem.indexOfScalar(u8, rhs, '.') orelse {
+                    pos = le;
+                    continue;
+                };
+                const module_name = rhs[0..dot];
+                try extra_imports.append(allocator, .{
+                    .start = pos,
+                    .end = le,
+                    .path = rhs,
+                    .class = classify(module_name),
+                    .stray = false,
+                });
             }
         }
         pos = le;
     }
 
-    // preamble first
+    var all_imports: std.ArrayListUnmanaged(Import) = .empty;
+    defer all_imports.deinit(allocator);
+    try all_imports.appendSlice(allocator, sorted_imports);
+    try all_imports.appendSlice(allocator, extra_imports.items);
+    std.sort.pdq(Import, all_imports.items, {}, Import.lessThan);
+
+    var imports_buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer imports_buf.deinit(allocator);
+
+    var prev_class: ?u2 = null;
+    for (all_imports.items) |imp| {
+        if (prev_class != null and prev_class.? != imp.class) {
+            try imports_buf.append(allocator, '\n');
+        }
+        prev_class = imp.class;
+        const text = source[imp.start..imp.end];
+        const trimmed_import = std.mem.trim(u8, text, " \t\n\r");
+        if (trimmed_import.len > 0) {
+            try imports_buf.appendSlice(allocator, trimmed_import);
+            try imports_buf.append(allocator, '\n');
+        }
+    }
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
     for (preamble_lines.items) |line| {
         try buf.appendSlice(allocator, line);
     }
@@ -301,25 +323,14 @@ fn buildSortedImportText(
         try buf.append(allocator, '\n');
     }
 
-    // sorted imports
     try buf.appendSlice(allocator, imports_buf.items);
 
-    // inter-section comments / blank lines (preserved from original ordering)
     if (inter_section.items.len > 0) {
         for (inter_section.items) |line| {
             try buf.appendSlice(allocator, line);
         }
     }
 
-    // derived lines
-    if (derived_lines.items.len > 0) {
-        try buf.append(allocator, '\n');
-        for (derived_lines.items) |line| {
-            try buf.appendSlice(allocator, line);
-        }
-    }
-
-    // trailing comments
     if (trailing_comments.items.len > 0) {
         try buf.append(allocator, '\n');
         for (trailing_comments.items) |line| {
@@ -331,7 +342,15 @@ fn buildSortedImportText(
         try buf.append(allocator, '\n');
     }
 
-    return buf.toOwnedSlice(allocator);
+    var deduped: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer deduped.deinit(allocator);
+    for (buf.items, 0..) |ch, i| {
+        if (ch == '\n' and i >= 2 and buf.items[i - 1] == '\n' and buf.items[i - 2] == '\n') continue;
+        try deduped.append(allocator, ch);
+    }
+    buf.deinit(allocator);
+
+    return deduped.toOwnedSlice(allocator);
 }
 
 fn showDiff(file_path: []const u8, old: []const u8, new: []const u8) void {
