@@ -1,6 +1,7 @@
 const std = @import("std");
-const schema_parse = @import("parse.zig");
+
 const schema_format = @import("format.zig");
+const schema_parse = @import("parse.zig");
 
 test "schema_property: format round trip preserves normalized structure" {
     const allocator = std.testing.allocator;

@@ -1,6 +1,8 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const types = @import("types.zig");
+
+const Allocator = std.mem.Allocator;
 const PatternSegment = types.PatternSegment;
 
 /// Parse a pattern string into PatternSegments.

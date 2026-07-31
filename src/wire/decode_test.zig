@@ -1,8 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
-const decode = @import("decode.zig");
+
 const msgpack = @import("../msgpack_utils.zig");
+const decode = @import("decode.zig");
 const helpers = @import("test_helpers.zig");
+
+const testing = std.testing;
 
 const encodePayload = helpers.encodePayload;
 const writeFixStr = helpers.writeFixStr;

@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const write_mod = @import("write.zig");
 
 test "writeEscapedString escapes special characters" {

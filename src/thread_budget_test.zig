@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 
 test "ThreadBudget with 3 cores" {

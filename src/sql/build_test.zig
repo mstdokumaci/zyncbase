@@ -1,6 +1,7 @@
 const std = @import("std");
-const schema_types = @import("../schema/types.zig");
+
 const schema_helpers = @import("../schema/test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
 const buf_mod = @import("buf.zig");
 const build = @import("build.zig");
 

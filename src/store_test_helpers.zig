@@ -1,6 +1,7 @@
 const std = @import("std");
-const msgpack_utils = @import("msgpack_utils.zig");
+
 const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
+const msgpack_utils = @import("msgpack_utils.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 

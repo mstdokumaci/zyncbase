@@ -1,10 +1,13 @@
 const std = @import("std");
+
 const msgpack = @import("msgpack");
-const testing = std.testing;
-const authorization_presence = @import("presence.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
+
 const schema_types = @import("../schema/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const authorization_presence = @import("presence.zig");
 const auth_helpers = @import("test_helpers.zig");
+
+const testing = std.testing;
 
 test "authorizePresenceWrite enforces presenceWrite condition" {
     const allocator = testing.allocator;

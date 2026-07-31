@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
-const workerPool = @import("worker_pool.zig").workerPool;
+
 const managedThread = @import("managed_thread.zig").managedThread;
+const workerPool = @import("worker_pool.zig").workerPool;
+
+const testing = std.testing;
 
 const TestWorker = struct {
     thread: managedThread(TestWorker),

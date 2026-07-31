@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const types = @import("types.zig");
+
+const testing = std.testing;
 
 const Value = types.Value;
 const ScalarValue = types.ScalarValue;

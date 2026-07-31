@@ -1,10 +1,12 @@
 const std = @import("std");
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
-const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
-const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
+
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
+const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
+
+const testing = std.testing;
+const Allocator = std.mem.Allocator;
 
 const TestSslPaths = struct {
     allocator: Allocator,

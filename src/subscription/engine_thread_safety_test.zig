@@ -1,10 +1,12 @@
 const std = @import("std");
-const testing = std.testing;
-const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
-const RecordChange = @import("engine.zig").RecordChange;
+
 const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const tth = @import("../typed/test_helpers.zig");
+const RecordChange = @import("engine.zig").RecordChange;
+const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+
+const testing = std.testing;
 
 test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
     const allocator = testing.allocator;

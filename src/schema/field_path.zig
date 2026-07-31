@@ -5,6 +5,7 @@
 /// (e.g. `"address.city"`).  All joining, splitting, and normalization lives
 /// here so every callsite stays in sync.
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 /// Join `prefix` and `segment` with `__`.

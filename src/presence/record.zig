@@ -1,9 +1,11 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const typed = @import("../typed/types.zig");
-const typed_codec = @import("../typed/codec.zig");
-const schema_types = @import("../schema/types.zig");
+
 const msgpack = @import("../msgpack_utils.zig");
+const schema_types = @import("../schema/types.zig");
+const typed_codec = @import("../typed/codec.zig");
+const typed = @import("../typed/types.zig");
+
+const Allocator = std.mem.Allocator;
 
 /// Accumulated in-memory state for one user or one namespace's shared record.
 /// A dense array indexed by field position, mirroring `typed.Record` but with

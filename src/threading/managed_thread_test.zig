@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
-const managedThread = @import("managed_thread.zig").managedThread;
+
 const latch = @import("latch.zig").latch;
+const managedThread = @import("managed_thread.zig").managedThread;
+
+const testing = std.testing;
 
 const error_latch = latch(void);
 

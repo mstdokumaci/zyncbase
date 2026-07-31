@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 /// A subscriber to presence notifications for a namespace.

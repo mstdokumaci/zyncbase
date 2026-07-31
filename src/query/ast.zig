@@ -1,7 +1,9 @@
 const std = @import("std");
+
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const hash_context = @import("hash_context.zig");
+
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;

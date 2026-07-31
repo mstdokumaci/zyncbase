@@ -1,21 +1,23 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const schema_types = @import("../schema/types.zig");
-const schema_system = @import("../schema/system.zig");
 const query_ast = @import("../query/ast.zig");
+const schema_system = @import("../schema/system.zig");
+const schema_types = @import("../schema/types.zig");
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+const wire_encode = @import("../wire/encode.zig");
 const storage_cache = @import("cache.zig");
-const read_mod = @import("reader.zig");
-const sql = @import("sql.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
-const wire_encode = @import("../wire/encode.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const managedThread = @import("../threading/managed_thread.zig").managedThread;
-const workerPool = @import("../threading/worker_pool.zig").workerPool;
-const Notifier = @import("../threading/notifier.zig").Notifier;
+const read_mod = @import("reader.zig");
+const sql = @import("sql.zig");
+
+const Allocator = std.mem.Allocator;
 
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;

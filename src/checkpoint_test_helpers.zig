@@ -1,9 +1,10 @@
 const std = @import("std");
+
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const Schema = @import("schema/types.zig").Schema;
 const schema_helpers = @import("schema/test_helpers.zig");
+const Schema = @import("schema/types.zig").Schema;
+const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,

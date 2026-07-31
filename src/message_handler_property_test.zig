@@ -1,13 +1,15 @@
 const std = @import("std");
-const testing = std.testing;
 
 const helpers = @import("app_test_helpers.zig");
-const AppTestContext = helpers.AppTestContext;
-const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
+const schema_types = @import("schema/types.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const schema_types = @import("schema/types.zig");
+
+const testing = std.testing;
+
+const AppTestContext = helpers.AppTestContext;
+const routeWithArena = helpers.routeWithArena;
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },

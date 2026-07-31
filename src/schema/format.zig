@@ -1,7 +1,8 @@
 const std = @import("std");
-const types = @import("types.zig");
+
 const json_write = @import("../json/write.zig");
 const field_path = @import("field_path.zig");
+const types = @import("types.zig");
 
 pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;

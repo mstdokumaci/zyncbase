@@ -1,15 +1,18 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const sqlite = @import("sqlite");
-const schema_types = @import("../schema/types.zig");
+
 const schema_system = @import("../schema/system.zig");
-const errors = @import("errors.zig");
-const typed = @import("../typed/types.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
-const typed_codec = @import("../typed/codec.zig");
+const schema_types = @import("../schema/types.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const SqlList = @import("../sql/buf.zig").SqlList;
 const build = @import("../sql/build.zig");
+const typed_codec = @import("../typed/codec.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+const errors = @import("errors.zig");
+
+const Allocator = std.mem.Allocator;
 
 /// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {

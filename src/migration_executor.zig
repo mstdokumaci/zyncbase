@@ -1,9 +1,11 @@
 const std = @import("std");
-const schema_types = @import("schema/types.zig");
-const schema_system = @import("schema/system.zig");
-const ddl_generator = @import("sql/ddl.zig");
-const migration_detector = @import("migration_detector.zig");
+
 const sqlite = @import("sqlite");
+
+const migration_detector = @import("migration_detector.zig");
+const schema_system = @import("schema/system.zig");
+const schema_types = @import("schema/types.zig");
+const ddl_generator = @import("sql/ddl.zig");
 
 pub const AutoMigrateMode = enum { full, additive_only, disabled };
 

@@ -1,14 +1,16 @@
 const std = @import("std");
-const testing = std.testing;
-const PresenceService = @import("service.zig").PresenceService;
-const th = @import("test_helpers.zig");
+
 const auth_helpers = @import("../authorization/test_helpers.zig");
+const auth_types = @import("../authorization/types.zig");
+const msgpack = @import("../msgpack_utils.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
+const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
-const msgpack = @import("../msgpack_utils.zig");
-const schema_types = @import("../schema/types.zig");
-const auth_types = @import("../authorization/types.zig");
+const PresenceService = @import("service.zig").PresenceService;
+const th = @import("test_helpers.zig");
+
+const testing = std.testing;
 
 fn makeServiceTestSchema(allocator: std.mem.Allocator) !schema_types.Schema {
     return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{

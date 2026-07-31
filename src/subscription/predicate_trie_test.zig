@@ -1,8 +1,9 @@
 const std = @import("std");
+
 const query_ast = @import("../query/ast.zig");
-const predicate_trie = @import("predicate_trie.zig");
-const tth = @import("../typed/test_helpers.zig");
 const qth = @import("../query/test_helpers.zig");
+const tth = @import("../typed/test_helpers.zig");
+const predicate_trie = @import("predicate_trie.zig");
 
 const testing = std.testing;
 const Condition = query_ast.Condition;

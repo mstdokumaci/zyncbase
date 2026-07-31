@@ -1,14 +1,16 @@
 const std = @import("std");
-const testing = std.testing;
 
 const helpers = @import("app_test_helpers.zig");
-const AppTestContext = helpers.AppTestContext;
-const parseResponse = helpers.parseResponse;
-const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_utils.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+
+const testing = std.testing;
+
+const AppTestContext = helpers.AppTestContext;
+const parseResponse = helpers.parseResponse;
+const routeWithArena = helpers.routeWithArena;
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;

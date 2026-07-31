@@ -1,7 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
-const msgpack_utils = @import("msgpack_utils.zig");
+
 const msgpack = @import("msgpack");
+
+const msgpack_utils = @import("msgpack_utils.zig");
+
+const testing = std.testing;
 
 // MessagePack utility properties
 //
