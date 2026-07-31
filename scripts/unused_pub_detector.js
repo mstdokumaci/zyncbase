@@ -134,8 +134,8 @@ for (const f of prod) {
         let pm;
         while ((pm = pubRe.exec(line)) !== null) {
             const name = pm[2];
-            if (depth === 0 && name === "main" && pm[1] === "fn") continue;
-            if (depth === 0 && name === "std_options") continue;
+            if (scope.length === 0 && name === "main" && pm[1] === "fn") continue;
+            if (scope.length === 0 && name === "std_options") continue;
             if (name === "Self") continue;
 
             decls.push({
@@ -197,16 +197,6 @@ function hasMemberAccess(text, name) {
     return new RegExp("\\.\\s*" + escapeRegex(name) + "\\b").test(text);
 }
 
-function hasMemberAccessOutsideLines(text, name, skipLines) {
-    const re = new RegExp("\\.\\s*" + escapeRegex(name) + "\\b", "g");
-    let m;
-    while ((m = re.exec(text)) !== null) {
-        const lineIdx = (text.substring(0, m.index).match(/\n/g) || []).length;
-        if (!skipLines.includes(lineIdx + 1)) return true;
-    }
-    return false;
-}
-
 // ---- STRIPPED TEXT CACHE (precomputed per-file, reused for self+ref checks) ----
 const strippedCache = new Map();
 function getStripped(f) {
@@ -235,7 +225,7 @@ for (const d of decls) {
             const qn = d.parent + "." + d.name;
             if (isSelf) {
                 if (hasWordOutsideLines(selfText, qn, [d.line])) prodCount++
-                else if (hasWord(selfText, d.parent) && hasMemberAccessOutsideLines(selfText, d.name, [d.line])) prodCount++;
+                else if (hasWord(selfText, d.parent) && hasWordOutsideLines(selfText, d.name, [d.line])) prodCount++;
             } else {
                 const fText = getStripped(f);
                 if (hasWord(fText, qn)) {
