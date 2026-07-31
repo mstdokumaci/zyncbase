@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
+const UserEntry = @import("../presence/manager.zig").UserEntry;
 const PresenceManager = @import("../presence/manager.zig").PresenceManager;
 const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 const schema_types = @import("../schema/types.zig");
@@ -605,7 +606,7 @@ pub fn encodePresenceUserSnapshot(
     allocator: Allocator,
     msg_id: u64,
     sub_id: u64,
-    users: []const PresenceManager.UserEntry,
+    users: []const UserEntry,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
