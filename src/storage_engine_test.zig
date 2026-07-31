@@ -8,19 +8,12 @@ const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const storage_mod = @import("storage_engine.zig");
 const cache_mod = @import("storage_engine/cache.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const latch_mod = @import("threading/latch.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
-const ack_latch = latch_mod.latch(void);
-
-const BatchOpForTest = struct {
-    entries: []storage_mod.WriteOp,
-    latch: ?*ack_latch,
-};
 
 const DirectWriterContext = struct {
     allocator: std.mem.Allocator,
@@ -84,13 +77,9 @@ fn makeDeleteBatchOps(allocator: std.mem.Allocator, table_index: usize) ![]stora
     return entries;
 }
 
-fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp, latch: *ack_latch) void {
+fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp) void {
     var last_batch_time: i64 = 0;
-    const op = BatchOpForTest{
-        .entries = entries,
-        .latch = latch,
-    };
-    ctx.engine.write_worker.executeBatchOp(op, &last_batch_time);
+    ctx.engine.write_worker.executeBatchOp(.{ .entries = entries }, &last_batch_time);
 }
 
 test "StorageEngine: shutdown drain completes immediate writer ops" {
@@ -358,16 +347,14 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchOps(allocator, 999);
-    var latch = ack_latch{};
     ctx.engine.write_worker.beginOp();
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     defer ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
         std.log.warn("failed to roll back test transaction: {}", .{err});
     };
 
-    executeBatchForTest(&ctx, entries, &latch);
+    executeBatchForTest(&ctx, entries);
 
-    try testing.expectError(storage_mod.StorageError.SQLiteError, latch.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
 }
 
@@ -380,12 +367,10 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchOps(allocator, 999);
-    var latch = ack_latch{};
     const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
-    executeBatchForTest(&ctx, entries, &latch);
+    executeBatchForTest(&ctx, entries);
 
-    try testing.expectError(storage_mod.StorageError.UnknownTable, latch.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
     try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
 
@@ -404,12 +389,10 @@ test "StorageEngine: low-level batch writer rejects unsupported ops and rolls ba
     var latch_ckpt = storage_mod.CheckpointLatch{};
     const entries = try allocator.alloc(storage_mod.WriteOp, 1);
     entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
-    var latch = ack_latch{};
     const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
-    executeBatchForTest(&ctx, entries, &latch);
+    executeBatchForTest(&ctx, entries);
 
-    try testing.expectError(storage_mod.StorageError.InvalidOperation, latch.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
     try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
 
