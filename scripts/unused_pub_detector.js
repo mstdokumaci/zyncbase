@@ -191,6 +191,22 @@ function hasWord(text, word) {
     return false;
 }
 
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function hasMemberAccess(text, name) {
+    return new RegExp("\\.\\s*" + escapeRegex(name) + "\\b").test(text);
+}
+
+function hasMemberAccessOutsideLines(text, name, skipLines) {
+    const re = new RegExp("\\.\\s*" + escapeRegex(name) + "\\b", "g");
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        const lineIdx = (text.substring(0, m.index).match(/\n/g) || []).length;
+        if (!skipLines.includes(lineIdx + 1)) return true;
+    }
+    return false;
+}
+
 // ---- STRIPPED TEXT CACHE (precomputed per-file, reused for self+ref checks) ----
 const strippedCache = new Map();
 function getStripped(f) {
@@ -219,12 +235,12 @@ for (const d of decls) {
             const qn = d.parent + "." + d.name;
             if (isSelf) {
                 if (hasWordOutsideLines(selfText, qn, [d.line])) prodCount++
-                else if (hasWord(selfText, d.parent) && hasWordOutsideLines(selfText, d.name, [d.line])) prodCount++;
+                else if (hasWord(selfText, d.parent) && hasMemberAccessOutsideLines(selfText, d.name, [d.line])) prodCount++;
             } else {
                 const fText = getStripped(f);
                 if (hasWord(fText, qn)) {
                     if (fileType.get(fp) === "prod") prodCount++; else testCount++;
-                } else if (hasWord(fText, d.parent) && hasWord(fText, d.name)) {
+                } else if (hasWord(fText, d.parent) && hasMemberAccess(fText, d.name)) {
                     if (fileType.get(fp) === "prod") prodCount++; else testCount++;
                 }
             }

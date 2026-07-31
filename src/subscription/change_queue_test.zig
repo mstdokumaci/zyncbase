@@ -123,14 +123,17 @@ test "ChangeQueue: multi-shard init and deinit" {
     // Test various shard counts
     for ([_]usize{ 1, 2, 4, 8, 16 }) |num_shards| {
         var queue = try ChangeQueue.init(alloc, num_shards);
+        defer queue.deinit();
         try testing.expectEqual(num_shards, queue.shardCount());
 
         // Verify each shard is accessible and initially empty
         for (0..num_shards) |i| {
             const shard = queue.getShard(i);
-            try testing.expect(shard.popTimed(0) == null);
+            if (shard.popTimed(0)) |job| {
+                var mut_job = job;
+                mut_job.deinit(alloc);
+                try testing.expect(false);
+            }
         }
-
-        queue.deinit();
     }
 }
