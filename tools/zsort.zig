@@ -558,7 +558,7 @@ pub fn main() !void {
         var obuf2: [256]u8 = undefined;
         const stdout_file2 = std.fs.File.stdout();
         var stdout_w2 = stdout_file2.writer(&obuf2);
-        stdout_w2.interface.print("\nFixed {} files, {} errors\n", .{ changed_count, error_count }) catch {};
-        if (changed_count > 0) std.process.exit(1);
+        stdout_w2.interface.print("\nFixed {} files, {} errors, {} banned\n", .{ changed_count, error_count, banned_count }) catch {};
+        if (changed_count > 0 or banned_count > 0) std.process.exit(1);
     }
 }
