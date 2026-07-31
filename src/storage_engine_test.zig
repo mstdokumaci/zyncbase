@@ -15,11 +15,11 @@ const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
-const AckLatch = latch_mod.latch(void);
+const ack_latch = latch_mod.latch(void);
 
 const BatchOpForTest = struct {
     entries: []storage_mod.WriteOp,
-    latch: ?*AckLatch,
+    latch: ?*ack_latch,
 };
 
 const DirectWriterContext = struct {
@@ -84,7 +84,7 @@ fn makeDeleteBatchOps(allocator: std.mem.Allocator, table_index: usize) ![]stora
     return entries;
 }
 
-fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp, latch: *AckLatch) void {
+fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp, latch: *ack_latch) void {
     var last_batch_time: i64 = 0;
     const op = BatchOpForTest{
         .entries = entries,
@@ -358,7 +358,7 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchOps(allocator, 999);
-    var latch = AckLatch{};
+    var latch = ack_latch{};
     ctx.engine.write_worker.beginOp();
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     defer ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
@@ -380,7 +380,7 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchOps(allocator, 999);
-    var latch = AckLatch{};
+    var latch = ack_latch{};
     const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries, &latch);
@@ -404,7 +404,7 @@ test "StorageEngine: low-level batch writer rejects unsupported ops and rolls ba
     var latch_ckpt = storage_mod.CheckpointLatch{};
     const entries = try allocator.alloc(storage_mod.WriteOp, 1);
     entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
-    var latch = AckLatch{};
+    var latch = ack_latch{};
     const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries, &latch);
