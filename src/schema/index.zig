@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const types = @import("types.zig");
 
 pub fn buildFieldIndex(allocator: std.mem.Allocator, table: *types.Table) !void {

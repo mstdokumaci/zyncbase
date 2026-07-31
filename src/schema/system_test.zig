@@ -1,7 +1,8 @@
 const std = @import("std");
-const schema_types = @import("types.zig");
+
 const schema_system = @import("system.zig");
 const schema_helpers = @import("test_helpers.zig");
+const schema_types = @import("types.zig");
 
 test "schema_index: exposes field kinds and writable ranges" {
     const allocator = std.testing.allocator;

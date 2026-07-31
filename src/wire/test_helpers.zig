@@ -1,7 +1,8 @@
 const std = @import("std");
+
 const msgpack = @import("../msgpack_utils.zig");
-const typed = @import("../typed/types.zig");
 const tth = @import("../typed/test_helpers.zig");
+const typed = @import("../typed/types.zig");
 
 pub fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.Record {
     const values = try allocator.alloc(typed.Value, 6);

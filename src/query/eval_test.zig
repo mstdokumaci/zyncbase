@@ -1,7 +1,8 @@
 const std = @import("std");
-const query_eval = @import("eval.zig");
-const query_ast = @import("ast.zig");
+
 const tth = @import("../typed/test_helpers.zig");
+const query_ast = @import("ast.zig");
+const query_eval = @import("eval.zig");
 
 test "evaluatePredicate respects explicit predicate states" {
     const allocator = std.testing.allocator;

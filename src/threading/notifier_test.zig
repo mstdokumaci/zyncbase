@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const Notifier = @import("notifier.zig").Notifier;
+
+const testing = std.testing;
 
 fn testCallback(ctx: ?*anyopaque) void {
     const counter: *u32 = @ptrCast(@alignCast(ctx.?));

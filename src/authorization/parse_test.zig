@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
+
 const query_ast = @import("../query/ast.zig");
 const auth_helpers = @import("test_helpers.zig");
+
+const testing = std.testing;
 
 test "AuthConfig implicit defaults" {
     const allocator = testing.allocator;

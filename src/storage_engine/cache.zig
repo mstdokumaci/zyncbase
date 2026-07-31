@@ -1,10 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
-const schema_types = @import("../schema/types.zig");
 const schema_system = @import("../schema/system.zig");
+const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+
+const Allocator = std.mem.Allocator;
 
 pub const MetadataCacheKey = struct {
     namespace_id: i64,

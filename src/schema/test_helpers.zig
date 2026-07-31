@@ -1,18 +1,20 @@
 const std = @import("std");
-const schema_types = @import("types.zig");
-const schema_parse = @import("parse.zig");
-const schema_index = @import("index.zig");
-const schema_mod_format = @import("format.zig");
-const Schema = schema_types.Schema;
-const StorageEngine = @import("../storage_engine.zig").StorageEngine;
-const ddl_generator = @import("../sql/ddl.zig");
+
+const send_queue_mod = @import("../connection/send_queue.zig");
+const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const migration_detector = @import("../migration_detector.zig");
 const migration_executor = @import("../migration_executor.zig");
-const MigrationExecutor = migration_executor.MigrationExecutor;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const send_queue_mod = @import("../connection/send_queue.zig");
-const send_queue_type = send_queue_mod.send_queue;
+const ddl_generator = @import("../sql/ddl.zig");
+const StorageEngine = @import("../storage_engine.zig").StorageEngine;
 const ChangeQueue = @import("../subscription/change_queue.zig").ChangeQueue;
+const schema_mod_format = @import("format.zig");
+const schema_index = @import("index.zig");
+const schema_parse = @import("parse.zig");
+const schema_types = @import("types.zig");
+
+const Schema = schema_types.Schema;
+const MigrationExecutor = migration_executor.MigrationExecutor;
+const send_queue_type = send_queue_mod.send_queue;
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.

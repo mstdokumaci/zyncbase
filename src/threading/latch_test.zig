@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const latch = @import("latch.zig").latch;
+
+const testing = std.testing;
 
 const error_latch = latch(void);
 

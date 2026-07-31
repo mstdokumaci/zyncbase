@@ -1,8 +1,10 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const types = @import("types.zig");
-const parse = @import("parse.zig");
+
 const schema_types = @import("../schema/types.zig");
+const parse = @import("parse.zig");
+const types = @import("types.zig");
+
+const Allocator = std.mem.Allocator;
 const AuthConfig = types.AuthConfig;
 const NamespaceRule = types.NamespaceRule;
 const StoreRule = types.StoreRule;

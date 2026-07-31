@@ -1,7 +1,9 @@
-const std = @import("std");
 const builtin = @import("builtin");
-const Allocator = std.mem.Allocator;
+const std = @import("std");
+
 const Connection = @import("connection/state.zig").Connection;
+
+const Allocator = std.mem.Allocator;
 
 /// MemoryStrategy provides different allocator strategies for different use cases in ZyncBase.
 /// It combines GeneralPurposeAllocator for long-lived allocations, ArenaAllocator for

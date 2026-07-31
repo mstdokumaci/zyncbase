@@ -1,25 +1,27 @@
 const std = @import("std");
+
+const helpers = @import("app_test_helpers.zig");
+const authorization_defaults = @import("authorization/defaults.zig");
+const connection_manager = @import("connection/manager.zig");
+const connection_violations = @import("connection/violations.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const MessageHandler = @import("message_handler.zig").MessageHandler;
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const PresenceService = @import("presence/service.zig").PresenceService;
+const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const sth = @import("storage_engine_test_helpers.zig");
+const StoreService = @import("store_service.zig").StoreService;
+const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+
 const testing = std.testing;
 
-const MessageHandler = @import("message_handler.zig").MessageHandler;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const schema_types = @import("schema/types.zig");
-const sth = @import("storage_engine_test_helpers.zig");
-const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
-const schema_helpers = @import("schema/test_helpers.zig");
-const connection_violations = @import("connection/violations.zig");
-const connection_manager = @import("connection/manager.zig");
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = connection_manager.ConnectionManager;
-const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
-const StoreService = @import("store_service.zig").StoreService;
-const PresenceService = @import("presence/service.zig").PresenceService;
-const authorization_defaults = @import("authorization/defaults.zig");
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {

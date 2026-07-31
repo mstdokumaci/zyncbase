@@ -1,6 +1,8 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const doc_id = @import("doc_id.zig");
+
+const Allocator = std.mem.Allocator;
 
 pub const DocId = doc_id.DocId;
 

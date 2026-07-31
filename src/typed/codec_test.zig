@@ -1,12 +1,14 @@
 const std = @import("std");
-const testing = std.testing;
-const schema_types = @import("../schema/types.zig");
-const msgpack = @import("../msgpack_utils.zig");
+
 const mh = @import("../msgpack_test_helpers.zig");
+const msgpack = @import("../msgpack_utils.zig");
+const schema_types = @import("../schema/types.zig");
 const typed = @import("codec.zig");
 const doc_id = @import("doc_id.zig");
 const Value = @import("types.zig").Value;
 const ScalarValue = @import("types.zig").ScalarValue;
+
+const testing = std.testing;
 
 fn jsonToOwnedSlice(allocator: std.mem.Allocator, value: Value) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;

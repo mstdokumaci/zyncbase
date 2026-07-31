@@ -1,12 +1,16 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const msgpack = @import("../msgpack_utils.zig");
-const typed = @import("../typed/types.zig");
+const PresenceManager = @import("../presence/manager.zig").PresenceManager;
+const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
+const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const schema_types = @import("../schema/types.zig");
-const WireError = @import("errors.zig").WireError;
+const typed = @import("../typed/types.zig");
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
+const WireError = @import("errors.zig").WireError;
+
+const Allocator = std.mem.Allocator;
 
 // === Comptime-encoded wire keys and values ===
 
@@ -517,9 +521,6 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 
 // === Presence encoding ===
 
-const PresenceManager = @import("../presence/manager.zig").PresenceManager;
-const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
-
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;
     const is_join = update.is_new_user and update.patch != null;
@@ -604,7 +605,7 @@ pub fn encodePresenceUserSnapshot(
     allocator: Allocator,
     msg_id: u64,
     sub_id: u64,
-    users: []const @import("../presence/manager.zig").UserEntry,
+    users: []const PresenceManager.UserEntry,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);

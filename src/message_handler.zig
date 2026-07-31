@@ -1,23 +1,25 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const msgpack = @import("msgpack_utils.zig");
-const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
-const subscription_mod = @import("subscription/engine.zig");
-const SubscriptionEngine = subscription_mod.SubscriptionEngine;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const connection_mod = @import("connection/state.zig");
-const Connection = connection_mod.Connection;
+
+const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
+const authorization_evaluate = @import("authorization/evaluate.zig");
+const authorization_types = @import("authorization/types.zig");
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
-const StoreService = @import("store_service.zig").StoreService;
+const connection_mod = @import("connection/state.zig");
+const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const msgpack = @import("msgpack_utils.zig");
 const PresenceService = @import("presence/service.zig").PresenceService;
-const wire_errors = @import("wire/errors.zig");
+const schema_types = @import("schema/types.zig");
+const StoreService = @import("store_service.zig").StoreService;
+const subscription_mod = @import("subscription/engine.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
-const authorization_types = @import("authorization/types.zig");
-const authorization_evaluate = @import("authorization/evaluate.zig");
-const schema_types = @import("schema/types.zig");
-const typed_doc_id = @import("typed/doc_id.zig");
-const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
+const wire_errors = @import("wire/errors.zig");
+
+const Allocator = std.mem.Allocator;
+const SubscriptionEngine = subscription_mod.SubscriptionEngine;
+const Connection = connection_mod.Connection;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling

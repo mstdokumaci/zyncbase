@@ -1,10 +1,12 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const schema_types = @import("../schema/types.zig");
+
 const query_ast = @import("../query/ast.zig");
-const typed = @import("../typed/types.zig");
+const schema_types = @import("../schema/types.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const SqlList = @import("../sql/buf.zig").SqlList;
+const typed = @import("../typed/types.zig");
+
+const Allocator = std.mem.Allocator;
 
 const Value = typed.Value;
 

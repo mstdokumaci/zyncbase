@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
+
 const authorization_pattern = @import("pattern.zig");
 const auth_helpers = @import("test_helpers.zig");
+
+const testing = std.testing;
 
 test "parsePattern splits literals and captures" {
     const allocator = testing.allocator;

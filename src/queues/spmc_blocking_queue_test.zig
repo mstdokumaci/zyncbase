@@ -1,6 +1,8 @@
 const std = @import("std");
-const testing = std.testing;
+
 const spmcBlockingQueue = @import("spmc_blocking_queue.zig").spmcBlockingQueue;
+
+const testing = std.testing;
 
 const TestItem = struct {
     id: u64,

@@ -1,12 +1,15 @@
 const std = @import("std");
+
 const msgpack = @import("msgpack");
-const testing = std.testing;
-const authorization_types = @import("types.zig");
-const authorization_evaluate = @import("evaluate.zig");
-const typed = @import("../typed/types.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
+
 const schema_helpers = @import("../schema/test_helpers.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
+const authorization_evaluate = @import("evaluate.zig");
 const auth_helpers = @import("test_helpers.zig");
+const authorization_types = @import("types.zig");
+
+const testing = std.testing;
 
 const EvalContext = authorization_evaluate.EvalContext;
 const ScalarValue = typed.ScalarValue;

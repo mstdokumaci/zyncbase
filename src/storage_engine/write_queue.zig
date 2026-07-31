@@ -1,11 +1,13 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
-const typed_doc_id = @import("../typed/doc_id.zig");
 const query_ast = @import("../query/ast.zig");
-const ColumnValue = @import("sql.zig").ColumnValue;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const ColumnValue = @import("sql.zig").ColumnValue;
+
+const Allocator = std.mem.Allocator;
 
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers

@@ -1,10 +1,12 @@
 const std = @import("std");
-const testing = std.testing;
+
 const helpers = @import("../app_test_helpers.zig");
+const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const test_helpers = @import("test_helpers.zig");
+
+const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
-const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 
 test "ConnectionManager - init and deinit" {
     const allocator = testing.allocator;

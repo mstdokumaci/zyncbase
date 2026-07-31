@@ -1,11 +1,13 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const typed_doc_id = @import("../typed/doc_id.zig");
-const schema_types = @import("../schema/types.zig");
+
 const msgpack = @import("../msgpack_utils.zig");
+const schema_types = @import("../schema/types.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
 const Subscriber = @import("subscriber.zig").Subscriber;
 const SubscriberTable = @import("subscriber.zig").SubscriberTable;
+
+const Allocator = std.mem.Allocator;
 
 /// Owns presence state, pending batches, and subscription tracking.
 /// Thread-safe; does not know about networking.

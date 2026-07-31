@@ -1,11 +1,14 @@
 const std = @import("std");
-const schema_types = @import("schema/types.zig");
-const schema_helpers = @import("schema/test_helpers.zig");
-const ddl_generator = @import("sql/ddl.zig");
+
+const sqlite = @import("sqlite");
+
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
+const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+const ddl_generator = @import("sql/ddl.zig");
+
 const MigrationExecutor = migration_executor.MigrationExecutor;
-const sqlite = @import("sqlite");
 
 const zero_doc_id = [_]u8{0} ** 16;
 

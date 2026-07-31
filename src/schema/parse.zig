@@ -1,10 +1,11 @@
 const std = @import("std");
-const types = @import("types.zig");
-const system = @import("system.zig");
+
 const json_read = @import("../json/read.zig");
-const index = @import("index.zig");
-const field_path = @import("field_path.zig");
 const sql_strings = @import("../sql/build.zig");
+const field_path = @import("field_path.zig");
+const index = @import("index.zig");
+const system = @import("system.zig");
+const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 

@@ -1,7 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
-const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
+
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
+
+const testing = std.testing;
 
 // 1. No data loss occurs during checkpoint
 // 2. WAL size decreases or stays same after successful checkpoint

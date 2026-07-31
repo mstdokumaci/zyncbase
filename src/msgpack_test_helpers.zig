@@ -1,6 +1,8 @@
 const std = @import("std");
+
 const msgpack_utils = @import("msgpack_utils.zig");
 const schema_types = @import("schema/types.zig");
+
 const TableMetadata = schema_types.Table;
 
 /// Wrapper for decode to maintain compatibility with zig-msgpack v0.0.16

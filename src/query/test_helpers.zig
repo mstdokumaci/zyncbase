@@ -1,9 +1,11 @@
 const std = @import("std");
-const query_ast = @import("ast.zig");
+
+const mth = @import("../msgpack_test_helpers.zig");
+const msgpack_utils = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const msgpack_utils = @import("../msgpack_utils.zig");
-const mth = @import("../msgpack_test_helpers.zig");
+const query_ast = @import("ast.zig");
+
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
