@@ -27,7 +27,7 @@ pub const MemoryStrategy = struct {
         arena_pool: PoolConfig = .{ .pre_allocate = 1024, .max_capacity = 1024 },
         connection_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 100_000 },
 
-        pub const PoolConfig = struct {
+        const PoolConfig = struct {
             pre_allocate: u32,
             max_capacity: u32,
         };

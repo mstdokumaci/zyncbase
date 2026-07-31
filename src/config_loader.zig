@@ -16,7 +16,7 @@ pub const Config = struct {
     authorization_file: ?[]const u8,
     allocator: Allocator,
 
-    pub const ServerConfig = struct {
+    const ServerConfig = struct {
         port: u16 = 3000,
         host: []const u8 = "0.0.0.0",
     };
@@ -34,7 +34,7 @@ pub const Config = struct {
         anonymous_subject_prefix: []const u8,
         session: SessionConfig = .{},
 
-        pub const SessionConfig = struct {
+        const SessionConfig = struct {
             claims: std.StringHashMapUnmanaged([]const u8) = .{},
             token_grace_period_seconds: u32 = 30,
         };

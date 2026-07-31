@@ -64,10 +64,6 @@ pub const Outbox = struct {
         }
     }
 
-    pub fn isEmpty(self: Outbox) bool {
-        return self.tail == self.head;
-    }
-
     pub fn isFull(self: Outbox) bool {
         return (self.head + 1) % outbox_capacity == self.tail;
     }

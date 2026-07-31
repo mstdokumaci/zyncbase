@@ -341,55 +341,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             }
         }
 
-        /// Evict multiple entries from the cache in a single COW operation
-        pub fn bulkEvict(self: *Self, keys: []const KeyType) void {
-            if (keys.len == 0) return;
-            while (true) {
-                const epoch_slot = self.epoch_manager.enter();
-                defer self.epoch_manager.exit(epoch_slot);
-
-                const old_entries = self.entries.load(.acquire);
-
-                var any_exists = false;
-                for (keys) |key| {
-                    if (old_entries.contains(key)) {
-                        any_exists = true;
-                        break;
-                    }
-                }
-                if (!any_exists) return;
-
-                const new_entries = self.cloneEntries(old_entries) catch return;
-
-                var evicted_entries = std.ArrayListUnmanaged(*CacheEntry).initCapacity(self.allocator, keys.len) catch {
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    return;
-                };
-                defer evicted_entries.deinit(self.allocator);
-
-                for (keys) |key| {
-                    if (new_entries.fetchRemove(key)) |kv| {
-                        evicted_entries.appendAssumeCapacity(kv.value);
-                    }
-                }
-
-                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |actual| {
-                    _ = actual;
-                    new_entries.deinit();
-                    self.allocator.destroy(new_entries);
-                    continue;
-                } else {
-                    for (evicted_entries.items) |e| {
-                        self.internalDefer(.{ .entry = e });
-                    }
-                    self.internalDefer(.{ .map = old_entries });
-                    _ = self.epoch_manager.bump();
-                    return;
-                }
-            }
-        }
-
         fn internalDefer(self: *Self, resource: Resource) void {
             const node = self.pool.pop() orelse blk: {
                 self.reclaim(false);
@@ -430,11 +381,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 }
                 self.reclaim_mutex.unlock();
             }
-        }
-
-        pub fn size(self: *Self) usize {
-            const map = self.entries.load(.acquire);
-            return map.count();
         }
 
         pub fn reclaim(self: *Self, force: bool) void {

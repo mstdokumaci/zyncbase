@@ -3,7 +3,6 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 
 pub const Payload = msgpack.Payload;
-pub const Map = msgpack.Map;
 
 /// Security-appropriate parse limits for WebSocket message handling.
 /// These align with the ZyncBase Wire Protocol Specification.
