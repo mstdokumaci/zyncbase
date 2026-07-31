@@ -32,9 +32,6 @@ pub const CheckpointStats = struct {
 /// Latch for checkpoint ops that return stats.
 pub const CheckpointLatch = latch_mod.latch(CheckpointStats); // zwanzig-disable-line: identifier-style
 
-/// Latch for batch ops that only need ack/err.
-pub const AckLatch = latch_mod.latch(void); // zwanzig-disable-line: identifier-style
-
 /// Addressing target extracted from a write op's payload. Used by the flush
 /// and batch paths to build eviction keys without re-switching on the union.
 pub const OpTarget = struct {
@@ -97,7 +94,6 @@ pub const WriteOp = union(enum) {
     },
     batch: struct {
         entries: []WriteOp,
-        latch: ?*AckLatch = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },

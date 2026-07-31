@@ -651,7 +651,6 @@ pub const WriteWorker = struct {
             while (self.queue.pop()) |op| {
                 switch (op) {
                     .checkpoint => |cop| cop.latch.reject(StorageError.EngineUnhealthy),
-                    .batch => |bop| if (bop.latch) |l| l.reject(StorageError.EngineUnhealthy),
                     else => {},
                 }
                 if (op.getWriteAckInfo()) |info| {
@@ -818,10 +817,6 @@ pub const WriteWorker = struct {
             // resume while these heap allocations are still live.
             for (entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
-
-            if (bop.latch) |l| {
-                if (final_err) |e| l.reject(e) else l.resolve({});
-            }
 
             if (@hasField(@TypeOf(bop), "conn_id")) {
                 if (bop.conn_id) |cid| {
