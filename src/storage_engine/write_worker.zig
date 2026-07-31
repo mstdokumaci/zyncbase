@@ -21,9 +21,9 @@ const storage_cache = @import("cache.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
 const filter_sql = @import("filter_sql.zig");
+const pk_set = @import("pk_set.zig");
 const reader = @import("reader.zig");
 const sql = @import("sql.zig");
-const pk_set = @import("pk_set.zig");
 const write_queue = @import("write_queue.zig");
 
 const Allocator = std.mem.Allocator;
