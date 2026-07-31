@@ -196,6 +196,14 @@ fn collectImports(
         }
         const line_start = findLineStart(source, found);
         const line_end = findLineEnd(source, found);
+        const line = std.mem.trimLeft(u8, source[line_start..line_end], " \t\r");
+        if (!std.mem.startsWith(u8, line, "const ") and
+            !std.mem.startsWith(u8, line, "pub const ") and
+            !std.mem.startsWith(u8, line, "_ = @import"))
+        {
+            pos = line_end;
+            continue;
+        }
         const path = extractPath(source[found..], "@import(") orelse {
             pos = line_end;
             continue;
