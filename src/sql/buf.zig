@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 /// Thin wrapper over `std.ArrayListUnmanaged(u8)` for building SQL/DDL strings.

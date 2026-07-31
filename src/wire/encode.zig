@@ -2,8 +2,6 @@ const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
 const presence_mgr = @import("../presence/manager.zig");
-const UserEntry = presence_mgr.UserEntry;
-const PresenceManager = presence_mgr.PresenceManager;
 const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
@@ -11,6 +9,9 @@ const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 const WireError = @import("errors.zig").WireError;
+
+const UserEntry = presence_mgr.UserEntry;
+const PresenceManager = presence_mgr.PresenceManager;
 
 const Allocator = std.mem.Allocator;
 
