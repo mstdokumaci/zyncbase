@@ -125,10 +125,10 @@ test "ChangeQueue: multi-shard init and deinit" {
         var queue = try ChangeQueue.init(alloc, num_shards);
         try testing.expectEqual(num_shards, queue.shardCount());
 
-        // Verify each shard is accessible
+        // Verify each shard is accessible and initially empty
         for (0..num_shards) |i| {
             const shard = queue.getShard(i);
-            try testing.expect(shard.isEmpty());
+            try testing.expect(shard.popTimed(0) == null);
         }
 
         queue.deinit();

@@ -114,12 +114,6 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.cond.broadcast();
         }
 
-        pub fn isEmpty(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            return self.count == 0;
-        }
-
         pub fn deinit(self: *Self) void {
             self.mutex.lock();
             defer self.mutex.unlock();
