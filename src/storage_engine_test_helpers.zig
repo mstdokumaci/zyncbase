@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const config_loader = @import("config_loader.zig");
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const query_ast = @import("query/ast.zig");
 const schema_index = @import("schema/index.zig");
@@ -365,7 +366,7 @@ pub const EngineTestContext = struct {
         try self.initWithPerformance(allocator, prefix, tables, .{}, options);
     }
 
-    pub fn initWithPerformance(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+    pub fn initWithPerformance(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, performance_config: config_loader.Config.PerformanceConfig, options: StorageEngine.Options) !void {
         const effective_options = schema_helpers.normalizeTestStorageOptions(options);
         self.allocator = allocator;
         self.test_context = try createTestContext(allocator, prefix, effective_options);
@@ -528,7 +529,7 @@ pub fn setupEngineWithOptions(ctx: *EngineTestContext, allocator: Allocator, pre
     try ctx.initWithOptions(allocator, prefix, &[_]Table{table}, options);
 }
 
-pub fn setupEngineWithPerformance(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+pub fn setupEngineWithPerformance(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table, performance_config: config_loader.Config.PerformanceConfig, options: StorageEngine.Options) !void {
     try ctx.initWithPerformance(allocator, prefix, &[_]Table{table}, performance_config, options);
 }
 

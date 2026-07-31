@@ -32,10 +32,10 @@ const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const SubscriptionWorkerPool = @import("subscription/worker_pool.zig").SubscriptionWorkerPool;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
-pub const uws_c = @import("uwebsockets_wrapper.zig").c;
-pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
-pub const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
+const uws_c = @import("uwebsockets_wrapper.zig").c;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
 const uws_timer = @import("uws_timer.zig");
 
 const SessionResolver = session_resolver.SessionResolver;

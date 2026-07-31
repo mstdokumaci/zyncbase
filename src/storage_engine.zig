@@ -48,7 +48,7 @@ pub const StorageEngine = struct {
         reader_pool_size: usize = 0,
     };
 
-    pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
+    const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
 
     pub const State = enum(u8) { setup, running, shutdown };
 

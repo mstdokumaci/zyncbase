@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const config_loader = @import("../config_loader.zig");
 const send_queue_mod = @import("../connection/send_queue.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const migration_detector = @import("../migration_detector.zig");
@@ -307,7 +308,7 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
     try setupTestEngineWithPerformance(engine, allocator, memory_strategy, context, schema, .{}, options);
 }
 
-pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, performance_config: config_loader.Config.PerformanceConfig, options: StorageEngine.Options) !void {
     const effective_options = normalizeTestStorageOptions(options);
     try engine.init(allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
