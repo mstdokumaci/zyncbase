@@ -8,7 +8,7 @@ Security is layered: transport admission, parser/resource limits, authentication
 
 | File | Responsibility |
 |------|----------------|
-| `src/config_loader.zig` | Security config values such as origins, message limits, and rate limits. |
+| `src/config/state.zig` | Security config values such as origins, message limits, and rate limits. |
 | `src/uwebsockets_wrapper.zig`, `src/uws_bridge.cpp` | Transport callbacks and origin/frame admission surface. |
 | `src/message_handler.zig` | Rate limiting, parser error handling, scoped session gate, and error propagation. |
 | `src/connection/violations.zig` | Repeated malformed/security-violation tracking. |

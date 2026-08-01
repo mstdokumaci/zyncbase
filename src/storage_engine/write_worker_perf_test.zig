@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const config_loader = @import("../config_loader.zig");
+const config_state = @import("../config/state.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -134,7 +134,7 @@ test "WriteWorker: flushBatch throughput" {
     const allocator = testing.allocator;
 
     // Disable auto-batching: test owns batch construction and flushBatch timing.
-    const perf_cfg = config_loader.Config.PerformanceConfig{
+    const perf_cfg = config_state.Config.PerformanceConfig{
         .batch_writes = false,
         .batch_size = 1,
         .batch_timeout = 0,

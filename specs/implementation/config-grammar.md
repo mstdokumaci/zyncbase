@@ -10,8 +10,9 @@ This document defines the schema, properties, and constraints for the server run
 
 | File | Responsibility |
 |------|----------------|
-| `src/config_loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
-| `src/config_loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
+| `src/config/state.zig` | Configuration types: `Config`, `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig`. |
+| `src/config/loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
+| `src/config/loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
 
 ## Important Types
 

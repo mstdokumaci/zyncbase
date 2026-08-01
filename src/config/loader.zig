@@ -1,126 +1,12 @@
 const std = @import("std");
 
-const json_read = @import("json/read.zig");
+const json_read = @import("../json/read.zig");
+const Config = @import("state.zig").Config;
 
 const Allocator = std.mem.Allocator;
 
-pub const Config = struct {
-    server: ServerConfig,
-    authentication: AuthConfig,
-    security: SecurityConfig,
-    logging: LoggingConfig,
-    performance: PerformanceConfig,
-    data_dir: []const u8,
-    schema_file: []const u8,
-    schema_content: ?[]const u8 = null,
-    authorization_file: ?[]const u8,
-    allocator: Allocator,
-
-    const ServerConfig = struct {
-        port: u16 = 3000,
-        host: []const u8 = "0.0.0.0",
-    };
-
-    pub const AuthConfig = struct {
-        jwt_secret: ?[]const u8 = null,
-        jwt_algorithm: []const u8,
-        jwt_issuer: ?[]const u8 = null,
-        jwt_audience: ?[]const u8 = null,
-        jwt_jwks_url: ?[]const u8 = null,
-        jwt_subject_claim: []const u8,
-        ticket_secret: ?[]const u8 = null,
-        ticket_ttl_seconds: u32 = 60,
-        anonymous_enabled: bool = false,
-        anonymous_subject_prefix: []const u8,
-        session: SessionConfig = .{},
-
-        const SessionConfig = struct {
-            claims: std.StringHashMapUnmanaged([]const u8) = .{},
-            token_grace_period_seconds: u32 = 30,
-        };
-    };
-
-    pub const SecurityConfig = struct {
-        allowed_origins: []const []const u8 = &.{},
-        allow_localhost: bool = true,
-        max_messages_per_second: u32 = 100,
-        max_connections: u32 = 100_000,
-        violation_threshold: u32 = 10,
-        max_message_size: usize = 1024 * 1024, // 1MB
-    };
-
-    pub const LoggingConfig = struct {
-        level: LogLevel = .info,
-        format: LogFormat = .json,
-
-        pub const LogLevel = enum {
-            debug,
-            info,
-            warn,
-            @"error",
-        };
-
-        pub const LogFormat = enum {
-            json,
-            text,
-        };
-    };
-
-    pub const PerformanceConfig = struct {
-        message_buffer_size: usize = 1000,
-        batch_writes: bool = true,
-        batch_size: usize = 200,
-        batch_timeout: u32 = 10,
-        statement_cache_size: usize = 100,
-    };
-
-    pub fn deinit(self: *Config) void {
-        // Free allocated strings
-        if (self.authentication.jwt_secret) |secret| {
-            self.allocator.free(secret);
-        }
-        self.allocator.free(self.authentication.jwt_algorithm);
-        if (self.authentication.jwt_issuer) |issuer| {
-            self.allocator.free(issuer);
-        }
-        if (self.authentication.jwt_audience) |audience| {
-            self.allocator.free(audience);
-        }
-        if (self.authentication.jwt_jwks_url) |jwks_url| {
-            self.allocator.free(jwks_url);
-        }
-        self.allocator.free(self.authentication.jwt_subject_claim);
-        if (self.authentication.ticket_secret) |secret| {
-            self.allocator.free(secret);
-        }
-        self.allocator.free(self.authentication.anonymous_subject_prefix);
-        {
-            var it = self.authentication.session.claims.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.authentication.session.claims.deinit(self.allocator);
-        }
-        for (self.security.allowed_origins) |origin| {
-            self.allocator.free(origin);
-        }
-        self.allocator.free(self.security.allowed_origins);
-        self.allocator.free(self.server.host);
-        self.allocator.free(self.data_dir);
-        self.allocator.free(self.schema_file);
-        if (self.schema_content) |content| { // Added deinit for schema_content
-            self.allocator.free(content);
-        }
-        if (self.authorization_file) |file| {
-            self.allocator.free(file);
-        }
-    }
-};
-
 pub const ConfigLoader = struct {
     pub fn load(allocator: Allocator, path: []const u8) !Config {
-        // Try to read config file
         const file_content = std.fs.cwd().readFileAlloc(
             allocator,
             path,
@@ -134,11 +20,9 @@ pub const ConfigLoader = struct {
         };
         defer allocator.free(file_content);
 
-        // Substitute environment variables
         const substituted = try substituteEnvVars(allocator, file_content);
         defer allocator.free(substituted);
 
-        // Parse JSON
         const parsed = try std.json.parseFromSlice(
             std.json.Value,
             allocator,
@@ -147,11 +31,9 @@ pub const ConfigLoader = struct {
         );
         defer parsed.deinit();
 
-        // Build config from JSON
         var config = try buildConfig(allocator, parsed.value);
         errdefer config.deinit();
 
-        // Validate config
         try validateConfig(&config);
 
         return config;
@@ -183,9 +65,7 @@ pub const ConfigLoader = struct {
 
         var i: usize = 0;
         while (i < content.len) {
-            // Look for ${VAR_NAME} pattern
             if (i + 2 < content.len and content[i] == '$' and content[i + 1] == '{') {
-                // Find closing }
                 const start = i + 2;
                 var end = start;
                 while (end < content.len and content[end] != '}') {
@@ -193,15 +73,12 @@ pub const ConfigLoader = struct {
                 }
 
                 if (end < content.len) {
-                    // Extract variable name
                     const var_name = content[start..end];
 
-                    // Get environment variable
                     if (std.process.getEnvVarOwned(allocator, var_name)) |value| {
                         defer allocator.free(value);
                         try result.appendSlice(allocator, value);
                     } else |_| {
-                        // Variable not found, keep original
                         try result.appendSlice(allocator, content[i .. end + 1]);
                     }
 
@@ -381,12 +258,10 @@ pub const ConfigLoader = struct {
     }
 
     fn validateConfig(config: *Config) !void {
-        // Validate port range
         if (config.server.port == 0 or config.server.port > 65535) {
             return error.InvalidPort;
         }
 
-        // Validate data directory exists or can be created
         std.fs.cwd().makeDir(config.data_dir) catch |err| {
             if (err != error.PathAlreadyExists) {
                 return error.InvalidDataDir;
@@ -404,14 +279,12 @@ pub const ConfigLoader = struct {
             };
         }
 
-        // Validate authorization rules file exists if specified
         if (config.authorization_file) |auth_file| {
             std.fs.cwd().access(auth_file, .{}) catch {
                 return error.AuthRulesFileNotFound;
             };
         }
 
-        // Validate numeric ranges
         if (config.performance.message_buffer_size == 0) {
             return error.InvalidBufferSize;
         }
