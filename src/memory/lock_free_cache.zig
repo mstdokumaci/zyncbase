@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("strategy.zig").MemoryStrategy;
 
 const Allocator = std.mem.Allocator;
 
@@ -10,24 +10,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
     comptime {
         if (!@hasDecl(t, "deinit")) {
             @compileError("lockFreeCache(T) requires `pub fn deinit(self: T, allocator: std.mem.Allocator) void` on T");
-        }
-
-        const fn_info = switch (@typeInfo(@TypeOf(t.deinit))) {
-            .@"fn" => |f| f,
-            else => @compileError("lockFreeCache(T): T.deinit must be a function"),
-        };
-
-        if (fn_info.params.len != 2) {
-            @compileError("lockFreeCache(T): T.deinit must have signature `fn (T, std.mem.Allocator) void`");
-        }
-
-        const param0 = fn_info.params[0].type orelse
-            @compileError("lockFreeCache(T): first deinit parameter type must be concrete");
-        const param1 = fn_info.params[1].type orelse
-            @compileError("lockFreeCache(T): second deinit parameter type must be concrete");
-
-        if (param0 != t or param1 != Allocator or fn_info.return_type != void) {
-            @compileError("lockFreeCache(T): T.deinit must be `fn (T, std.mem.Allocator) void`");
         }
     }
     return struct {
@@ -193,8 +175,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     self.allocator.destroy(new_entries);
                 }
 
-                var result = try transformFn(ctx, new_entries);
-                defer result.deinit(self.allocator);
+                const result = try transformFn(ctx, new_entries);
 
                 if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                     if (result.created) |entry| {
@@ -206,7 +187,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 }
 
                 if (result.replaced) |entry| self.internalDefer(.{ .entry = entry });
-                for (result.evicted.items) |ev| self.internalDefer(.{ .entry = ev.entry });
                 self.internalDefer(.{ .map = old_entries });
                 _ = self.epoch_manager.bump();
                 return;
@@ -234,26 +214,18 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         }
 
         pub const Error = error{
-            RefCountOverflow,
             OutOfMemory,
             NotFound,
-            CasFailed,
         };
 
         pub const CowResult = struct {
             replaced: ?*CacheEntry = null,
             created: ?*CacheEntry = null,
-            evicted: std.ArrayListUnmanaged(struct { key: KeyType, entry: *CacheEntry }) = .empty,
-
-            pub fn deinit(self: *CowResult, allocator: Allocator) void {
-                self.evicted.deinit(allocator);
-            }
         };
 
         /// Handle for a cached item, ensures proper ref counting
         pub const Handle = struct {
             cache: *Self,
-            key: KeyType,
             entry: *CacheEntry,
             epoch_slot: usize,
 
@@ -278,7 +250,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
             return Handle{
                 .cache = self,
-                .key = key,
                 .entry = entry,
                 .epoch_slot = slot,
             };
@@ -342,7 +313,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         }
 
         fn internalDefer(self: *Self, resource: Resource) void {
-            const node = self.pool.pop() orelse blk: {
+            const node = self.pool.acquire() catch blk: {
                 self.reclaim(false);
                 break :blk self.pool.acquire() catch return;
             };

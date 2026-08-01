@@ -59,13 +59,13 @@ test {
     _ = @import("subscription/worker_pool_test.zig");
     _ = @import("subscription/worker_pool_perf_test.zig");
     _ = @import("subscription/consistency_test.zig");
+    _ = @import("memory/lock_free_cache_test.zig");
+    _ = @import("memory/lock_free_cache_leak_test.zig");
+    _ = @import("memory/strategy_test.zig");
 
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
-    _ = @import("lock_free_cache_test.zig");
-    _ = @import("lock_free_cache_leak_test.zig");
-    _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("config/loader_test.zig");
     _ = @import("message_handler_test.zig");

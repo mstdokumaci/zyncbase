@@ -4,13 +4,12 @@ const sqlite = @import("sqlite");
 
 const SessionResolver = @import("authorization/session_resolver.zig").SessionResolver;
 const send_queue_type = @import("connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const schema_types = @import("schema/types.zig");
 const sql_build = @import("sql/build.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const connection = @import("storage_engine/connection.zig");
 const storage_errors = @import("storage_engine/errors.zig");
-const pk_set_mod = @import("storage_engine/pk_set.zig");
 const read_buffer = @import("storage_engine/read_buffer.zig");
 const read_worker_pool_mod = @import("storage_engine/read_worker_pool.zig");
 const sql = @import("storage_engine/sql.zig");
@@ -25,7 +24,6 @@ const WriteWorker = write_worker_mod.WriteWorker;
 const Schema = schema_types.Schema;
 
 pub const StorageError = storage_errors.StorageError;
-pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
@@ -36,7 +34,7 @@ const CheckpointStats = write_queue.CheckpointStats;
 pub const write_queue_type = write_queue.write_queue_type;
 pub const ReadRequest = read_buffer.ReadRequest;
 const DocId = typed_doc_id.DocId;
-const metadata_cache_type = storage_cache.metadata_cache_type;
+const document_cache_type = storage_cache.document_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
 
@@ -63,12 +61,12 @@ pub const StorageEngine = struct {
     migration_active: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(write_queue_type.Node),
     schema: *const Schema,
-    metadata_cache: metadata_cache_type,
+    document_cache: document_cache_type,
     namespace_cache: namespace_cache_type,
     identity_cache: identity_cache_type,
     options: Options,
     write_worker: WriteWorker,
-    pk_sets: []PkSet,
+    pk_sets: []storage_cache.pk_set_type,
 
     pub fn init(
         self: *StorageEngine,
@@ -119,11 +117,9 @@ pub const StorageEngine = struct {
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .schema = schema,
             // SAFETY: Initialized below
-            .metadata_cache = undefined,
-            // SAFETY: Initialized below
-            .namespace_cache = undefined,
-            // SAFETY: Initialized below
-            .identity_cache = undefined,
+            .document_cache = undefined,
+            .namespace_cache = storage_cache.namespace_cache_type.empty,
+            .identity_cache = storage_cache.identity_cache_type.empty,
             .migration_active = std.atomic.Value(bool).init(false),
             .write_worker = .{
                 .allocator = allocator,
@@ -138,11 +134,11 @@ pub const StorageEngine = struct {
                 .session_resolver = null,
                 .send_queue = null,
                 .notifier = .{ .callback = event_loop_notifier, .ctx = notifier_ctx },
-                // SAFETY: Set after metadata_cache init below
-                .metadata_cache = undefined,
-                // SAFETY: Set after cache init below
+                // SAFETY: Set after document_cache init below
+                .document_cache = undefined,
+                // SAFETY: Set after ns/identity cache init below
                 .namespace_cache = undefined,
-                // SAFETY: Set after cache init below
+                // SAFETY: Set after ns/identity cache init below
                 .identity_cache = undefined,
                 // SAFETY: Set after pk_sets init below
                 .pk_sets = undefined,
@@ -169,16 +165,11 @@ pub const StorageEngine = struct {
         self.write_worker.stmt_cache.init(allocator, self.write_worker.performance_config.statement_cache_size);
         errdefer self.write_worker.stmt_cache.deinit(allocator);
 
-        try self.metadata_cache.init(allocator, .{});
-        errdefer self.metadata_cache.deinit();
-        self.write_worker.metadata_cache = &self.metadata_cache;
+        try self.document_cache.init(allocator, .{});
+        errdefer self.document_cache.deinit();
+        self.write_worker.document_cache = &self.document_cache;
 
-        try self.namespace_cache.init(allocator, .{});
-        errdefer self.namespace_cache.deinit();
         self.write_worker.namespace_cache = &self.namespace_cache;
-
-        try self.identity_cache.init(allocator, .{});
-        errdefer self.identity_cache.deinit();
         self.write_worker.identity_cache = &self.identity_cache;
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
@@ -188,10 +179,10 @@ pub const StorageEngine = struct {
         errdefer self.write_worker.queue.deinit();
 
         const num_tables = schema.tables.len;
-        self.pk_sets = try allocator.alloc(PkSet, num_tables);
+        self.pk_sets = try allocator.alloc(storage_cache.pk_set_type, num_tables);
         errdefer allocator.free(self.pk_sets);
         for (self.pk_sets) |*pk_set| {
-            pk_set.* = PkSet.empty;
+            pk_set.* = storage_cache.pk_set_type.empty;
         }
 
         self.write_worker.pk_sets = self.pk_sets;
@@ -285,9 +276,9 @@ pub const StorageEngine = struct {
         self.read_request_queue.deinit();
 
         // 5. Deinit cache
-        self.metadata_cache.deinit();
-        self.namespace_cache.deinit();
-        self.identity_cache.deinit();
+        self.document_cache.deinit();
+        self.namespace_cache.deinit(gpa);
+        self.identity_cache.deinit(gpa);
 
         // 6. Deinit pk_sets
         for (self.pk_sets) |*pk_set| {
@@ -354,6 +345,13 @@ pub const StorageEngine = struct {
         return self.pk_sets[table_index].contains(id);
     }
 
+    fn reset_pk_sets(self: *StorageEngine) void {
+        for (self.pk_sets) |*pk_set| {
+            pk_set.deinit(self.allocator);
+            pk_set.* = storage_cache.pk_set_type.empty;
+        }
+    }
+
     /// Execute setup SQL (DDL/Migrations) before the engine starts.
     /// This method is only allowed when the engine is in the 'setup' state.
     pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
@@ -366,12 +364,13 @@ pub const StorageEngine = struct {
         // any cached prepared statements and metadata.
         self.write_worker.stmt_cache.deinit(self.allocator);
         self.write_worker.stmt_cache.init(self.allocator, self.write_worker.performance_config.statement_cache_size);
-        self.metadata_cache.deinit();
-        try self.metadata_cache.init(self.allocator, .{});
-        self.namespace_cache.deinit();
-        try self.namespace_cache.init(self.allocator, .{});
-        self.identity_cache.deinit();
-        try self.identity_cache.init(self.allocator, .{});
+        self.document_cache.deinit();
+        try self.document_cache.init(self.allocator, .{});
+        self.namespace_cache.deinit(self.allocator);
+        self.namespace_cache = storage_cache.namespace_cache_type.empty;
+        self.identity_cache.deinit(self.allocator);
+        self.identity_cache = storage_cache.identity_cache_type.empty;
+        self.reset_pk_sets();
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         self.write_worker.bumpVersion();
     }
@@ -389,6 +388,9 @@ pub const StorageEngine = struct {
         }
 
         // ─── Bootstrap pk_sets from existing rows ───────────────────────────
+        // Reset any pk_sets populated by a previous (failed) bootstrap attempt
+        // so stale IDs cannot survive into documentExists/write-path checks.
+        self.reset_pk_sets();
         // One-shot prepare per table: the SELECT "id" FROM "<t>" query is run
         // exactly once at startup, so it does NOT go through stmt_cache (avoids
         // polluting the LRU with single-use entries).
@@ -409,7 +411,7 @@ pub const StorageEngine = struct {
                 const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
                 const doc_id = try typed_doc_id.fromBytes(bytes);
 
-                self.pk_sets[table_index].insert(self.allocator, doc_id);
+                try self.pk_sets[table_index].put(self.allocator, doc_id, {});
             }
         }
 
@@ -479,7 +481,7 @@ pub const StorageEngine = struct {
             &self.read_request_queue,
             send_queue,
             self.schema,
-            &self.metadata_cache,
+            &self.document_cache,
             &self.write_worker.version,
             self.write_worker.notifier.callback,
             self.write_worker.notifier.ctx,
@@ -516,16 +518,12 @@ pub const StorageEngine = struct {
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
-        const handle = self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace)) catch return null;
-        defer handle.release();
-        return handle.data().namespace_id;
+        return self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace));
     }
 
     pub fn cachedUserId(self: *StorageEngine, identity_namespace_id: i64, external_user_id: []const u8) ?DocId {
         const key = storage_cache.identityCacheKey(identity_namespace_id, external_user_id);
-        const handle = self.identity_cache.get(key) catch return null;
-        defer handle.release();
-        return handle.data().user_doc_id;
+        return self.identity_cache.get(key);
     }
 
     pub fn enqueueSessionResolution(

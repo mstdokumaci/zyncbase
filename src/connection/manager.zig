@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const Schema = @import("../schema/types.zig").Schema;
 const Notifier = @import("../threading/notifier.zig").Notifier;

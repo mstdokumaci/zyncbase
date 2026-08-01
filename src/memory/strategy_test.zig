@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("strategy.zig").MemoryStrategy;
 
 const testing = std.testing;
 
@@ -50,11 +50,8 @@ test "MemoryStrategy: arena allocator pool usage" {
 
 test "MemoryStrategy: arena pool thread safety stress test" {
     const allocator = testing.allocator;
-    const config = MemoryStrategy.Config{
-        .arena_pool = .{ .pre_allocate = 1024, .max_capacity = 1024 },
-    };
     var strategy: MemoryStrategy = undefined;
-    try strategy.initWithConfig(allocator, config);
+    try strategy.init(allocator);
     defer std.debug.assert(strategy.deinit() == .ok);
 
     const num_threads = 8;

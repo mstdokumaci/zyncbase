@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Connection = @import("connection/state.zig").Connection;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;

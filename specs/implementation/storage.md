@@ -36,7 +36,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | Type alias for the SPSC write op queue. `IndexPool` provides zero-allocation pooled nodes. |
 | `ReadWorkerPool` / `ReadWorker` | `workerPool`, `managedThread`, `read_request_queue`, `SendQueue`, `Notifier` | Pool of dedicated reader threads; each `ReadWorker` owns an exclusive `ReaderNode` (SQLite connection + statement cache). |
 | `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its writer allocator for safe cross-thread handoff to subscription workers. |
-| `PkSet` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
+| `pk_set_type` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
 | `ColumnValue` | typed values | Represents values bound into SQLite statements. |
 | `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
 | `MigrationPlan` | old/new schema metadata | Describes required schema changes before execution. |

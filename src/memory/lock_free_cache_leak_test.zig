@@ -13,6 +13,16 @@ const U32Value = struct {
     }
 };
 
+const CountingValue = struct {
+    value: u32,
+    deinit_count: *std.atomic.Value(usize),
+
+    pub fn deinit(self: CountingValue, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        _ = self.deinit_count.fetchAdd(1, .seq_cst);
+    }
+};
+
 test "LockFreeCache: pool stability and leak test" {
     const allocator = testing.allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
@@ -49,31 +59,45 @@ test "LockFreeCache: pool stability and leak test" {
     try testing.expect(active < 5);
 }
 
-test "LockFreeCache: pool exhaustion behavior" {
+test "LockFreeCache: pool exhaustion retains and eventually reclaims all resources" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(U32Value, i64);
+    const u32_cache = lockFreeCache(CountingValue, i64);
     const config = u32_cache.Config{
         .max_deferred_nodes = 10,
         .reclamation_interval_ms = 10,
     };
 
+    var deinit_count = std.atomic.Value(usize).init(0);
+
     var cache: u32_cache = undefined;
     try cache.init(allocator, config);
     defer cache.deinit();
 
-    try cache.update(1, .{ .value = 0 });
+    try cache.update(1, .{ .value = 0, .deinit_count = &deinit_count });
 
     // Mock a slow reader by pinning an epoch
     const handle = try cache.get(1);
-    defer handle.release();
 
-    // Perform updates until pool is exhausted
+    // Perform updates until the deferred-node pool is exhausted; retired
+    // resources must be retained (allocator-backed overflow), not dropped.
     const updates_until_exhaustion = config.max_deferred_nodes + 2;
     var i: usize = 0;
     while (i < updates_until_exhaustion) : (i += 1) {
-        try cache.update(1, .{ .value = @intCast(i) });
+        try cache.update(1, .{ .value = @intCast(i), .deinit_count = &deinit_count });
     }
 
-    // With current internalDefer, it just skips if pool is empty after force reclaim.
-    // This test ensures we don't crash.
+    // While the reader pins the epoch, no retired entry may be reclaimed early.
+    try testing.expectEqual(@as(usize, 0), deinit_count.load(.acquire));
+
+    // Unpin the epoch, then verify every retired entry is eventually reclaimed.
+    handle.release();
+
+    var retries: u32 = 0;
+    while (retries < 10) : (retries += 1) {
+        cache.reclaim(true);
+        if (deinit_count.load(.acquire) == updates_until_exhaustion) break;
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    try testing.expectEqual(@as(usize, updates_until_exhaustion), deinit_count.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), cache.pool.active_count.load(.acquire));
 }

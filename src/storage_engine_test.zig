@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const send_queue_mod = @import("connection/send_queue.zig");
+const fail_alloc = @import("failing_allocator_test_helper.zig");
 const query_ast = @import("query/ast.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
@@ -983,7 +984,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
 
     const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
 
-    // 1. Initial upsert: Should write-through to metadata_cache
+    // 1. Initial upsert: Should write-through to document_cache
     const columns = [_]sth.ColumnValue{
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
@@ -992,7 +993,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache hit immediately after write without reading DB
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1011,7 +1012,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache still holds "initial_val" and was NOT evicted
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1024,8 +1025,77 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache is now a miss
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => {},
-        .hit => return error.TestUnexpectedResult,
+        .hit => |hit| {
+            defer hit.handle.release();
+            return error.TestUnexpectedResult;
+        },
     }
+}
+
+test "StorageEngine: failed document cache update evicts stale entry post-commit" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("val", .text),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "cache-update-failure-test", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const namespace_id: i64 = 100;
+    const doc_id: typed_doc_id.DocId = 1;
+
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
+
+    // Re-point the engine's document cache at an allocator that fails exactly
+    // `remaining` allocations (unlike std.testing.FailingAllocator, which
+    // fails permanently). The write worker holds a pointer to
+    // &engine.document_cache, which is unchanged by deinit+reinit in place.
+    var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
+    ctx.engine.document_cache.deinit();
+    try ctx.engine.document_cache.init(failing.allocator(), .{});
+
+    // 1. Initial upsert: Should write-through to document_cache
+    const columns = [_]sth.ColumnValue{
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
+    };
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
+        .miss => return error.TestUnexpectedResult,
+        .hit => |hit| {
+            defer hit.handle.release();
+            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
+        },
+    }
+
+    // 2. Fail the next cache allocation: the post-commit cache write for the
+    //    update below will fail, and the stale "initial_val" entry must be
+    //    evicted so subsequent reads produce a miss instead of stale data.
+    failing.remaining = 1;
+
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new_val" } } }};
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    // 3. Cache entry must be gone; the DB holds the committed value
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
+        .miss => {},
+        .hit => |hit| {
+            defer hit.handle.release();
+            return error.TestUnexpectedResult;
+        },
+    }
+
+    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+    defer if (record) |r| r.deinit(allocator);
+    try testing.expect(record != null);
+    try testing.expectEqualStrings("new_val", record.?.values[val_field_idx].scalar.text);
 }
