@@ -855,7 +855,8 @@ pub const WriteWorker = struct {
                     if (op.record) |r| {
                         self.document_cache.update(op.key, r) catch |err| {
                             const classified_err = errors.classifyError(err);
-                            std.log.err("Failed to update document cache: {}", .{classified_err});
+                            std.log.warn("Failed to update document cache: {}", .{classified_err});
+                            _ = self.document_cache.evict(op.key);
                             r.deinit(self.allocator);
                         };
                         op.record = null;

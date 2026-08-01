@@ -345,6 +345,13 @@ pub const StorageEngine = struct {
         return self.pk_sets[table_index].contains(id);
     }
 
+    fn reset_pk_sets(self: *StorageEngine) void {
+        for (self.pk_sets) |*pk_set| {
+            pk_set.deinit(self.allocator);
+            pk_set.* = storage_cache.pk_set_type.empty;
+        }
+    }
+
     /// Execute setup SQL (DDL/Migrations) before the engine starts.
     /// This method is only allowed when the engine is in the 'setup' state.
     pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
@@ -363,6 +370,7 @@ pub const StorageEngine = struct {
         self.namespace_cache = storage_cache.namespace_cache_type.empty;
         self.identity_cache.deinit(self.allocator);
         self.identity_cache = storage_cache.identity_cache_type.empty;
+        self.reset_pk_sets();
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         self.write_worker.bumpVersion();
     }
@@ -380,6 +388,9 @@ pub const StorageEngine = struct {
         }
 
         // ─── Bootstrap pk_sets from existing rows ───────────────────────────
+        // Reset any pk_sets populated by a previous (failed) bootstrap attempt
+        // so stale IDs cannot survive into documentExists/write-path checks.
+        self.reset_pk_sets();
         // One-shot prepare per table: the SELECT "id" FROM "<t>" query is run
         // exactly once at startup, so it does NOT go through stmt_cache (avoids
         // polluting the LRU with single-use entries).

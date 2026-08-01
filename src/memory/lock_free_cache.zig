@@ -342,7 +342,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         }
 
         fn internalDefer(self: *Self, resource: Resource) void {
-            const node = self.pool.pop() orelse blk: {
+            const node = self.pool.acquire() catch blk: {
                 self.reclaim(false);
                 break :blk self.pool.acquire() catch return;
             };
