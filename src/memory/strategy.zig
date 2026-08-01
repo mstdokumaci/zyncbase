@@ -22,34 +22,9 @@ pub const MemoryStrategy = struct {
     /// Object pool for high-churn connection objects to avoid allocation overhead
     connection_pool: IndexPool(Connection),
 
-    /// Memory Strategy configuration for pools
-    pub const Config = struct {
-        arena_pool: PoolConfig = .{ .pre_allocate = 1024, .max_capacity = 1024 },
-        connection_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 100_000 },
-
-        const PoolConfig = struct {
-            pre_allocate: u32,
-            max_capacity: u32,
-        };
-
-        /// Standard production configuration
-        pub const default_config = Config{};
-
-        /// Minimal configuration for tests to reduce overhead
-        pub const minimal_config = Config{
-            .arena_pool = .{ .pre_allocate = 16, .max_capacity = 1024 },
-        };
-    };
-
     /// Initialize the memory strategy with standard defaults.
-    /// Automatically optimizes for tests if builtin.is_test is true.
+    /// Pre-allocates fewer arenas under `zig test` to reduce test overhead.
     pub fn init(self: *MemoryStrategy, allocator: Allocator) !void {
-        const current_config = if (builtin.is_test) Config.minimal_config else Config.default_config;
-        try self.initWithConfig(allocator, current_config);
-    }
-
-    /// Initialize the memory strategy with specific configuration.
-    pub fn initWithConfig(self: *MemoryStrategy, allocator: Allocator, config: Config) !void {
         const gpa_ptr = try allocator.create(std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }));
         errdefer allocator.destroy(gpa_ptr);
         gpa_ptr.* = .{};
@@ -64,10 +39,12 @@ pub const MemoryStrategy = struct {
             .connection_pool = undefined,
         };
 
+        const arena_pre_allocate: u32 = if (builtin.is_test) 16 else 1024;
+
         // Initialize pools
         try self.arena_pool.init(
             gpa_alloc,
-            config.arena_pool.max_capacity,
+            1024,
             deinitArena,
             initArena,
         );
@@ -75,20 +52,15 @@ pub const MemoryStrategy = struct {
 
         try self.connection_pool.init(
             gpa_alloc,
-            config.connection_pool.max_capacity,
+            100_000,
             deinitConnection,
             initConnection,
         );
         errdefer self.connection_pool.deinit();
 
         // Pre-allocate arenas based on configuration
-        for (0..config.arena_pool.pre_allocate) |_| {
+        for (0..arena_pre_allocate) |_| {
             try self.arena_pool.pushInitial();
-        }
-
-        // Pre-allocate connections
-        for (0..config.connection_pool.pre_allocate) |_| {
-            try self.connection_pool.pushInitial();
         }
     }
 
