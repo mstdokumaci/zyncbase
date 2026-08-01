@@ -11,7 +11,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 | File/Context | Responsibility |
 |------|----------------|
 | `build.zig` | Configures compiler instrumentation options for sanitizers (`-fsanitize=thread`). |
-| `src/memory_safety_property_test.zig` | Fuzzes boundary conditions to trigger GPA leak detection. |
+| `src/memory/strategy_test.zig` | Isolated-GPA leak probing for the arena/connection pools (capacity reuse, concurrent access). |
 | `src/lock_free_cache_leak_test.zig` | Validates that retired cache nodes are correctly destroyed under stress load. |
 | `src/queues/mpsc_queue_thread_safety_test.zig` | Stresses cross-thread MPSC send-queue behavior under TSan. |
 | `src/queues/spmc_blocking_queue_thread_safety_test.zig` | Stresses blocking fanout queues under TSan. |

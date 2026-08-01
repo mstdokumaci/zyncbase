@@ -82,7 +82,6 @@ test {
     _ = @import("uwebsockets_wrapper_property_test.zig");
     _ = @import("storage_engine_error_property_test.zig");
     _ = @import("logging_property_test.zig");
-    _ = @import("memory_safety_property_test.zig");
     _ = @import("msgpack_utils_property_test.zig");
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
