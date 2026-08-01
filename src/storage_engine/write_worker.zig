@@ -5,7 +5,7 @@ const sqlite = @import("sqlite");
 const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
 const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
@@ -21,7 +21,6 @@ const storage_cache = @import("cache.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
 const filter_sql = @import("filter_sql.zig");
-const pk_set = @import("pk_set.zig");
 const reader = @import("reader.zig");
 const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
@@ -32,7 +31,7 @@ const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const ChangeQueue = change_queue_mod.ChangeQueue;
 
 const DocId = typed_doc_id.DocId;
-const MetadataCacheKey = storage_cache.MetadataCacheKey;
+const DocumentCacheKey = storage_cache.DocumentCacheKey;
 const Record = typed.Record;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
@@ -77,10 +76,10 @@ pub const WriteWorker = struct {
     session_resolver: ?*SessionResolver,
     send_queue: ?*send_queue_type,
     notifier: Notifier,
-    metadata_cache: *storage_cache.metadata_cache_type,
+    document_cache: *storage_cache.document_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
-    pk_sets: []pk_set.PkSet,
+    pk_sets: []storage_cache.pk_set_type,
     schema: *const schema_types.Schema,
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
@@ -770,7 +769,7 @@ pub const WriteWorker = struct {
     const PkTracking = struct { table_index: usize, id: DocId };
 
     const CacheOp = struct {
-        key: MetadataCacheKey,
+        key: DocumentCacheKey,
         kind: enum { update, evict },
         record: ?Record,
     };
@@ -854,23 +853,25 @@ pub const WriteWorker = struct {
             switch (op.kind) {
                 .update => {
                     if (op.record) |r| {
-                        self.metadata_cache.update(op.key, r) catch |err| {
+                        self.document_cache.update(op.key, r) catch |err| {
                             const classified_err = errors.classifyError(err);
-                            std.log.err("Failed to update metadata cache: {}", .{classified_err});
+                            std.log.err("Failed to update document cache: {}", .{classified_err});
                             r.deinit(self.allocator);
                         };
                         op.record = null;
                     }
                 },
                 .evict => {
-                    _ = self.metadata_cache.evict(op.key);
+                    _ = self.document_cache.evict(op.key);
                 },
             }
         }
 
         for (pk_inserts.items) |item| {
             if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].insert(self.allocator, item.id);
+                self.pk_sets[item.table_index].put(self.allocator, item.id, {}) catch |err| {
+                    std.log.warn("Failed to insert into pk_set (OOM): {}", .{err});
+                };
             }
         }
         for (pk_deletes.items) |item| {
@@ -896,10 +897,7 @@ pub const WriteWorker = struct {
         if (sql.resolveNamespaceId(&self.conn, ns_stmt, sop.namespace)) |ns_id| {
             namespace_id = ns_id;
 
-            self.namespace_cache.update(
-                storage_cache.namespaceCacheKey(sop.namespace),
-                .{ .namespace_id = ns_id },
-            ) catch |err| {
+            self.namespace_cache.put(self.allocator, storage_cache.namespaceCacheKey(sop.namespace), ns_id) catch |err| {
                 std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
             };
 
@@ -920,10 +918,7 @@ pub const WriteWorker = struct {
                     sop.timestamp,
                 )) |uid| {
                     user_doc_id = uid;
-                    self.identity_cache.update(
-                        storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
-                        .{ .user_doc_id = uid },
-                    ) catch |err| {
+                    self.identity_cache.put(self.allocator, storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id), uid) catch |err| {
                         std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
                     };
                 } else |err| {

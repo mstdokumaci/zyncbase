@@ -983,7 +983,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
 
     const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
 
-    // 1. Initial upsert: Should write-through to metadata_cache
+    // 1. Initial upsert: Should write-through to document_cache
     const columns = [_]sth.ColumnValue{
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
@@ -992,7 +992,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache hit immediately after write without reading DB
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1011,7 +1011,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache still holds "initial_val" and was NOT evicted
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => return error.TestUnexpectedResult,
         .hit => |hit| {
             defer hit.handle.release();
@@ -1024,7 +1024,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     try ctx.engine.flushPendingWrites();
 
     // Verify cache is now a miss
-    switch (cache_mod.getCachedRecord(&ctx.engine.metadata_cache, cache_key)) {
+    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
         .miss => {},
         .hit => return error.TestUnexpectedResult,
     }

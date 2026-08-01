@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const typed = @import("../typed/doc_id.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
 const th = @import("test_helpers.zig");

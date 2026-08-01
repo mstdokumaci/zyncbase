@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Connection = @import("connection/state.zig").Connection;
+const Connection = @import("../connection/state.zig").Connection;
 
 const Allocator = std.mem.Allocator;
 

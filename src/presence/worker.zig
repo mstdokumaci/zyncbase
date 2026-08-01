@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const ArenaHandle = @import("../memory_strategy.zig").ArenaHandle;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const msgpack = @import("../msgpack_utils.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;

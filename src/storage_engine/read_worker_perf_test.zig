@@ -344,7 +344,7 @@ test "ReadWorker: cache miss → cache hit" {
         .reader_pool_size = 1,
     });
     defer ctx.deinit();
-    defer ctx.engine.metadata_cache.reclaim(true);
+    defer ctx.engine.document_cache.reclaim(true);
 
     const table_metadata = try ctx.tableMetadata("items");
     const doc_id: DocId = 42;
@@ -364,7 +364,7 @@ test "ReadWorker: cache miss → cache hit" {
     for (0..rounds) |i| {
         // Miss: first read for this doc_id in a fresh arena reset cycle.
         // We evict the cache entry between rounds to force a miss.
-        _ = ctx.engine.metadata_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
+        _ = ctx.engine.document_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
 
         var t = try std.time.Timer.start();
         const record_a = try worker.executeSelectDocument(table_metadata, doc_id, 1);
@@ -421,7 +421,7 @@ test "ReadWorker: version-gated cache update" {
         .reader_pool_size = 1,
     });
     defer ctx.deinit();
-    defer ctx.engine.metadata_cache.reclaim(true);
+    defer ctx.engine.document_cache.reclaim(true);
 
     const table_metadata = try ctx.tableMetadata("items");
     const doc_id: DocId = 77;
@@ -467,7 +467,7 @@ test "ReadWorker: concurrent readers — no data race" {
         .reader_pool_size = reader_pool_size,
     });
     defer ctx.deinit();
-    defer ctx.engine.metadata_cache.reclaim(true);
+    defer ctx.engine.document_cache.reclaim(true);
 
     const table_metadata = try ctx.tableMetadata("items");
     const ns_id: i64 = 1;

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const config_state = @import("../config/state.zig");
 const send_queue_mod = @import("../connection/send_queue.zig");
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const migration_detector = @import("../migration_detector.zig");
 const migration_executor = @import("../migration_executor.zig");
 const ddl_generator = @import("../sql/ddl.zig");

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const schema_system = @import("../schema/system.zig");

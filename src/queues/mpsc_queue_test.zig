@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
 
 const testing = std.testing;

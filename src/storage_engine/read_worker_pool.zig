@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
-const metadata_cache_type = storage_cache.metadata_cache_type;
+const document_cache_type = storage_cache.document_cache_type;
 const req_queue_type = read_buffer.read_request_queue;
 const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
@@ -52,7 +52,7 @@ pub const ReadWorker = struct {
     request_queue: *req_queue_type,
     send_queue: *send_queue_type,
     schema: *const schema_types.Schema,
-    metadata_cache: *metadata_cache_type,
+    document_cache: *document_cache_type,
     writer_version: *std.atomic.Value(u64),
     allocator: Allocator,
     notifier: Notifier,
@@ -71,7 +71,7 @@ pub const ReadWorker = struct {
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
         schema: *const schema_types.Schema,
-        metadata_cache: *metadata_cache_type,
+        document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
@@ -82,7 +82,7 @@ pub const ReadWorker = struct {
             .request_queue = request_queue,
             .send_queue = send_queue,
             .schema = schema,
-            .metadata_cache = metadata_cache,
+            .document_cache = document_cache,
             .writer_version = writer_version,
             .allocator = allocator,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
@@ -247,7 +247,7 @@ pub const ReadWorker = struct {
     ) !?Record {
         const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
 
-        switch (storage_cache.getCachedRecord(self.metadata_cache, cache_key)) {
+        switch (storage_cache.getCachedRecord(self.document_cache, cache_key)) {
             .miss => {},
             .hit => |hit| {
                 defer hit.handle.release();
@@ -286,7 +286,7 @@ pub const ReadWorker = struct {
                 const cache_record = record.clone(self.allocator) catch {
                     return record;
                 };
-                self.metadata_cache.update(cache_key, cache_record) catch |err| {
+                self.document_cache.update(cache_key, cache_record) catch |err| {
                     cache_record.deinit(self.allocator);
                     std.log.err("ReadWorker: cache.update failed: {}", .{err});
                 };
@@ -398,7 +398,7 @@ pub const ReadWorkerPool = struct {
         request_queue: *req_queue_type,
         send_queue: *send_queue_type,
         schema: *const schema_types.Schema,
-        metadata_cache: *metadata_cache_type,
+        document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
@@ -420,7 +420,7 @@ pub const ReadWorkerPool = struct {
                 request_queue,
                 send_queue,
                 schema,
-                metadata_cache,
+                document_cache,
                 writer_version,
                 notifier_fn,
                 notifier_ctx,
