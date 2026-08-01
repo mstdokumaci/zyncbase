@@ -3,7 +3,7 @@
 const fs = require("fs"), path = require("path");
 const SRC = path.resolve(__dirname, "..", "src");
 const EXTERNAL = new Set(["std","builtin","sqlite","msgpack","httpx"]);
-const TEST_RE = /_(?:test|property_test|thread_safety_test|perf_test|leak_test)\.zig$|test_helpers\.zig$|_test_helpers\.zig$|timed_test_runner\.zig$|msgpack_test_helpers\.zig$|checkpoint_test_helpers\.zig$|app_test_helpers\.zig$|store_test_helpers\.zig$|test_all\.zig$/;
+const TEST_RE = /test/;
 
 function log(m) { process.stderr.write(m + "\n"); }
 

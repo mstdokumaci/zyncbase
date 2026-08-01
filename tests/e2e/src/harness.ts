@@ -199,7 +199,6 @@ function removeDir(dir: string) {
 function isRuntimeSourceFile(fileName: string): boolean {
 	if (
 		fileName.endsWith("_test.zig") ||
-		fileName.endsWith("_property_test.zig") ||
 		fileName.endsWith("_test_helpers.zig") ||
 		fileName === "test_all.zig" ||
 		fileName === "timed_test_runner.zig"
