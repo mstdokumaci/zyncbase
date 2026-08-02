@@ -3,7 +3,7 @@
 const std = @import("std");
 
 pub const class_std_builtin: u2 = 0;
-pub const class_vendor: u2 = 1;
+pub const class_third_party: u2 = 1;
 pub const class_local: u2 = 2;
 
 pub const Import = struct {
@@ -26,17 +26,19 @@ pub const Import = struct {
     }
 };
 
-// Corresponding dependency declarations are in build.zig.
-const vendor_modules = [_][]const u8{ "sqlite", "msgpack", "httpx" };
-
 pub fn classify(path: []const u8) u2 {
-    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin")) {
+    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin") or
+        std.mem.eql(u8, path, "@zig"))
+    {
         return class_std_builtin;
     }
-    for (vendor_modules) |mod| {
-        if (std.mem.eql(u8, path, mod)) return class_vendor;
+    if (std.mem.eql(u8, path, "root") or std.mem.eql(u8, path, "build_root") or
+        std.mem.indexOfScalar(u8, path, '/') != null or
+        std.mem.endsWith(u8, path, ".zig"))
+    {
+        return class_local;
     }
-    return class_local;
+    return class_third_party;
 }
 
 fn findLineStart(source: []const u8, pos: usize) usize {
@@ -278,7 +280,7 @@ pub fn collectImports(
                 .start = line_start,
                 .end = block_end_cimport,
                 .path = "<cimport>",
-                .class = class_vendor,
+                .class = class_third_party,
                 .stray = found >= block_end,
                 .comment_start = comment_start,
             });
@@ -306,7 +308,18 @@ pub fn findImportBlockEnd(source: []const u8) usize {
     return pos;
 }
 
-pub fn hasBannedPatterns(source: []const u8) ?[]const u8 {
+fn banMessage(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
+    return std.fmt.allocPrint(allocator, fmt, args) catch |err| {
+        std.debug.print("zsort: failed to format ban message: {s}\n", .{@errorName(err)});
+        return null;
+    };
+}
+
+pub fn hasBannedPatterns(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    banned_prefixes: []const []const u8,
+) ?[]const u8 {
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, source, pos, "@import(")) |found| {
         const line_start = findLineStart(source, found);
@@ -322,7 +335,7 @@ pub fn hasBannedPatterns(source: []const u8) ?[]const u8 {
             !std.mem.startsWith(u8, line, "pub const ") and
             !std.mem.startsWith(u8, line, "_ = @import"))
         {
-            return "inline @import in type expression";
+            return banMessage(allocator, "inline @import in type expression", .{});
         }
 
         const inner = source[found + "@import(".len ..];
@@ -332,8 +345,11 @@ pub fn hasBannedPatterns(source: []const u8) ?[]const u8 {
                 continue;
             };
             const path = inner[1 .. 1 + path_end];
-            if (std.mem.startsWith(u8, path, "./")) return "./ prefix on import path";
-            if (std.mem.startsWith(u8, path, "src/")) return "absolute import path";
+            for (banned_prefixes) |prefix| {
+                if (std.mem.startsWith(u8, path, prefix)) {
+                    return banMessage(allocator, "import path starts with banned prefix '{s}'", .{prefix});
+                }
+            }
         }
 
         pos = line_end_excl;
@@ -344,7 +360,7 @@ pub fn hasBannedPatterns(source: []const u8) ?[]const u8 {
         const le = findLineEnd(source, line_pos);
         const l = std.mem.trimLeft(u8, source[line_pos..le], " \t\r");
         if (!std.mem.startsWith(u8, l, "//") and std.mem.indexOf(u8, l, "usingnamespace") != null) {
-            return "usingnamespace detected";
+            return banMessage(allocator, "usingnamespace detected", .{});
         }
         line_pos = le;
     }
@@ -569,12 +585,11 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     if (args.len < 3) {
-        std.debug.print("Usage: zsort [check|fix] <dir|file>\n", .{});
+        std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
         std.process.exit(1);
     }
 
     const mode_str = args[1];
-    const target = args[2];
 
     const mode: enum { check, fix } = if (std.mem.eql(u8, mode_str, "fix"))
         .fix
@@ -585,27 +600,53 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
+    var banned_prefixes: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer banned_prefixes.deinit(allocator);
+
+    var target: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--ban-prefix")) {
+            if (i + 1 >= args.len) {
+                std.debug.print("Missing value for --ban-prefix\n", .{});
+                std.process.exit(1);
+            }
+            i += 1;
+            try banned_prefixes.append(allocator, args[i]);
+        } else if (target == null) {
+            target = args[i];
+        } else {
+            std.debug.print("Unexpected argument: {s}\n", .{args[i]});
+            std.process.exit(1);
+        }
+    }
+
+    const target_path = target orelse {
+        std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
+        std.process.exit(1);
+    };
+
     var files: std.ArrayListUnmanaged([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    const stat = std.fs.cwd().statFile(target) catch |err| {
-        std.debug.print("Cannot access '{s}': {s}\n", .{ target, @errorName(err) });
+    const stat = std.fs.cwd().statFile(target_path) catch |err| {
+        std.debug.print("Cannot access '{s}': {s}\n", .{ target_path, @errorName(err) });
         std.process.exit(1);
     };
 
     if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(target, .{ .iterate = true });
+        var dir = try std.fs.cwd().openDir(target_path, .{ .iterate = true });
         defer dir.close();
-        try walkDir(allocator, dir, target, &files);
+        try walkDir(allocator, dir, target_path, &files);
     } else if (stat.kind == .file) {
-        try files.append(allocator, target);
+        try files.append(allocator, target_path);
     } else {
-        std.debug.print("'{s}' is not a supported file or directory\n", .{target});
+        std.debug.print("'{s}' is not a supported file or directory\n", .{target_path});
         std.process.exit(1);
     }
 
     if (files.items.len == 0) {
-        std.debug.print("No .zig files found in '{s}'\n", .{target});
+        std.debug.print("No .zig files found in '{s}'\n", .{target_path});
         std.process.exit(1);
     }
 
@@ -629,7 +670,7 @@ pub fn main() !void {
         const block_end = findImportBlockEnd(source);
         const result = try collectImports(fa, source, block_end);
 
-        if (hasBannedPatterns(source)) |msg| {
+        if (hasBannedPatterns(fa, source, banned_prefixes.items)) |msg| {
             std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
             banned_count += 1;
         }
