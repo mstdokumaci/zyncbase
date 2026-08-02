@@ -407,16 +407,216 @@ test "walkDir: excludes cache and vcs directories" {
         for (found.items) |f| std.testing.allocator.free(f);
         found.deinit(std.testing.allocator);
     }
-    try zsort.walkDir(std.testing.allocator, tmp.dir, "tmp", &found);
+    try zsort.walkDir(std.testing.allocator, tmp.dir, "tmp", &found, &.{});
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
     for (found.items) |f| {
         try std.testing.expect(std.mem.endsWith(u8, f, "main.zig") or std.mem.endsWith(u8, f, "sub/lib.zig"));
     }
 }
 
+test "walkDir: respects gitignore ignores at component boundaries" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.makePath("ignored");
+    try tmp.dir.makePath("build-tools");
+    try tmp.dir.makePath("keep");
+    try tmp.dir.writeFile(.{ .sub_path = "ignored/a.zig", .data = "" });
+    try tmp.dir.writeFile(.{ .sub_path = "build-tools/b.zig", .data = "" });
+    try tmp.dir.writeFile(.{ .sub_path = "keep/c.zig", .data = "" });
+    var found: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer {
+        for (found.items) |f| std.testing.allocator.free(f);
+        found.deinit(std.testing.allocator);
+    }
+    try zsort.walkDir(std.testing.allocator, tmp.dir, "tmp", &found, &.{ "ignored", "build" });
+    try std.testing.expectEqual(@as(usize, 2), found.items.len);
+    for (found.items) |f| {
+        try std.testing.expect(std.mem.endsWith(u8, f, "build-tools/b.zig") or std.mem.endsWith(u8, f, "keep/c.zig"));
+    }
+}
+
+test "matchesIgnore: component-boundary prefix match" {
+    try std.testing.expect(zsort.matchesIgnore("build/foo.zig", "build"));
+    try std.testing.expect(zsort.matchesIgnore("build", "build"));
+    try std.testing.expect(zsort.matchesIgnore("build/foo.zig", "build/"));
+    try std.testing.expect(zsort.matchesIgnore("a/zig-out/b.zig", "zig-out"));
+    try std.testing.expect(!zsort.matchesIgnore("build-tools/x.zig", "build"));
+    try std.testing.expect(!zsort.matchesIgnore("buildings.zig", "build"));
+    try std.testing.expect(!zsort.matchesIgnore("x", "y"));
+    try std.testing.expect(!zsort.matchesIgnore("x", "/"));
+}
+
+test "loadGitignore: parses patterns, skips comments and unsupported entries" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{
+        .sub_path = ".gitignore",
+        .data = "# comment\n.zig-cache\nbuild/\n\n*.tmp\n!keep\nnode_modules\n  spaced  \n",
+    });
+    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root);
+    const ignores = try zsort.loadGitignore(std.testing.allocator, root);
+    defer {
+        for (ignores) |p| std.testing.allocator.free(p);
+        std.testing.allocator.free(ignores);
+    }
+    try std.testing.expectEqual(@as(usize, 4), ignores.len);
+    try std.testing.expectEqualStrings(".zig-cache", ignores[0]);
+    try std.testing.expectEqualStrings("build/", ignores[1]);
+    try std.testing.expectEqualStrings("node_modules", ignores[2]);
+    try std.testing.expectEqualStrings("spaced", ignores[3]);
+}
+
+test "loadGitignore: missing file yields empty list" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root);
+    const ignores = try zsort.loadGitignore(std.testing.allocator, root);
+    defer std.testing.allocator.free(ignores);
+    try std.testing.expectEqual(@as(usize, 0), ignores.len);
+}
+
+test "formatUnifiedDiff: local reorder with context" {
+    const old = "const bar = @import(\"bar\");\nconst std = @import(\"std\");\n\nconst rest = 1;\n";
+    const new = "const std = @import(\"std\");\nconst bar = @import(\"bar\");\n\nconst rest = 1;\n";
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "test.zig", old, new);
+    defer std.testing.allocator.free(diff);
+    const expected = "  --- test.zig\n" ++
+        "  +++ test.zig\n" ++
+        "  @@ -1,2 +1,2 @@\n" ++
+        "  - const bar = @import(\"bar\");\n" ++
+        "  - const std = @import(\"std\");\n" ++
+        "  + const std = @import(\"std\");\n" ++
+        "  + const bar = @import(\"bar\");\n" ++
+        "   \n" ++
+        "   const rest = 1;\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
+test "formatUnifiedDiff: whole-file replace" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "x\ny\n");
+    defer std.testing.allocator.free(diff);
+    const expected = "  --- t.zig\n" ++
+        "  +++ t.zig\n" ++
+        "  @@ -1,2 +1,2 @@\n" ++
+        "  - a\n" ++
+        "  - b\n" ++
+        "  + x\n" ++
+        "  + y\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
+test "formatUnifiedDiff: CRLF input diffs cleanly" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\r\nb\r\n", "a\r\nc\r\n");
+    defer std.testing.allocator.free(diff);
+    const expected = "  --- t.zig\n" ++
+        "  +++ t.zig\n" ++
+        "  @@ -2,1 +2,1 @@\n" ++
+        "   a\n" ++
+        "  - b\n" ++
+        "  + c\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
+test "formatUnifiedDiff: trailing-newline difference emits marker" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb");
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqualStrings(
+        "  --- t.zig\n" ++
+            "  +++ t.zig\n" ++
+            "  (trailing newline only)\n" ++
+            "\n",
+        diff,
+    );
+}
+
+test "collectImports: classes and sorted order" {
+    const source =
+        \\const local = @import("foo.zig");
+        \\const std = @import("std");
+        \\const sqlite = @import("sqlite");
+        \\
+        \\const rest = 1;
+    ;
+    const block_end = zsort.findImportBlockEnd(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 3), imports.items.len);
+    try std.testing.expectEqual(zsort.class_std_builtin, imports.items[0].class);
+    try std.testing.expectEqualStrings("std", imports.items[0].path);
+    try std.testing.expectEqual(zsort.class_third_party, imports.items[1].class);
+    try std.testing.expectEqualStrings("sqlite", imports.items[1].path);
+    try std.testing.expectEqual(zsort.class_local, imports.items[2].class);
+    try std.testing.expectEqualStrings("foo.zig", imports.items[2].path);
+}
+
+test "buildSortedImportText: comment travels with its import" {
+    const source =
+        \\// header
+        \\const bar = @import("bar");
+        \\// std comment
+        \\const std = @import("std");
+        \\
+        \\const rest = 1;
+    ;
+    const block_end = zsort.findImportBlockEnd(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, block_end);
+    defer std.testing.allocator.free(result);
+    const std_pos = std.mem.indexOf(u8, result, "const std") orelse return error.TestUnexpectedResult;
+    const bar_pos = std.mem.indexOf(u8, result, "const bar") orelse return error.TestUnexpectedResult;
+    const comment_pos = std.mem.indexOf(u8, result, "// std comment") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(comment_pos < std_pos);
+    try std.testing.expect(std_pos < bar_pos);
+}
+
+test "buildSortedImportText: alias imports hoisted after imports" {
+    const source =
+        \\const bar = @import("bar");
+        \\const Debug = std.debug;
+        \\
+        \\const rest = 1;
+    ;
+    const block_end = zsort.findImportBlockEnd(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, block_end);
+    defer std.testing.allocator.free(result);
+    const bar_pos = std.mem.indexOf(u8, result, "const bar") orelse return error.TestUnexpectedResult;
+    const debug_pos = std.mem.indexOf(u8, result, "const Debug = std.debug;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(bar_pos < debug_pos);
+}
+
+test "processSource: hoisted stray import lands in its group" {
+    const source =
+        \\const bar = @import("bar");
+        \\const std = @import("std");
+        \\
+        \\pub fn main() !void {}
+        \\
+        \\const late = @import("late.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std") orelse return error.TestUnexpectedResult;
+    const bar_pos = std.mem.indexOf(u8, result.new_text, "const bar") orelse return error.TestUnexpectedResult;
+    const late_pos = std.mem.indexOf(u8, result.new_text, "const late") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std_pos < bar_pos);
+    try std.testing.expect(bar_pos < late_pos);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "pub fn main") != null);
+}
+
 test "parseArgs: check mode with prefixes" {
+    var msg: ?[]const u8 = null;
     const args = [_][]const u8{ "zsort", "check", "src", "--ban-prefix", "./", "--ban-prefix", "src/" };
-    var parsed = try zsort.parseArgs(std.testing.allocator, &args);
+    var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expect(parsed.mode == .check);
     try std.testing.expectEqualStrings("src", parsed.target);
@@ -426,18 +626,51 @@ test "parseArgs: check mode with prefixes" {
 }
 
 test "parseArgs: fix mode" {
+    var msg: ?[]const u8 = null;
     const args = [_][]const u8{ "zsort", "fix", "tools" };
-    var parsed = try zsort.parseArgs(std.testing.allocator, &args);
+    var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expect(parsed.mode == .fix);
     try std.testing.expectEqualStrings("tools", parsed.target);
     try std.testing.expectEqual(@as(usize, 0), parsed.banned_prefixes.items.len);
 }
 
+test "parseArgs: help and version flags" {
+    var msg: ?[]const u8 = null;
+    var help = try zsort.parseArgs(std.testing.allocator, &.{ "zsort", "--help" }, &msg);
+    defer help.deinit(std.testing.allocator);
+    try std.testing.expect(help.help);
+    try std.testing.expect(!help.version);
+
+    var version = try zsort.parseArgs(std.testing.allocator, &.{ "zsort", "--version" }, &msg);
+    defer version.deinit(std.testing.allocator);
+    try std.testing.expect(version.version);
+    try std.testing.expect(!version.help);
+}
+
 test "parseArgs: errors" {
-    try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{"zsort"}));
-    try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check" }));
-    try std.testing.expectError(error.InvalidMode, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "fixx", "src" }));
-    try std.testing.expectError(error.MissingBanValue, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--ban-prefix" }));
-    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "extra" }));
+    var msg: ?[]const u8 = null;
+    defer if (msg) |m| std.testing.allocator.free(m);
+
+    try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{"zsort"}, &msg));
+    try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check" }, &msg));
+
+    try std.testing.expectError(error.InvalidMode, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "fixx", "src" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "fixx") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
+
+    try std.testing.expectError(error.MissingBanValue, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--ban-prefix" }, &msg));
+
+    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "extra" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "extra") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
+
+    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--bogus" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "unknown option") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "--bogus") != null);
 }
