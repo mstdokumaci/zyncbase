@@ -1115,6 +1115,7 @@ pub fn main() !void {
     pool.waitAndWork(&wg);
 
     var changed_count: usize = 0;
+    var fixed_count: usize = 0;
     var error_count: usize = 0;
     var banned_count: usize = 0;
 
@@ -1162,6 +1163,7 @@ pub fn main() !void {
                     error_count += 1;
                     break :fixFile;
                 };
+                fixed_count += 1;
                 printStdout("Fixed: {s}\n", .{file_path});
             }
         } else {
@@ -1174,7 +1176,7 @@ pub fn main() !void {
     }
 
     const stats = SummaryStats{
-        .changed = changed_count,
+        .changed = if (parsed.mode == .fix) fixed_count else changed_count,
         .errors = error_count,
         .banned = banned_count,
         .files = files.items.len,
