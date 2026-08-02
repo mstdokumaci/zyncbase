@@ -674,3 +674,52 @@ test "parseArgs: errors" {
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "unknown option") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "--bogus") != null);
 }
+
+test "formatSummary: check mode, plain without color" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 1,
+        .errors = 2,
+        .banned = 0,
+        .files = 179,
+        .elapsed_ns = 12 * std.time.ns_per_ms,
+    }, .check, false) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("\t1 needs fixing, 2 errors, 0 banned across 179 files in 12ms.\n", s);
+}
+
+test "formatSummary: fix mode, plain without color" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 0,
+        .errors = 0,
+        .banned = 0,
+        .files = 179,
+        .elapsed_ns = 500_000,
+    }, .fix, false) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("\n\tFixed 0 files, 0 errors, 0 banned across 179 files in 0ms.\n", s);
+}
+
+test "formatSummary: colorized numbers, sub-ms truncates to 0ms" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 0,
+        .errors = 0,
+        .banned = 0,
+        .files = 179,
+        .elapsed_ns = 500_000,
+    }, .check, true) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("\t\x1b[33m0\x1b[39m needs fixing, \x1b[33m0\x1b[39m errors, \x1b[33m0\x1b[39m banned across \x1b[33m179\x1b[39m files in \x1b[33m0\x1b[39mms.\n", s);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") != null);
+}
+
+test "formatSummary: no escape bytes when color disabled" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 0,
+        .errors = 0,
+        .banned = 0,
+        .files = 1,
+        .elapsed_ns = 0,
+    }, .check, false) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") == null);
+}

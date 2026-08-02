@@ -940,6 +940,39 @@ fn printStdout(comptime fmt: []const u8, args: anytype) void {
     w.interface.flush() catch return;
 }
 
+fn useColor() bool {
+    return std.posix.isatty(std.fs.File.stdout().handle);
+}
+
+pub const SummaryStats = struct {
+    changed: usize,
+    errors: usize,
+    banned: usize,
+    files: usize,
+    elapsed_ns: u64,
+};
+
+pub fn formatSummary(
+    allocator: std.mem.Allocator,
+    stats: SummaryStats,
+    mode: CliMode,
+    use_color: bool,
+) ?[]const u8 {
+    const on = "\x1b[33m";
+    const off = "\x1b[39m";
+    const ms = @divTrunc(stats.elapsed_ns, std.time.ns_per_ms);
+    if (use_color) {
+        return switch (mode) {
+            .check => allocFmt(allocator, "\t{[0]s}{[2]d}{[1]s} needs fixing, {[0]s}{[3]d}{[1]s} errors, {[0]s}{[4]d}{[1]s} banned across {[0]s}{[5]d}{[1]s} files in {[0]s}{[6]d}{[1]s}ms.\n", .{ on, off, stats.changed, stats.errors, stats.banned, stats.files, ms }),
+            .fix => allocFmt(allocator, "\n\tFixed {[0]s}{[2]d}{[1]s} files, {[0]s}{[3]d}{[1]s} errors, {[0]s}{[4]d}{[1]s} banned across {[0]s}{[5]d}{[1]s} files in {[0]s}{[6]d}{[1]s}ms.\n", .{ on, off, stats.changed, stats.errors, stats.banned, stats.files, ms }),
+        };
+    }
+    return switch (mode) {
+        .check => allocFmt(allocator, "\t{d} needs fixing, {d} errors, {d} banned across {d} files in {d}ms.\n", .{ stats.changed, stats.errors, stats.banned, stats.files, ms }),
+        .fix => allocFmt(allocator, "\n\tFixed {d} files, {d} errors, {d} banned across {d} files in {d}ms.\n", .{ stats.changed, stats.errors, stats.banned, stats.files, ms }),
+    };
+}
+
 fn printHelp() void {
     printStdout(
         \\Usage: zsort [check|fix] <dir|file> [options]
@@ -1046,6 +1079,8 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    var timer = try std.time.Timer.start();
+
     const slots = try allocator.alloc(JobSlot, files.items.len);
     defer allocator.free(slots);
     for (slots) |*slot| {
@@ -1127,7 +1162,7 @@ pub fn main() !void {
                     error_count += 1;
                     break :fixFile;
                 };
-                std.debug.print("Fixed: {s}\n", .{file_path});
+                printStdout("Fixed: {s}\n", .{file_path});
             }
         } else {
             if (result.stray_count > 0) {
@@ -1138,17 +1173,24 @@ pub fn main() !void {
         }
     }
 
+    const stats = SummaryStats{
+        .changed = changed_count,
+        .errors = error_count,
+        .banned = banned_count,
+        .files = files.items.len,
+        .elapsed_ns = timer.read(),
+    };
     if (parsed.mode == .check) {
+        if (formatSummary(allocator, stats, .check, useColor())) |summary| {
+            printStdout("{s}", .{summary});
+        }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
-            std.debug.print("{} needs fixing, {} errors, {} banned\n", .{ changed_count, error_count, banned_count });
             std.process.exit(1);
         }
     } else {
-        var obuf2: [256]u8 = undefined;
-        const stdout_file2 = std.fs.File.stdout();
-        var stdout_w2 = stdout_file2.writer(&obuf2);
-        stdout_w2.interface.print("\nFixed {} files, {} errors, {} banned\n", .{ changed_count, error_count, banned_count }) catch return;
-        stdout_w2.interface.flush() catch return;
+        if (formatSummary(allocator, stats, .fix, useColor())) |summary| {
+            printStdout("{s}", .{summary});
+        }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);
     }
 }
