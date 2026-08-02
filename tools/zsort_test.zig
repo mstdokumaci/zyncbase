@@ -4,17 +4,23 @@ const zsort = @import("zsort.zig");
 test "classify: std/builtin" {
     try std.testing.expectEqual(zsort.class_std_builtin, zsort.classify("std"));
     try std.testing.expectEqual(zsort.class_std_builtin, zsort.classify("builtin"));
+    try std.testing.expectEqual(zsort.class_std_builtin, zsort.classify("@zig"));
 }
 
-test "classify: vendor modules" {
-    try std.testing.expectEqual(zsort.class_vendor, zsort.classify("sqlite"));
-    try std.testing.expectEqual(zsort.class_vendor, zsort.classify("msgpack"));
-    try std.testing.expectEqual(zsort.class_vendor, zsort.classify("httpx"));
+test "classify: third-party modules" {
+    try std.testing.expectEqual(zsort.class_third_party, zsort.classify("sqlite"));
+    try std.testing.expectEqual(zsort.class_third_party, zsort.classify("msgpack"));
+    try std.testing.expectEqual(zsort.class_third_party, zsort.classify("httpx"));
+    try std.testing.expectEqual(zsort.class_third_party, zsort.classify("foo"));
 }
 
 test "classify: local" {
-    try std.testing.expectEqual(zsort.class_local, zsort.classify("foo"));
-    try std.testing.expectEqual(zsort.class_local, zsort.classify("some_module"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("foo.zig"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("subdir/foo.zig"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("./foo.zig"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("../foo.zig"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("root"));
+    try std.testing.expectEqual(zsort.class_local, zsort.classify("build_root"));
 }
 
 test "extractPath: normal" {
@@ -176,7 +182,7 @@ test "buildSortedImportText: comments separating groups" {
     const source =
         \\const std = @import("std");
         \\
-        \\// Vendor imports
+        \\// Third-party imports
         \\const sqlite = @import("sqlite");
         \\
         \\const rest = 1;
@@ -188,7 +194,7 @@ test "buildSortedImportText: comments separating groups" {
     const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, block_end);
     defer std.testing.allocator.free(result);
 
-    try std.testing.expect(std.mem.indexOf(u8, result, "// Vendor imports") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "// Third-party imports") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "std") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "sqlite") != null);
 }

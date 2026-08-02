@@ -3,7 +3,7 @@
 const std = @import("std");
 
 pub const class_std_builtin: u2 = 0;
-pub const class_vendor: u2 = 1;
+pub const class_third_party: u2 = 1;
 pub const class_local: u2 = 2;
 
 pub const Import = struct {
@@ -26,17 +26,19 @@ pub const Import = struct {
     }
 };
 
-// Corresponding dependency declarations are in build.zig.
-const vendor_modules = [_][]const u8{ "sqlite", "msgpack", "httpx" };
-
 pub fn classify(path: []const u8) u2 {
-    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin")) {
+    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin") or
+        std.mem.eql(u8, path, "@zig"))
+    {
         return class_std_builtin;
     }
-    for (vendor_modules) |mod| {
-        if (std.mem.eql(u8, path, mod)) return class_vendor;
+    if (std.mem.eql(u8, path, "root") or std.mem.eql(u8, path, "build_root") or
+        std.mem.indexOfScalar(u8, path, '/') != null or
+        std.mem.endsWith(u8, path, ".zig"))
+    {
+        return class_local;
     }
-    return class_local;
+    return class_third_party;
 }
 
 fn findLineStart(source: []const u8, pos: usize) usize {
@@ -278,7 +280,7 @@ pub fn collectImports(
                 .start = line_start,
                 .end = block_end_cimport,
                 .path = "<cimport>",
-                .class = class_vendor,
+                .class = class_third_party,
                 .stray = found >= block_end,
                 .comment_start = comment_start,
             });
