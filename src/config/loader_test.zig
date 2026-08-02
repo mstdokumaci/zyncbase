@@ -8,6 +8,23 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const ConfigLoader = @import("loader.zig").ConfigLoader;
 const Config = @import("state.zig").Config;
 
+/// Writes an empty schema file and the given config content under `test_dir`,
+/// returning an allocated path to the config file. The caller owns the returned
+/// path and schema content.
+fn writeConfigWithSchema(
+    allocator: std.mem.Allocator,
+    test_dir: []const u8,
+    config_file_name: []const u8,
+    schema_file_path: []const u8,
+    config_content: []const u8,
+) ![]const u8 {
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try std.fs.path.join(allocator, &.{ test_dir, config_file_name });
+    errdefer allocator.free(temp_file_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
+    return temp_file_path;
+}
+
 test "ConfigLoader loads defaults when file not found" {
     const allocator = std.testing.allocator;
 
@@ -386,8 +403,6 @@ test "config: validation - invalid port" {
     var context = try schema_helpers.TestContext.init(allocator, "config-invalid-port");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-port.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-invalid-port.json" });
     defer allocator.free(schema_file_path);
 
@@ -401,8 +416,8 @@ test "config: validation - invalid port" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-port.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     const result = ConfigLoader.load(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidPort, result);
@@ -414,8 +429,6 @@ test "config: validation - port zero" {
     var context = try schema_helpers.TestContext.init(allocator, "config-port-zero");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-port-zero.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-port-zero.json" });
     defer allocator.free(schema_file_path);
 
@@ -429,8 +442,8 @@ test "config: validation - port zero" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-port-zero.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     const result = ConfigLoader.load(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidPort, result);
@@ -442,8 +455,6 @@ test "config: validation - invalid buffer size" {
     var context = try schema_helpers.TestContext.init(allocator, "config-invalid-buffer");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-buffer.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-invalid-buffer.json" });
     defer allocator.free(schema_file_path);
 
@@ -457,8 +468,8 @@ test "config: validation - invalid buffer size" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-buffer.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     const result = ConfigLoader.load(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidBufferSize, result);
@@ -470,8 +481,6 @@ test "config: validation - invalid max message size" {
     var context = try schema_helpers.TestContext.init(allocator, "config-invalid-max-msg");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-max-message-size.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-invalid-max-message.json" });
     defer allocator.free(schema_file_path);
 
@@ -485,8 +494,8 @@ test "config: validation - invalid max message size" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-max-message-size.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     const result = ConfigLoader.load(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidMaxMessageSize, result);
@@ -614,8 +623,6 @@ test "config: round-trip - server config" {
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-server");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-server.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-server.json" });
     defer allocator.free(schema_file_path);
 
@@ -630,8 +637,8 @@ test "config: round-trip - server config" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-server.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     var config = try ConfigLoader.load(allocator, temp_file_path);
     defer config.deinit();
@@ -647,8 +654,6 @@ test "config: round-trip - logging config" {
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-logging");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-logging.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-logging.json" });
     defer allocator.free(schema_file_path);
 
@@ -663,8 +668,8 @@ test "config: round-trip - logging config" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-logging.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     var config = try ConfigLoader.load(allocator, temp_file_path);
     defer config.deinit();
@@ -680,8 +685,6 @@ test "config: round-trip - complete config" {
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-complete");
     defer context.deinit();
 
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-complete.json" });
-    defer allocator.free(temp_file_path);
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-complete.json" });
     defer allocator.free(schema_file_path);
 
@@ -722,8 +725,8 @@ test "config: round-trip - complete config" {
     , .{ context.test_dir, schema_file_path });
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-complete.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
 
     var config = try ConfigLoader.load(allocator, temp_file_path);
     defer config.deinit();

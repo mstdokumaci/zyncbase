@@ -220,6 +220,34 @@ fn insertSchemaMetaVersion(db: *sqlite.Db, allocator: std.mem.Allocator, version
     try execSql(db, allocator, sql);
 }
 
+/// Returns the declared type of `column_name` in `table_name` via PRAGMA table_info,
+/// or null if the column is absent. The returned slice is owned by the caller.
+fn columnType(db: *sqlite.Db, allocator: std.mem.Allocator, table_name: []const u8, column_name: []const u8) !?[]const u8 {
+    const pragma_sql = try std.fmt.allocPrint(allocator, "PRAGMA table_info({s})", .{table_name});
+    defer allocator.free(pragma_sql);
+    var stmt = try db.prepareDynamic(pragma_sql);
+    defer stmt.deinit();
+
+    const PragmaRow = struct {
+        cid: i64,
+        name: []const u8,
+        type: []const u8,
+        notnull: i64,
+        dflt_value: ?[]const u8,
+        pk: i64,
+    };
+    var iter = try stmt.iteratorAlloc(PragmaRow, allocator, .{});
+    while (try iter.nextAlloc(allocator, .{})) |row| {
+        defer {
+            allocator.free(row.name);
+            allocator.free(row.type);
+            if (row.dflt_value) |dv| allocator.free(dv);
+        }
+        if (std.mem.eql(u8, row.name, column_name)) return try allocator.dupe(u8, row.type);
+    }
+    return null;
+}
+
 // Feature: schema-aware-storage, Property 10: Additive migration preserves existing data
 // For any database state and additive MigrationPlan (containing only create_table and add_column
 // changes), after Migration_Executor.execute completes, every row that existed before the migration
@@ -292,10 +320,8 @@ test "migration_executor: additive migration preserves existing data" {
             .{tname},
         );
         defer allocator.free(check_sql);
-        const check_sql_z = try allocator.dupeZ(u8, check_sql);
-        defer allocator.free(check_sql_z);
 
-        var stmt = try db.prepareDynamic(check_sql_z);
+        var stmt = try db.prepareDynamic(check_sql);
         defer stmt.deinit();
 
         const CheckRow = struct {
@@ -384,10 +410,8 @@ test "migration_executor: destructive migration refused when not allowed" {
                 .{tname},
             );
             defer allocator.free(check_sql);
-            const check_sql_z = try allocator.dupeZ(u8, check_sql);
-            defer allocator.free(check_sql_z);
 
-            var stmt = try db.prepareDynamic(check_sql_z);
+            var stmt = try db.prepareDynamic(check_sql);
             defer stmt.deinit();
 
             const IdRow = struct { id: []const u8 };
@@ -398,38 +422,10 @@ test "migration_executor: destructive migration refused when not allowed" {
             try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
 
             // Verify DB schema is unchanged: col_a must still be TEXT
-            const pragma_sql = try std.fmt.allocPrint(
-                allocator,
-                "PRAGMA table_info({s})",
-                .{tname},
-            );
-            defer allocator.free(pragma_sql);
-
-            var pragma_stmt = try db.prepareDynamic(pragma_sql);
-            defer pragma_stmt.deinit();
-
-            const PragmaRow = struct {
-                cid: i64,
-                name: []const u8,
-                type: []const u8,
-                notnull: i64,
-                dflt_value: ?[]const u8,
-                pk: i64,
-            };
-
-            var col_a_is_text = false;
-            var pragma_iter = try pragma_stmt.iteratorAlloc(PragmaRow, allocator, .{});
-            while (try pragma_iter.nextAlloc(allocator, .{})) |pragma_row| {
-                defer {
-                    allocator.free(pragma_row.name);
-                    allocator.free(pragma_row.type);
-                    if (pragma_row.dflt_value) |dv| allocator.free(dv);
-                }
-                if (std.mem.eql(u8, pragma_row.name, "col_a") and std.mem.eql(u8, pragma_row.type, "TEXT")) {
-                    col_a_is_text = true;
-                }
-            }
-            try std.testing.expect(col_a_is_text);
+            const col_type = try columnType(&db, allocator, tname, "col_a");
+            defer if (col_type) |ct| allocator.free(ct);
+            try std.testing.expect(col_type != null);
+            try std.testing.expectEqualStrings("TEXT", col_type.?);
         }
     }
 }
@@ -557,39 +553,9 @@ test "migration_executor: major version bump is refused" {
             try std.testing.expectError(error.MajorVersionBumpNotAllowed, result);
 
             // Verify no changes were applied: column 'extra' should not exist
-            // Check via PRAGMA table_info - 'extra' column should not be present
-            const pragma_sql = try std.fmt.allocPrint(
-                allocator,
-                "PRAGMA table_info({s})",
-                .{tname},
-            );
-            defer allocator.free(pragma_sql);
-
-            var pragma_stmt = try db.prepareDynamic(pragma_sql);
-            defer pragma_stmt.deinit();
-
-            const PragmaRow = struct {
-                cid: i64,
-                name: []const u8,
-                type: []const u8,
-                notnull: i64,
-                dflt_value: ?[]const u8,
-                pk: i64,
-            };
-
-            var found_extra = false;
-            var pragma_iter = try pragma_stmt.iteratorAlloc(PragmaRow, allocator, .{});
-            while (try pragma_iter.nextAlloc(allocator, .{})) |row| {
-                defer {
-                    allocator.free(row.name);
-                    allocator.free(row.type);
-                    if (row.dflt_value) |dv| allocator.free(dv);
-                }
-                if (std.mem.eql(u8, row.name, "extra")) {
-                    found_extra = true;
-                }
-            }
-            try std.testing.expect(!found_extra);
+            const extra_type = try columnType(&db, allocator, tname, "extra");
+            defer if (extra_type) |et| allocator.free(et);
+            try std.testing.expect(extra_type == null);
         }
     }
 }

@@ -42,7 +42,7 @@ test "storage: write/flush/read round-trip on file-backed engine" {
     const allocator = testing.allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-roundtrip", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
     const tbl = try ctx.table("data_table");
@@ -112,6 +112,7 @@ test "storage: error handling concurrent access safety" {
         }
         fn runErr(t_ctx: ThreadContext, table_index: usize) !void {
             const record = try sth.readDoc(t_ctx.allocator, t_ctx.storage, table_index, 1, 1);
+            try testing.expect(record != null);
             defer if (record) |r| r.deinit(t_ctx.allocator);
         }
     }.run;
@@ -136,12 +137,12 @@ test "storage: write/flush/read round-trip with empty value" {
     const storage = &ctx.engine;
     const tbl = try ctx.table("data_table");
 
-    try ctx.insertText("data_table", 1, 1, "val", "value");
+    try ctx.insertText("data_table", 1, 1, "val", "");
     try storage.flushPendingWrites();
     {
-        const record = try tbl.readDoc(allocator, 1, 1);
-        defer if (record) |r| r.deinit(allocator);
-        try testing.expect(record != null);
+        var doc = try tbl.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", "");
     }
 }
 test "storage: error handling large values" {

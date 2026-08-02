@@ -7,14 +7,13 @@ const sth = @import("storage_engine_test_helpers.zig");
 const testing = std.testing;
 
 // This property test verifies that the storage engine stays stable under
-// concurrent insert/read/delete operations while errors are injected:
-// no panics or crashes occur, and the engine keeps operating.
+// concurrent insert/read/delete operations: no panics or crashes occur, and
+// the engine keeps operating.
 //
-// We test various error scenarios to ensure the server never crashes:
-// - Multiple concurrent operations during errors
-// - Rapid error conditions
-// - Error recovery and retry logic
-// - Resource cleanup after errors
+// The workers run a mix of insert/read/delete operations concurrently;
+// operation errors are tolerated via the existing error handling so that a
+// transient failure cannot crash a worker. The test passes if all threads
+// complete and a final flush succeeds.
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

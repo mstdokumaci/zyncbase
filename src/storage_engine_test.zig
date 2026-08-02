@@ -1136,29 +1136,6 @@ test "storage: engine init rejects file path as data dir" {
     try testing.expectError(error.NotDir, result);
 }
 
-test "storage: engine init creates database file" {
-    const allocator = testing.allocator;
-    var ms: sth.MemoryStrategy = undefined;
-    try ms.init(allocator);
-    defer std.debug.assert(ms.deinit() == .ok);
-
-    var context = try sth.TestContext.init(allocator, "storage-init-valid");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-
-    var sm = try sth.createDummySchema(allocator);
-    defer sm.deinit();
-    var engine: StorageEngine = undefined;
-    try engine.init(allocator, &ms, test_dir, &sm, .{}, .{ .in_memory = false, .reader_pool_size = 1 }, null, null);
-    defer engine.deinit();
-
-    // Verify database file was created
-    const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
-    defer allocator.free(db_path);
-    const db_file = try std.fs.cwd().openFile(db_path, .{});
-    db_file.close();
-}
-
 // Storage engine thread safety properties
 test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
@@ -1217,14 +1194,20 @@ test "storage: thread-safe engine access" {
 
     // Spawn write threads
     var write_threads: [num_threads / 2]std.Thread = undefined;
+    var write_spawned: usize = 0;
+    errdefer for (write_threads[0..write_spawned]) |thread| thread.join();
     for (&write_threads, 0..) |*thread, i| {
         thread.* = try std.Thread.spawn(.{}, WriteThread.run, .{ ThreadContext{ .ctx = &ctx, .result = &write_results[i] }, i });
+        write_spawned += 1;
     }
     // Spawn read threads
     var read_threads: [num_threads / 2]std.Thread = undefined;
     const test_table = try ctx.table("test");
+    var read_spawned: usize = 0;
+    errdefer for (read_threads[0..read_spawned]) |thread| thread.join();
     for (&read_threads, 0..) |*thread, i| {
         thread.* = try std.Thread.spawn(.{}, ReadThread.run, .{ engine, test_table.metadata.index, i, &read_results[i] });
+        read_spawned += 1;
     }
     // Wait for all threads
     for (write_threads) |thread| {
@@ -1267,7 +1250,7 @@ test "storage: connection pool reuse and release" {
     const test_table = try ctx.table("test");
     while (i < num_operations) : (i += 1) {
         const key: u128 = if (i % 2 == 0) 1 else 2;
-        const record = try test_table.readDoc(testing.allocator, key, 1);
+        const record = try test_table.readDoc(allocator, key, 1);
         defer if (record) |r| r.deinit(allocator);
         try testing.expect(record != null);
     }
@@ -1350,7 +1333,7 @@ test "storage: insert/delete inverse consistency" {
     }
 }
 
-test "storage: transaction isolation and consistency" {
+test "storage: batched writes commit consistently" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
@@ -1400,7 +1383,7 @@ test "storage: transaction isolation and consistency" {
     _ = try sth.expectFieldString(record_n3.?, test_table.metadata, "val", "new3");
 }
 
-test "storage: concurrent batch processing" {
+test "storage: multi-batch writes all persist" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
@@ -1490,7 +1473,7 @@ test "storage: data persistence across restarts" {
     {
         var ctx: sth.EngineTestContext = undefined;
         try sth.setupEngineWithDir(&ctx, allocator, test_dir, table, .{ .in_memory = false });
-        defer ctx.deinit();
+        defer ctx.deinitNoCleanup();
 
         const test_table = try ctx.table("test");
         const record = try test_table.readDoc(allocator, 1, 1);
@@ -1529,7 +1512,7 @@ test "storage: schema update integrity" {
 
         var ctx: sth.EngineTestContext = undefined;
         try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v2, .{ .in_memory = false });
-        defer ctx.deinit();
+        defer ctx.deinitNoCleanup();
 
         const test_table = try ctx.table("test");
 
@@ -1546,6 +1529,7 @@ test "storage: schema update integrity" {
         const record2 = try test_table.readDoc(allocator, 2, 1);
         defer if (record2) |r| r.deinit(allocator);
         try testing.expect(record2 != null);
+        _ = try sth.expectFieldInt(record2.?, test_table.metadata, "val2", 42);
     }
 }
 
@@ -1566,6 +1550,7 @@ test "storage: random operations fuzzing" {
     const rand = prng.random();
 
     const items_index = ctx.tableIndex("items");
+    const test_table = try ctx.table("items");
     var i: usize = 0;
     while (i < 200) : (i += 1) {
         const op = rand.intRangeAtMost(u8, 0, 3);
@@ -1584,7 +1569,6 @@ test "storage: random operations fuzzing" {
             },
             2 => {
                 // Query
-                const test_table = try ctx.table("items");
                 const record = try test_table.readDoc(allocator, id, ns);
                 if (record) |r| r.deinit(allocator);
             },

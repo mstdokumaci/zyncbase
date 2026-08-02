@@ -19,7 +19,13 @@ test "logging: connection events" {
     // a log entry is written with the connection ID.
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            std.debug.print("Memory leak detected!\n", .{});
+            @panic("Memory leak in init/deinit cycle");
+        }
+    }
     const allocator = gpa.allocator();
 
     var app: AppTestContext = undefined;
@@ -136,13 +142,21 @@ test "logging: connection events" {
 }
 
 test "logging: error details" {
-    // Error event logging properties
+    // Message-parsing error logging properties
     //
-    // This property test verifies that for any database or message parsing error,
-    // a log entry is written with error details.
+    // This property test verifies that for any message parsing error,
+    // a log entry is written with error details. Because the log sink
+    // cannot be intercepted directly, the tests exercise the error paths
+    // (and one null-record lookup) and assert on observable behavior.
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            std.debug.print("Memory leak detected!\n", .{});
+            @panic("Memory leak in init/deinit cycle");
+        }
+    }
     const allocator = gpa.allocator();
 
     // Initialize components
@@ -199,8 +213,9 @@ test "logging: error details" {
         manager.onClose(&ws);
     }
 
-    // Test 3: Database errors are logged
-    // Storage engine logs errors internally when operations fail
+    // Test 3: Missing records return null (not an error)
+    // Reading an absent document is normal operation, not a database error:
+    // readDoc returns null and no error is raised.
     {
         const tbl_md = app.schema.table("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
@@ -243,7 +258,13 @@ test "logging: level filtering" {
     // We verify that the logging infrastructure is in place and used correctly.
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            std.debug.print("Memory leak detected!\n", .{});
+            @panic("Memory leak in init/deinit cycle");
+        }
+    }
     const allocator = gpa.allocator();
 
     // Test 1: Verify different log levels are used appropriately
@@ -277,7 +298,13 @@ test "logging: message formatting" {
     // is text-based with level, scope, and message.
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer {
+        const leaked = gpa.deinit();
+        if (leaked == .leak) {
+            std.debug.print("Memory leak detected!\n", .{});
+            @panic("Memory leak in init/deinit cycle");
+        }
+    }
     const allocator = gpa.allocator();
 
     // Test 1: Verify log messages include required information
