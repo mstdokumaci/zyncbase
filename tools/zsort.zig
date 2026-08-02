@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+pub const version = "0.1.0";
+
 pub const class_std_builtin: u2 = 0;
 pub const class_third_party: u2 = 1;
 pub const class_local: u2 = 2;
@@ -343,9 +345,9 @@ pub fn findImportBlockEnd(source: []const u8) usize {
     return pos;
 }
 
-fn banMessage(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
+fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
     return std.fmt.allocPrint(allocator, fmt, args) catch |err| {
-        std.debug.print("zsort: failed to format ban message: {s}\n", .{@errorName(err)});
+        std.debug.print("zsort: failed to format message: {s}\n", .{@errorName(err)});
         return null;
     };
 }
@@ -372,13 +374,13 @@ pub fn hasBannedPatterns(
                 !std.mem.startsWith(u8, line, "pub const ") and
                 !std.mem.startsWith(u8, line, "_ = @import"))
             {
-                return banMessage(allocator, "inline @import in type expression", .{});
+                return allocFmt(allocator, "inline @import in type expression", .{});
             }
 
             if (extractPath(source[found..], "@import(")) |path| {
                 for (banned_prefixes) |prefix| {
                     if (std.mem.startsWith(u8, path, prefix)) {
-                        return banMessage(allocator, "import path starts with banned prefix '{s}'", .{prefix});
+                        return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix});
                     }
                 }
             }
@@ -585,21 +587,69 @@ pub fn buildSortedImportText(
     return deduped.toOwnedSlice(allocator);
 }
 
-fn showDiff(file_path: []const u8, old: []const u8, new: []const u8) void {
+fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnmanaged([]const u8) {
+    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        try lines.append(allocator, std.mem.trimRight(u8, line, "\r"));
+    }
+    // A trailing newline produces a final empty element; drop it so that
+    // "a\n" and "a" compare equal.
+    if (lines.items.len > 0 and lines.items[lines.items.len - 1].len == 0) {
+        lines.items.len -= 1;
+    }
+    return lines;
+}
+
+/// Minimal unified-style diff: trims common prefix/suffix lines and shows the
+/// changed middle with up to two context lines around it.
+/// ponytail: prefix/suffix diff, switch to Myers if multi-hunk noise ever matters
+pub fn formatUnifiedDiff(
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+    old: []const u8,
+    new: []const u8,
+) ![]const u8 {
+    var old_lines = try splitLines(allocator, old);
+    defer old_lines.deinit(allocator);
+    var new_lines = try splitLines(allocator, new);
+    defer new_lines.deinit(allocator);
+
+    var p: usize = 0;
+    while (p < old_lines.items.len and p < new_lines.items.len and
+        std.mem.eql(u8, old_lines.items[p], new_lines.items[p])) : (p += 1)
+    {}
+
+    var s: usize = 0;
+    while (s < old_lines.items.len - p and s < new_lines.items.len - p and
+        std.mem.eql(u8, old_lines.items[old_lines.items.len - 1 - s], new_lines.items[new_lines.items.len - 1 - s])) : (s += 1)
+    {}
+
+    const old_mid = old_lines.items[p .. old_lines.items.len - s];
+    const new_mid = new_lines.items[p .. new_lines.items.len - s];
+    const after_start = old_lines.items.len - s;
+    const after_end = @min(old_lines.items.len, after_start + 2);
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
+    try w.print("  --- {s}\n", .{file_path});
+    try w.print("  +++ {s}\n", .{file_path});
+    try w.print("  @@ -{d},{d} +{d},{d} @@\n", .{ p + 1, old_mid.len, p + 1, new_mid.len });
+    for (old_lines.items[p -| 2..p]) |line| try w.print("   {s}\n", .{line});
+    for (old_mid) |line| try w.print("  - {s}\n", .{line});
+    for (new_mid) |line| try w.print("  + {s}\n", .{line});
+    for (old_lines.items[after_start..after_end]) |line| try w.print("   {s}\n", .{line});
+    try w.writeByte('\n');
+    return buf.toOwnedSlice(allocator);
+}
+
+fn showDiff(allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8) void {
+    const diff = formatUnifiedDiff(allocator, file_path, old, new) catch return;
     var obuf: [4096]u8 = undefined;
     const stdout_file = std.fs.File.stdout();
     var stdout_w = stdout_file.writer(&obuf);
-
-    stdout_w.interface.print("  --- {s}\n", .{file_path}) catch return;
-    var old_lines = std.mem.splitScalar(u8, old, '\n');
-    while (old_lines.next()) |line| {
-        stdout_w.interface.print("  - {s}\n", .{line}) catch return;
-    }
-    var new_lines = std.mem.splitScalar(u8, new, '\n');
-    while (new_lines.next()) |line| {
-        stdout_w.interface.print("  + {s}\n", .{line}) catch return;
-    }
-    stdout_w.interface.writeAll("\n") catch return;
+    stdout_w.interface.writeAll(diff) catch return;
     stdout_w.interface.flush() catch return;
 }
 
@@ -615,17 +665,59 @@ fn isExcludedPath(path: []const u8) bool {
     return false;
 }
 
+/// Component-boundary prefix match: `build` matches `build` and `build/x.zig`,
+/// but not `build-tools/x.zig`. A trailing slash in `pattern` is ignored.
+pub fn matchesIgnore(path: []const u8, pattern: []const u8) bool {
+    const pat = std.mem.trimRight(u8, pattern, "/");
+    if (pat.len == 0) return false;
+    if (!std.mem.startsWith(u8, path, pat)) return false;
+    return path.len == pat.len or path[pat.len] == '/';
+}
+
+fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
+    for (ignores) |pattern| {
+        if (matchesIgnore(path, pattern)) return true;
+    }
+    return false;
+}
+
+/// Read `<root>/.gitignore` and return its cleaned patterns, allocated with
+/// `allocator` (patterns and the slice belong to that allocator).
+/// Missing or unreadable files yield an empty list (not an error).
+/// ponytail: no wildcards or negation; entries match as path-component prefixes
+pub fn loadGitignore(allocator: std.mem.Allocator, root: []const u8) ![]const []const u8 {
+    const gitignore_path = try std.fs.path.join(allocator, &.{ root, ".gitignore" });
+    defer allocator.free(gitignore_path);
+
+    const contents = std.fs.cwd().readFileAlloc(allocator, gitignore_path, 1024 * 1024) catch return &[_][]const u8{};
+    defer allocator.free(contents);
+
+    var patterns: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer patterns.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, contents, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (line[0] == '!' or std.mem.indexOfAny(u8, line, "*?[") != null) continue;
+        try patterns.append(allocator, try allocator.dupe(u8, line));
+    }
+    return patterns.toOwnedSlice(allocator);
+}
+
 pub fn walkDir(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     base_path: []const u8,
     files: *std.ArrayListUnmanaged([]const u8),
+    ignores: []const []const u8,
 ) !void {
     var iter = try dir.walk(allocator);
     defer iter.deinit();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
         if (isExcludedPath(entry.path)) continue;
+        if (matchesAnyIgnore(entry.path, ignores)) continue;
         if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
         const full_path = try std.fs.path.join(allocator, &.{ base_path, entry.path });
         try files.append(allocator, full_path);
@@ -743,49 +835,122 @@ pub fn processSource(
 
 pub const CliMode = enum { check, fix };
 
+pub const ParseError = error{ OutOfMemory, Usage, InvalidMode, MissingBanValue, UnexpectedArg };
+
 pub const Args = struct {
     mode: CliMode,
     target: []const u8,
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
+    help: bool = false,
+    version: bool = false,
 
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
         self.banned_prefixes.deinit(allocator);
     }
 };
 
-pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Args {
-    if (args.len < 3) return error.Usage;
-
-    const mode: CliMode = if (std.mem.eql(u8, args[1], "fix"))
-        .fix
-    else if (std.mem.eql(u8, args[1], "check"))
-        .check
-    else
-        return error.InvalidMode;
+/// On error, `err_msg` (when non-null) is set to a heap-allocated message
+/// describing what went wrong; the caller frees it.
+pub fn parseArgs(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    err_msg: *?[]const u8,
+) ParseError!Args {
+    var mode: ?CliMode = null;
+    var target: ?[]const u8 = null;
+    var help = false;
+    var show_version = false;
 
     var banned_prefixes: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer banned_prefixes.deinit(allocator);
 
-    var target: ?[]const u8 = null;
-    var i: usize = 2;
+    var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--ban-prefix")) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            help = true;
+        } else if (std.mem.eql(u8, arg, "--version")) {
+            show_version = true;
+        } else if (std.mem.eql(u8, arg, "--ban-prefix")) {
             if (i + 1 >= args.len) return error.MissingBanValue;
             i += 1;
             try banned_prefixes.append(allocator, args[i]);
+        } else if (arg.len > 0 and arg[0] == '-') {
+            err_msg.* = allocFmt(allocator, "unknown option '{s}'", .{arg});
+            return error.UnexpectedArg;
+        } else if (mode == null) {
+            if (std.mem.eql(u8, arg, "check")) {
+                mode = .check;
+            } else if (std.mem.eql(u8, arg, "fix")) {
+                mode = .fix;
+            } else {
+                err_msg.* = allocFmt(allocator, "unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
+                return error.InvalidMode;
+            }
         } else if (target == null) {
-            target = args[i];
+            target = arg;
         } else {
+            err_msg.* = allocFmt(allocator, "unexpected argument '{s}'", .{arg});
             return error.UnexpectedArg;
         }
     }
 
-    if (target == null) return error.Usage;
-
+    if (help or show_version) {
+        return .{
+            .mode = mode orelse .check,
+            .target = target orelse ".",
+            .banned_prefixes = banned_prefixes,
+            .help = help,
+            .version = show_version,
+        };
+    }
     return .{
-        .mode = mode,
-        .target = target.?,
+        .mode = mode orelse return error.Usage,
+        .target = target orelse return error.Usage,
         .banned_prefixes = banned_prefixes,
+    };
+}
+
+fn printHelp() void {
+    std.debug.print(
+        \\Usage: zsort [check|fix] <dir|file> [options]
+        \\
+        \\Modes:
+        \\  check              Verify Zig import ordering; exits 1 when changes are needed
+        \\  fix                Rewrite files with sorted imports
+        \\
+        \\Options:
+        \\  --ban-prefix <p>   Reject import paths starting with prefix (repeatable)
+        \\  -h, --help         Show this help message
+        \\  --version          Print version and exit
+        \\
+    , .{});
+}
+
+const JobSlot = struct {
+    arena: *std.heap.ArenaAllocator,
+    source: []const u8,
+    result: ?ProcessResult = null,
+    read_err: ?[]const u8 = null,
+    proc_err: ?[]const u8 = null,
+};
+
+const FileJob = struct {
+    slot: *JobSlot,
+    path: []const u8,
+    banned: []const []const u8,
+};
+
+fn processFileJob(job: *const FileJob) void {
+    const allocator = job.slot.arena.allocator();
+    const source = std.fs.cwd().readFileAlloc(allocator, job.path, 10 * 1024 * 1024) catch |err| {
+        job.slot.read_err = @errorName(err);
+        return;
+    };
+    job.slot.source = source;
+    job.slot.result = processSource(allocator, source, job.banned) catch |err| {
+        job.slot.proc_err = @errorName(err);
+        return;
     };
 }
 
@@ -795,13 +960,15 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     const args = try std.process.argsAlloc(allocator);
-    var parsed = parseArgs(allocator, args) catch |err| switch (err) {
+    var err_msg: ?[]const u8 = null;
+    var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
         error.Usage => {
             std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
+            std.debug.print("Run 'zsort --help' for details.\n", .{});
             std.process.exit(1);
         },
         error.InvalidMode => {
-            std.debug.print("Invalid mode. Use 'check' or 'fix'.\n", .{});
+            std.debug.print("Invalid mode: {s}\n", .{err_msg orelse "expected 'check' or 'fix'"});
             std.process.exit(1);
         },
         error.MissingBanValue => {
@@ -809,12 +976,21 @@ pub fn main() !void {
             std.process.exit(1);
         },
         error.UnexpectedArg => {
-            std.debug.print("Unexpected argument\n", .{});
+            std.debug.print("Unexpected argument: {s}\n", .{err_msg orelse ""});
             std.process.exit(1);
         },
         error.OutOfMemory => return error.OutOfMemory,
     };
     defer parsed.deinit(allocator);
+
+    if (parsed.help) {
+        printHelp();
+        return;
+    }
+    if (parsed.version) {
+        std.debug.print("zsort {s}\n", .{version});
+        return;
+    }
 
     var files: std.ArrayListUnmanaged([]const u8) = .empty;
     defer files.deinit(allocator);
@@ -827,7 +1003,8 @@ pub fn main() !void {
     if (stat.kind == .directory) {
         var dir = try std.fs.cwd().openDir(parsed.target, .{ .iterate = true });
         defer dir.close();
-        try walkDir(allocator, dir, parsed.target, &files);
+        const ignores = try loadGitignore(allocator, parsed.target);
+        try walkDir(allocator, dir, parsed.target, &files, ignores);
     } else if (stat.kind == .file) {
         try files.append(allocator, parsed.target);
     } else {
@@ -840,62 +1017,99 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    const slots = try allocator.alloc(JobSlot, files.items.len);
+    defer allocator.free(slots);
+    for (slots) |*slot| {
+        const file_arena = try allocator.create(std.heap.ArenaAllocator);
+        file_arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // SAFETY: source is set by the worker before main reads it; read_err
+        // and proc_err guard every access path.
+        slot.* = .{
+            .arena = file_arena,
+            .source = undefined,
+        };
+    }
+
+    const jobs = try allocator.alloc(FileJob, files.items.len);
+    defer allocator.free(jobs);
+    for (jobs, slots, files.items) |*job, *slot, file_path| {
+        job.* = .{
+            .slot = slot,
+            .path = file_path,
+            .banned = parsed.banned_prefixes.items,
+        };
+    }
+
+    // SAFETY: init() fully initializes the pool before any use below.
+    var pool: std.Thread.Pool = undefined;
+    try std.Thread.Pool.init(&pool, .{ .allocator = allocator, .n_jobs = null });
+    defer pool.deinit();
+    var wg: std.Thread.WaitGroup = .{};
+    for (jobs) |*job| {
+        pool.spawnWg(&wg, processFileJob, .{job});
+    }
+    pool.waitAndWork(&wg);
+
     var changed_count: usize = 0;
     var error_count: usize = 0;
     var banned_count: usize = 0;
 
-    for (files.items) |file_path| {
-        var file_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer file_arena.deinit();
-        const fa = file_arena.allocator();
+    for (jobs) |*job| {
+        const slot = job.slot;
+        const file_path = job.path;
 
-        const source = std.fs.cwd().readFileAlloc(fa, file_path, 10 * 1024 * 1024) catch |err| {
-            std.debug.print("Error reading {s}: {s}\n", .{ file_path, @errorName(err) });
+        if (slot.read_err) |msg| {
+            std.debug.print("Error reading {s}: {s}\n", .{ file_path, msg });
             error_count += 1;
             continue;
-        };
-
-        const result = processSource(fa, source, parsed.banned_prefixes.items) catch |err| {
-            std.debug.print("Error processing {s}: {s}\n", .{ file_path, @errorName(err) });
+        }
+        if (slot.proc_err) |msg| {
+            std.debug.print("Error processing {s}: {s}\n", .{ file_path, msg });
             error_count += 1;
             continue;
-        };
-
+        }
+        const result = slot.result orelse continue;
         if (result.banned_msg) |msg| {
             std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
             banned_count += 1;
         }
-
         if (!result.changed) continue;
 
         changed_count += 1;
 
         if (parsed.mode == .fix) {
-            var af_buf: [4096]u8 = undefined;
-            var af = std.fs.cwd().atomicFile(file_path, .{ .write_buffer = &af_buf }) catch |err| {
-                std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
-                error_count += 1;
-                continue;
-            };
-            defer af.deinit();
-            af.file_writer.interface.writeAll(result.new_text) catch |err| {
-                std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
-                error_count += 1;
-                continue;
-            };
-            af.finish() catch |err| {
-                std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
-                error_count += 1;
-                continue;
-            };
-            std.debug.print("Fixed: {s}\n", .{file_path});
+            fixFile: {
+                var af_buf: [4096]u8 = undefined;
+                var af = std.fs.cwd().atomicFile(file_path, .{ .write_buffer = &af_buf }) catch |err| {
+                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
+                    error_count += 1;
+                    break :fixFile;
+                };
+                defer af.deinit();
+                af.file_writer.interface.writeAll(result.new_text) catch |err| {
+                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
+                    error_count += 1;
+                    break :fixFile;
+                };
+                af.finish() catch |err| {
+                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
+                    error_count += 1;
+                    break :fixFile;
+                };
+                std.debug.print("Fixed: {s}\n", .{file_path});
+            }
         } else {
             if (result.stray_count > 0) {
-                showDiff(file_path, source, result.new_text);
+                showDiff(allocator, file_path, slot.source, result.new_text);
             } else {
-                showDiff(file_path, source[0..result.block_end], result.new_block);
+                showDiff(allocator, file_path, slot.source[0..result.block_end], result.new_block);
             }
         }
+    }
+
+    for (slots) |*slot| {
+        slot.arena.deinit();
+        allocator.destroy(slot.arena);
     }
 
     if (parsed.mode == .check) {
@@ -909,6 +1123,6 @@ pub fn main() !void {
         var stdout_w2 = stdout_file2.writer(&obuf2);
         stdout_w2.interface.print("\nFixed {} files, {} errors, {} banned\n", .{ changed_count, error_count, banned_count }) catch return;
         stdout_w2.interface.flush() catch return;
-        if (changed_count > 0 or banned_count > 0) std.process.exit(1);
+        if (error_count > 0 or banned_count > 0) std.process.exit(1);
     }
 }
