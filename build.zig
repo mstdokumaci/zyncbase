@@ -60,14 +60,14 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_check_imports = b.addRunArtifact(zsort_exe);
-    run_check_imports.addArgs(&.{ "check", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+    run_check_imports.addArgs(&.{ "check", ".", "--ban-prefix", "./", "--ban-prefix", "src/" });
 
     const check_imports_step = b.step("check-imports", "Check Zig import ordering");
     check_imports_step.dependOn(&run_check_imports.step);
     lint_step.dependOn(&run_check_imports.step);
 
     const run_fix_imports = b.addRunArtifact(zsort_exe);
-    run_fix_imports.addArgs(&.{ "fix", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+    run_fix_imports.addArgs(&.{ "fix", ".", "--ban-prefix", "./", "--ban-prefix", "src/" });
 
     const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering");
     fix_imports_step.dependOn(&run_fix_imports.step);
