@@ -3,7 +3,32 @@
 const fs = require("fs"), path = require("path");
 const SRC = path.resolve(__dirname, "..", "src");
 const EXTERNAL = new Set(["std","builtin","sqlite","msgpack","httpx"]);
-const TEST_RE = /test/;
+// Boundary-aware test-path classification on canonical paths ("src/foo_test.zig"):
+// *_test.zig suffix, test_all.zig, *test_helper(s).zig, *test_runner.zig.
+// Does NOT match ordinary production names such as "latest.zig".
+const TEST_RE = /(?:^|\/)(?:[^/]+_test\.zig|test_all\.zig|[^/]*test[-_](?:helper|runner)[^/]*\.zig)$/;
+
+if (process.argv.includes("--selftest")) {
+    const cases = [
+        ["src/logging_test.zig", true],
+        ["src/test_all.zig", true],
+        ["src/app_test_helpers.zig", true],
+        ["src/schema/test_helpers.zig", true],
+        ["src/timed_test_runner.zig", true],
+        ["src/latest.zig", false],
+        ["src/main.zig", false],
+        ["src/server.zig", false],
+    ];
+    for (const [p, expected] of cases) {
+        const actual = TEST_RE.test(p);
+        if (actual !== expected) {
+            console.error(`FAIL: TEST_RE("${p}") = ${actual}, expected ${expected}`);
+            process.exit(1);
+        }
+    }
+    console.log("selftest: all path classifications OK");
+    process.exit(0);
+}
 
 function log(m) { process.stderr.write(m + "\n"); }
 

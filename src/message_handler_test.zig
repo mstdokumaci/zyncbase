@@ -515,6 +515,7 @@ fn expectResponseType(allocator: std.mem.Allocator, response: []const u8, expect
     defer parsed.free(allocator);
 
     const value = (try msgpack_helpers.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
+    try testing.expect(value == .str);
     try testing.expectEqualStrings(expected, value.str.value());
 }
 
@@ -532,9 +533,11 @@ fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected:
     defer parsed.free(allocator);
 
     const resp_type = (try msgpack_helpers.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
+    try testing.expect(resp_type == .str);
     try testing.expectEqualStrings("error", resp_type.str.value());
 
     const code = (try msgpack_helpers.getMapValue(parsed, "code")) orelse return error.TestExpectedError;
+    try testing.expect(code == .str);
     try testing.expectEqualStrings(expected, code.str.value());
 }
 
@@ -563,15 +566,13 @@ test "message: representative frames route at protocol boundary" {
         try expectResponseId(allocator, response, 11);
     }
 
-    blk: {
+    {
         const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 12, 1, table.index);
         defer allocator.free(message);
 
-        const response = (try routeBytesOptional(&app, sc.conn, allocator, message)) orelse break :blk;
-        defer allocator.free(response);
-
-        try expectResponseType(allocator, response, "ok");
-        try expectResponseId(allocator, response, 12);
+        // StoreQuery is not yet implemented: no response is produced.
+        const response = try routeBytesOptional(&app, sc.conn, allocator, message);
+        try testing.expect(response == null);
     }
 
     {
@@ -609,13 +610,13 @@ test "message: response id is preserved across routed requests" {
         try expectResponseId(allocator, response, 101);
     }
 
-    blk: {
+    {
         const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 202, 1, table.index);
         defer allocator.free(message);
 
-        const response = (try routeBytesOptional(&app, sc.conn, allocator, message)) orelse break :blk;
-        defer allocator.free(response);
-        try expectResponseId(allocator, response, 202);
+        // StoreQuery is not yet implemented: no response is produced.
+        const response = try routeBytesOptional(&app, sc.conn, allocator, message);
+        try testing.expect(response == null);
     }
 
     {

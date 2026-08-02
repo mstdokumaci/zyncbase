@@ -15,6 +15,7 @@ const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
+const StorageEngine = sth.StorageEngine;
 
 const DirectWriterContext = struct {
     allocator: std.mem.Allocator,
@@ -1100,47 +1101,56 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
     try testing.expectEqualStrings("new_val", record.?.values[val_field_idx].scalar.text);
 }
 
-const StorageEngine = sth.StorageEngine;
-test "storage: engine initialization errors" {
+test "storage: engine init rejects empty data dir" {
     const allocator = testing.allocator;
     var ms: sth.MemoryStrategy = undefined;
     try ms.init(allocator);
     defer std.debug.assert(ms.deinit() == .ok);
 
-    // Test 1: Invalid directory path
     const invalid_dir = "";
-    var sm1 = try sth.createDummySchema(allocator);
-    defer sm1.deinit();
-    var engine1: StorageEngine = undefined;
-    const result1 = engine1.init(allocator, &ms, invalid_dir, &sm1, .{}, .{ .in_memory = false }, null, null);
-    try testing.expectError(error.InvalidDataDir, result1);
+    var sm = try sth.createDummySchema(allocator);
+    defer sm.deinit();
+    var engine: StorageEngine = undefined;
+    const result = engine.init(allocator, &ms, invalid_dir, &sm, .{}, .{ .in_memory = false }, null, null);
+    try testing.expectError(error.InvalidDataDir, result);
+}
 
-    // Test 2: Path that is a file, not a directory
-    var context_not_dir = try sth.TestContext.init(allocator, "storage-not-dir");
-    defer context_not_dir.deinit();
-    const test_file = try std.fs.path.join(allocator, &.{ context_not_dir.test_dir, "test_file_not_dir.txt" });
+test "storage: engine init rejects file path as data dir" {
+    const allocator = testing.allocator;
+    var ms: sth.MemoryStrategy = undefined;
+    try ms.init(allocator);
+    defer std.debug.assert(ms.deinit() == .ok);
+
+    var context = try sth.TestContext.init(allocator, "storage-not-dir");
+    defer context.deinit();
+    const test_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test_file_not_dir.txt" });
     defer allocator.free(test_file);
 
-    // Create a file
     const file = try std.fs.cwd().createFile(test_file, .{});
     file.close();
 
-    var sm2 = try sth.createDummySchema(allocator);
-    defer sm2.deinit();
-    var engine2: StorageEngine = undefined;
-    const result2 = engine2.init(allocator, &ms, test_file, &sm2, .{}, .{ .in_memory = false }, null, null);
-    try testing.expectError(error.NotDir, result2);
+    var sm = try sth.createDummySchema(allocator);
+    defer sm.deinit();
+    var engine: StorageEngine = undefined;
+    const result = engine.init(allocator, &ms, test_file, &sm, .{}, .{ .in_memory = false }, null, null);
+    try testing.expectError(error.NotDir, result);
+}
 
-    // Test 3: Valid initialization should succeed
-    var context_valid = try sth.TestContext.init(allocator, "storage-init-valid");
-    defer context_valid.deinit();
-    const test_dir = context_valid.test_dir;
+test "storage: engine init creates database file" {
+    const allocator = testing.allocator;
+    var ms: sth.MemoryStrategy = undefined;
+    try ms.init(allocator);
+    defer std.debug.assert(ms.deinit() == .ok);
 
-    var sm3 = try sth.createDummySchema(allocator);
-    defer sm3.deinit();
-    var engine3: StorageEngine = undefined;
-    try engine3.init(allocator, &ms, test_dir, &sm3, .{}, .{ .in_memory = false, .reader_pool_size = 1 }, null, null);
-    defer engine3.deinit();
+    var context = try sth.TestContext.init(allocator, "storage-init-valid");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+
+    var sm = try sth.createDummySchema(allocator);
+    defer sm.deinit();
+    var engine: StorageEngine = undefined;
+    try engine.init(allocator, &ms, test_dir, &sm, .{}, .{ .in_memory = false, .reader_pool_size = 1 }, null, null);
+    defer engine.deinit();
 
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
@@ -1155,7 +1165,7 @@ test "storage: thread-safe engine access" {
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "prop-multi-table", table);
+    try sth.setupEngine(&ctx, allocator, "storage-thread-safe", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
 
@@ -1164,9 +1174,15 @@ test "storage: thread-safe engine access" {
     const ops_per_thread = 50;
     const ThreadContext = struct {
         ctx: *sth.EngineTestContext,
+        result: *?anyerror,
     };
     const WriteThread = struct {
-        fn run(t_ctx: ThreadContext, thread_id: usize) !void {
+        fn run(t_ctx: ThreadContext, thread_id: usize) void {
+            runErr(t_ctx, thread_id) catch |err| {
+                t_ctx.result.* = err;
+            };
+        }
+        fn runErr(t_ctx: ThreadContext, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = thread_id * 1_000 + i + 1;
@@ -1181,7 +1197,12 @@ test "storage: thread-safe engine access" {
         }
     };
     const ReadThread = struct {
-        fn run(eng: *StorageEngine, table_index: usize, thread_id: usize) !void {
+        fn run(eng: *StorageEngine, table_index: usize, thread_id: usize, result: *?anyerror) void {
+            runErr(eng, table_index, thread_id) catch |err| {
+                result.* = err;
+            };
+        }
+        fn runErr(eng: *StorageEngine, table_index: usize, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
@@ -1191,16 +1212,19 @@ test "storage: thread-safe engine access" {
         }
     };
 
+    var write_results = [_]?anyerror{null} ** (num_threads / 2);
+    var read_results = [_]?anyerror{null} ** (num_threads / 2);
+
     // Spawn write threads
     var write_threads: [num_threads / 2]std.Thread = undefined;
     for (&write_threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, WriteThread.run, .{ ThreadContext{ .ctx = &ctx }, i });
+        thread.* = try std.Thread.spawn(.{}, WriteThread.run, .{ ThreadContext{ .ctx = &ctx, .result = &write_results[i] }, i });
     }
     // Spawn read threads
     var read_threads: [num_threads / 2]std.Thread = undefined;
     const test_table = try ctx.table("test");
     for (&read_threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, ReadThread.run, .{ engine, test_table.metadata.index, i });
+        thread.* = try std.Thread.spawn(.{}, ReadThread.run, .{ engine, test_table.metadata.index, i, &read_results[i] });
     }
     // Wait for all threads
     for (write_threads) |thread| {
@@ -1209,12 +1233,16 @@ test "storage: thread-safe engine access" {
     for (read_threads) |thread| {
         thread.join();
     }
+    // All workers must have completed without error
+    for (write_results) |r| try testing.expect(r == null);
+    for (read_results) |r| try testing.expect(r == null);
     // Flush writes and verify data
     try engine.flushPendingWrites();
     // Verify some data was written
     const record = try test_table.readDoc(allocator, 1, 1);
     defer if (record) |r| r.deinit(allocator);
     try testing.expect(record != null);
+    _ = try sth.expectFieldString(record.?, test_table.metadata, "val", "{\"thread\":0,\"op\":0}");
 }
 
 test "storage: connection pool reuse and release" {
@@ -1222,7 +1250,7 @@ test "storage: connection pool reuse and release" {
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "prop-many-ns", table);
+    try sth.setupEngine(&ctx, allocator, "storage-conn-pool", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
 
@@ -1251,7 +1279,7 @@ test "storage: persistence round-trip (various types)" {
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "prop-burst", table);
+    try sth.setupEngine(&ctx, allocator, "storage-persistence", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
 
@@ -1280,6 +1308,7 @@ test "storage: persistence round-trip (various types)" {
         const record = try test_table.readDoc(allocator, tc.id, tc.namespace_id);
         defer if (record) |r| r.deinit(allocator);
         try testing.expect(record != null);
+        _ = try sth.expectFieldString(record.?, test_table.metadata, "val", tc.value);
     }
 }
 
@@ -1366,6 +1395,9 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(record_up1 != null);
     try testing.expect(record_up2 != null);
     try testing.expect(record_n3 != null);
+    _ = try sth.expectFieldString(record_up1.?, test_table.metadata, "val", "updated1");
+    _ = try sth.expectFieldString(record_up2.?, test_table.metadata, "val", "updated2");
+    _ = try sth.expectFieldString(record_n3.?, test_table.metadata, "val", "new3");
 }
 
 test "storage: concurrent batch processing" {
@@ -1505,6 +1537,7 @@ test "storage: schema update integrity" {
         const record1 = try test_table.readDoc(allocator, 1, 1);
         defer if (record1) |r| r.deinit(allocator);
         try testing.expect(record1 != null);
+        _ = try sth.expectFieldString(record1.?, test_table.metadata, "val1", "value1");
 
         // New data with new field
         try ctx.insertInt("test", 2, 1, "val2", 42);
@@ -1532,6 +1565,7 @@ test "storage: random operations fuzzing" {
     var prng = std.Random.DefaultPrng.init(0);
     const rand = prng.random();
 
+    const items_index = ctx.tableIndex("items");
     var i: usize = 0;
     while (i < 200) : (i += 1) {
         const op = rand.intRangeAtMost(u8, 0, 3);
@@ -1546,7 +1580,7 @@ test "storage: random operations fuzzing" {
             },
             1 => {
                 // Delete
-                try engine.enqueueWriteOp(.{ .delete = .{ .table_index = 0, .id = id, .namespace_id = ns } });
+                try engine.enqueueWriteOp(.{ .delete = .{ .table_index = items_index, .id = id, .namespace_id = ns } });
             },
             2 => {
                 // Query

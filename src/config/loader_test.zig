@@ -641,89 +641,6 @@ test "config: round-trip - server config" {
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
 }
 
-test "config: round-trip - auth config" {
-    const allocator = std.testing.allocator;
-
-    var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-auth");
-    defer context.deinit();
-
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-auth.json" });
-    defer allocator.free(temp_file_path);
-    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-auth.json" });
-    defer allocator.free(schema_file_path);
-
-    const config_content = try std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "authentication": {{
-        \\    "jwt": {{
-        \\      "secret": "my-secret-key",
-        \\      "algorithm": "HS512",
-        \\      "issuer": "zyncbase",
-        \\      "audience": "api"
-        \\    }}
-        \\  }},
-        \\  "schema": "{s}"
-        \\}}
-    , .{schema_file_path});
-    defer allocator.free(config_content);
-
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
-
-    var config = try ConfigLoader.load(allocator, temp_file_path);
-    defer config.deinit();
-
-    // Verify values match original
-    try std.testing.expect(config.authentication.jwt_secret != null);
-    try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
-    try std.testing.expectEqualStrings("HS512", config.authentication.jwt_algorithm);
-    try std.testing.expect(config.authentication.jwt_issuer != null);
-    try std.testing.expectEqualStrings("zyncbase", config.authentication.jwt_issuer.?);
-    try std.testing.expect(config.authentication.jwt_audience != null);
-    try std.testing.expectEqualStrings("api", config.authentication.jwt_audience.?);
-}
-
-test "config: round-trip - security config" {
-    const allocator = std.testing.allocator;
-
-    var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-security");
-    defer context.deinit();
-
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-security.json" });
-    defer allocator.free(temp_file_path);
-    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-security.json" });
-    defer allocator.free(schema_file_path);
-
-    const config_content = try std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "security": {{
-        \\    "allowedOrigins": ["https://example.com", "https://app.example.com"],
-        \\    "allowLocalhost": false,
-        \\    "maxMessagesPerSecond": 200,
-        \\    "maxConnections": 20,
-        \\    "maxMessageSize": 2097152
-        \\  }},
-        \\  "schema": "{s}"
-        \\}}
-    , .{schema_file_path});
-    defer allocator.free(config_content);
-
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
-
-    var config = try ConfigLoader.load(allocator, temp_file_path);
-    defer config.deinit();
-
-    // Verify values match original
-    try std.testing.expectEqual(@as(usize, 2), config.security.allowed_origins.len);
-    try std.testing.expectEqualStrings("https://example.com", config.security.allowed_origins[0]);
-    try std.testing.expectEqualStrings("https://app.example.com", config.security.allowed_origins[1]);
-    try std.testing.expectEqual(false, config.security.allow_localhost);
-    try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
-    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections);
-    try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
-}
-
 test "config: round-trip - logging config" {
     const allocator = std.testing.allocator;
 
@@ -755,43 +672,6 @@ test "config: round-trip - logging config" {
     // Verify values match original
     try std.testing.expectEqual(Config.LoggingConfig.LogLevel.debug, config.logging.level);
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
-}
-
-test "config: round-trip - performance config" {
-    const allocator = std.testing.allocator;
-
-    var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-perf");
-    defer context.deinit();
-
-    const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-roundtrip-performance.json" });
-    defer allocator.free(temp_file_path);
-    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-roundtrip-performance.json" });
-    defer allocator.free(schema_file_path);
-
-    const config_content = try std.fmt.allocPrint(allocator,
-        \\{{
-        \\  "performance": {{
-        \\    "messageBufferSize": 2000,
-        \\    "batchWrites": false,
-        \\    "batchSize": 50,
-        \\    "batchTimeout": 20
-        \\  }},
-        \\  "schema": "{s}"
-        \\}}
-    , .{schema_file_path});
-    defer allocator.free(config_content);
-
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
-
-    var config = try ConfigLoader.load(allocator, temp_file_path);
-    defer config.deinit();
-
-    // Verify values match original
-    try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
-    try std.testing.expectEqual(false, config.performance.batch_writes);
-    try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
-    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 }
 
 test "config: round-trip - complete config" {

@@ -75,117 +75,70 @@ test "msgpack_utils: writeMsgPackStr str32 (>65535 bytes)" {
 //
 // Invariant: Oversized Payloads Rejected
 //
-// This test MUST FAIL on unfixed code (PackerIO uses DEFAULT_LIMITS which are too permissive).
-// Failure confirms the bug exists. When the fix is applied (PackWithLimits + TIGHT_LIMITS),
-// this test will PASS.
+// Payloads beyond wire_limits (depth 32, array/map 100k, string/bin/ext 1MB)
+// must be rejected with the corresponding limit error.
+fn writeBe32(buf: []u8, offset: usize, value: u32) void {
+    buf[offset + 0] = @intCast((value >> 24) & 0xff);
+    buf[offset + 1] = @intCast((value >> 16) & 0xff);
+    buf[offset + 2] = @intCast((value >> 8) & 0xff);
+    buf[offset + 3] = @intCast(value & 0xff);
+}
+
+fn expectDecodeError(allocator: std.mem.Allocator, bytes: []const u8, expected_err: anyerror) !void {
+    var reader: std.Io.Reader = .fixed(bytes);
+    const result = msgpack_utils.decode(allocator, &reader);
+    if (result) |payload| {
+        payload.free(allocator);
+        return error.TestUnexpectedResult;
+    } else |err| {
+        try testing.expectEqual(expected_err, err);
+    }
+}
+
 test "msgpack: reject oversized payloads (depth, array, map, string)" {
     const allocator = testing.allocator;
 
-    // --- Depth bomb ---
-    // Craft a MessagePack array nested 33 levels deep.
-    // Each level: fixarray of 1 element (0x91). Innermost: nil (0xc0).
-    // wire_limits.max_depth = 32, so 33 levels should trigger MaxDepthExceeded.
+    // Depth bomb: array nested 33 levels (max_depth = 32).
     {
         var depth_bomb: [34]u8 = undefined;
         for (0..33) |i| {
             depth_bomb[i] = 0x91; // fixarray of 1 element
         }
         depth_bomb[33] = 0xc0; // nil at innermost level
-
-        var reader: std.Io.Reader = .fixed(&depth_bomb);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            // Bug confirmed: decode returned a valid Payload instead of error.MaxDepthExceeded
-            // Counterexample: depth bomb (20 levels) decoded successfully — PackerIO allows depth up to 1000
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.MaxDepthExceeded, err);
-        }
+        try expectDecodeError(allocator, &depth_bomb, error.MaxDepthExceeded);
     }
 
-    // --- Array bomb ---
-    // Craft a MessagePack array32 header claiming 100,001 elements, followed by 100,001 nil bytes.
-    // wire_limits.max_array_length = 100,000, so 100,001 elements should trigger ArrayTooLarge.
+    // Array bomb: array32 claiming 100,001 elements (max_array_length = 100,000).
     {
         const count: u32 = 100001;
-        const array_bomb = try allocator.alloc(u8, 5 + 100001);
+        const array_bomb = try allocator.alloc(u8, 5 + count);
         defer allocator.free(array_bomb);
-        array_bomb[0] = 0xdd; // array32 format byte
-        array_bomb[1] = @intCast((count >> 24) & 0xff);
-        array_bomb[2] = @intCast((count >> 16) & 0xff);
-        array_bomb[3] = @intCast((count >> 8) & 0xff);
-        array_bomb[4] = @intCast(count & 0xff);
-        for (5..5 + 100001) |i| {
-            array_bomb[i] = 0xc0; // nil
-        }
-
-        var reader: std.Io.Reader = .fixed(array_bomb);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            // Bug confirmed: decode returned a valid Payload instead of error.ArrayTooLarge
-            // Counterexample: array bomb (2000 elements) decoded successfully — PackerIO allows up to 1,000,000
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.ArrayTooLarge, err);
-        }
+        array_bomb[0] = 0xdd; // array32
+        writeBe32(array_bomb, 1, count);
+        @memset(array_bomb[5..], 0xc0); // nil
+        try expectDecodeError(allocator, array_bomb, error.ArrayTooLarge);
     }
 
-    // --- Map bomb ---
-    // Craft a MessagePack map32 header claiming 100,001 entries, followed by 200,002 nil bytes (key+value pairs).
-    // wire_limits.max_map_size = 100,000, so 100,001 entries should trigger MapTooLarge.
+    // Map bomb: map32 claiming 100,001 entries (max_map_size = 100,000).
     {
         const count: u32 = 100001;
-        const map_bomb = try allocator.alloc(u8, 5 + 200002);
+        const map_bomb = try allocator.alloc(u8, 5 + 2 * count);
         defer allocator.free(map_bomb);
-        map_bomb[0] = 0xdf; // map32 format byte
-        map_bomb[1] = @intCast((count >> 24) & 0xff);
-        map_bomb[2] = @intCast((count >> 16) & 0xff);
-        map_bomb[3] = @intCast((count >> 8) & 0xff);
-        map_bomb[4] = @intCast(count & 0xff);
-        for (5..5 + 200002) |i| {
-            map_bomb[i] = 0xc0; // nil (key and value both nil)
-        }
-
-        var reader: std.Io.Reader = .fixed(map_bomb);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            // Bug confirmed: decode returned a valid Payload instead of error.MapTooLarge
-            // Counterexample: map bomb (2000 entries) decoded successfully — PackerIO allows up to 1,000,000
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.MapTooLarge, err);
-        }
+        map_bomb[0] = 0xdf; // map32
+        writeBe32(map_bomb, 1, count);
+        @memset(map_bomb[5..], 0xc0); // nil key+value pairs
+        try expectDecodeError(allocator, map_bomb, error.MapTooLarge);
     }
 
-    // --- String bomb ---
-    // Craft a MessagePack str32 header claiming 2 MB, followed by 2 MB of zero bytes.
-    // wire_limits.max_string_length = 1 MB, so 2 MB should trigger StringTooLong.
+    // String bomb: str32 claiming 2 MB (max_string_length = 1 MB).
     {
         const str_len: u32 = 2 * 1024 * 1024;
-        const total_size = 5 + str_len;
-        const string_bomb = try allocator.alloc(u8, total_size);
+        const string_bomb = try allocator.alloc(u8, 5 + str_len);
         defer allocator.free(string_bomb);
-
-        string_bomb[0] = 0xdb; // str32 format byte
-        string_bomb[1] = @intCast((str_len >> 24) & 0xff);
-        string_bomb[2] = @intCast((str_len >> 16) & 0xff);
-        string_bomb[3] = @intCast((str_len >> 8) & 0xff);
-        string_bomb[4] = @intCast(str_len & 0xff);
-        @memset(string_bomb[5..], 0); // zero bytes for string content
-
-        var reader: std.Io.Reader = .fixed(string_bomb);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            // Bug confirmed: decode returned a valid Payload instead of error.StringTooLong
-            // Counterexample: string bomb (128 KB) decoded successfully — PackerIO allows up to 100 MB
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.StringTooLong, err);
-        }
+        string_bomb[0] = 0xdb; // str32
+        writeBe32(string_bomb, 1, str_len);
+        @memset(string_bomb[5..], 0);
+        try expectDecodeError(allocator, string_bomb, error.StringTooLong);
     }
 }
 
@@ -261,8 +214,6 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
     const allocator = testing.allocator;
 
     // --- Depth exactly 31 (max allowed with max_depth=32) ---
-    // The zig-msgpack depth check fires when parse_stack.items.len >= max_depth (32).
-    // So 31 levels of nesting is the maximum that succeeds.
     {
         var depth31: [32]u8 = undefined;
         for (0..31) |i| {
@@ -278,15 +229,11 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
     // --- Array of exactly 100,000 elements ---
     {
         const count: u32 = 100000;
-        const total_size = 5 + count;
-        const array_exact = try allocator.alloc(u8, total_size);
+        const array_exact = try allocator.alloc(u8, 5 + count);
         defer allocator.free(array_exact);
 
-        array_exact[0] = 0xdd; // array32 format byte
-        array_exact[1] = @intCast((count >> 24) & 0xff);
-        array_exact[2] = @intCast((count >> 16) & 0xff);
-        array_exact[3] = @intCast((count >> 8) & 0xff);
-        array_exact[4] = @intCast(count & 0xff);
+        array_exact[0] = 0xdd; // array32
+        writeBe32(array_exact, 1, count);
         @memset(array_exact[5..], 0xc0); // nil
 
         var reader: std.Io.Reader = .fixed(array_exact);
@@ -294,21 +241,63 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
         result.free(allocator);
     }
 
+    // --- Map of exactly 100,000 entries ---
+    {
+        const count: u32 = 100000;
+        const map_exact = try allocator.alloc(u8, 5 + 2 * count);
+        defer allocator.free(map_exact);
+
+        map_exact[0] = 0xdf; // map32
+        writeBe32(map_exact, 1, count);
+        @memset(map_exact[5..], 0xc0); // nil key+value pairs
+
+        var reader: std.Io.Reader = .fixed(map_exact);
+        const result = try msgpack_utils.decode(allocator, &reader);
+        result.free(allocator);
+    }
+
     // --- String of exactly 1MB bytes ---
     {
         const str_len: u32 = 1 * 1024 * 1024;
-        const total_size = 5 + str_len;
-        const string_exact = try allocator.alloc(u8, total_size);
+        const string_exact = try allocator.alloc(u8, 5 + str_len);
         defer allocator.free(string_exact);
 
-        string_exact[0] = 0xdb; // str32 format byte
-        string_exact[1] = @intCast((str_len >> 24) & 0xff);
-        string_exact[2] = @intCast((str_len >> 16) & 0xff);
-        string_exact[3] = @intCast((str_len >> 8) & 0xff);
-        string_exact[4] = @intCast(str_len & 0xff);
+        string_exact[0] = 0xdb; // str32
+        writeBe32(string_exact, 1, str_len);
         @memset(string_exact[5..], 0);
 
         var reader: std.Io.Reader = .fixed(string_exact);
+        const result = try msgpack_utils.decode(allocator, &reader);
+        result.free(allocator);
+    }
+
+    // --- Bin of exactly 1MB bytes ---
+    {
+        const bin_len: u32 = 1 * 1024 * 1024;
+        const bin_exact = try allocator.alloc(u8, 5 + bin_len);
+        defer allocator.free(bin_exact);
+
+        bin_exact[0] = 0xc6; // bin32
+        writeBe32(bin_exact, 1, bin_len);
+        @memset(bin_exact[5..], 0);
+
+        var reader: std.Io.Reader = .fixed(bin_exact);
+        const result = try msgpack_utils.decode(allocator, &reader);
+        result.free(allocator);
+    }
+
+    // --- Ext of exactly 1MB bytes ---
+    {
+        const ext_len: u32 = 1 * 1024 * 1024;
+        const ext_exact = try allocator.alloc(u8, 5 + 1 + ext_len);
+        defer allocator.free(ext_exact);
+
+        ext_exact[0] = 0xc9; // ext32
+        writeBe32(ext_exact, 1, ext_len);
+        ext_exact[5] = 0x00; // ext type byte
+        @memset(ext_exact[6..], 0);
+
+        var reader: std.Io.Reader = .fixed(ext_exact);
         const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
@@ -329,64 +318,68 @@ test "msgpack: reject one-over-boundary payloads" {
             depth32[i] = 0x91; // fixarray of 1 element
         }
         depth32[32] = 0xc0; // nil at innermost level
-
-        var reader: std.Io.Reader = .fixed(&depth32);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.MaxDepthExceeded, err);
-        }
+        try expectDecodeError(allocator, &depth32, error.MaxDepthExceeded);
     }
 
     // --- Array of exactly 100,001 elements (one over max_array_length=100,000) ---
     {
         const count: u32 = 100001;
-        const total_size = 5 + count;
-        const array_over = try allocator.alloc(u8, total_size);
+        const array_over = try allocator.alloc(u8, 5 + count);
         defer allocator.free(array_over);
 
-        array_over[0] = 0xdd; // array32 format byte
-        array_over[1] = @intCast((count >> 24) & 0xff);
-        array_over[2] = @intCast((count >> 16) & 0xff);
-        array_over[3] = @intCast((count >> 8) & 0xff);
-        array_over[4] = @intCast(count & 0xff);
+        array_over[0] = 0xdd; // array32
+        writeBe32(array_over, 1, count);
         @memset(array_over[5..], 0xc0); // nil
+        try expectDecodeError(allocator, array_over, error.ArrayTooLarge);
+    }
 
-        var reader: std.Io.Reader = .fixed(array_over);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.ArrayTooLarge, err);
-        }
+    // --- Map of exactly 100,001 entries (one over max_map_size=100,000) ---
+    {
+        const count: u32 = 100001;
+        const map_over = try allocator.alloc(u8, 5 + 2 * count);
+        defer allocator.free(map_over);
+
+        map_over[0] = 0xdf; // map32
+        writeBe32(map_over, 1, count);
+        @memset(map_over[5..], 0xc0); // nil key+value pairs
+        try expectDecodeError(allocator, map_over, error.MapTooLarge);
     }
 
     // --- String of exactly 1MB+1 bytes (one over max_string_length=1MB) ---
     {
         const str_len: u32 = 1 * 1024 * 1024 + 1;
-        const total_size = 5 + str_len;
-        const string_over = try allocator.alloc(u8, total_size);
+        const string_over = try allocator.alloc(u8, 5 + str_len);
         defer allocator.free(string_over);
 
-        string_over[0] = 0xdb; // str32 format byte
-        string_over[1] = @intCast((str_len >> 24) & 0xff);
-        string_over[2] = @intCast((str_len >> 16) & 0xff);
-        string_over[3] = @intCast((str_len >> 8) & 0xff);
-        string_over[4] = @intCast(str_len & 0xff);
+        string_over[0] = 0xdb; // str32
+        writeBe32(string_over, 1, str_len);
         @memset(string_over[5..], 0);
+        try expectDecodeError(allocator, string_over, error.StringTooLong);
+    }
 
-        var reader: std.Io.Reader = .fixed(string_over);
-        const result = msgpack_utils.decode(allocator, &reader);
-        if (result) |payload| {
-            payload.free(allocator);
-            // Limit not enforced: string of 64KB+1 decoded successfully — unfixed code uses DEFAULT_LIMITS (max_string_length=100MB)
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expectEqual(error.StringTooLong, err);
-        }
+    // --- Bin of exactly 1MB+1 bytes (one over max_bin_length=1MB) ---
+    {
+        const bin_len: u32 = 1 * 1024 * 1024 + 1;
+        const bin_over = try allocator.alloc(u8, 5 + bin_len);
+        defer allocator.free(bin_over);
+
+        bin_over[0] = 0xc6; // bin32
+        writeBe32(bin_over, 1, bin_len);
+        @memset(bin_over[5..], 0);
+        try expectDecodeError(allocator, bin_over, error.BinDataLengthTooLong);
+    }
+
+    // --- Ext of exactly 1MB+1 bytes (one over max_ext_length=1MB) ---
+    {
+        const ext_len: u32 = 1 * 1024 * 1024 + 1;
+        const ext_over = try allocator.alloc(u8, 5 + 1 + ext_len);
+        defer allocator.free(ext_over);
+
+        ext_over[0] = 0xc9; // ext32
+        writeBe32(ext_over, 1, ext_len);
+        ext_over[5] = 0x00; // ext type byte
+        @memset(ext_over[6..], 0);
+        try expectDecodeError(allocator, ext_over, error.ExtDataTooLarge);
     }
 }
 
@@ -410,7 +403,11 @@ fn verifyPayloadEquality(expected: msgpack.Payload, actual: msgpack.Payload) !vo
         .str => |v| try testing.expectEqualStrings(v.value(), actual.str.value()),
         .map => {
             try testing.expectEqual(expected.map.count(), actual.map.count());
-            // In a real test we'd iterate and compare entries
+            var it = expected.map.iterator();
+            while (it.next()) |entry| {
+                const actual_val = (try actual.mapGetGeneric(entry.key_ptr.*)) orelse return error.TestExpectedValue;
+                try verifyPayloadEquality(entry.value_ptr.*, actual_val);
+            }
         },
         else => {},
     }

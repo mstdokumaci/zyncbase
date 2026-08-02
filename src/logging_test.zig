@@ -1,71 +1,16 @@
 const std = @import("std");
 
 const helpers = @import("app_test_helpers.zig");
-const authorization_defaults = @import("authorization/defaults.zig");
 const connection_manager = @import("connection/manager.zig");
-const connection_violations = @import("connection/violations.zig");
-const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
-const MessageHandler = @import("message_handler.zig").MessageHandler;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const PresenceService = @import("presence/service.zig").PresenceService;
-const schema_helpers = @import("schema/test_helpers.zig");
-const schema_types = @import("schema/types.zig");
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const sth = @import("storage_engine_test_helpers.zig");
-const StoreService = @import("store_service.zig").StoreService;
-const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
 
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
-const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const ConnectionManager = connection_manager.ConnectionManager;
-
-// Custom log handler to capture log messages for testing
-const LogCapture = struct {
-    allocator: std.mem.Allocator,
-    messages: std.ArrayListUnmanaged(LogMessage) = .empty,
-    mutex: std.Thread.Mutex,
-
-    const LogMessage = struct {
-        level: std.log.Level,
-        message: []const u8,
-        allocator: std.mem.Allocator,
-
-        fn deinit(self: *LogMessage) void {
-            self.allocator.free(self.message);
-        }
-    };
-
-    fn init(allocator: std.mem.Allocator) LogCapture {
-        return .{
-            .allocator = allocator,
-            .messages = .empty,
-            .mutex = .{},
-        };
-    }
-
-    fn deinit(self: *LogCapture) void {
-        for (self.messages.items) |*msg| {
-            msg.deinit();
-        }
-        self.messages.deinit(self.allocator);
-    }
-
-    fn contains(self: *LogCapture, needle: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        for (self.messages.items) |msg| {
-            if (std.mem.indexOf(u8, msg.message, needle) != null) {
-                return true;
-            }
-        }
-        return false;
-    }
-};
 
 test "logging: connection events" {
     // Connection event logging properties
@@ -149,22 +94,6 @@ test "logging: connection events" {
         for (&connections) |*ws| {
             manager.onClose(ws);
         }
-    }
-
-    // Test 4: Error handling logs connection ID
-    {
-        var ws = createMockWebSocket(memory_strategy.generalAllocator());
-
-        // Open connection
-        try manager.onOpen(&ws);
-        const conn_id = ws.getConnId();
-
-        // Handle error - this should log "WebSocket error on connection: id={}"
-        manager.onClose(&ws);
-
-        // Verify connection was cleaned up
-        const result = manager.acquireConnection(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
     }
 
     // Test 5: Concurrent connections all log
@@ -319,84 +248,23 @@ test "logging: level filtering" {
 
     // Test 1: Verify different log levels are used appropriately
     {
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(testing.allocator);
-        defer std.debug.assert(memory_strategy.deinit() == .ok);
-
-        var tracker: ViolationTracker = undefined;
-        tracker.init(allocator, 10);
-        defer tracker.deinit();
-
-        var context = try schema_helpers.TestContext.init(allocator, "logging-level");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-
-        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema_types.Table, 1);
-        defer allocator.free(tables);
-        tables[0] = schema_helpers.makeTable("test", &fields);
-        var sm2 = try sth.createSchema(allocator, tables);
-        defer sm2.deinit();
-
-        var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
-        defer subscription_engine.deinit();
-
-        var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
-        defer storage_engine.deinit();
-
-        var auth_config = try authorization_defaults.implicitConfig(allocator, &sm2);
-        defer auth_config.deinit();
-
-        var store_service = StoreService.init(allocator, &storage_engine, &sm2, &auth_config);
-        defer store_service.deinit();
-
-        var presence_service = PresenceService.init(allocator, null, &auth_config, &sm2);
-        defer presence_service.deinit();
-
-        var handler: MessageHandler = undefined;
-        const empty_claims: std.StringHashMapUnmanaged([]const u8) = .{};
-        handler.init(
-            allocator,
-            &memory_strategy,
-            &tracker,
-            &store_service,
-            &presence_service,
-            &subscription_engine,
-            .{},
-            &auth_config,
-            &sm2,
-            null,
-            &empty_claims,
-        );
-        defer handler.deinit();
-
-        var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm2, 100_000, 30);
-        defer manager.deinit();
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "logging-level", &.{
+            .{ .name = "test", .fields = &.{"val"} },
+        });
+        defer app.deinit();
 
         // Trigger different log levels
-        var ws = createMockWebSocket(memory_strategy.generalAllocator());
+        var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
 
         // Info level: connection open
-        try manager.onOpen(&ws);
+        try app.connection_manager.onOpen(&ws);
 
         // Warn level: invalid message
-        manager.onMessage(&ws, "invalid", .binary);
+        app.connection_manager.onMessage(&ws, "invalid", .binary);
 
         // Error level: error handling
-        manager.onClose(&ws);
-    }
-
-    // Test 2: Verify log levels are consistent across components
-    // The codebase uses:
-    // - std.log.info for normal operations (connection open/close, startup)
-    // - std.log.warn for recoverable errors (parse failures, missing connections)
-    // - std.log.err for serious errors (processing failures, database errors)
-    {
-        // This is verified by code inspection and the fact that the code compiles
-        // and runs correctly with different log levels
-        try testing.expect(true);
+        app.connection_manager.onClose(&ws);
     }
 }
 
@@ -414,153 +282,47 @@ test "logging: message formatting" {
 
     // Test 1: Verify log messages include required information
     {
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(testing.allocator);
-        defer std.debug.assert(memory_strategy.deinit() == .ok);
-
-        var tracker: ViolationTracker = undefined;
-        tracker.init(allocator, 10);
-        defer tracker.deinit();
-
-        var context = try schema_helpers.TestContext.init(allocator, "logging-format");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-
-        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema_types.Table, 1);
-        defer allocator.free(tables);
-        tables[0] = schema_helpers.makeTable("test", &fields);
-        var sm3 = try sth.createSchema(allocator, tables);
-        defer sm3.deinit();
-
-        var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
-        defer subscription_engine.deinit();
-
-        var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
-        defer storage_engine.deinit();
-
-        var auth_config2 = try authorization_defaults.implicitConfig(allocator, &sm3);
-        defer auth_config2.deinit();
-
-        var store_service = StoreService.init(allocator, &storage_engine, &sm3, &auth_config2);
-        defer store_service.deinit();
-
-        var presence_service = PresenceService.init(allocator, null, &auth_config2, &sm3);
-        defer presence_service.deinit();
-
-        var handler: MessageHandler = undefined;
-        const empty_claims2: std.StringHashMapUnmanaged([]const u8) = .{};
-        handler.init(
-            allocator,
-            &memory_strategy,
-            &tracker,
-            &store_service,
-            &presence_service,
-            &subscription_engine,
-            .{},
-            &auth_config2,
-            &sm3,
-            null,
-            &empty_claims2,
-        );
-        defer handler.deinit();
-
-        var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm3, 100_000, 30);
-        defer manager.deinit();
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "logging-format", &.{
+            .{ .name = "test", .fields = &.{"val"} },
+        });
+        defer app.deinit();
 
         // Trigger various log messages
-        var ws = createMockWebSocket(memory_strategy.generalAllocator());
+        var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
 
         // Connection logging includes connection ID
-        try manager.onOpen(&ws);
+        try app.connection_manager.onOpen(&ws);
         const conn_id = ws.getConnId();
         try testing.expect(conn_id > 0);
 
         // Error logging includes error details
-        manager.onMessage(&ws, "invalid", .binary);
+        app.connection_manager.onMessage(&ws, "invalid", .binary);
 
         // Close logging includes connection ID and close code
-        manager.onClose(&ws);
-    }
-
-    // Test 2: Verify log format consistency
-    {
-        // This is verified by code inspection
-        try testing.expect(true);
+        app.connection_manager.onClose(&ws);
     }
 
     // Test 3: Verify log messages are properly formatted with parameters
     {
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer std.debug.assert(memory_strategy.deinit() == .ok);
-
-        var tracker: ViolationTracker = undefined;
-        tracker.init(allocator, 10);
-        defer tracker.deinit();
-
-        var context = try schema_helpers.TestContext.init(allocator, "logging-params");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-
-        var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
-        var tables = try allocator.alloc(schema_types.Table, 1);
-        defer allocator.free(tables);
-        tables[0] = schema_helpers.makeTable("test", &fields);
-        var sm4 = try sth.createSchema(allocator, tables);
-        defer sm4.deinit();
-
-        var subscription_engine = SubscriptionEngine.init(allocator);
-        defer subscription_engine.deinit();
-
-        var storage_engine: StorageEngine = undefined;
-        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true, .reader_pool_size = 1 }, null, null);
-        defer storage_engine.deinit();
-
-        var auth_config3 = try authorization_defaults.implicitConfig(allocator, &sm4);
-        defer auth_config3.deinit();
-
-        var store_service = StoreService.init(allocator, &storage_engine, &sm4, &auth_config3);
-        defer store_service.deinit();
-
-        var presence_service = PresenceService.init(allocator, null, &auth_config3, &sm4);
-        defer presence_service.deinit();
-
-        var handler: MessageHandler = undefined;
-        const empty_claims3: std.StringHashMapUnmanaged([]const u8) = .{};
-        handler.init(
-            allocator,
-            &memory_strategy,
-            &tracker,
-            &store_service,
-            &presence_service,
-            &subscription_engine,
-            .{},
-            &auth_config3,
-            &sm4,
-            null,
-            &empty_claims3,
-        );
-        defer handler.deinit();
-
-        var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler, &sm4, 100_000, 30);
-        defer manager.deinit();
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "logging-params", &.{
+            .{ .name = "test", .fields = &.{"val"} },
+        });
+        defer app.deinit();
 
         // Test multiple connections to verify ID formatting
         const num_connections = 5;
         var connections: [num_connections]WebSocket = undefined;
 
         for (&connections) |*ws| {
-            ws.* = createMockWebSocket(memory_strategy.generalAllocator());
-            try manager.onOpen(ws);
+            ws.* = createMockWebSocket(app.memory_strategy.generalAllocator());
+            try app.connection_manager.onOpen(ws);
         }
 
         // Close all with different codes
         for (&connections) |*ws| {
-            manager.onClose(ws);
+            app.connection_manager.onClose(ws);
         }
     }
 }

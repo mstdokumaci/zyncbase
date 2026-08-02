@@ -42,30 +42,23 @@ test "server: initialization is idempotent" {
     });
 
     // Property: Multiple init/deinit cycles should not leak memory
-    // Test with 1 cycle first to debug leaks
-    const num_cycles = 1;
-    var i: usize = 0;
-    while (i < num_cycles) : (i += 1) {
+    const num_cycles = 2;
+    for (0..num_cycles) |_| {
         // Initialize server with unique data directory and custom schema path
-        const server = try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_file_path, null);
-        std.log.debug("Server initialized", .{});
-        defer {
-            std.log.debug("About to call server.deinit()", .{});
-            server.deinit();
-            std.log.debug("server.deinit() returned", .{});
+        // The block scope ensures deinit runs before the next cycle re-creates
+        // the data directory (deleteTree after the block).
+        {
+            const server = try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_file_path, null);
+            defer server.deinit();
+
+            // Verify server is properly initialized
+            try testing.expect(server.schema.tables.len > 0);
+            const loaded_data_dir = server.config.data_dir;
+            try testing.expectEqualStrings(data_dir, loaded_data_dir);
+
+            // Verify shutdown flag is initialized to false
+            try testing.expect(!server.shutdown_requested.load(.acquire));
         }
-
-        // Verify server is properly initialized
-        try testing.expect(@intFromPtr(&server.memory_strategy) != 0);
-        try testing.expect(@intFromPtr(&server.violation_tracker) != 0);
-        try testing.expect(@intFromPtr(&server.subscription_engine) != 0);
-        try testing.expect(@intFromPtr(&server.checkpoint_manager) != 0);
-        try testing.expect(@intFromPtr(&server.storage_engine) != 0);
-        try testing.expect(@intFromPtr(&server.websocket_server) != 0);
-        try testing.expect(@intFromPtr(&server.message_handler) != 0);
-
-        // Verify shutdown flag is initialized to false
-        try testing.expect(!server.shutdown_requested.load(.acquire));
 
         // Clean up database file between cycles
         std.fs.cwd().deleteTree(data_dir) catch {}; // zwanzig-disable-line: empty-catch-engine

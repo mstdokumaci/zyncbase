@@ -251,7 +251,7 @@ const destroyMockWebSocket = helpers.destroyMockWebSocket;
 // 4. Close callbacks receive correct close code and message
 // 5. Callbacks are not invoked if not registered
 
-test "ws: callbacks invoked for all events" {
+test "ws: callback contract - handlers invoked per registration" {
     const allocator = testing.allocator;
 
     // Test case structure
@@ -308,27 +308,7 @@ test "ws: callbacks invoked for all events" {
         std.log.debug("Running test case: {s}\n", .{tc.name});
 
         // Create callback context to track invocations
-        var ctx = CallbackContext{
-            .open_called = 0,
-            .message_called = 0,
-            .close_called = 0,
-            .last_message = null,
-            .last_message_type = null,
-            .last_close_code = null,
-            .last_close_message = null,
-            .received_user_data = null,
-        };
-
-        // Create server
-        const config = WebSocketServer.Config{
-            .port = 8080,
-            .host = "127.0.0.1",
-            .ssl = false,
-        };
-
-        var server: WebSocketServer = undefined;
-        try server.init(allocator, config);
-        defer server.deinit();
+        var ctx = CallbackContext{};
 
         // Build handlers based on test case
         const handlers = WebSocketHandlers{
@@ -337,12 +317,9 @@ test "ws: callbacks invoked for all events" {
             .on_close = if (tc.register_close) testOnCloseProperty else null,
         };
 
-        // Register handlers with context as user data
-        server.registerWebSocketHandlers("/*", handlers, &ctx);
-
         // Simulate WebSocket events by calling the handlers directly
-        // In a real integration test, we would connect a client and trigger events
-        // For property testing, we verify the handler registration and invocation logic
+        // (the wrapper exposes no dispatch API; the callback contract is
+        // verified by invoking each registered handler in isolation).
 
         // Simulate open event
         if (tc.register_open) {
@@ -416,16 +393,7 @@ test "ws: message callback content and type" {
     };
 
     for (message_tests) |mt| {
-        var ctx = CallbackContext{
-            .open_called = 0,
-            .message_called = 0,
-            .close_called = 0,
-            .last_message = null,
-            .last_message_type = null,
-            .last_close_code = null,
-            .last_close_message = null,
-            .received_user_data = null,
-        };
+        var ctx = CallbackContext{};
 
         const config = WebSocketServer.Config{
             .port = 8080,
@@ -478,16 +446,7 @@ test "ws: close callback code and message" {
     };
 
     for (close_tests) |ct| {
-        var ctx = CallbackContext{
-            .open_called = 0,
-            .message_called = 0,
-            .close_called = 0,
-            .last_message = null,
-            .last_message_type = null,
-            .last_close_code = null,
-            .last_close_message = null,
-            .received_user_data = null,
-        };
+        var ctx = CallbackContext{};
 
         const config = WebSocketServer.Config{
             .port = 8080,
@@ -521,19 +480,10 @@ test "ws: close callback code and message" {
     }
 }
 
-test "ws: callbacks invoked exactly once" {
+test "ws: callback invocation counts reflect events" {
     const allocator = testing.allocator;
 
-    var ctx = CallbackContext{
-        .open_called = 0,
-        .message_called = 0,
-        .close_called = 0,
-        .last_message = null,
-        .last_message_type = null,
-        .last_close_code = null,
-        .last_close_message = null,
-        .received_user_data = null,
-    };
+    var ctx = CallbackContext{};
 
     const config = WebSocketServer.Config{
         .port = 8080,
@@ -555,6 +505,7 @@ test "ws: callbacks invoked exactly once" {
 
     // Simulate multiple events
     var mock_ws = createMockWebSocket(allocator);
+    defer destroyMockWebSocket(allocator, &mock_ws);
 
     // Open event
     if (handlers.on_open) |handler| {
@@ -575,26 +526,19 @@ test "ws: callbacks invoked exactly once" {
         handler(&mock_ws, 1000, "closing", &ctx);
     }
     try testing.expectEqual(@as(u32, 1), ctx.close_called);
-
-    // Verify total invocations
-    try testing.expectEqual(@as(u32, 1), ctx.open_called);
-    try testing.expectEqual(@as(u32, 3), ctx.message_called);
-    try testing.expectEqual(@as(u32, 1), ctx.close_called);
-
-    destroyMockWebSocket(allocator, &mock_ws);
 }
 
 // Helper types and functions
 
 const CallbackContext = struct {
-    open_called: u32,
-    message_called: u32,
-    close_called: u32,
-    last_message: ?[]const u8,
-    last_message_type: ?MessageType,
-    last_close_code: ?i32,
-    last_close_message: ?[]const u8,
-    received_user_data: ?*anyopaque,
+    open_called: u32 = 0,
+    message_called: u32 = 0,
+    close_called: u32 = 0,
+    last_message: ?[]const u8 = null,
+    last_message_type: ?MessageType = null,
+    last_close_code: ?i32 = null,
+    last_close_message: ?[]const u8 = null,
+    received_user_data: ?*anyopaque = null,
 };
 
 fn testOnOpenProperty(ws: *WebSocket, user_data: ?*anyopaque) void {

@@ -38,7 +38,7 @@ test "storage: error handling invalid database path" {
         }
     }
 }
-test "storage: error handling read-only filesystem" {
+test "storage: write/flush/read round-trip on file-backed engine" {
     const allocator = testing.allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
@@ -101,20 +101,30 @@ test "storage: error handling concurrent access safety" {
         storage: *StorageEngine,
         allocator: std.mem.Allocator,
     };
+    const ThreadResult = struct {
+        outcome: ?anyerror = null,
+    };
     const runRead = struct {
-        fn run(t_ctx: ThreadContext, table_index: usize) void {
-            const record = sth.readDoc(t_ctx.allocator, t_ctx.storage, table_index, 1, 1) catch return; // zwanzig-disable-line: swallowed-error
+        fn run(t_ctx: ThreadContext, table_index: usize, result: *ThreadResult) void {
+            runErr(t_ctx, table_index) catch |err| { // zwanzig-disable-line: swallowed-error
+                result.outcome = err;
+            };
+        }
+        fn runErr(t_ctx: ThreadContext, table_index: usize) !void {
+            const record = try sth.readDoc(t_ctx.allocator, t_ctx.storage, table_index, 1, 1);
             defer if (record) |r| r.deinit(t_ctx.allocator);
         }
     }.run;
     var threads: [4]std.Thread = undefined;
+    var results = [_]ThreadResult{.{}} ** 4;
     const tbl_md = ctx.schema.table("data_table") orelse return error.UnknownTable;
-    for (&threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index });
+    for (&threads, &results) |*t, *result| {
+        t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index, result });
     }
     for (threads) |t| t.join();
+    for (results) |result| try testing.expect(result.outcome == null);
 }
-test "storage: error handling empty paths" {
+test "storage: write/flush/read round-trip with empty value" {
     const allocator = testing.allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;

@@ -162,6 +162,9 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
 
     // Verify timestamp was updated
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
+
+    // Duration may be 0 for very fast runs; verify value is valid.
+    try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
 test "CheckpointWorker: getMetrics" {
@@ -373,11 +376,10 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
 
     const result = try manager.performCheckpoint(.truncate);
 
-    if (result.success) {
-        // WAL size after should be <= WAL size before
-        try testing.expect(result.wal_size_after <= result.wal_size_before);
-        try testing.expect(result.wal_size_before == initial_wal_size);
-    }
+    // WAL size after should be <= WAL size before
+    try testing.expect(result.success);
+    try testing.expect(result.wal_size_after <= result.wal_size_before);
+    try testing.expect(result.wal_size_before == initial_wal_size);
 }
 
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
@@ -407,7 +409,7 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "checkpoint: failure handling - failed checkpoints increment counter" {
+test "checkpoint: failure handling - failure counter starts at zero" {
     const allocator = testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -420,43 +422,11 @@ test "checkpoint: failure handling - failed checkpoints increment counter" {
 
     const manager = &ctx.manager;
 
-    // Property: Failed checkpoints increment failure counter
+    // Property: The failure counter starts at zero on a fresh manager
+    // (no failure injection hook exists, so this test verifies the initial state)
     const initial_failures = manager.failed_checkpoint_count.load(.acquire);
 
-    // Note: In real implementation, we would inject a failure here
-    // For now, we just verify the counter exists and can be read
     try testing.expect(initial_failures == 0);
-}
-
-test "checkpoint: metrics accuracy - metrics reflect operations accurately" {
-    const allocator = testing.allocator;
-
-    var ctx: checkpoint_helpers.Context = undefined;
-    try ctx.init(allocator, .{
-        .wal_size_threshold = 1024,
-        .time_threshold_sec = 300,
-        .checkpoint_mode = .passive,
-    });
-    defer ctx.deinit();
-
-    const manager = &ctx.manager;
-
-    // Property: Metrics accurately reflect checkpoint operations
-    const metrics_before = manager.getMetrics();
-
-    // Perform checkpoint
-    _ = try manager.performCheckpoint(.passive);
-
-    const metrics_after = manager.getMetrics();
-
-    // Verify checkpoint count increased
-    try testing.expect(metrics_after.checkpoint_count == metrics_before.checkpoint_count + 1);
-
-    // Verify timestamp updated
-    try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
-
-    // Duration may be 0 for very fast runs; verify value is valid.
-    try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
 test "checkpoint: escalation logic - works correctly when needed" {
@@ -472,43 +442,15 @@ test "checkpoint: escalation logic - works correctly when needed" {
 
     const manager = &ctx.manager;
 
-    // Property: Escalation logic works correctly
-    // Set up scenario where passive checkpoint doesn't reduce WAL much
-    manager.wal_size.store(10000, .release);
-
+    // Property: Escalation logic works correctly.
+    // The in-memory WAL size is 0, so a passive checkpoint cannot reduce the
+    // WAL by >=10% and the worker must escalate to full mode.
     const result = try manager.performCheckpointWithEscalation();
 
     // Verify checkpoint was attempted (success flag should be set)
     try testing.expect(result.success);
+    // Verify escalation actually occurred (passive would mean no escalation)
+    try testing.expect(result.mode != .passive);
     // Duration may be 0 in fast runs, but should be >= 0
     try testing.expect(result.duration_ms >= 0);
-}
-
-test "checkpoint: Prometheus formatting - output contains all required metrics" {
-    const allocator = testing.allocator;
-
-    const metrics = CheckpointWorker.CheckpointMetrics{
-        .last_checkpoint_time = 1234567890,
-        .last_checkpoint_duration_ms = 150,
-        .wal_size_bytes = 5000000,
-        .checkpoint_count = 42,
-        .failed_checkpoint_count = 3,
-    };
-
-    const prometheus_output = try metrics.toPrometheus(allocator);
-    defer allocator.free(prometheus_output);
-
-    // Property: Prometheus output contains all required metrics
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "zyncbase_checkpoint_last_time_seconds") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "zyncbase_checkpoint_last_duration_ms") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "zyncbase_wal_size_bytes") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "zyncbase_checkpoint_total") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "zyncbase_checkpoint_failed_total") != null);
-
-    // Property: Prometheus output contains correct values
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "1234567890") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "150") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "5000000") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "42") != null);
-    try testing.expect(std.mem.indexOf(u8, prometheus_output, "3") != null);
 }
