@@ -3,6 +3,7 @@ const std = @import("std");
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const storage_mod = @import("storage_engine.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 
 const testing = std.testing;
 
@@ -162,6 +163,9 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
 
     // Verify timestamp was updated
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
+
+    // Duration may be 0 for very fast runs; verify value is valid.
+    try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
 test "CheckpointWorker: getMetrics" {
@@ -311,4 +315,165 @@ test "CheckpointWorker: fast shutdown" {
 
     // Should be much faster than 60s
     try testing.expect(duration < 2000);
+}
+
+// 1. No data loss occurs during checkpoint
+// 2. WAL size decreases or stays same after successful checkpoint
+// 3. Checkpoint metrics accurately reflect operation
+// 4. Failed checkpoints don't corrupt database state
+// 5. Concurrent reads can continue during checkpoint
+
+test "checkpoint: integrity - no data loss occurs during checkpoint" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1024, // 1KB for testing
+        .time_threshold_sec = 1, // 1 second for testing
+        .checkpoint_mode = .passive,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Insert representative records through the storage engine the
+    // checkpoint worker manages, then flush them to SQLite.
+    const table_metadata = ctx.schema.table("items") orelse return error.MissingItemsTable;
+    const fixture = sth.TableFixture{
+        .engine = &ctx.storage_engine,
+        .metadata = table_metadata,
+    };
+    const namespace_id: i64 = 1;
+    try fixture.insertText(1, namespace_id, "name", "alpha");
+    try fixture.insertText(2, namespace_id, "name", "beta");
+    try fixture.flush();
+
+    const metrics_before = manager.getMetrics();
+
+    // Simulate WAL growth (in-memory WAL reports 0 bytes)
+    manager.wal_size.store(2048, .release); // Exceed threshold
+
+    // Verify shouldCheckpoint returns true
+    try testing.expect(manager.shouldCheckpoint());
+
+    // Perform checkpoint
+    const result = try manager.performCheckpoint(.passive);
+
+    // Verify checkpoint succeeded
+    try testing.expect(result.success);
+
+    // Verify metrics were updated
+    const metrics_after = manager.getMetrics();
+    try testing.expect(metrics_after.checkpoint_count == metrics_before.checkpoint_count + 1);
+    try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
+
+    // Property: Checkpoint must not lose data — every record inserted
+    // before the checkpoint must be readable afterwards, unchanged.
+    const alpha = try sth.readDoc(allocator, &ctx.storage_engine, table_metadata.index, 1, namespace_id);
+    defer if (alpha) |r| r.deinit(allocator);
+    try testing.expect(alpha != null);
+    _ = try sth.expectFieldString(alpha.?, table_metadata, "name", "alpha");
+
+    const beta = try sth.readDoc(allocator, &ctx.storage_engine, table_metadata.index, 2, namespace_id);
+    defer if (beta) |r| r.deinit(allocator);
+    try testing.expect(beta != null);
+    _ = try sth.expectFieldString(beta.?, table_metadata, "name", "beta");
+}
+
+test "checkpoint: WAL size management - size decreases or stays same after success" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1024,
+        .time_threshold_sec = 300,
+        .checkpoint_mode = .passive,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Property: WAL size should decrease or stay same after successful checkpoint
+    const initial_wal_size: usize = 5000;
+    manager.wal_size.store(initial_wal_size, .release);
+
+    const result = try manager.performCheckpoint(.truncate);
+
+    // WAL size after should be <= WAL size before
+    try testing.expect(result.success);
+    try testing.expect(result.wal_size_after <= result.wal_size_before);
+    try testing.expect(result.wal_size_before == initial_wal_size);
+}
+
+test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1000,
+        .time_threshold_sec = 60,
+        .checkpoint_mode = .passive,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Property: shouldCheckpoint returns true when size threshold exceeded
+    manager.wal_size.store(1500, .release);
+    try testing.expect(manager.shouldCheckpoint());
+
+    // Property: shouldCheckpoint returns false when under threshold
+    manager.wal_size.store(500, .release);
+    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    try testing.expect(!manager.shouldCheckpoint());
+
+    // Property: shouldCheckpoint returns true when time threshold exceeded
+    manager.last_checkpoint.store(std.time.timestamp() - 120, .release); // 2 minutes ago
+    try testing.expect(manager.shouldCheckpoint());
+}
+
+test "checkpoint: failure handling - failure counter starts at zero" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1024,
+        .time_threshold_sec = 300,
+        .checkpoint_mode = .passive,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Property: The failure counter starts at zero on a fresh manager
+    // (no failure injection hook exists, so this test verifies the initial state)
+    const initial_failures = manager.failed_checkpoint_count.load(.acquire);
+
+    try testing.expect(initial_failures == 0);
+}
+
+test "checkpoint: escalation logic - works correctly when needed" {
+    const allocator = testing.allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
+        .wal_size_threshold = 1024,
+        .time_threshold_sec = 300,
+        .checkpoint_mode = .passive,
+    });
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
+
+    // Property: Escalation logic works correctly.
+    // The in-memory WAL size is 0, so a passive checkpoint cannot reduce the
+    // WAL by >=10% and the worker must escalate to full mode.
+    const result = try manager.performCheckpointWithEscalation();
+
+    // Verify checkpoint was attempted (success flag should be set)
+    try testing.expect(result.success);
+    // Verify escalation actually occurred (passive would mean no escalation)
+    try testing.expect(result.mode != .passive);
+    // Duration may be 0 in fast runs, but should be >= 0
+    try testing.expect(result.duration_ms >= 0);
 }

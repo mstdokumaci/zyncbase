@@ -6,17 +6,14 @@ const sth = @import("storage_engine_test_helpers.zig");
 
 const testing = std.testing;
 
-// This property test verifies that the server remains stable when database errors occur:
-// 1. No panics or crashes on database errors
-// 2. Server continues operating after database errors
-// 3. Error recovery mechanisms work correctly
-// 4. Concurrent operations remain safe during errors
+// This property test verifies that the storage engine stays stable under
+// concurrent insert/read/delete operations: no panics or crashes occur, and
+// the engine keeps operating.
 //
-// We test various error scenarios to ensure the server never crashes:
-// - Multiple concurrent operations during errors
-// - Rapid error conditions
-// - Error recovery and retry logic
-// - Resource cleanup after errors
+// The workers run a mix of insert/read/delete operations concurrently;
+// operation errors are tolerated via the existing error handling so that a
+// transient failure cannot crash a worker. The test passes if all threads
+// complete and a final flush succeeds.
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

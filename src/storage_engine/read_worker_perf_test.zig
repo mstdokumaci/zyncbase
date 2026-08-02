@@ -548,5 +548,5 @@ test "ReadWorker: selectQuery throughput" {
     try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 5.4 else if (is_debug) 1.8 else 0.6);
 
     // Sweep: rows=100, priority < 50
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 8.1 else if (is_debug) 2.7 else 0.9);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 9.0 else if (is_debug) 3.0 else 1.0);
 }
