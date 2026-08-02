@@ -6,7 +6,7 @@ const EXTERNAL = new Set(["std","builtin","sqlite","msgpack","httpx"]);
 // Boundary-aware test-path classification on canonical paths ("src/foo_test.zig"):
 // *_test.zig suffix, test_all.zig, *test_helper(s).zig, *test_runner.zig.
 // Does NOT match ordinary production names such as "latest.zig".
-const TEST_RE = /(?:^|\/)(?:[^/]+_test\.zig|test_all\.zig|[^/]*test[-_](?:helper|runner)[^/]*\.zig)$/;
+const TEST_RE = /(?:^|\/)(?:[^/]+_test\.zig|test_all\.zig|(?:[^/]+[-_])?test[-_](?:helper|runner)[^/]*\.zig)$/;
 
 if (process.argv.includes("--selftest")) {
     const cases = [
@@ -16,6 +16,8 @@ if (process.argv.includes("--selftest")) {
         ["src/schema/test_helpers.zig", true],
         ["src/timed_test_runner.zig", true],
         ["src/latest.zig", false],
+        ["src/contest_helpers.zig", false],
+        ["src/latest_runner.zig", false],
         ["src/main.zig", false],
         ["src/server.zig", false],
     ];

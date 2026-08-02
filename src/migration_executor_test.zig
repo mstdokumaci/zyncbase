@@ -517,7 +517,7 @@ test "migration_executor: major version bump is refused" {
             defer allocator.free(ddl);
             try execMultiSql(&db, allocator, ddl);
 
-            // Persisted version: major = 1
+            // Target major is always one greater than the persisted major.
             const target_major = persisted_major + 1;
 
             const persisted_ver = try std.fmt.allocPrint(allocator, "{d}.0.0", .{persisted_major});

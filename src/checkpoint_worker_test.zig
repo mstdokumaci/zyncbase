@@ -3,6 +3,7 @@ const std = @import("std");
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const storage_mod = @import("storage_engine.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 
 const testing = std.testing;
 
@@ -335,11 +336,21 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
 
     const manager = &ctx.manager;
 
-    // Property: Checkpoint should not lose data
-    // We verify this by checking that metrics are consistent before and after
+    // Insert representative records through the storage engine the
+    // checkpoint worker manages, then flush them to SQLite.
+    const table_metadata = ctx.schema.table("items") orelse return error.MissingItemsTable;
+    const fixture = sth.TableFixture{
+        .engine = &ctx.storage_engine,
+        .metadata = table_metadata,
+    };
+    const namespace_id: i64 = 1;
+    try fixture.insertText(1, namespace_id, "name", "alpha");
+    try fixture.insertText(2, namespace_id, "name", "beta");
+    try fixture.flush();
+
     const metrics_before = manager.getMetrics();
 
-    // Simulate WAL growth
+    // Simulate WAL growth (in-memory WAL reports 0 bytes)
     manager.wal_size.store(2048, .release); // Exceed threshold
 
     // Verify shouldCheckpoint returns true
@@ -355,6 +366,18 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
     const metrics_after = manager.getMetrics();
     try testing.expect(metrics_after.checkpoint_count == metrics_before.checkpoint_count + 1);
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
+
+    // Property: Checkpoint must not lose data — every record inserted
+    // before the checkpoint must be readable afterwards, unchanged.
+    const alpha = try sth.readDoc(allocator, &ctx.storage_engine, table_metadata.index, 1, namespace_id);
+    defer if (alpha) |r| r.deinit(allocator);
+    try testing.expect(alpha != null);
+    _ = try sth.expectFieldString(alpha.?, table_metadata, "name", "alpha");
+
+    const beta = try sth.readDoc(allocator, &ctx.storage_engine, table_metadata.index, 2, namespace_id);
+    defer if (beta) |r| r.deinit(allocator);
+    try testing.expect(beta != null);
+    _ = try sth.expectFieldString(beta.?, table_metadata, "name", "beta");
 }
 
 test "checkpoint: WAL size management - size decreases or stays same after success" {

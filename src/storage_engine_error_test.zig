@@ -54,9 +54,9 @@ test "storage: write/flush/read round-trip on file-backed engine" {
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        const record = try tbl.readDoc(allocator, 1, 1);
-        defer if (record) |r| r.deinit(allocator);
-        try testing.expect(record != null);
+        var doc = try tbl.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", "value1");
     }
 }
 test "storage: error handling constraint violations" {
@@ -118,8 +118,11 @@ test "storage: error handling concurrent access safety" {
     var threads: [4]std.Thread = undefined;
     var results = [_]ThreadResult{.{}} ** 4;
     const tbl_md = ctx.schema.table("data_table") orelse return error.UnknownTable;
+    var spawned: usize = 0;
+    errdefer for (threads[0..spawned]) |t| t.join();
     for (&threads, &results) |*t, *result| {
         t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index, result });
+        spawned += 1;
     }
     for (threads) |t| t.join();
     for (results) |result| try testing.expect(result.outcome == null);
