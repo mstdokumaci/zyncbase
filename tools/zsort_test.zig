@@ -282,8 +282,8 @@ test "processSource: blank line before multiline stray import does not invert sl
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "late.zig"));
-    const std_pos = std.mem.indexOf(u8, result.new_text, "const std").?;
-    const late_pos = std.mem.indexOf(u8, result.new_text, "const late").?;
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std") orelse return error.TestUnexpectedResult;
+    const late_pos = std.mem.indexOf(u8, result.new_text, "const late") orelse return error.TestUnexpectedResult;
     try std.testing.expect(late_pos > std_pos);
 }
 
