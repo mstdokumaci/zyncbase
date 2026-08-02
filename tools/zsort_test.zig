@@ -269,6 +269,82 @@ test "processSource: hoists multiline stray import intact" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "late.zig").? < std.mem.indexOf(u8, result.new_text, "pub fn main").?);
 }
 
+test "processSource: blank line before multiline stray import does not invert slice" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\const late = @import(
+        \\    "late.zig"
+        \\);
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "late.zig"));
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std").?;
+    const late_pos = std.mem.indexOf(u8, result.new_text, "const late").?;
+    try std.testing.expect(late_pos > std_pos);
+}
+
+test "processSource: unterminated import at EOF terminates" {
+    const source =
+        \\const std = @import("std");
+        \\const late = @import(
+        \\    "late.zig"
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(!result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "late.zig"));
+}
+
+test "processSource: comment above multiline stray import does not invert slice" {
+    const source =
+        \\const std = @import("std");
+        \\// c1
+        \\const late = @import(
+        \\    "late.zig"
+        \\);
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "late.zig"));
+}
+
+test "processSource: import expression ending in brace terminates" {
+    const source =
+        \\const std = @import("std");
+        \\const x = @import("a")
+        \\{
+        \\};
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(!result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "const x = @import"));
+}
+
+test "hasBannedPatterns: whitespace after @import( still detected" {
+    const source = "const foo = @import( \"./bar\");\n";
+    const msg = zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }) orelse return error.TestFailed;
+    defer std.testing.allocator.free(msg);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
+}
+
+test "processSource: collapses consecutive CRLF blank lines" {
+    const source = "// h\r\n\r\n\r\nconst bar = @import(\"bar\");\r\n\r\npub fn main() {}\r\n";
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, result.new_text, "\r\n\r\n\r\n"));
+}
+
 test "processSource: skip comment leaves file untouched" {
     const source =
         \\// zsort: skip
@@ -318,8 +394,10 @@ test "walkDir: excludes cache and vcs directories" {
     try tmp.dir.makePath("zig-cache");
     try tmp.dir.makePath("zig-out");
     try tmp.dir.makePath("sub");
+    try tmp.dir.makePath("sub/.zig-cache");
     try tmp.dir.writeFile(.{ .sub_path = "main.zig", .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = "sub/lib.zig", .data = "" });
+    try tmp.dir.writeFile(.{ .sub_path = "sub/.zig-cache/e.zig", .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = ".git/a.zig", .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = ".zig-cache/b.zig", .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = "zig-cache/c.zig", .data = "" });

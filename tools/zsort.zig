@@ -265,7 +265,10 @@ pub fn collectImports(
                     if (source[j] == '{' or source[j] == '}') break;
                     j += 1;
                 }
-                if (import_end == line_end) continue;
+                if (import_end == line_end) {
+                    i = line_end;
+                    continue;
+                }
             }
             try imports.append(allocator, .{
                 .start = line_start,
@@ -372,13 +375,7 @@ pub fn hasBannedPatterns(
                 return banMessage(allocator, "inline @import in type expression", .{});
             }
 
-            const inner = source[found + "@import(".len ..];
-            if (inner.len > 0 and inner[0] == '"') {
-                const path_end = std.mem.indexOfScalar(u8, inner[1..], '"') orelse {
-                    i = line_end_excl;
-                    continue;
-                };
-                const path = inner[1 .. 1 + path_end];
+            if (extractPath(source[found..], "@import(")) |path| {
                 for (banned_prefixes) |prefix| {
                     if (std.mem.startsWith(u8, path, prefix)) {
                         return banMessage(allocator, "import path starts with banned prefix '{s}'", .{prefix});
@@ -573,9 +570,15 @@ pub fn buildSortedImportText(
 
     var deduped: std.ArrayListUnmanaged(u8) = .empty;
     errdefer deduped.deinit(allocator);
-    for (buf.items, 0..) |ch, i| {
-        if (ch == '\n' and i >= 2 and buf.items[i - 1] == '\n' and buf.items[i - 2] == '\n') continue;
-        try deduped.append(allocator, ch);
+    var blank_run: usize = 0;
+    var line_pos: usize = 0;
+    while (line_pos < buf.items.len) {
+        const le = findLineEnd(buf.items, line_pos);
+        const line = buf.items[line_pos..le];
+        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
+        blank_run = if (is_blank) blank_run + 1 else 0;
+        if (blank_run < 2) try deduped.appendSlice(allocator, line);
+        line_pos = le;
     }
     buf.deinit(allocator);
 
@@ -603,10 +606,11 @@ fn showDiff(file_path: []const u8, old: []const u8, new: []const u8) void {
 const excluded_dirs = [_][]const u8{ ".git", ".zig-cache", "zig-cache", "zig-out" };
 
 fn isExcludedPath(path: []const u8) bool {
-    const sep = std.mem.indexOfScalar(u8, path, '/') orelse path.len;
-    const first = path[0..sep];
-    for (excluded_dirs) |dir_name| {
-        if (std.mem.eql(u8, first, dir_name)) return true;
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |component| {
+        for (excluded_dirs) |dir_name| {
+            if (std.mem.eql(u8, component, dir_name)) return true;
+        }
     }
     return false;
 }
@@ -706,7 +710,9 @@ pub fn processSource(
         defer buf.deinit(allocator);
         var pos: usize = block_end;
         for (stray_imports.items) |imp| {
-            const removal_start = if (imp.comment_start) |cs| cs else imp.start;
+            const raw_start = if (imp.comment_start) |cs| cs else imp.start;
+            const removal_start = @max(raw_start, pos);
+            if (imp.end <= pos) continue;
             try buf.appendSlice(allocator, source[pos..removal_start]);
             pos = imp.end;
         }
