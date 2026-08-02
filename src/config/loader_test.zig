@@ -261,15 +261,35 @@ test "config: env var substitution" {
     const allocator = std.testing.allocator;
 
     // Set up test environment variables using C setenv
+    const prev_test_port = c.getenv("TEST_PORT");
+    const prev_test_host = c.getenv("TEST_HOST");
+    const prev_test_jwt_secret = c.getenv("TEST_JWT_SECRET");
+    const prev_test_data_dir = c.getenv("TEST_DATA_DIR");
     _ = c.setenv("TEST_PORT", "8080", 1);
     _ = c.setenv("TEST_HOST", "192.168.1.1", 1);
     _ = c.setenv("TEST_JWT_SECRET", "test-secret-key", 1);
     _ = c.setenv("TEST_DATA_DIR", "/tmp/test-isolated-dir", 1);
     defer {
-        _ = c.unsetenv("TEST_PORT");
-        _ = c.unsetenv("TEST_HOST");
-        _ = c.unsetenv("TEST_JWT_SECRET");
-        _ = c.unsetenv("TEST_DATA_DIR");
+        if (prev_test_port) |v| {
+            _ = c.setenv("TEST_PORT", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_PORT");
+        }
+        if (prev_test_host) |v| {
+            _ = c.setenv("TEST_HOST", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_HOST");
+        }
+        if (prev_test_jwt_secret) |v| {
+            _ = c.setenv("TEST_JWT_SECRET", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_JWT_SECRET");
+        }
+        if (prev_test_data_dir) |v| {
+            _ = c.setenv("TEST_DATA_DIR", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_DATA_DIR");
+        }
     }
 
     var context = try schema_helpers.TestContext.init(allocator, "config-env-vars");
@@ -316,7 +336,13 @@ test "config: env var substitution - missing variable keeps original" {
     const allocator = std.testing.allocator;
 
     // Ensure the variable doesn't exist
+    const prev_nonexistent_var = c.getenv("NONEXISTENT_VAR");
     _ = c.unsetenv("NONEXISTENT_VAR");
+    defer {
+        if (prev_nonexistent_var) |v| {
+            _ = c.setenv("NONEXISTENT_VAR", v, 1);
+        }
+    }
 
     var context = try schema_helpers.TestContext.init(allocator, "config-missing-env");
     defer context.deinit();
@@ -352,13 +378,28 @@ test "config: env var substitution - multiple variables" {
     const allocator = std.testing.allocator;
 
     // Set up multiple test environment variables
+    const prev_test_origin_1 = c.getenv("TEST_ORIGIN_1");
+    const prev_test_origin_2 = c.getenv("TEST_ORIGIN_2");
+    const prev_test_rate_limit = c.getenv("TEST_RATE_LIMIT");
     _ = c.setenv("TEST_ORIGIN_1", "https://example.com", 1);
     _ = c.setenv("TEST_ORIGIN_2", "https://app.example.com", 1);
     _ = c.setenv("TEST_RATE_LIMIT", "200", 1);
     defer {
-        _ = c.unsetenv("TEST_ORIGIN_1");
-        _ = c.unsetenv("TEST_ORIGIN_2");
-        _ = c.unsetenv("TEST_RATE_LIMIT");
+        if (prev_test_origin_1) |v| {
+            _ = c.setenv("TEST_ORIGIN_1", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_ORIGIN_1");
+        }
+        if (prev_test_origin_2) |v| {
+            _ = c.setenv("TEST_ORIGIN_2", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_ORIGIN_2");
+        }
+        if (prev_test_rate_limit) |v| {
+            _ = c.setenv("TEST_RATE_LIMIT", v, 1);
+        } else {
+            _ = c.unsetenv("TEST_RATE_LIMIT");
+        }
     }
 
     var context = try schema_helpers.TestContext.init(allocator, "config-multiple-env");
@@ -615,9 +656,9 @@ test "config: file existence validation - valid auth rules file" {
 }
 
 // Authorization selection properties
-// Invariant: Configuration round-trip
-// For any valid configuration, serializing then parsing should produce an equivalent configuration.
-test "config: round-trip - server config" {
+// Invariant: Configuration loading
+// For any valid configuration, loading valid configuration produces the expected equivalent configuration.
+test "config: load - server config" {
     const allocator = std.testing.allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-server");
@@ -648,7 +689,7 @@ test "config: round-trip - server config" {
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
 }
 
-test "config: round-trip - logging config" {
+test "config: load - logging config" {
     const allocator = std.testing.allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-logging");
@@ -679,7 +720,7 @@ test "config: round-trip - logging config" {
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
 }
 
-test "config: round-trip - complete config" {
+test "config: load - complete config" {
     const allocator = std.testing.allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-complete");
@@ -738,10 +779,17 @@ test "config: round-trip - complete config" {
     try std.testing.expect(config.authentication.jwt_secret != null);
     try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
     try std.testing.expectEqualStrings("HS512", config.authentication.jwt_algorithm);
+    try std.testing.expect(config.authentication.jwt_issuer != null);
+    try std.testing.expectEqualStrings("zyncbase", config.authentication.jwt_issuer.?);
+    try std.testing.expect(config.authentication.jwt_audience != null);
+    try std.testing.expectEqualStrings("api", config.authentication.jwt_audience.?);
 
     try std.testing.expectEqual(@as(usize, 1), config.security.allowed_origins.len);
     try std.testing.expectEqualStrings("https://example.com", config.security.allowed_origins[0]);
     try std.testing.expectEqual(false, config.security.allow_localhost);
+    try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
+    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections);
+    try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 
     try std.testing.expectEqual(Config.LoggingConfig.LogLevel.debug, config.logging.level);
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
