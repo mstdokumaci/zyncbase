@@ -27,9 +27,7 @@ pub const Import = struct {
 };
 
 pub fn classify(path: []const u8) u2 {
-    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin") or
-        std.mem.eql(u8, path, "@zig"))
-    {
+    if (std.mem.eql(u8, path, "std") or std.mem.eql(u8, path, "builtin")) {
         return class_std_builtin;
     }
     if (std.mem.eql(u8, path, "root") or std.mem.eql(u8, path, "build_root") or
@@ -39,6 +37,46 @@ pub fn classify(path: []const u8) u2 {
         return class_local;
     }
     return class_third_party;
+}
+
+fn skipStringOrComment(source: []const u8, pos: usize) usize {
+    const ch = source[pos];
+    if (ch == '"' or ch == '\'') {
+        var i = pos + 1;
+        while (i < source.len and source[i] != ch) : (i += 1) {
+            if (source[i] == '\\') i += 1;
+        }
+        return @min(i + 1, source.len);
+    }
+    if (ch == '/' and pos + 1 < source.len) {
+        if (source[pos + 1] == '/') {
+            var i = pos + 2;
+            while (i < source.len and source[i] != '\n') : (i += 1) {}
+            return @min(i + 1, source.len);
+        }
+        if (source[pos + 1] == '*') {
+            var i = pos + 2;
+            while (i + 1 < source.len) : (i += 1) {
+                if (source[i] == '*' and source[i + 1] == '/') {
+                    i += 1;
+                    break;
+                }
+            }
+            return @min(i + 2, source.len);
+        }
+    }
+    if (ch == '\\' and pos + 1 < source.len and source[pos + 1] == '\\') {
+        var k = pos;
+        while (k > 0 and source[k - 1] != '\n') : (k -= 1) {
+            if (source[k - 1] != ' ' and source[k - 1] != '\t') break;
+        }
+        if (k == 0 or source[k - 1] == '\n') {
+            var i = pos + 2;
+            while (i < source.len and source[i] != '\n') : (i += 1) {}
+            return @min(i + 1, source.len);
+        }
+    }
+    return pos;
 }
 
 fn findLineStart(source: []const u8, pos: usize) usize {
@@ -61,33 +99,10 @@ pub fn findCImportEnd(source: []const u8, pos: usize) usize {
     var i = pos;
     var depth: usize = 0;
     var started = false;
-    while (i < source.len) : (i += 1) {
-        if (source[i] == '"') {
-            i += 1;
-            while (i < source.len and source[i] != '"') : (i += 1) {
-                if (source[i] == '\\') i += 1;
-            }
-            continue;
-        }
-        if (source[i] == '\'') {
-            i += 1;
-            while (i < source.len and source[i] != '\'') : (i += 1) {
-                if (source[i] == '\\') i += 1;
-            }
-            continue;
-        }
-        if (source[i] == '/' and i + 1 < source.len and source[i + 1] == '/') {
-            while (i < source.len and source[i] != '\n') : (i += 1) {}
-            continue;
-        }
-        if (source[i] == '/' and i + 1 < source.len and source[i + 1] == '*') {
-            i += 2;
-            while (i + 1 < source.len) : (i += 1) {
-                if (source[i] == '*' and source[i + 1] == '/') {
-                    i += 1;
-                    break;
-                }
-            }
+    while (i < source.len) {
+        const skip = skipStringOrComment(source, i);
+        if (skip != i) {
+            i = skip;
             continue;
         }
         if (source[i] == '{') {
@@ -102,13 +117,17 @@ pub fn findCImportEnd(source: []const u8, pos: usize) usize {
                 return i + 1;
             }
         }
+        i += 1;
     }
     return findLineEnd(source, pos);
 }
 
 pub fn extractPath(source: []const u8, needle: []const u8) ?[]const u8 {
     const pos = std.mem.indexOf(u8, source, needle) orelse return null;
-    const open = pos + needle.len;
+    var open = pos + needle.len;
+    while (open < source.len and
+        (source[open] == ' ' or source[open] == '\t' or source[open] == '\r' or source[open] == '\n')) : (open += 1)
+    {}
     if (open >= source.len) return null;
     const close = std.mem.indexOfScalar(u8, source[open..], ')') orelse return null;
     const inner = source[open .. open + close];
@@ -118,6 +137,14 @@ pub fn extractPath(source: []const u8, needle: []const u8) ?[]const u8 {
         return inner[1 .. 1 + e];
     }
     return null;
+}
+
+fn endsWithSemicolon(trimmed: []const u8) bool {
+    var t = trimmed;
+    if (std.mem.indexOf(u8, t, "//")) |c| t = t[0..c];
+    if (std.mem.indexOf(u8, t, "/*")) |c| t = t[0..c];
+    t = std.mem.trimRight(u8, t, " \t\r\n");
+    return t.len > 0 and t[t.len - 1] == ';';
 }
 
 pub fn isTopLevelImportLine(line: []const u8) bool {
@@ -133,8 +160,8 @@ pub fn isTopLevelImportLine(line: []const u8) bool {
         if (std.mem.indexOf(u8, trimmed, "= union") != null) return false;
         if (std.mem.indexOf(u8, trimmed, "= opaque") != null) return false;
 
-        if (std.mem.indexOf(u8, trimmed, "@import") != null) return true;
-        if (std.mem.indexOf(u8, trimmed, "@cImport") != null) return true;
+        if (std.mem.indexOf(u8, trimmed, "@import") != null) return endsWithSemicolon(trimmed);
+        if (std.mem.indexOf(u8, trimmed, "@cImport") != null) return endsWithSemicolon(trimmed);
 
         const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
         const before_eq = trimmed[0..eq];
@@ -147,10 +174,10 @@ pub fn isTopLevelImportLine(line: []const u8) bool {
             if (c == '.') has_dot = true;
         }
         if (!has_dot) return false;
-        return true;
+        return endsWithSemicolon(trimmed);
     }
 
-    if (std.mem.startsWith(u8, trimmed, "_ = @import")) return true;
+    if (std.mem.startsWith(u8, trimmed, "_ = @import")) return endsWithSemicolon(trimmed);
 
     return false;
 }
@@ -166,41 +193,26 @@ pub fn collectImports(
     var i: usize = 0;
     var depth: usize = 0;
 
-    while (i < source.len) : (i += 1) {
-        if (source[i] == '"') {
+    while (i < source.len) {
+        const skip = skipStringOrComment(source, i);
+        if (skip != i) {
+            i = skip;
+            continue;
+        }
+        if (source[i] == '{') {
+            depth += 1;
             i += 1;
-            while (i < source.len and source[i] != '"') : (i += 1) {
-                if (source[i] == '\\') i += 1;
-            }
             continue;
         }
-        if (source[i] == '\'') {
+        if (source[i] == '}') {
+            depth -|= 1;
             i += 1;
-            while (i < source.len and source[i] != '\'') : (i += 1) {
-                if (source[i] == '\\') i += 1;
-            }
             continue;
         }
-        if (source[i] == '/' and i + 1 < source.len and source[i + 1] == '/') {
-            while (i < source.len and source[i] != '\n') : (i += 1) {}
-            continue;
-        }
-        if (source[i] == '/' and i + 1 < source.len and source[i + 1] == '*') {
-            i += 2;
-            while (i + 1 < source.len) : (i += 1) {
-                if (source[i] == '*' and source[i + 1] == '/') {
-                    i += 1;
-                    break;
-                }
-            }
-            continue;
-        }
-        if (source[i] == '{') depth += 1;
-        if (source[i] == '}') depth -|= 1;
 
         if (std.mem.startsWith(u8, source[i..], "@import(")) {
             if (depth > 0) {
-                i += "@import(".len - 1;
+                i += "@import(".len;
                 continue;
             }
             const found = i;
@@ -211,11 +223,11 @@ pub fn collectImports(
                 !std.mem.startsWith(u8, line, "pub const ") and
                 !std.mem.startsWith(u8, line, "_ = @import"))
             {
-                i = line_end - 1;
+                i = line_end;
                 continue;
             }
             const path = extractPath(source[found..], "@import(") orelse {
-                i = line_end - 1;
+                i = line_end;
                 continue;
             };
             var comment_start: ?usize = null;
@@ -237,21 +249,42 @@ pub fn collectImports(
                     }
                 }
             }
+            var import_end = line_end;
+            if (!endsWithSemicolon(line)) {
+                var j = line_end;
+                while (j < source.len) {
+                    const j_skip = skipStringOrComment(source, j);
+                    if (j_skip != j) {
+                        j = j_skip;
+                        continue;
+                    }
+                    if (source[j] == ';') {
+                        import_end = j + 1;
+                        break;
+                    }
+                    if (source[j] == '{' or source[j] == '}') break;
+                    j += 1;
+                }
+                if (import_end == line_end) {
+                    i = line_end;
+                    continue;
+                }
+            }
             try imports.append(allocator, .{
                 .start = line_start,
-                .end = line_end,
+                .end = import_end,
                 .path = path,
                 .class = classify(path),
                 .stray = found >= block_end,
                 .comment_start = comment_start,
             });
-            i = line_end - 1;
+            i = import_end;
             continue;
         }
 
         if (std.mem.startsWith(u8, source[i..], "@cImport(")) {
             if (depth > 0) {
-                i += "@cImport(".len - 1;
+                i += "@cImport(".len;
                 continue;
             }
             const found = i;
@@ -284,9 +317,11 @@ pub fn collectImports(
                 .stray = found >= block_end,
                 .comment_start = comment_start,
             });
-            i = block_end_cimport - 1;
+            i = block_end_cimport;
             continue;
         }
+
+        i += 1;
     }
 
     std.sort.pdq(Import, imports.items, {}, Import.lessThan);
@@ -320,52 +355,54 @@ pub fn hasBannedPatterns(
     source: []const u8,
     banned_prefixes: []const []const u8,
 ) ?[]const u8 {
-    var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, source, pos, "@import(")) |found| {
-        const line_start = findLineStart(source, found);
-        const line_end_excl = findLineEnd(source, found);
-        const line = std.mem.trimLeft(u8, source[line_start..line_end_excl], " \t\r");
-
-        if (std.mem.startsWith(u8, line, "//")) {
-            pos = line_end_excl;
+    var i: usize = 0;
+    while (i < source.len) {
+        const skip = skipStringOrComment(source, i);
+        if (skip != i) {
+            i = skip;
             continue;
         }
+        if (std.mem.startsWith(u8, source[i..], "@import(")) {
+            const found = i;
+            const line_start = findLineStart(source, found);
+            const line_end_excl = findLineEnd(source, found);
+            const line = std.mem.trimLeft(u8, source[line_start..line_end_excl], " \t\r");
 
-        if (!std.mem.startsWith(u8, line, "const ") and
-            !std.mem.startsWith(u8, line, "pub const ") and
-            !std.mem.startsWith(u8, line, "_ = @import"))
-        {
-            return banMessage(allocator, "inline @import in type expression", .{});
-        }
+            if (!std.mem.startsWith(u8, line, "const ") and
+                !std.mem.startsWith(u8, line, "pub const ") and
+                !std.mem.startsWith(u8, line, "_ = @import"))
+            {
+                return banMessage(allocator, "inline @import in type expression", .{});
+            }
 
-        const inner = source[found + "@import(".len ..];
-        if (inner.len > 0 and inner[0] == '"') {
-            const path_end = std.mem.indexOfScalar(u8, inner[1..], '"') orelse {
-                pos = line_end_excl;
-                continue;
-            };
-            const path = inner[1 .. 1 + path_end];
-            for (banned_prefixes) |prefix| {
-                if (std.mem.startsWith(u8, path, prefix)) {
-                    return banMessage(allocator, "import path starts with banned prefix '{s}'", .{prefix});
+            if (extractPath(source[found..], "@import(")) |path| {
+                for (banned_prefixes) |prefix| {
+                    if (std.mem.startsWith(u8, path, prefix)) {
+                        return banMessage(allocator, "import path starts with banned prefix '{s}'", .{prefix});
+                    }
                 }
             }
-        }
 
-        pos = line_end_excl;
-    }
-
-    var line_pos: usize = 0;
-    while (line_pos < source.len) {
-        const le = findLineEnd(source, line_pos);
-        const l = std.mem.trimLeft(u8, source[line_pos..le], " \t\r");
-        if (!std.mem.startsWith(u8, l, "//") and std.mem.indexOf(u8, l, "usingnamespace") != null) {
-            return banMessage(allocator, "usingnamespace detected", .{});
+            i = line_end_excl;
+            continue;
         }
-        line_pos = le;
+        i += 1;
     }
 
     return null;
+}
+
+fn detectNewline(source: []const u8) []const u8 {
+    var crlf: usize = 0;
+    var lf: usize = 0;
+    var i: usize = 0;
+    while (i < source.len) : (i += 1) {
+        if (source[i] == '\n') {
+            lf += 1;
+            if (i > 0 and source[i - 1] == '\r') crlf += 1;
+        }
+    }
+    return if (crlf * 2 > lf) "\r\n" else "\n";
 }
 
 pub fn buildSortedImportText(
@@ -469,10 +506,12 @@ pub fn buildSortedImportText(
     var imports_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer imports_buf.deinit(allocator);
 
+    const nl = detectNewline(source);
+
     var prev_class: ?u2 = null;
     for (all_imports.items) |imp| {
         if (prev_class != null and prev_class.? != imp.class) {
-            try imports_buf.append(allocator, '\n');
+            try imports_buf.appendSlice(allocator, nl);
         }
         prev_class = imp.class;
         if (imp.comment_start) |cs| {
@@ -482,16 +521,16 @@ pub fn buildSortedImportText(
         const trimmed_import = std.mem.trim(u8, text, " \t\n\r");
         if (trimmed_import.len > 0) {
             try imports_buf.appendSlice(allocator, trimmed_import);
-            try imports_buf.append(allocator, '\n');
+            try imports_buf.appendSlice(allocator, nl);
         }
     }
 
     if (extra_imports.items.len > 0) {
         if (imports_buf.items.len > 0 and imports_buf.items[imports_buf.items.len - 1] != '\n') {
-            try imports_buf.append(allocator, '\n');
+            try imports_buf.appendSlice(allocator, nl);
         }
         if (all_imports.items.len > 0) {
-            try imports_buf.append(allocator, '\n');
+            try imports_buf.appendSlice(allocator, nl);
         }
         for (extra_imports.items) |imp| {
             if (imp.comment_start) |cs| {
@@ -501,7 +540,7 @@ pub fn buildSortedImportText(
             const trimmed_import = std.mem.trim(u8, text, " \t\n\r");
             if (trimmed_import.len > 0) {
                 try imports_buf.appendSlice(allocator, trimmed_import);
-                try imports_buf.append(allocator, '\n');
+                try imports_buf.appendSlice(allocator, nl);
             }
         }
     }
@@ -513,27 +552,33 @@ pub fn buildSortedImportText(
         try buf.appendSlice(allocator, line);
     }
     if (preamble_lines.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
-        try buf.append(allocator, '\n');
+        try buf.appendSlice(allocator, nl);
     }
 
     try buf.appendSlice(allocator, imports_buf.items);
 
     if (trailing_comments.items.len > 0) {
-        try buf.append(allocator, '\n');
+        try buf.appendSlice(allocator, nl);
         for (trailing_comments.items) |line| {
             try buf.appendSlice(allocator, line);
         }
     }
 
     if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '\n') {
-        try buf.append(allocator, '\n');
+        try buf.appendSlice(allocator, nl);
     }
 
     var deduped: std.ArrayListUnmanaged(u8) = .empty;
     errdefer deduped.deinit(allocator);
-    for (buf.items, 0..) |ch, i| {
-        if (ch == '\n' and i >= 2 and buf.items[i - 1] == '\n' and buf.items[i - 2] == '\n') continue;
-        try deduped.append(allocator, ch);
+    var blank_run: usize = 0;
+    var line_pos: usize = 0;
+    while (line_pos < buf.items.len) {
+        const le = findLineEnd(buf.items, line_pos);
+        const line = buf.items[line_pos..le];
+        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
+        blank_run = if (is_blank) blank_run + 1 else 0;
+        if (blank_run < 2) try deduped.appendSlice(allocator, line);
+        line_pos = le;
     }
     buf.deinit(allocator);
 
@@ -558,7 +603,19 @@ fn showDiff(file_path: []const u8, old: []const u8, new: []const u8) void {
     stdout_w.interface.flush() catch return;
 }
 
-fn walkDir(
+const excluded_dirs = [_][]const u8{ ".git", ".zig-cache", "zig-cache", "zig-out" };
+
+fn isExcludedPath(path: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |component| {
+        for (excluded_dirs) |dir_name| {
+            if (std.mem.eql(u8, component, dir_name)) return true;
+        }
+    }
+    return false;
+}
+
+pub fn walkDir(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     base_path: []const u8,
@@ -568,6 +625,7 @@ fn walkDir(
     defer iter.deinit();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
+        if (isExcludedPath(entry.path)) continue;
         if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
         const full_path = try std.fs.path.join(allocator, &.{ base_path, entry.path });
         try files.append(allocator, full_path);
@@ -575,7 +633,160 @@ fn walkDir(
 }
 
 fn hasSkipComment(source: []const u8) bool {
-    return std.mem.indexOf(u8, source, "// zsort: skip") != null;
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const le = findLineEnd(source, pos);
+        const trimmed = std.mem.trimLeft(u8, source[pos..le], " \t\r");
+        if (std.mem.startsWith(u8, trimmed, "//") and std.mem.indexOf(u8, trimmed, "zsort: skip") != null) {
+            return true;
+        }
+        pos = le;
+    }
+    return false;
+}
+
+pub const ProcessResult = struct {
+    new_text: []const u8,
+    new_block: []const u8,
+    block_end: usize,
+    changed: bool,
+    banned: bool,
+    banned_msg: ?[]const u8,
+    stray_count: usize,
+};
+
+pub fn processSource(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    banned_prefixes: []const []const u8,
+) !ProcessResult {
+    if (hasSkipComment(source)) {
+        return .{
+            .new_text = source,
+            .new_block = source,
+            .block_end = 0,
+            .changed = false,
+            .banned = false,
+            .banned_msg = null,
+            .stray_count = 0,
+        };
+    }
+
+    const block_end = findImportBlockEnd(source);
+    var imports = try collectImports(allocator, source, block_end);
+    defer imports.deinit(allocator);
+
+    const banned_msg = hasBannedPatterns(allocator, source, banned_prefixes);
+
+    if (imports.items.len == 0) {
+        return .{
+            .new_text = source,
+            .new_block = source,
+            .block_end = block_end,
+            .changed = false,
+            .banned = banned_msg != null,
+            .banned_msg = banned_msg,
+            .stray_count = 0,
+        };
+    }
+
+    var stray_imports = std.ArrayListUnmanaged(Import).empty;
+    defer stray_imports.deinit(allocator);
+    for (imports.items) |imp| {
+        if (imp.stray) {
+            try stray_imports.append(allocator, imp);
+        }
+    }
+
+    var rest = source[block_end..];
+    var rest_owned: ?[]const u8 = null;
+    if (stray_imports.items.len > 0) {
+        std.sort.pdq(Import, stray_imports.items, {}, struct {
+            fn lt(_: void, a: Import, b: Import) bool {
+                return a.start < b.start;
+            }
+        }.lt);
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        var pos: usize = block_end;
+        for (stray_imports.items) |imp| {
+            const raw_start = if (imp.comment_start) |cs| cs else imp.start;
+            const removal_start = @max(raw_start, pos);
+            if (imp.end <= pos) continue;
+            try buf.appendSlice(allocator, source[pos..removal_start]);
+            pos = imp.end;
+        }
+        try buf.appendSlice(allocator, source[pos..]);
+        const owned = try buf.toOwnedSlice(allocator);
+        rest_owned = owned;
+        rest = owned;
+    }
+
+    const new_imports = try buildSortedImportText(allocator, source, imports.items, block_end);
+
+    const original_block = source[0..block_end];
+    const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0;
+
+    const full_new = try std.mem.concat(allocator, u8, &.{ new_imports, rest });
+    if (rest_owned) |owned| allocator.free(owned);
+
+    return .{
+        .new_text = full_new,
+        .new_block = new_imports,
+        .block_end = block_end,
+        .changed = changed,
+        .banned = banned_msg != null,
+        .banned_msg = banned_msg,
+        .stray_count = stray_imports.items.len,
+    };
+}
+
+pub const CliMode = enum { check, fix };
+
+pub const Args = struct {
+    mode: CliMode,
+    target: []const u8,
+    banned_prefixes: std.ArrayListUnmanaged([]const u8),
+
+    pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
+        self.banned_prefixes.deinit(allocator);
+    }
+};
+
+pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Args {
+    if (args.len < 3) return error.Usage;
+
+    const mode: CliMode = if (std.mem.eql(u8, args[1], "fix"))
+        .fix
+    else if (std.mem.eql(u8, args[1], "check"))
+        .check
+    else
+        return error.InvalidMode;
+
+    var banned_prefixes: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer banned_prefixes.deinit(allocator);
+
+    var target: ?[]const u8 = null;
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--ban-prefix")) {
+            if (i + 1 >= args.len) return error.MissingBanValue;
+            i += 1;
+            try banned_prefixes.append(allocator, args[i]);
+        } else if (target == null) {
+            target = args[i];
+        } else {
+            return error.UnexpectedArg;
+        }
+    }
+
+    if (target == null) return error.Usage;
+
+    return .{
+        .mode = mode,
+        .target = target.?,
+        .banned_prefixes = banned_prefixes,
+    };
 }
 
 pub fn main() !void {
@@ -584,69 +795,48 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     const args = try std.process.argsAlloc(allocator);
-    if (args.len < 3) {
-        std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
-        std.process.exit(1);
-    }
-
-    const mode_str = args[1];
-
-    const mode: enum { check, fix } = if (std.mem.eql(u8, mode_str, "fix"))
-        .fix
-    else if (std.mem.eql(u8, mode_str, "check"))
-        .check
-    else {
-        std.debug.print("Invalid mode. Use 'check' or 'fix'.\n", .{});
-        std.process.exit(1);
-    };
-
-    var banned_prefixes: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer banned_prefixes.deinit(allocator);
-
-    var target: ?[]const u8 = null;
-    var i: usize = 2;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--ban-prefix")) {
-            if (i + 1 >= args.len) {
-                std.debug.print("Missing value for --ban-prefix\n", .{});
-                std.process.exit(1);
-            }
-            i += 1;
-            try banned_prefixes.append(allocator, args[i]);
-        } else if (target == null) {
-            target = args[i];
-        } else {
-            std.debug.print("Unexpected argument: {s}\n", .{args[i]});
+    var parsed = parseArgs(allocator, args) catch |err| switch (err) {
+        error.Usage => {
+            std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
             std.process.exit(1);
-        }
-    }
-
-    const target_path = target orelse {
-        std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
-        std.process.exit(1);
+        },
+        error.InvalidMode => {
+            std.debug.print("Invalid mode. Use 'check' or 'fix'.\n", .{});
+            std.process.exit(1);
+        },
+        error.MissingBanValue => {
+            std.debug.print("Missing value for --ban-prefix\n", .{});
+            std.process.exit(1);
+        },
+        error.UnexpectedArg => {
+            std.debug.print("Unexpected argument\n", .{});
+            std.process.exit(1);
+        },
+        error.OutOfMemory => return error.OutOfMemory,
     };
+    defer parsed.deinit(allocator);
 
     var files: std.ArrayListUnmanaged([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    const stat = std.fs.cwd().statFile(target_path) catch |err| {
-        std.debug.print("Cannot access '{s}': {s}\n", .{ target_path, @errorName(err) });
+    const stat = std.fs.cwd().statFile(parsed.target) catch |err| {
+        std.debug.print("Cannot access '{s}': {s}\n", .{ parsed.target, @errorName(err) });
         std.process.exit(1);
     };
 
     if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(target_path, .{ .iterate = true });
+        var dir = try std.fs.cwd().openDir(parsed.target, .{ .iterate = true });
         defer dir.close();
-        try walkDir(allocator, dir, target_path, &files);
+        try walkDir(allocator, dir, parsed.target, &files);
     } else if (stat.kind == .file) {
-        try files.append(allocator, target_path);
+        try files.append(allocator, parsed.target);
     } else {
-        std.debug.print("'{s}' is not a supported file or directory\n", .{target_path});
+        std.debug.print("'{s}' is not a supported file or directory\n", .{parsed.target});
         std.process.exit(1);
     }
 
     if (files.items.len == 0) {
-        std.debug.print("No .zig files found in '{s}'\n", .{target_path});
+        std.debug.print("No .zig files found in '{s}'\n", .{parsed.target});
         std.process.exit(1);
     }
 
@@ -665,62 +855,22 @@ pub fn main() !void {
             continue;
         };
 
-        if (hasSkipComment(source)) continue;
-
-        const block_end = findImportBlockEnd(source);
-        const result = try collectImports(fa, source, block_end);
-
-        if (hasBannedPatterns(fa, source, banned_prefixes.items)) |msg| {
-            std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
-            banned_count += 1;
-        }
-
-        if (result.items.len == 0) continue;
-
-        var stray_imports = std.ArrayListUnmanaged(Import).empty;
-        for (result.items) |imp| {
-            if (imp.stray) {
-                try stray_imports.append(fa, imp);
-            }
-        }
-        var rest = source[block_end..];
-        var filtered_rest_owned: ?[]u8 = null;
-        if (stray_imports.items.len > 0) {
-            std.sort.pdq(Import, stray_imports.items, {}, struct {
-                fn lt(_: void, a: Import, b: Import) bool {
-                    return a.start < b.start;
-                }
-            }.lt);
-            var buf: std.ArrayListUnmanaged(u8) = .empty;
-            var pos: usize = block_end;
-            for (stray_imports.items) |imp| {
-                const removal_start = if (imp.comment_start) |cs| cs else imp.start;
-                try buf.appendSlice(fa, source[pos..removal_start]);
-                pos = imp.end;
-            }
-            try buf.appendSlice(fa, source[pos..]);
-            filtered_rest_owned = try buf.toOwnedSlice(fa);
-            rest = filtered_rest_owned.?;
-        }
-
-        const new_imports = buildSortedImportText(fa, source, result.items, block_end) catch |err| {
-            std.debug.print("Error building sorted imports for {s}: {s}\n", .{ file_path, @errorName(err) });
+        const result = processSource(fa, source, parsed.banned_prefixes.items) catch |err| {
+            std.debug.print("Error processing {s}: {s}\n", .{ file_path, @errorName(err) });
             error_count += 1;
             continue;
         };
 
-        const original_block = source[0..block_end];
-        if (std.mem.eql(u8, original_block, new_imports) and stray_imports.items.len == 0) continue;
+        if (result.banned_msg) |msg| {
+            std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
+            banned_count += 1;
+        }
+
+        if (!result.changed) continue;
 
         changed_count += 1;
 
-        if (mode == .fix) {
-            const full_new = std.mem.concat(fa, u8, &.{ new_imports, rest }) catch |err| {
-                std.debug.print("Error allocating for {s}: {s}\n", .{ file_path, @errorName(err) });
-                error_count += 1;
-                continue;
-            };
-
+        if (parsed.mode == .fix) {
             var af_buf: [4096]u8 = undefined;
             var af = std.fs.cwd().atomicFile(file_path, .{ .write_buffer = &af_buf }) catch |err| {
                 std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
@@ -728,7 +878,7 @@ pub fn main() !void {
                 continue;
             };
             defer af.deinit();
-            af.file_writer.interface.writeAll(full_new) catch |err| {
+            af.file_writer.interface.writeAll(result.new_text) catch |err| {
                 std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
                 error_count += 1;
                 continue;
@@ -740,11 +890,15 @@ pub fn main() !void {
             };
             std.debug.print("Fixed: {s}\n", .{file_path});
         } else {
-            showDiff(file_path, original_block, new_imports);
+            if (result.stray_count > 0) {
+                showDiff(file_path, source, result.new_text);
+            } else {
+                showDiff(file_path, source[0..result.block_end], result.new_block);
+            }
         }
     }
 
-    if (mode == .check) {
+    if (parsed.mode == .check) {
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.debug.print("{} needs fixing, {} errors, {} banned\n", .{ changed_count, error_count, banned_count });
             std.process.exit(1);
