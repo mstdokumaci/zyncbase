@@ -387,7 +387,7 @@ test "processSource: preserves CRLF line endings" {
 }
 
 test "walkDir: excludes cache and vcs directories" {
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     try tmp.dir.makePath(".git");
     try tmp.dir.makePath(".zig-cache");
