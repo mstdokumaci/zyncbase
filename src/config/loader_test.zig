@@ -279,12 +279,6 @@ test "config: env var substitution" {
     defer if (prev_test_jwt_secret) |v| allocator.free(v);
     const prev_test_data_dir = try dupeEnvZ(allocator, c.getenv("TEST_DATA_DIR"));
     defer if (prev_test_data_dir) |v| allocator.free(v);
-    _ = c.setenv("TEST_PORT", "8080", 1);
-    _ = c.setenv("TEST_HOST", "192.168.1.1", 1);
-    _ = c.setenv("TEST_JWT_SECRET", "test-secret-key", 1);
-    const test_data_dir_z = try allocator.dupeZ(u8, context.test_dir);
-    defer allocator.free(test_data_dir_z);
-    _ = c.setenv("TEST_DATA_DIR", test_data_dir_z, 1);
     defer {
         if (prev_test_port) |v| {
             _ = c.setenv("TEST_PORT", v, 1);
@@ -307,6 +301,12 @@ test "config: env var substitution" {
             _ = c.unsetenv("TEST_DATA_DIR");
         }
     }
+    _ = c.setenv("TEST_PORT", "8080", 1);
+    _ = c.setenv("TEST_HOST", "192.168.1.1", 1);
+    _ = c.setenv("TEST_JWT_SECRET", "test-secret-key", 1);
+    const test_data_dir_z = try allocator.dupeZ(u8, context.test_dir);
+    defer allocator.free(test_data_dir_z);
+    _ = c.setenv("TEST_DATA_DIR", test_data_dir_z, 1);
 
     const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-env-vars.json" });
     defer allocator.free(temp_file_path);
@@ -713,6 +713,7 @@ test "config: load - complete config" {
         \\    "allowLocalhost": false,
         \\    "maxMessagesPerSecond": 200,
         \\    "maxConnections": 20,
+        \\    "violationThreshold": 5,
         \\    "maxMessageSize": 2097152
         \\  }},
         \\  "logging": {{
@@ -723,7 +724,8 @@ test "config: load - complete config" {
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
         \\    "batchSize": 50,
-        \\    "batchTimeout": 20
+        \\    "batchTimeout": 20,
+        \\    "statementCacheSize": 250
         \\  }},
         \\  "dataDir": "{s}",
         \\  "schema": "{s}"
@@ -754,6 +756,7 @@ test "config: load - complete config" {
     try std.testing.expectEqual(false, config.security.allow_localhost);
     try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
     try std.testing.expectEqual(@as(u32, 20), config.security.max_connections);
+    try std.testing.expectEqual(@as(u32, 5), config.security.violation_threshold);
     try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 
     try std.testing.expectEqual(Config.LoggingConfig.LogLevel.debug, config.logging.level);
@@ -763,6 +766,7 @@ test "config: load - complete config" {
     try std.testing.expectEqual(false, config.performance.batch_writes);
     try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
+    try std.testing.expectEqual(@as(usize, 250), config.performance.statement_cache_size);
 
     try std.testing.expectEqualStrings(context.test_dir, config.data_dir);
 }
