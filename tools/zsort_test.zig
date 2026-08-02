@@ -439,7 +439,7 @@ test "matchesIgnore: component-boundary prefix match" {
     try std.testing.expect(zsort.matchesIgnore("build/foo.zig", "build"));
     try std.testing.expect(zsort.matchesIgnore("build", "build"));
     try std.testing.expect(zsort.matchesIgnore("build/foo.zig", "build/"));
-    try std.testing.expect(!zsort.matchesIgnore("a/zig-out/b.zig", "zig-out"));
+    try std.testing.expect(zsort.matchesIgnore("a/zig-out/b.zig", "zig-out"));
     try std.testing.expect(!zsort.matchesIgnore("build-tools/x.zig", "build"));
     try std.testing.expect(!zsort.matchesIgnore("buildings.zig", "build"));
     try std.testing.expect(!zsort.matchesIgnore("x", "y"));
@@ -522,10 +522,16 @@ test "formatUnifiedDiff: CRLF input diffs cleanly" {
     try std.testing.expectEqualStrings(expected, diff);
 }
 
-test "formatUnifiedDiff: trailing-newline difference shows only context" {
+test "formatUnifiedDiff: trailing-newline difference emits marker" {
     const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb");
     defer std.testing.allocator.free(diff);
-    try std.testing.expectEqualStrings("  --- t.zig\n  +++ t.zig\n  @@ -3,0 +3,0 @@\n   a\n   b\n\n", diff);
+    try std.testing.expectEqualStrings(
+        "  --- t.zig\n" ++
+            "  +++ t.zig\n" ++
+            "  (trailing newline only)\n" ++
+            "\n",
+        diff,
+    );
 }
 
 test "collectImports: classes and sorted order" {
@@ -660,4 +666,11 @@ test "parseArgs: errors" {
     try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "extra" }, &msg));
     try std.testing.expect(msg != null);
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "extra") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
+
+    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--bogus" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "unknown option") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "--bogus") != null);
 }

@@ -633,6 +633,15 @@ pub fn formatUnifiedDiff(
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
     const w = buf.writer(allocator);
+
+    if (old_mid.len == 0 and new_mid.len == 0) {
+        try w.print("  --- {s}\n", .{file_path});
+        try w.print("  +++ {s}\n", .{file_path});
+        try w.print("  (trailing newline only)\n", .{});
+        try w.writeByte('\n');
+        return buf.toOwnedSlice(allocator);
+    }
+
     try w.print("  --- {s}\n", .{file_path});
     try w.print("  +++ {s}\n", .{file_path});
     try w.print("  @@ -{d},{d} +{d},{d} @@\n", .{ p + 1, old_mid.len, p + 1, new_mid.len });
@@ -665,13 +674,26 @@ fn isExcludedPath(path: []const u8) bool {
     return false;
 }
 
-/// Component-boundary prefix match: `build` matches `build` and `build/x.zig`,
-/// but not `build-tools/x.zig`. A trailing slash in `pattern` is ignored.
+/// Component-boundary prefix match: a slash-free `pattern` matches any path
+/// component and everything below it (`build` matches `build` and `a/build/x.zig`,
+/// but not `build-tools/x.zig`). A pattern containing a slash is anchored at the
+/// path root. A trailing slash in `pattern` is ignored.
 pub fn matchesIgnore(path: []const u8, pattern: []const u8) bool {
     const pat = std.mem.trimRight(u8, pattern, "/");
     if (pat.len == 0) return false;
-    if (!std.mem.startsWith(u8, path, pat)) return false;
-    return path.len == pat.len or path[pat.len] == '/';
+    if (std.mem.indexOfScalar(u8, pat, '/') != null) {
+        return matchesComponentPrefix(path, pat);
+    }
+    var it = std.mem.tokenizeScalar(u8, path, '/');
+    while (it.next()) |component| {
+        if (matchesComponentPrefix(component, pat)) return true;
+    }
+    return false;
+}
+
+fn matchesComponentPrefix(s: []const u8, pat: []const u8) bool {
+    if (!std.mem.startsWith(u8, s, pat)) return false;
+    return s.len == pat.len or s[pat.len] == '/';
 }
 
 fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
@@ -911,8 +933,15 @@ pub fn parseArgs(
     };
 }
 
+fn printStdout(comptime fmt: []const u8, args: anytype) void {
+    var obuf: [4096]u8 = undefined;
+    var w = std.fs.File.stdout().writer(&obuf);
+    w.interface.print(fmt, args) catch return;
+    w.interface.flush() catch return;
+}
+
 fn printHelp() void {
-    std.debug.print(
+    printStdout(
         \\Usage: zsort [check|fix] <dir|file> [options]
         \\
         \\Modes:
@@ -988,7 +1017,7 @@ pub fn main() !void {
         return;
     }
     if (parsed.version) {
-        std.debug.print("zsort {s}\n", .{version});
+        printStdout("zsort {s}\n", .{version});
         return;
     }
 
@@ -1056,6 +1085,8 @@ pub fn main() !void {
 
     for (jobs) |*job| {
         const slot = job.slot;
+        defer allocator.destroy(slot.arena);
+        defer slot.arena.deinit();
         const file_path = job.path;
 
         if (slot.read_err) |msg| {
@@ -1105,11 +1136,6 @@ pub fn main() !void {
                 showDiff(allocator, file_path, slot.source[0..result.block_end], result.new_block);
             }
         }
-    }
-
-    for (slots) |*slot| {
-        slot.arena.deinit();
-        allocator.destroy(slot.arena);
     }
 
     if (parsed.mode == .check) {
