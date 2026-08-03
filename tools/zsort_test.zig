@@ -50,6 +50,13 @@ test "isTopLevelImportLine: alias to struct-like module name" {
     try std.testing.expect(zsort.isTopLevelImportLine("const Structs = structs.Kind;\n"));
 }
 
+test "isTopLevelImportLine: trailing type-keyword comment on import line" {
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = struct\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = enum\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = union\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = opaque\n"));
+}
+
 test "isTopLevelImportLine: not import lines" {
     try std.testing.expect(!zsort.isTopLevelImportLine("const S = struct {\n"));
     try std.testing.expect(!zsort.isTopLevelImportLine("const E = enum {\n"));

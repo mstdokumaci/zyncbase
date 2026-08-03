@@ -138,13 +138,14 @@ fn endsWithSemicolon(trimmed: []const u8) bool {
     return t.len > 0 and t[t.len - 1] == ';';
 }
 
-// ponytail: first match only; a later "= struct" can only live in a trailing
-// comment or a second declaration, both rejected by the alias RHS validation below
-fn hasTypeKeyword(trimmed: []const u8, kw: []const u8) bool {
-    const i = std.mem.indexOf(u8, trimmed, kw) orelse return false;
-    const after = i + kw.len;
-    return after >= trimmed.len or
-        (!std.ascii.isAlphanumeric(trimmed[after]) and trimmed[after] != '_');
+// only the first token after = is a type keyword; trailing comment/string text must not count
+fn hasTypeKeyword(trimmed: []const u8, keyword: []const u8) bool {
+    const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
+    const rhs = std.mem.trimLeft(u8, trimmed[eq + 1 ..], " \t");
+    if (!std.mem.startsWith(u8, rhs, keyword)) return false;
+    const after = keyword.len;
+    return after >= rhs.len or
+        (!std.ascii.isAlphanumeric(rhs[after]) and rhs[after] != '_');
 }
 
 pub fn isTopLevelImportLine(line: []const u8) bool {
@@ -155,10 +156,10 @@ pub fn isTopLevelImportLine(line: []const u8) bool {
     if (std.mem.startsWith(u8, trimmed, "const ") or
         std.mem.startsWith(u8, trimmed, "pub const "))
     {
-        if (hasTypeKeyword(trimmed, "= struct")) return false;
-        if (hasTypeKeyword(trimmed, "= enum")) return false;
-        if (hasTypeKeyword(trimmed, "= union")) return false;
-        if (hasTypeKeyword(trimmed, "= opaque")) return false;
+        if (hasTypeKeyword(trimmed, "struct")) return false;
+        if (hasTypeKeyword(trimmed, "enum")) return false;
+        if (hasTypeKeyword(trimmed, "union")) return false;
+        if (hasTypeKeyword(trimmed, "opaque")) return false;
 
         if (std.mem.indexOf(u8, trimmed, "@import") != null) return endsWithSemicolon(trimmed);
         if (std.mem.indexOf(u8, trimmed, "@cImport") != null) return endsWithSemicolon(trimmed);
