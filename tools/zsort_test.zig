@@ -71,6 +71,18 @@ test "findImportBlockEnd: ends at first non-import" {
     try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, zsort.findImportBlockEnd(source));
 }
 
+test "findImportBlockEnd: alias to struct-like module does not end block" {
+    const source =
+        \\const std = @import("std");
+        \\const Enum = enums.Kind;
+        \\const Other = @import("other");
+    ;
+    try std.testing.expectEqual(
+        "const std = @import(\"std\");\nconst Enum = enums.Kind;\nconst Other = @import(\"other\");".len,
+        zsort.findImportBlockEnd(source),
+    );
+}
+
 test "findCImportEnd: basic block" {
     const source =
         \\const c = @cImport({
