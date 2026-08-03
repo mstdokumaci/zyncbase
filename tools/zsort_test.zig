@@ -43,6 +43,13 @@ test "isTopLevelImportLine: semicolon terminated alias" {
     try std.testing.expect(zsort.isTopLevelImportLine("const Debug = std.debug;\n"));
 }
 
+test "isTopLevelImportLine: alias to struct-like module name" {
+    try std.testing.expect(zsort.isTopLevelImportLine("const Enum = enums.Kind;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Union = unions.Kind;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Opaque = opaques.Handle;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Structs = structs.Kind;\n"));
+}
+
 test "isTopLevelImportLine: not import lines" {
     try std.testing.expect(!zsort.isTopLevelImportLine("const S = struct {\n"));
     try std.testing.expect(!zsort.isTopLevelImportLine("const E = enum {\n"));

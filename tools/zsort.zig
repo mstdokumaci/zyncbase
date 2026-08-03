@@ -149,6 +149,15 @@ fn endsWithSemicolon(trimmed: []const u8) bool {
     return t.len > 0 and t[t.len - 1] == ';';
 }
 
+// ponytail: first match only; a later "= struct" can only live in a trailing
+// comment or a second declaration, both rejected by the alias RHS validation below
+fn hasTypeKeyword(trimmed: []const u8, kw: []const u8) bool {
+    const i = std.mem.indexOf(u8, trimmed, kw) orelse return false;
+    const after = i + kw.len;
+    return after >= trimmed.len or
+        (!std.ascii.isAlphanumeric(trimmed[after]) and trimmed[after] != '_');
+}
+
 pub fn isTopLevelImportLine(line: []const u8) bool {
     const trimmed = std.mem.trimLeft(u8, line, " \t\n\r");
     if (trimmed.len == 0) return true;
@@ -157,10 +166,10 @@ pub fn isTopLevelImportLine(line: []const u8) bool {
     if (std.mem.startsWith(u8, trimmed, "const ") or
         std.mem.startsWith(u8, trimmed, "pub const "))
     {
-        if (std.mem.indexOf(u8, trimmed, "= struct") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= enum") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= union") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= opaque") != null) return false;
+        if (hasTypeKeyword(trimmed, "= struct")) return false;
+        if (hasTypeKeyword(trimmed, "= enum")) return false;
+        if (hasTypeKeyword(trimmed, "= union")) return false;
+        if (hasTypeKeyword(trimmed, "= opaque")) return false;
 
         if (std.mem.indexOf(u8, trimmed, "@import") != null) return endsWithSemicolon(trimmed);
         if (std.mem.indexOf(u8, trimmed, "@cImport") != null) return endsWithSemicolon(trimmed);
