@@ -288,6 +288,23 @@ test "processSource: hoists multiline stray import intact" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "late.zig").? < std.mem.indexOf(u8, result.new_text, "pub fn main").?);
 }
 
+test "processSource: division-deref is not mistaken for a block comment" {
+    const source =
+        \\const v = a/*b;
+        \\const std = @import("std");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer if (result.changed) {
+        std.testing.allocator.free(result.new_text);
+        std.testing.allocator.free(result.new_block);
+    };
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "const std = @import(\"std\");\nconst v = a/*b;\n",
+        result.new_text,
+    );
+}
+
 test "processSource: blank line before multiline stray import does not invert slice" {
     const source =
         \\const std = @import("std");
