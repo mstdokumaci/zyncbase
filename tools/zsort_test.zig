@@ -374,6 +374,24 @@ test "processSource: skip comment leaves file untouched" {
     try std.testing.expectEqualStrings(source, result.new_text);
 }
 
+test "processSource: file-leading //! block stays at top with out-of-order imports" {
+    const source =
+        \\//! Module docs.
+        \\//! More docs.
+        \\
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "//! Module docs.\n//! More docs.\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
 test "processSource: idempotent" {
     const source =
         \\const bar = @import("bar");
