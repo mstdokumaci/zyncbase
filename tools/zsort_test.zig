@@ -43,6 +43,20 @@ test "isTopLevelImportLine: semicolon terminated alias" {
     try std.testing.expect(zsort.isTopLevelImportLine("const Debug = std.debug;\n"));
 }
 
+test "isTopLevelImportLine: alias to struct-like module name" {
+    try std.testing.expect(zsort.isTopLevelImportLine("const Enum = enums.Kind;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Union = unions.Kind;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Opaque = opaques.Handle;\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const Structs = structs.Kind;\n"));
+}
+
+test "isTopLevelImportLine: trailing type-keyword comment on import line" {
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = struct\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = enum\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = union\n"));
+    try std.testing.expect(zsort.isTopLevelImportLine("const x = @import(\"a\"); // = opaque\n"));
+}
+
 test "isTopLevelImportLine: not import lines" {
     try std.testing.expect(!zsort.isTopLevelImportLine("const S = struct {\n"));
     try std.testing.expect(!zsort.isTopLevelImportLine("const E = enum {\n"));
@@ -62,6 +76,18 @@ test "findImportBlockEnd: ends at first non-import" {
         \\const Foo = struct {
     ;
     try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, zsort.findImportBlockEnd(source));
+}
+
+test "findImportBlockEnd: alias to struct-like module does not end block" {
+    const source =
+        \\const std = @import("std");
+        \\const Enum = enums.Kind;
+        \\const Other = @import("other");
+    ;
+    try std.testing.expectEqual(
+        "const std = @import(\"std\");\nconst Enum = enums.Kind;\nconst Other = @import(\"other\");".len,
+        zsort.findImportBlockEnd(source),
+    );
 }
 
 test "findCImportEnd: basic block" {
@@ -269,6 +295,23 @@ test "processSource: hoists multiline stray import intact" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "late.zig").? < std.mem.indexOf(u8, result.new_text, "pub fn main").?);
 }
 
+test "processSource: division-deref is not mistaken for a block comment" {
+    const source =
+        \\const v = a/*b;
+        \\const std = @import("std");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer if (result.changed) {
+        std.testing.allocator.free(result.new_text);
+        std.testing.allocator.free(result.new_block);
+    };
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "const std = @import(\"std\");\nconst v = a/*b;\n",
+        result.new_text,
+    );
+}
+
 test "processSource: blank line before multiline stray import does not invert slice" {
     const source =
         \\const std = @import("std");
@@ -353,6 +396,24 @@ test "processSource: skip comment leaves file untouched" {
     const result = try zsort.processSource(std.testing.allocator, source, &.{});
     try std.testing.expect(!result.changed);
     try std.testing.expectEqualStrings(source, result.new_text);
+}
+
+test "processSource: file-leading //! block stays at top with out-of-order imports" {
+    const source =
+        \\//! Module docs.
+        \\//! More docs.
+        \\
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "//! Module docs.\n//! More docs.\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
 }
 
 test "processSource: idempotent" {

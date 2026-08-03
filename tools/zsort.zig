@@ -56,16 +56,6 @@ fn skipStringOrComment(source: []const u8, pos: usize) usize {
             while (i < source.len and source[i] != '\n') : (i += 1) {}
             return @min(i + 1, source.len);
         }
-        if (source[pos + 1] == '*') {
-            var i = pos + 2;
-            while (i + 1 < source.len) : (i += 1) {
-                if (source[i] == '*' and source[i + 1] == '/') {
-                    i += 1;
-                    break;
-                }
-            }
-            return @min(i + 2, source.len);
-        }
     }
     if (ch == '\\' and pos + 1 < source.len and source[pos + 1] == '\\') {
         var k = pos;
@@ -144,9 +134,18 @@ pub fn extractPath(source: []const u8, needle: []const u8) ?[]const u8 {
 fn endsWithSemicolon(trimmed: []const u8) bool {
     var t = trimmed;
     if (std.mem.indexOf(u8, t, "//")) |c| t = t[0..c];
-    if (std.mem.indexOf(u8, t, "/*")) |c| t = t[0..c];
     t = std.mem.trimRight(u8, t, " \t\r\n");
     return t.len > 0 and t[t.len - 1] == ';';
+}
+
+// only the first token after = is a type keyword; trailing comment/string text must not count
+fn hasTypeKeyword(trimmed: []const u8, keyword: []const u8) bool {
+    const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
+    const rhs = std.mem.trimLeft(u8, trimmed[eq + 1 ..], " \t");
+    if (!std.mem.startsWith(u8, rhs, keyword)) return false;
+    const after = keyword.len;
+    return after >= rhs.len or
+        (!std.ascii.isAlphanumeric(rhs[after]) and rhs[after] != '_');
 }
 
 pub fn isTopLevelImportLine(line: []const u8) bool {
@@ -157,10 +156,10 @@ pub fn isTopLevelImportLine(line: []const u8) bool {
     if (std.mem.startsWith(u8, trimmed, "const ") or
         std.mem.startsWith(u8, trimmed, "pub const "))
     {
-        if (std.mem.indexOf(u8, trimmed, "= struct") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= enum") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= union") != null) return false;
-        if (std.mem.indexOf(u8, trimmed, "= opaque") != null) return false;
+        if (hasTypeKeyword(trimmed, "struct")) return false;
+        if (hasTypeKeyword(trimmed, "enum")) return false;
+        if (hasTypeKeyword(trimmed, "union")) return false;
+        if (hasTypeKeyword(trimmed, "opaque")) return false;
 
         if (std.mem.indexOf(u8, trimmed, "@import") != null) return endsWithSemicolon(trimmed);
         if (std.mem.indexOf(u8, trimmed, "@cImport") != null) return endsWithSemicolon(trimmed);
