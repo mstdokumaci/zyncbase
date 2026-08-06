@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
-const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const test_helpers = @import("test_helpers.zig");
+const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;

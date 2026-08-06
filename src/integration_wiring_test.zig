@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const schema_helpers = @import("schema/test_helpers.zig");
-const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 const sth = @import("storage_engine_test_helpers.zig");
+const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 const testing = std.testing;
 

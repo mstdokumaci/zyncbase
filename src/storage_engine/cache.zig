@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const lockFreeCache = @import("../memory/lock_free_cache.zig").lockFreeCache;
-const lockedMap = @import("../memory/locked_map.zig").lockedMap;
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+const lockFreeCache = @import("../memory/lock_free_cache.zig").lockFreeCache;
+const lockedMap = @import("../memory/locked_map.zig").lockedMap;
 
 const DocId = typed_doc_id.DocId;
 

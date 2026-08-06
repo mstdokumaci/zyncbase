@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const schema_system = @import("../schema/system.zig");
@@ -10,6 +8,8 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const wire_encode = @import("../wire/encode.zig");
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const RecordChange = @import("engine.zig").RecordChange;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;

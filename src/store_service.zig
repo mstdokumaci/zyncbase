@@ -15,9 +15,9 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const typed = @import("typed/types.zig");
 
 const Allocator = std.mem.Allocator;
+const ReadRequest = storage_mod.ReadRequest;
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
-const ReadRequest = storage_mod.ReadRequest;
 const DocId = typed_doc_id.DocId;
 
 /// Decode a pair-array payload into a deduplicated list of column values.

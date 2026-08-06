@@ -1,12 +1,11 @@
 const std = @import("std");
 
 const query_ast = @import("../query/ast.zig");
-const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
+const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 
 const Allocator = std.mem.Allocator;
-
 const Record = typed.Record;
 
 pub const ReadRequest = struct {

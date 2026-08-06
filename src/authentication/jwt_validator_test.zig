@@ -4,11 +4,11 @@ const json_write = @import("../json/write.zig");
 const base64_utils = @import("base64_utils.zig");
 const jwt_validator = @import("jwt_validator.zig");
 
-const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const JwtValidator = jwt_validator.JwtValidator;
-const Jwks = jwt_validator.Jwks;
+const testing = std.testing;
 const Jwk = jwt_validator.Jwk;
+const Jwks = jwt_validator.Jwks;
+const JwtValidator = jwt_validator.JwtValidator;
 
 /// Test-only helper to populate Jwks keys, inlined from Jwks
 /// to keep test accommodations out of the production codebase.

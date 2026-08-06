@@ -11,10 +11,6 @@
             .url = "https://github.com/zigcc/zig-msgpack/archive/2795481d1ae75ac5458736e86166e7964116ecba.tar.gz",
             .hash = "zig_msgpack-0.0.14-evvueEc7BQATytDqy8wFvDb883Jv3yLk_8cF5EoYaKFB",
         },
-        .zwanzig = .{
-            .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.14.0.tar.gz",
-            .hash = "zwanzig-0.14.0-oiXZljvxGACKRbJD3WEVSKM_gbCm6GUsrz2_TbFP7xfe",
-        },
         .httpx = .{
             .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.0.7.tar.gz",
             .hash = "httpx-0.0.7-8qj2evX4CQDJRRmwgwJtbWrABhBbhWoXprzRM7Xqir5z",

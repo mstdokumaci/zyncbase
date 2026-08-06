@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
-const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const storage_mod = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 
 const testing = std.testing;
 

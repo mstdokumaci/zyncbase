@@ -2,7 +2,6 @@ const std = @import("std");
 
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
-const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 const query_parser = @import("../query/parser.zig");
 const schema_parse = @import("../schema/parse.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
@@ -12,9 +11,9 @@ const typed = @import("../typed/types.zig");
 const wire_encode = @import("encode.zig");
 const wire_errors = @import("errors.zig");
 const helpers = @import("test_helpers.zig");
+const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 
 const testing = std.testing;
-
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
 test "encodeSuccess: produces valid MsgPack" {

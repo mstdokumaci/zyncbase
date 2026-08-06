@@ -11,14 +11,13 @@ const query_ast = @import("ast.zig");
 const Schema = schema_types.Schema;
 const typedValueFromPayload = typed_codec.fromPayload;
 const writeValueMsgPack = typed_codec.writeMsgPack;
+const Cursor = typed.Cursor;
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
-const Cursor = typed.Cursor;
-
-const Operator = query_ast.Operator;
 const Condition = query_ast.Condition;
-const SortDescriptor = query_ast.SortDescriptor;
+const Operator = query_ast.Operator;
 const QueryFilter = query_ast.QueryFilter;
+const SortDescriptor = query_ast.SortDescriptor;
 
 pub const ParserError = error{
     InvalidMessageFormat,

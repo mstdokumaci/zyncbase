@@ -7,9 +7,8 @@ const evaluate_mod = @import("evaluate.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
-const EvalContext = evaluate_mod.EvalContext;
 const Value = typed.Value;
+const EvalContext = evaluate_mod.EvalContext;
 
 pub const DocPredicateError = error{
     InvalidFieldName,

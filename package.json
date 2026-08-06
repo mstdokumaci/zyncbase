@@ -9,7 +9,8 @@
     "test:safe": "zig build test -Doptimize=ReleaseSafe --summary all",
     "test:fast": "zig build test -Doptimize=ReleaseFast --summary all",
     "test:slowest": "zig build test-slowest -Doptimize=ReleaseSafe --summary all",
-    "lint": "zig build fix-imports && zig fmt src tools && zlint --deny-warnings && zig build lint && zig build check --summary all"
+    "lint": "zsort check . --ban-prefix ./ --ban-prefix src/ && zig fmt --check src && zlint --deny-warnings && zwanzig --format text src && zig build check --summary all",
+    "lint:fix": "zsort fix . --ban-prefix ./ --ban-prefix src/ && zig fmt src"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",

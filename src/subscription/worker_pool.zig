@@ -1,16 +1,16 @@
 const std = @import("std");
 
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const msgpack = @import("../msgpack_utils.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
+const typed = @import("../typed/types.zig");
+const wire_encode = @import("../wire/encode.zig");
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const workerPool = @import("../threading/worker_pool.zig").workerPool;
-const typed = @import("../typed/types.zig");
-const wire_encode = @import("../wire/encode.zig");
 const ChangeJob = @import("change_queue.zig").ChangeJob;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
@@ -18,8 +18,8 @@ const RecordChange = @import("engine.zig").RecordChange;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 
 const Allocator = std.mem.Allocator;
-const MatchOp = SubscriptionEngine.MatchOp;
 const Payload = msgpack.Payload;
+const MatchOp = SubscriptionEngine.MatchOp;
 
 pub const SubscriptionWorkerPool = struct {
     pool: workerPool(SubscriptionWorker),

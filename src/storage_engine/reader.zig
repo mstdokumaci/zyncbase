@@ -6,15 +6,14 @@ const query_ast = @import("../query/ast.zig");
 const query_parser = @import("../query/parser.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
-const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const sql_build = @import("../sql/build.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const filter_sql = @import("filter_sql.zig");
 const sql = @import("sql.zig");
+const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 
 const Allocator = std.mem.Allocator;
-
 const DocId = typed_doc_id.DocId;
 const Cursor = typed.Cursor;
 const Record = typed.Record;

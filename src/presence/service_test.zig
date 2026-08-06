@@ -7,8 +7,8 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
-const PresenceService = @import("service.zig").PresenceService;
 const th = @import("test_helpers.zig");
+const PresenceService = @import("service.zig").PresenceService;
 
 const testing = std.testing;
 

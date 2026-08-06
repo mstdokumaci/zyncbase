@@ -1,25 +1,25 @@
 const std = @import("std");
 
-const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const authorization_evaluate = @import("authorization/evaluate.zig");
 const authorization_types = @import("authorization/types.zig");
-const SecurityConfig = @import("config/state.zig").Config.SecurityConfig;
 const connection_mod = @import("connection/state.zig");
-const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
-const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_utils.zig");
-const PresenceService = @import("presence/service.zig").PresenceService;
 const schema_types = @import("schema/types.zig");
-const StoreService = @import("store_service.zig").StoreService;
 const subscription_mod = @import("subscription/engine.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
+const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
+const SecurityConfig = @import("config/state.zig").Config.SecurityConfig;
+const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
+const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
+const PresenceService = @import("presence/service.zig").PresenceService;
+const StoreService = @import("store_service.zig").StoreService;
 
 const Allocator = std.mem.Allocator;
-const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 const Connection = connection_mod.Connection;
+const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling

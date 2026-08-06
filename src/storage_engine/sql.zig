@@ -4,13 +4,13 @@ const sqlite = @import("sqlite");
 
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
-const SqlBuf = @import("../sql/buf.zig").SqlBuf;
-const SqlList = @import("../sql/buf.zig").SqlList;
 const build = @import("../sql/build.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const errors = @import("errors.zig");
+const SqlBuf = @import("../sql/buf.zig").SqlBuf;
+const SqlList = @import("../sql/buf.zig").SqlList;
 
 const Allocator = std.mem.Allocator;
 

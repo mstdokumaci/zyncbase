@@ -1,13 +1,8 @@
 const std = @import("std");
 
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
-const managedThread = @import("../threading/managed_thread.zig").managedThread;
-const Notifier = @import("../threading/notifier.zig").Notifier;
-const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
@@ -16,16 +11,20 @@ const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const workerPool = @import("../threading/worker_pool.zig").workerPool;
 
 const Allocator = std.mem.Allocator;
-
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
 const document_cache_type = storage_cache.document_cache_type;
-const req_queue_type = read_buffer.read_request_queue;
+const ReaderNode = connection.ReaderNode;
 const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
-const ReaderNode = connection.ReaderNode;
+const req_queue_type = read_buffer.read_request_queue;
 
 fn cleanupRequest(req: ReadRequest, alloc: Allocator) void {
     var mutable_req = req;

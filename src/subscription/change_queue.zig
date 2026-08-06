@@ -1,8 +1,8 @@
 const std = @import("std");
 
-const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
 const RecordChange = @import("engine.zig").RecordChange;
 
 const Allocator = std.mem.Allocator;

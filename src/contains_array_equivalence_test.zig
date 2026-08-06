@@ -5,10 +5,10 @@ const qth = @import("query/test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
+const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 
 const testing = std.testing;
 

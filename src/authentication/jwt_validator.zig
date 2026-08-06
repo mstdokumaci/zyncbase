@@ -5,9 +5,9 @@ const httpx = @import("httpx");
 const json_read = @import("../json/read.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed = @import("../typed/types.zig");
-const c = @import("../uwebsockets_wrapper.zig").c;
 const uws_timer = @import("../uws_timer.zig");
 const base64_utils = @import("base64_utils.zig");
+const c = @import("../uwebsockets_wrapper.zig").c;
 
 const Allocator = std.mem.Allocator;
 

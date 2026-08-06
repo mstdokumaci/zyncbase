@@ -7,7 +7,6 @@ const doc_id = @import("doc_id.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const ScalarValue = types.ScalarValue;
 const Value = types.Value;
 

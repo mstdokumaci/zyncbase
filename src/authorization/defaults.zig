@@ -6,10 +6,10 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const AuthConfig = types.AuthConfig;
-const NamespaceRule = types.NamespaceRule;
-const StoreRule = types.StoreRule;
 const Condition = types.Condition;
+const NamespaceRule = types.NamespaceRule;
 const PatternSegment = types.PatternSegment;
+const StoreRule = types.StoreRule;
 
 /// Returns a pre-built AuthConfig from the implicit defaults.
 /// Caller owns the returned config and must call deinit().

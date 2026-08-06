@@ -4,9 +4,9 @@ const helpers = @import("../app_test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
+const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
 const destroyMockWebSocket = helpers.destroyMockWebSocket;
-const AppTestContext = helpers.AppTestContext;
 
 test "connection: state deallocation on close" {
     // This property test verifies that for any connection that closes,

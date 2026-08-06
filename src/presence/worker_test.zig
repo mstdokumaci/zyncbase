@@ -1,17 +1,17 @@
 const std = @import("std");
 
+const typed = @import("../typed/doc_id.zig");
+const th = @import("test_helpers.zig");
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
-const typed = @import("../typed/doc_id.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
-const th = @import("test_helpers.zig");
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 
 const testing = std.testing;
-const makeTestUserFields = th.makeTestUserFields;
 const freeTestFields = th.freeTestFields;
 const makePresencePatch = th.makePresencePatch;
 const makeTestSharedSingleField = th.makeTestSharedSingleField;
+const makeTestUserFields = th.makeTestUserFields;
 
 fn notifierFn(ctx: ?*anyopaque) void {
     const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(ctx));
