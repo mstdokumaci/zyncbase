@@ -30,7 +30,7 @@ cd zyncbase
 ### 2. uWebSockets
 
 uWebSockets and µSockets are directly vendored under `vendor/uwebsockets/` and `vendor/usockets/`.
-The Zig server calls them through the purpose-built C bridge in `src/uws_bridge.cpp` and `src/uws_wrapper.h`.
+The Zig server calls them through the C bridge in `src/uws_bridge.cpp` and `src/uws_wrapper.h`.
 
 ### 3. Build ZyncBase
 
