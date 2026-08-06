@@ -5,8 +5,8 @@ const json_read = @import("../json/read.zig");
 const json_write = @import("../json/write.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed = @import("../typed/types.zig");
-const c = @import("../uwebsockets_wrapper.zig").c;
 const base64_utils = @import("base64_utils.zig");
+const c = @import("../uwebsockets_wrapper.zig").c;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const Session = @import("session.zig").Session;
 

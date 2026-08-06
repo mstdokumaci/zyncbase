@@ -8,10 +8,10 @@ const typed_doc_id = @import("../typed/doc_id.zig");
 const ColumnValue = @import("sql.zig").ColumnValue;
 const WriteOp = @import("write_queue.zig").WriteOp;
 
-const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const DocId = typed_doc_id.DocId;
+const testing = std.testing;
 const EngineTestContext = sth.EngineTestContext;
+const DocId = typed_doc_id.DocId;
 
 const items_table = schema_helpers.makeTable("items", &.{
     schema_helpers.makeField("val", .integer),

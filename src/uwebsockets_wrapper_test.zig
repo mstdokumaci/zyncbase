@@ -1,13 +1,15 @@
 const std = @import("std");
 
 const helpers = @import("app_test_helpers.zig");
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
-const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
+const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
 
-const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
+const createMockWebSocket = helpers.createMockWebSocket;
+const destroyMockWebSocket = helpers.destroyMockWebSocket;
 
 const TestSslPaths = struct {
     allocator: Allocator,
@@ -237,8 +239,6 @@ test "WebSocketServer: full server lifecycle with SSL" {
     try runFullLifecycleTest(allocator, config, "wss://127.0.0.1:9006/", true);
 }
 
-const createMockWebSocket = helpers.createMockWebSocket;
-const destroyMockWebSocket = helpers.destroyMockWebSocket;
 // This property test verifies that WebSocket callbacks are invoked for all connection events:
 // - on_open callback is invoked when a connection opens
 // - on_message callback is invoked when a message is received

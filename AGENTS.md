@@ -40,7 +40,8 @@ Important: Project is still in early development stage. Give no consideration to
 - **`std.Io` casing:** Always use PascalCase `std.Io` (not lowercase `std.io`). This is the Zig 0.15+ convention. Example: `var reader: std.Io.Reader = .fixed(bytes);`
 
 ## Linting and Formatting
-- **Linter:** Use `bun run lint` (via `zwanzig`) to maintain code quality and catch common pitfalls.
+- **Linter:** Use `bun run lint` to maintain code quality and catch common pitfalls. `zsort` (import sorting), `zlint`, `zwanzig` (static analysis), plus `zig fmt`.
+- **Fixing imports:** Run `bun run lint:fix` to auto-sort imports (`zsort fix`) and reformat (`zig fmt`).
 
 # Suggested Commands for ZyncBase
 
@@ -61,7 +62,8 @@ Important: Project is still in early development stage. Give no consideration to
 - **Compress Specs:** `npm run specs:compress` (Syncs `specs/` to `specs_llm/`)
 
 ## Linting
-- **Run Linter:** `bun run lint` (Takes ~3 minutes to complete, be patient.)
+- **Run Linter:** `bun run lint`
+- **Fix Imports & Format:** `bun run lint:fix`
 - **Biome Check:** `bunx biome check --write`
 
 # Actions Upon Task Completion

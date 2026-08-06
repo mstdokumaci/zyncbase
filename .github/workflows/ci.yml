@@ -82,12 +82,22 @@ jobs:
       - name: Setup project
         uses: ./.github/actions/setup-project
 
-      - name: Install zlint
+      - name: Install linters
         run: |
           curl -fsSL -o /tmp/zlint \
-            "https://github.com/DonIsaac/zlint/releases/download/v0.8.1/zlint-linux-x86_64"
+            "https://github.com/DonIsaac/zlint/releases/download/v0.9.1/zlint-linux-x86_64"
           chmod +x /tmp/zlint
           sudo mv /tmp/zlint /usr/local/bin/zlint
+
+          curl -fsSL -o /tmp/zsort.tar.gz \
+            "https://github.com/mstdokumaci/zsort/releases/download/v0.6.0/zsort-x86_64-linux.tar.gz"
+          tar -xzf /tmp/zsort.tar.gz -C /tmp
+          sudo mv /tmp/zsort /usr/local/bin/zsort
+
+          curl -fsSL -o /tmp/zwanzig.tar.gz \
+            "https://github.com/forketyfork/zwanzig/releases/download/v0.14.0/zwanzig-v0.14.0-linux-x86_64.tar.gz"
+          tar -xzf /tmp/zwanzig.tar.gz -C /tmp
+          sudo mv /tmp/zwanzig /usr/local/bin/zwanzig
 
       - name: Run lint
         run: bun run lint

@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
-const PresenceRecord = @import("record.zig").PresenceRecord;
 const th = @import("test_helpers.zig");
+const PresenceRecord = @import("record.zig").PresenceRecord;
 
 const testing = std.testing;
-const makeTestUserFields = th.makeTestUserFields;
 const freeTestFields = th.freeTestFields;
 const makePresencePatch = th.makePresencePatch;
+const makeTestUserFields = th.makeTestUserFields;
 
 test "PresenceRecord - init creates all-null slots" {
     const allocator = testing.allocator;

@@ -7,9 +7,9 @@ const typed = @import("../typed/types.zig");
 const predicate_trie = @import("predicate_trie.zig");
 
 const Allocator = std.mem.Allocator;
-const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
+const QueryFilter = query_ast.QueryFilter;
 const Record = typed.Record;
 const PredicateTrie = predicate_trie.PredicateTrie;
 

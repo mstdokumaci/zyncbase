@@ -6,11 +6,11 @@ const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const query_ast = @import("ast.zig");
 
-const QueryFilter = query_ast.QueryFilter;
+const Payload = msgpack_utils.Payload;
+const FieldType = schema_types.FieldType;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
-const FieldType = schema_types.FieldType;
-const Payload = msgpack_utils.Payload;
+const QueryFilter = query_ast.QueryFilter;
 
 /// Creates a QueryFilter with a default order_by = "id" ASC.
 /// Caller owns the memory and must call deinit(allocator).

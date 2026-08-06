@@ -1,14 +1,14 @@
 const std = @import("std");
 
+const msgpack = @import("../msgpack_utils.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
+const wire_encode = @import("../wire/encode.zig");
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
-const msgpack = @import("../msgpack_utils.zig");
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
-const typed_doc_id = @import("../typed/doc_id.zig");
-const wire_encode = @import("../wire/encode.zig");
 const PresenceManager = @import("manager.zig").PresenceManager;
 
 const Allocator = std.mem.Allocator;

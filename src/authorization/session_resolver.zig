@@ -1,12 +1,12 @@
 const std = @import("std");
 
-const ConnectionManager = @import("../connection/manager.zig").ConnectionManager;
-const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
 const authorization_evaluate = @import("evaluate.zig");
+const ConnectionManager = @import("../connection/manager.zig").ConnectionManager;
+const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 
 const Allocator = std.mem.Allocator;
 const DocId = typed_doc_id.DocId;

@@ -37,41 +37,6 @@ pub fn build(b: *std.Build) void {
     });
     const httpx_module = httpx_dep.module("httpx");
 
-    // Add zwanzig dependency
-    const zw = b.dependency("zwanzig", .{
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-    });
-    const zw_exe = zw.artifact("zwanzig");
-
-    const run_zw = b.addRunArtifact(zw_exe);
-    run_zw.addArgs(&.{ "--format", "text", "src", "tools" });
-
-    const lint_step = b.step("lint", "Run zwanzig code quality check");
-    lint_step.dependOn(&run_zw.step);
-
-    const zsort_exe = b.addExecutable(.{
-        .name = "zsort",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zsort.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-        }),
-    });
-
-    const run_check_imports = b.addRunArtifact(zsort_exe);
-    run_check_imports.addArgs(&.{ "check", ".", "--ban-prefix", "./", "--ban-prefix", "src/" });
-
-    const check_imports_step = b.step("check-imports", "Check Zig import ordering");
-    check_imports_step.dependOn(&run_check_imports.step);
-    lint_step.dependOn(&run_check_imports.step);
-
-    const run_fix_imports = b.addRunArtifact(zsort_exe);
-    run_fix_imports.addArgs(&.{ "fix", ".", "--ban-prefix", "./", "--ban-prefix", "src/" });
-
-    const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering");
-    fix_imports_step.dependOn(&run_fix_imports.step);
-
     // Create the main executable
     const exe = b.addExecutable(.{
         .name = "zyncbase",
@@ -101,16 +66,6 @@ pub fn build(b: *std.Build) void {
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
-    const zsort_test_exe = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zsort_test.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
-    });
-    const run_zsort_test = b.addRunArtifact(zsort_test_exe);
-    test_step.dependOn(&run_zsort_test.step);
-
     const test_slowest_step = b.step("test-slowest", "Run all tests and report the slowest ones");
     const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
     const run_slow_tests = b.addRunArtifact(slow_tests);
@@ -135,7 +90,6 @@ pub fn build(b: *std.Build) void {
 
     const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     check_step.dependOn(&test_check.step);
-    check_step.dependOn(&zsort_exe.step);
 }
 
 fn setupTest(

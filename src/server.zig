@@ -1,20 +1,24 @@
 const std = @import("std");
 
-const Jwks = @import("authentication/jwt_validator.zig").Jwks;
-const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
-const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
 const authentication_session = @import("authentication/session.zig");
 const ticket_exchange = @import("authentication/ticket_exchange.zig");
 const authorization_defaults = @import("authorization/defaults.zig");
 const authorization_parse = @import("authorization/parse.zig");
 const session_resolver = @import("authorization/session_resolver.zig");
 const authorization_types = @import("authorization/types.zig");
+const connection_manager = @import("connection/manager.zig");
+const connection_violations = @import("connection/violations.zig");
+const schema_parse = @import("schema/parse.zig");
+const schema_system = @import("schema/system.zig");
+const schema_types = @import("schema/types.zig");
+const uws_timer = @import("uws_timer.zig");
+const Jwks = @import("authentication/jwt_validator.zig").Jwks;
+const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
+const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config/loader.zig").ConfigLoader;
 const Config = @import("config/state.zig").Config;
-const connection_manager = @import("connection/manager.zig");
 const send_queue_type = @import("connection/send_queue.zig").send_queue;
-const connection_violations = @import("connection/violations.zig");
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
@@ -22,9 +26,6 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceService = @import("presence/service.zig").PresenceService;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
-const schema_parse = @import("schema/parse.zig");
-const schema_system = @import("schema/system.zig");
-const schema_types = @import("schema/types.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StoreService = @import("store_service.zig").StoreService;
@@ -32,18 +33,17 @@ const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const SubscriptionWorkerPool = @import("subscription/worker_pool.zig").SubscriptionWorkerPool;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
-const uws_c = @import("uwebsockets_wrapper.zig").c;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
-const uws_timer = @import("uws_timer.zig");
+const uws_c = @import("uwebsockets_wrapper.zig").c;
 
+const Session = authentication_session.Session;
+const TicketExchange = ticket_exchange.TicketExchange;
 const SessionResolver = session_resolver.SessionResolver;
 const ConnectionManager = connection_manager.ConnectionManager;
 const ViolationTracker = connection_violations.ConnectionViolationTracker;
 const Schema = schema_types.Schema;
-const TicketExchange = ticket_exchange.TicketExchange;
-const Session = authentication_session.Session;
 
 // Atomic global server reference for signal handlers (written once before registration,
 // read from signal handler thread). Explicit acquire/release atomics are required as

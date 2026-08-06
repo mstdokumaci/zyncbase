@@ -2,9 +2,9 @@ const std = @import("std");
 
 const typed = @import("types.zig");
 
-const Value = typed.Value;
 const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
 
 pub fn valText(t: []const u8) Value {
     return .{ .scalar = .{ .text = t } };

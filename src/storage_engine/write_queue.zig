@@ -1,10 +1,10 @@
 const std = @import("std");
 
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
-const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const latch_mod = @import("../threading/latch.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
+const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
 const ColumnValue = @import("sql.zig").ColumnValue;
 
 const Allocator = std.mem.Allocator;

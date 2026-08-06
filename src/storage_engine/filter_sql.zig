@@ -2,12 +2,11 @@ const std = @import("std");
 
 const query_ast = @import("../query/ast.zig");
 const schema_types = @import("../schema/types.zig");
+const typed = @import("../typed/types.zig");
 const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 const SqlList = @import("../sql/buf.zig").SqlList;
-const typed = @import("../typed/types.zig");
 
 const Allocator = std.mem.Allocator;
-
 const Value = typed.Value;
 
 pub const RenderedPredicate = struct {

@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const Session = @import("../authentication/session.zig").Session;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const uws = @import("../uwebsockets_wrapper.zig");
+const Session = @import("../authentication/session.zig").Session;
 
 const Allocator = std.mem.Allocator;
 const WebSocket = uws.WebSocket;

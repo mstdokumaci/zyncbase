@@ -6,10 +6,10 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
 const ddl_generator = @import("ddl.zig");
 
-const DDLGenerator = ddl_generator.DDLGenerator;
 const Field = schema_types.Field;
 const FieldType = schema_types.FieldType;
 const OnDelete = schema_types.OnDelete;
+const DDLGenerator = ddl_generator.DDLGenerator;
 
 test "ddl_generator: generate DDL for a known table" {
     const allocator = std.testing.allocator;

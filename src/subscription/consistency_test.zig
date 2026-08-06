@@ -5,13 +5,12 @@ const qth = @import("../query/test_helpers.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const tth = @import("../typed/test_helpers.zig");
-const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const sub_eng = @import("engine.zig");
+const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 
 const testing = std.testing;
-
-const SubscriptionEngine = sub_eng.SubscriptionEngine;
 const RecordChange = sub_eng.RecordChange;
+const SubscriptionEngine = sub_eng.SubscriptionEngine;
 
 test "Subscription Consistency: write-before-subscribe is captured and delivered" {
     const allocator = testing.allocator;

@@ -7,9 +7,8 @@ const sth = @import("storage_engine_test_helpers.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
-
-const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
+const createMockWebSocket = helpers.createMockWebSocket;
 const ConnectionManager = connection_manager.ConnectionManager;
 
 test "logging: connection events" {

@@ -3,6 +3,7 @@ const std = @import("std");
 const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const tth = @import("../typed/test_helpers.zig");
+const CollectionKey = @import("engine.zig").CollectionKey;
 const RecordChange = @import("engine.zig").RecordChange;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 
@@ -138,7 +139,7 @@ test "SubscriptionEngine: concurrent unsubscribe with multi-group contention" {
     try testing.expectEqual(@as(u32, thread_count * subs_per_thread), engine.active_subs.count());
 
     // Verify single collection-index entry contains all 4 groups
-    const coll_key = @import("engine.zig").CollectionKey{ .namespace_id = 1, .table_index = 0 };
+    const coll_key = CollectionKey{ .namespace_id = 1, .table_index = 0 };
     const coll_groups = engine.groups_by_collection.get(coll_key) orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, thread_count), coll_groups.items.len);
 

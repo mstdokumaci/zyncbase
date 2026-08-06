@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const config_state = @import("config/state.zig");
-pub const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("query/ast.zig");
 const schema_index = @import("schema/index.zig");
 const schema_parse = @import("schema/parse.zig");
@@ -14,19 +13,20 @@ const sql = @import("storage_engine/sql.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
+pub const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
 const Helpers = @This();
-pub const StorageEngine = storage_engine.StorageEngine;
-pub const ColumnValue = storage_engine.ColumnValue;
-pub const StorageError = storage_engine.StorageError;
-pub const Schema = schema_types.Schema;
-pub const Table = schema_types.Table;
+const Allocator = std.mem.Allocator;
+const testing = std.testing;
+pub const TestContext = schema_helpers.TestContext;
 pub const Field = schema_types.Field;
 pub const FieldType = schema_types.FieldType;
+pub const Schema = schema_types.Schema;
+pub const Table = schema_types.Table;
 pub const TableMetadata = schema_types.Table;
-pub const TestContext = schema_helpers.TestContext;
+pub const ColumnValue = storage_engine.ColumnValue;
+pub const StorageEngine = storage_engine.StorageEngine;
+pub const StorageError = storage_engine.StorageError;
 
 pub const NamedColumn = struct {
     field: []const u8,

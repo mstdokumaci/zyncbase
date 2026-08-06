@@ -10,10 +10,10 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 const testing = std.testing;
-
 const AppTestContext = helpers.AppTestContext;
 const parseResponse = helpers.parseResponse;
 const routeWithArena = helpers.routeWithArena;
+const routeWithArenaOptional = helpers.routeWithArenaOptional;
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
@@ -269,7 +269,7 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     try buf.append(allocator, 0x92); // fixarray(2)
     try buf.append(allocator, 0xcf);
     try writer.writeInt(u64, table.index, .big);
-    const doc_id_bytes = @import("typed/doc_id.zig").toBytes(1);
+    const doc_id_bytes = typed_doc_id.toBytes(1);
     try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
     try msgpack.writeMsgPackStr(writer, "value");
     try msgpack.writeMsgPackStr(writer, "hello");
@@ -494,8 +494,6 @@ test "NamespaceSwitch: namespaced=false allows any switch" {
 const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },
 };
-
-const routeWithArenaOptional = helpers.routeWithArenaOptional;
 
 fn routeBytes(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) ![]u8 {
     return try routeWithArena(&app.handler, allocator, conn, message);

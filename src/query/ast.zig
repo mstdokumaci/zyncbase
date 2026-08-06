@@ -4,9 +4,9 @@ const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const hash_context = @import("hash_context.zig");
 
-const Value = typed.Value;
-const ScalarValue = typed.ScalarValue;
 const Cursor = typed.Cursor;
+const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
 
 pub const Operator = enum(u8) {
     eq = 0,

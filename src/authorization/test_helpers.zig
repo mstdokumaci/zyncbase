@@ -7,10 +7,10 @@ const authorization_parse = @import("parse.zig");
 const authorization_types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-const NamespaceRule = authorization_types.NamespaceRule;
-const StoreRule = authorization_types.StoreRule;
-const PatternSegment = authorization_types.PatternSegment;
 const AuthConfig = authorization_types.AuthConfig;
+const NamespaceRule = authorization_types.NamespaceRule;
+const PatternSegment = authorization_types.PatternSegment;
+const StoreRule = authorization_types.StoreRule;
 
 pub fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
     var schema = try makeAuthTestSchema(allocator);

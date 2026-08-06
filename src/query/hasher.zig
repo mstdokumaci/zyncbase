@@ -2,9 +2,9 @@ const std = @import("std");
 
 const query_ast = @import("ast.zig");
 
-const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
+const QueryFilter = query_ast.QueryFilter;
 
 /// Computes a u64 structural hash of a QueryFilter.
 /// The hash identifies the SQL template — it includes all structural

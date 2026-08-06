@@ -7,8 +7,8 @@ const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const ddl_generator = @import("sql/ddl.zig");
 
-const MigrationDetector = migration_detector.MigrationDetector;
 const ChangeKind = migration_detector.ChangeKind;
+const MigrationDetector = migration_detector.MigrationDetector;
 
 fn openMemDb() !sqlite.Db {
     return sqlite.Db.init(.{

@@ -4,6 +4,7 @@ const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const mpscQueue = @import("mpsc_queue.zig").mpscQueue;
 
 const testing = std.testing;
+const AllocPool = MemoryStrategy.AllocPool;
 
 const TestEntry = struct {
     id: u64,
@@ -14,7 +15,6 @@ const TestEntry = struct {
     }
 };
 
-const AllocPool = MemoryStrategy.AllocPool;
 const queue_type = mpscQueue(TestEntry, AllocPool);
 const PoolType = AllocPool(queue_type.Node);
 

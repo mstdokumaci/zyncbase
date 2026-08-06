@@ -5,8 +5,8 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("codec.zig");
 const doc_id = @import("doc_id.zig");
-const Value = @import("types.zig").Value;
 const ScalarValue = @import("types.zig").ScalarValue;
+const Value = @import("types.zig").Value;
 
 const testing = std.testing;
 

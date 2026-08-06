@@ -5,13 +5,13 @@ const fail_alloc = @import("failing_allocator_test_helper.zig");
 const query_ast = @import("query/ast.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
-const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const storage_mod = @import("storage_engine.zig");
 const cache_mod = @import("storage_engine/cache.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
+const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;

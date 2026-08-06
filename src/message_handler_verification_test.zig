@@ -5,12 +5,11 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 
 const testing = std.testing;
-
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
+const encodePayloadToBytes = helpers.encodePayloadToBytes;
 const routeWithArena = helpers.routeWithArena;
 const routeWithArenaOptional = helpers.routeWithArenaOptional;
-const encodePayloadToBytes = helpers.encodePayloadToBytes;
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },

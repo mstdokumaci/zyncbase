@@ -2,17 +2,10 @@ const std = @import("std");
 
 const sqlite = @import("sqlite");
 
-const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
-const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const query_ast = @import("../query/ast.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const change_queue_mod = @import("../subscription/change_queue.zig");
-const managedThread = @import("../threading/managed_thread.zig").managedThread;
-const Notifier = @import("../threading/notifier.zig").Notifier;
-const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
@@ -24,19 +17,24 @@ const filter_sql = @import("filter_sql.zig");
 const reader = @import("reader.zig");
 const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
+const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
+const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
+const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
+const managedThread = @import("../threading/managed_thread.zig").managedThread;
+const Notifier = @import("../threading/notifier.zig").Notifier;
+const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
 
 const Allocator = std.mem.Allocator;
-
-const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const ChangeQueue = change_queue_mod.ChangeQueue;
-
+const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const DocId = typed_doc_id.DocId;
-const DocumentCacheKey = storage_cache.DocumentCacheKey;
 const Record = typed.Record;
+const DocumentCacheKey = storage_cache.DocumentCacheKey;
+const StorageError = errors.StorageError;
+const StatementCache = sql.StatementCache;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
-const StatementCache = sql.StatementCache;
-const StorageError = errors.StorageError;
 
 /// Classify a database error, log it, and optionally deinit an old record.
 /// Used as the catch handler in executeBatch* / handle*Entry functions.
