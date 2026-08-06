@@ -235,7 +235,7 @@ Under the hood, this sends an `AuthRefresh` wire message. See [Wire Protocol](..
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Store API](./store-api.md) — Persistent state operations
 - [Presence API](./presence-api.md) — Ephemeral user awareness

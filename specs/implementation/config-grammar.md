@@ -131,7 +131,7 @@ Validation checks occur during server bootstrap in `validateConfig`:
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Security](./security.md)
 - [Error Taxonomy](./error-taxonomy.md)

@@ -56,7 +56,7 @@ The lock-free cache is a reusable read-mostly cache primitive. It is used where 
 
 **Overflow policy**: If `max_deferred_nodes` is reached, cache updates block until reclamation catches up. This is a backpressure mechanism to prevent unbounded memory growth.
 
-## See Also
+## Related Specifications
 
 - [Threading](./threading.md)
 - [Memory Strategy](./memory-strategy.md)

@@ -47,4 +47,4 @@ Planned React and Vue bindings:
 
 ---
 
-**Note**: These documents serve as the source of truth for SDK implementation and server behavior. For installation and getting started guides, refer to the main repository documentation.
+**Note**: These documents are the source of truth for SDK implementation and server behavior. For installation and getting started guides, refer to the main repository documentation.

@@ -392,15 +392,15 @@ client.presence.subscribeShared(({ playing, timestamp }) => {
 
 ## Best Practices
 
-1. **Keep user fields minimal**: Only include essential transient state. Move stable data like `name` and `color` to the `users` collection in the store, where they persist and can be queried.
+1. **Keep user fields minimal**: Only include transient state. Move stable data like `name` and `color` to the `users` collection in the store, where they persist and can be queried.
 2. **Send only what changed**: Merge semantics mean you pay only for what you send. Cursor-only updates should not include status or name.
 3. **Namespace granularity**: Use specific namespaces (`doc:123`) rather than broad ones (`tenant:acme`) to reduce fan-out and avoid leaking presence across unrelated contexts.
-4. **Use `subscribeShared` for room-level coordination**: Do not use the store for ephemeral room state. The shared tier exists precisely for this — it is faster, never persisted, and cleaned up automatically.
+4. **Use `subscribeShared` for room-level coordination**: Do not use the store for ephemeral room state. The shared tier is faster, never persisted, and cleaned up automatically on disconnect.
 5. **Design shared state for LWW**: If two users write shared state simultaneously, last-writer-wins at the server. Shared state fields should be self-describing values (slide index, boolean flag) that remain meaningful under concurrent writes.
 
 ---
 
-## See Also
+## Related Specifications
 - [Store API Reference](./store-api.md) — For persistent state management
 - [Configuration](./configuration.md) — Defining presence and store schemas in `schema.json`
 - [Authorization](./configuration.md#authorizationjson) — Presence auth rules in `authorization.json`

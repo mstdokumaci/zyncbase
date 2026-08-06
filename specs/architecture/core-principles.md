@@ -100,7 +100,7 @@ Writes return immediately on acceptance. Committed state arrives through subscri
 
 ---
 
-## See Also
+## Related Specifications
 
 - [ADRs](./adrs.md) - All architectural decision records
 - [Threading Model](./threading-model.md) - Detailed threading implementation

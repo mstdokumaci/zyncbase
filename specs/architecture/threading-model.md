@@ -171,7 +171,7 @@ Notification: 8 threads × ~5k each  = 40k change evaluations/sec
 Writes:       1 thread  × ~10k      = 10k writes/sec (serialized)
 Event Loop:   1 thread  × ~200k     = 200k messages/sec dispatch
 Total: ~150k+ req/sec average
-CPU usage: ~85% (all cores utilized)
+CPU usage: ~85% (all cores used)
 ```
 
 **vs Single-threaded approach:**
@@ -225,7 +225,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 - **Uses all CPU cores** — True vertical scaling
 - **Deterministic** — No configuration knobs to misconfigure
 - **Warm reads are fully in-memory** — Subscription Engine eliminates SQLite round-trips
-- **SQLite parallel reads** — Fully utilized for cold queries
+- **SQLite parallel reads** — Fully used for cold queries
 - **Lock-free metadata** — Auth/schema/namespace lookups are wait-free
 - **Fail-fast** — Server refuses to start on underpowered machines
 
@@ -265,7 +265,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 - Easier to reason about
 
 **Cons:**
-- Cannot utilize multiple CPU cores
+- Cannot use multiple CPU cores
 - Limited to ~10k req/sec total
 - Wastes SQLite parallel read capability
 - Not competitive with Bun/modern systems
@@ -295,7 +295,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 
 ---
 
-## See Also
+## Related Specifications
 
 - [ADRs](./adrs.md) - Architectural Decision Records
 - [Storage Layer](./storage-layer.md) - Details on parallel disk access

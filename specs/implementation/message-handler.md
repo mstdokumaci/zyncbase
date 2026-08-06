@@ -112,7 +112,7 @@ Errors flow through four distinct paths depending on when they occur:
 - Store writes are serialized by the storage write queue; read/subscription paths must not mutate connection scope.
 - Disconnect teardown clears violation state, detaches subscriptions, resets scope, and removes presence owned by the connection.
 
-## See Also
+## Related Specifications
 
 - [Wire Protocol](./wire-protocol.md)
 - [Auth Exchange](./auth-exchange.md)

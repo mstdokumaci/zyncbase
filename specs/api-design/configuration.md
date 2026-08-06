@@ -250,7 +250,7 @@ When `anonymous.enabled` is true, the SDK may request a ticket using a high-entr
 
 ---
 
-## See Also
+## Related Specifications
 - [README](./README.md) - API overview and entry point
 - [Store API Reference](./store-api.md) - For how to use the store once configured
 - [Presence API Reference](./presence-api.md) - For presence configuration context
@@ -532,9 +532,9 @@ The `users` collection is a reserved hybrid table that is automatically managed 
 
 Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as a scoped session needs an internal user ID, before application profile data is available. If `users.namespaced = true`, the same external identity may resolve to different internal user IDs for different store or presence namespaces.
 
-**What ZyncBase generates (automatic flattening):**
+### Automatic Column Flattening
 
-ZyncBase flattens nested objects into column names using a double underscore (`__`) separator. This allows efficient standard SQL queries while maintaining a natural document-like structure for the client.
+ZyncBase flattens nested objects into column names using a double underscore (`__`) separator. This enables standard SQL queries while maintaining a document-like structure for the client.
 
 ```sql
 CREATE TABLE users (
@@ -577,9 +577,9 @@ ZyncBase uses a **store-based** schema format. Define your data store structure:
 }
 ```
 
-### Nested Fields (Automatic Flattening)
+### Nested Fields
 
-ZyncBase automatically flattens nested objects of any depth for efficient querying:
+ZyncBase flattens nested objects of any depth for querying:
 
 ```json
 {
@@ -601,7 +601,7 @@ ZyncBase automatically flattens nested objects of any depth for efficient queryi
 }
 ```
 
-**Client API (recursive nested objects work naturally):**
+#### Client API Usage
 ```typescript
 // Set nested fields (at any depth)
 await zyncbase.set('users.user-1', {
@@ -624,28 +624,28 @@ const users = await zyncbase.query('users', {
 })
 ```
 
-**What happens under the hood:**
+#### Implementation Details
 - Nested fields are recursively flattened to columns using a double underscore separator: `address__location__lat`, etc.
-- Base field names in the schema are forbidden from containing `__` to prevent collisions.
-- The server reconstructs the nested structure for the client automatically on `get` and `query` operations.
-- *Note: On the wire, these string identifiers are entirely replaced by numeric index mappings transparently by the SDK.*
+- Base field names in the schema cannot contain `__` to prevent collisions.
+- The server reconstructs the nested structure for the client on `get` and `query` operations.
+- On the wire, string identifiers are replaced by numeric index mappings transparently by the SDK.
 
-**Benefits:**
-- Efficient querying (standard SQLite indexes work on flattened columns)
-- Unlimited nesting depth for `store` fields (up to 1024 fields per table)
-- Clean client-side experience (no manual flattening required)
+#### Capabilities
+- Standard SQLite indexes operate directly on flattened columns.
+- Deeply nested `store` fields support up to 1024 fields per table.
+- Client applications use standard JavaScript nested objects without manual flattening.
 
-**Limitations:**
-- Nested objects cannot contain arrays of objects (arrays must be at the leaf level)
-- Total recursion depth is limited by the maximum number of fields per table (1024)
-- Field names must not contain `__` — that sequence is reserved for the flattening separator
-- `presence` fields support **arbitrary nesting depth** (bounded to 500 flat fields total per tier)
+#### Constraints
+- Nested objects cannot contain arrays of objects (arrays must be at leaf positions).
+- Total recursion depth is limited by the maximum fields per table (1024).
+- Field names must not contain `__` (reserved for column flattening).
+- `presence` fields support arbitrary nesting depth (bounded to 500 flat fields total per tier).
 
 ### Arrays
 
-ZyncBase supports arrays with specific constraints:
+ZyncBase supports arrays with specific type constraints.
 
-**✅ Simple arrays (primitives):**
+#### Primitive Arrays
 ```json
 {
   "store": {
@@ -661,20 +661,20 @@ ZyncBase supports arrays with specific constraints:
 }
 ```
 
-**Client API:**
+#### Client API Usage
 ```typescript
-await zyncbase.set(tasks.task-1', {
+await zyncbase.set('tasks.task-1', {
   tags: ["urgent", "backend"]
 })
 ```
 
-**Typed array behavior (canonical sorted-set):**
+#### Array Normalization
 - Elements must match the schema `items` primitive type.
 - `null`, nested arrays, and objects are rejected.
 - Arrays are normalized to sorted unique form on write.
 - Reads and query equality observe this canonical sorted unique representation.
 
-**❌ Arrays of objects (not supported):**
+#### Unsupported: Arrays of Objects
 ```json
 {
   "store": {
@@ -683,7 +683,7 @@ await zyncbase.set(tasks.task-1', {
         "members": {
           "type": "array",
           "items": {
-            "type": "object",  // ❌ Not allowed
+            "type": "object",  // Not allowed
             "fields": {
               "userId": { "type": "string" },
               "role": { "type": "string" }

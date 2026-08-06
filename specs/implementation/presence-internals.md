@@ -100,7 +100,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 - `SubscriberTable` is not thread-safe; `PresenceManager` provides synchronization via `data_mutex`.
 - Presence cleanup on disconnect must be idempotent and handled through `PresenceOp.remove_all_for_connection` enqueued by the event loop.
 
-## See Also
+## Related Specifications
 
 - [Wire Protocol](./wire-protocol.md)
 - [Auth System](./auth-system.md)

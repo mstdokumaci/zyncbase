@@ -131,7 +131,7 @@ When `authorization.json` is omitted, the server synthesizes the following "publ
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Auth System](./auth-system.md)
 - [Query Grammar](./query-grammar.md)

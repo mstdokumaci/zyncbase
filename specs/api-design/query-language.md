@@ -645,7 +645,7 @@ For complex queries beyond these limitations:
 
 ---
 
-## See Also
+## Related Specifications
 
 - [README](./README.md) - API overview and entry point
 - [Store API](./store-api.md) - How to use queries in the SDK

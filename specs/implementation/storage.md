@@ -152,7 +152,7 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 - StoreSubscribe registration happens in `MessageHandler` before the read request is enqueued to the reader pool.
 - Metadata cache is lock-free and safe for concurrent reads from reader threads and the writer thread. Cache population uses writer version snapshot for race protection.
 
-## See Also
+## Related Specifications
 
 - [Schema Grammar](./schema-grammar.md)
 - [Query Engine](./query-engine.md)

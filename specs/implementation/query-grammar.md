@@ -137,7 +137,7 @@ Filters are simplified prior to execution based on logical invariants:
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Cursor Pagination](./cursor-pagination.md)
 - [Storage](./storage.md)

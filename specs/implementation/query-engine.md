@@ -72,7 +72,7 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 **Overflow policy**: Batch operations exceeding 500 ops return `BATCH_TOO_LARGE`. Queries without a `limit` are unbounded; clients should always supply a limit for predictable performance.
 
-## See Also
+## Related Specifications
 
 - [Query Grammar](./query-grammar.md)
 - [Cursor Pagination](./cursor-pagination.md)

@@ -89,7 +89,7 @@ During the connection lifecycle and handshake upgrade, authentication and valida
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Error Taxonomy](./error-taxonomy.md)
 - [Security](./security.md)

@@ -261,7 +261,7 @@ client.store.get(['users', userId, 'name'])
 
 ---
 
-## See Also
+## Related Specifications
 - [Presence API](./presence-api.md) - For user awareness features
 - [Query Language Reference](./query-language.md) - Detailed query syntax
 - [Configuration & Schema](./configuration.md) - For schema definitions

@@ -110,7 +110,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - `WaitGroup.done()` must only be called after a matching `add()`. `WriteWorker` calls `beginOp()` (wraps `add(1)`) before enqueuing and `endOp(n)` after the commit loop processes N ops.
 - `Notifier.notify()` is safe to call from any thread; it unconditionally invokes the stored callback with no locking.
 
-## See Also
+## Related Specifications
 
 - [Message Handler](./message-handler.md)
 - [Storage](./storage.md)

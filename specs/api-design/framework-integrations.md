@@ -172,7 +172,7 @@ function App() {
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Store API](./store-api.md) — Underlying store methods
 - [Presence API](./presence-api.md) — Underlying presence methods

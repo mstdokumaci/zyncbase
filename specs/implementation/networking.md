@@ -176,7 +176,7 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 | Shutdown drain timeout | 3,000 ms | Maximum time to wait for connections to drain during graceful shutdown. |
 | Token sweep interval | 15,000 ms | How often expired JWT tokens are swept across connections. |
 
-## See Also
+## Related Specifications
 
 - [Wire Protocol](./wire-protocol.md)
 - [Message Handler](./message-handler.md)

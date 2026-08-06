@@ -88,7 +88,7 @@ Write-Ahead Logging (WAL) transforms SQLite's concurrency model from a single-us
 
 ## Connection Pool Strategy
 
-To utilize multiple CPU cores for reads, ZyncBase maintains a connection pool with one reader per core. All writes are queued and executed via a single writer connection to satisfy SQLite's serialization requirements. See [ADR-006](./adrs.md#adr-006-multi-threaded-core-engine).
+To use multiple CPU cores for reads, ZyncBase maintains a connection pool with one reader per core. All writes are queued and executed via a single writer connection to satisfy SQLite's serialization requirements. See [ADR-006](./adrs.md#adr-006-multi-threaded-core-engine).
 
 - **One reader per core**: Maximizes parallel read throughput without connection contention.
 - **Single writer**: Batched for efficiency to overcome `fsync()` overhead.
@@ -224,7 +224,7 @@ The storage layer is designed for vertical scaling on a single node. Distributed
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Threading Model](./threading-model.md) - How connection pool enables parallel reads
 - [ADRs](./adrs.md) - Architectural Decision Records

@@ -170,7 +170,7 @@ The parser accepts validation-key names (`enum`, `pattern`, `format`, `minLength
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Error Taxonomy](./error-taxonomy.md)
 - [Storage](./storage.md)

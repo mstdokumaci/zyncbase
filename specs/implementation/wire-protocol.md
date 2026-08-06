@@ -168,7 +168,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - New public errors must be added to `src/wire/errors.zig`, `sdk/typescript/src/errors.ts`, and [Error Taxonomy](./error-taxonomy.md).
 - Breaking wire changes are acceptable during the current green-field stage, but the docs and SDK must move in the same commit.
 
-## See Also
+## Related Specifications
 
 - [Message Handler](./message-handler.md)
 - [Query Grammar](./query-grammar.md)

@@ -71,7 +71,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 
 - Internal Zig errors are not public API. They map to the closest public code in `src/wire/errors.zig`.
 - Parser limit failures currently map to `MESSAGE_TOO_LARGE` or `INVALID_MESSAGE_FORMAT`; do not document separate public MessagePack limit codes unless they are added to `src/wire/errors.zig` and the SDK.
-- SQLite, cache, checkpoint, and allocator failures are operational/internal details. They should map to `ENGINE_UNHEALTHY` or `INTERNAL_ERROR` unless a user-actionable public code is intentionally added.
+- SQLite, cache, checkpoint, and allocator failures are operational/internal details. They should map to `ENGINE_UNHEALTHY` or `INTERNAL_ERROR` unless a user-facing public error code is intentionally added.
 - Authorization failures map to `NAMESPACE_UNAUTHORIZED` only for namespace admission. Store/presence operation denials map to `PERMISSION_DENIED`.
 - Write acknowledgement failures use the same code catalog inside `WriteError` pushes; top-level `phase` and optional `batchIndex` fields explain where the failure happened.
 
@@ -95,7 +95,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `validation` | No | Fix request shape/schema/query. |
 | `client` | No | Fix SDK call site or reduce payload/batch size. |
 
-## See Also
+## Related Specifications
 
 - [Wire Protocol](./wire-protocol.md) - Error response and `WriteError` push shape.
 - [Message Handler](./message-handler.md) - Request propagation path.

@@ -191,7 +191,7 @@ Confirmed write timeouts mean confirmation was not received. They do not imply t
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Connection Management](./connection-management.md) — Client lifecycle and events
 - [Store API](./store-api.md) — Accepted/committed mutation methods

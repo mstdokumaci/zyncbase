@@ -93,7 +93,7 @@ When the active sort field is the system `id` field, the cursor predicate is sim
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Query Engine](./query-engine.md)
 - [Storage](./storage.md)

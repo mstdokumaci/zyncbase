@@ -58,7 +58,7 @@ Security is layered: transport admission, parser/resource limits, authentication
 - Repeated malformed/security-sensitive payloads close the connection.
 - Allocator exhaustion is treated as request/server failure, never as partial authorization success.
 
-## See Also
+## Related Specifications
 
 - [Auth Exchange](./auth-exchange.md)
 - [Auth System](./auth-system.md)

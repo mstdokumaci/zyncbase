@@ -36,7 +36,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Threading](./threading.md)
 - [Memory Strategy](./memory-strategy.md)

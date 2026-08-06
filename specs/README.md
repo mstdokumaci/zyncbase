@@ -4,20 +4,20 @@ This directory contains the formal specifications and architectural decisions fo
 
 ## Documentation Index
 
-### 🏗️ [Architecture](./architecture/README.md)
-*Core principles and long-term architectural decisions.*
+### [Architecture](./architecture/README.md)
+Core principles and long-term architectural decisions.
 - [Core Principles](./architecture/core-principles.md) — The fundamental pillars of ZyncBase.
 - [Architecture Decisions (ADRs)](./architecture/adrs.md) — Record of major technical choices.
 - [Deep Dives](./architecture/README.md#architectural-deep-dives) — Storage layer and threading models.
 
-### 📐 [API Design](./api-design/README.md)
-*External contracts for clients and SDKs.*
+### [API Design](./api-design/README.md)
+External contracts for clients and SDKs.
 - [Store API](./api-design/store-api.md) — Path-based synchronization and batching.
 - [Query Language](./api-design/query-language.md) — Reference for filtering and sorting.
 - [Presence API](./api-design/presence-api.md) — Ephemeral state and user awareness.
 
-### ⚙️ [Implementation](./implementation/README.md)
-*Technical specs for the server core and internal systems.*
+### [Implementation](./implementation/README.md)
+Technical specs for the server core and internal systems.
 - [Wire Protocol](./implementation/wire-protocol.md) — MessagePack & WebSocket binary contract.
 - [Security Implementation](./implementation/security.md) — Detailed auth and networking specs.
 - [Core Engine](./implementation/threading.md) — Threading, memory, and cache internals.

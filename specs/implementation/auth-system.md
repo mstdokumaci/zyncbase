@@ -111,7 +111,7 @@ Unlike the Store API, the Presence API is a namespace-wide boundary:
 
 ## Composition Model & Operators
 
-Rules utilize a subset of the store query predicate model:
+Rules use a subset of the store query predicate model:
 - **Literals**: `true` (allow) or `false` (deny).
 - **Operators**:
 
@@ -140,7 +140,7 @@ To ensure sub-microsecond performance, ZyncBase separates database concerns from
 
 ---
 
-## See Also
+## Related Specifications
 
 - [Auth Exchange](./auth-exchange.md)
 - [Auth Grammar](./auth-grammar.md)

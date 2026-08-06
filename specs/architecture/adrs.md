@@ -11,7 +11,7 @@ ZyncBase requires maximum throughput, predictable latency under all load conditi
 - **Native multi-threading**: Direct OS thread model maps one-to-one onto CPU cores. No green threads, no runtime scheduler overhead.
 - **Manual memory control**: Specialized allocators (Arena, Pool) enable predictable allocation patterns and zero-cost abstractions at hot paths.
 - **Single binary**: Statically linked output under 15MB with no runtime dependencies. Deployment is a file copy.
-- **C/C++ interop**: Zero-cost FFI enables seamless integration with uWebSockets, SQLite, and other battle-tested C/C++ libraries without wrapper overhead.
+- **C/C++ interop**: Zero-cost FFI enables direct integration with uWebSockets, SQLite, and other battle-tested C/C++ libraries without wrapper overhead.
 
 **Consequences**:
 - Best-in-class throughput and tail latency on server hardware.
@@ -123,7 +123,7 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 ## ADR-006: Deterministic Thread Budget Architecture
 
-A single-threaded core cannot utilize SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
+A single-threaded core cannot use SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
 
 **Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 3 CPU cores. There are no configuration overrides for thread counts. Background worker domains may encode outbound messages, but uWebSockets sends are event-loop-only and cross-thread delivery goes through `SendQueue`.
 
@@ -347,7 +347,7 @@ By default, all collections are namespace-partitioned (`namespaced: true`). Sett
 
 This is the pattern for master data that must be visible across all tenant namespaces: the `users` collection, pricing tiers, global configuration. `users` defaults to `namespaced: false`.
 
-Setting `"namespaced": true` on the `users` collection creates fully isolated identity realms per namespace — the same external identity string maps to a distinct `users.id` in each namespace. This mode is intended for applications where users belong to exactly one namespace (e.g., strict per-tenant isolation). In this mode, namespace switching is not a supported usage pattern: a user's identity is resolved in the context of their home namespace, and accessing a different namespace would create a new, unrelated identity row in that namespace's partition. Applications using `users.namespaced = true` should ensure their JWT grants access to a single namespace.
+Setting `"namespaced": true` on the `users` collection creates fully isolated identity partitions per namespace — the same external identity string maps to a distinct `users.id` in each namespace. This mode is intended for applications where users belong to exactly one namespace (e.g., strict per-tenant isolation). In this mode, namespace switching is not a supported usage pattern: a user's identity is resolved in the context of their home namespace, and accessing a different namespace would create a new, unrelated identity row in that namespace's partition. Applications using `users.namespaced = true` should ensure their JWT grants access to a single namespace.
 
 The `namespace_id = 0` routing is transparent to the developer and invisible in the API.
 
@@ -716,7 +716,7 @@ Errors from a real-time system span connection failures, authorization denials, 
 
 Every ZyncBase error is typed as `ZyncBaseError` with `code` (machine-readable string), `message` (human-readable), `category`, and optional `details` (including `phase`, `batchIndex`, etc., as applicable).
 
-The 8-category model is a server-side classification. The SDK maps it to typed error objects via `deriveCategory`. The SDK consumer categories are: `authentication`, `authorization`, `state`, `validation`, `client`, `rate_limit`, `server`, `network`, and `unknown`. Application code receives a fully classified, actionable error at every error boundary.
+The 8-category model is a server-side classification. The SDK maps it to typed error objects via `deriveCategory`. The SDK consumer categories are: `authentication`, `authorization`, `state`, `validation`, `client`, `rate_limit`, `server`, `network`, and `unknown`. Application code receives a fully classified, typed error object at every error boundary.
 
 **Consequences**:
 - Application developers handle semantically meaningful error categories, not raw status codes or opaque strings.
