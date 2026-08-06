@@ -138,7 +138,9 @@ test "WriteWorker: flushBatch throughput" {
     // time in Debug and distorts the throughput numbers.
     var prod_ms: MemoryStrategy = undefined;
     try prod_ms.init(testing.allocator);
-    defer std.debug.assert(prod_ms.deinit() == .ok); // leak check (replaces testing.allocator's)
+    defer {
+        if (prod_ms.deinit() != .ok) @panic("MemoryStrategy leak detected");
+    } // leak check (replaces testing.allocator's)
     const allocator = prod_ms.generalAllocator();
 
     // Disable auto-batching: test owns batch construction and flushBatch timing.
