@@ -95,7 +95,8 @@ test "LockFreeCache: pool exhaustion retains and eventually reclaims all resourc
     var retries: u32 = 0;
     while (retries < 10) : (retries += 1) {
         cache.reclaim(true);
-        if (deinit_count.load(.acquire) == updates_until_exhaustion) break;
+        if (deinit_count.load(.acquire) == updates_until_exhaustion and
+            cache.pool.active_count.load(.acquire) == 0) break;
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
     try testing.expectEqual(@as(usize, updates_until_exhaustion), deinit_count.load(.acquire));
