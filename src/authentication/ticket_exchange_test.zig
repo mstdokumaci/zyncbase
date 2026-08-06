@@ -56,9 +56,6 @@ test "TicketExchange: expired ticket verification fails" {
     const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
     defer allocator.free(ticket);
 
-    // Sleep for 1.1s to guarantee expiration
-    std.Thread.sleep(1100 * std.time.ns_per_ms);
-
     try testing.expectError(error.TokenExpired, exchange.verifyTicket(allocator, ticket));
 }
 

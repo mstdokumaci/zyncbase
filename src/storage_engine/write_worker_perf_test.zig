@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const config_state = @import("../config/state.zig");
+const memory_strategy = @import("../memory/strategy.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -10,6 +11,7 @@ const WriteOp = @import("write_queue.zig").WriteOp;
 
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
+const MemoryStrategy = memory_strategy.MemoryStrategy;
 const EngineTestContext = sth.EngineTestContext;
 const DocId = typed_doc_id.DocId;
 
@@ -131,7 +133,13 @@ fn runBatchSweep(
 }
 
 test "WriteWorker: flushBatch throughput" {
-    const allocator = testing.allocator;
+    // Prod-shaped allocator: server.zig passes memory_strategy.generalAllocator()
+    // into the engine. testing.allocator's 10-frame stack capture dominates wall
+    // time in Debug and distorts the throughput numbers.
+    var prod_ms: MemoryStrategy = undefined;
+    try prod_ms.init(testing.allocator);
+    defer std.debug.assert(prod_ms.deinit() == .ok); // leak check (replaces testing.allocator's)
+    const allocator = prod_ms.generalAllocator();
 
     // Disable auto-batching: test owns batch construction and flushBatch timing.
     const perf_cfg = config_state.Config.PerformanceConfig{
