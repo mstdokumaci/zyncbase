@@ -312,7 +312,11 @@ export class SubscriptionTracker {
 		}
 
 		for (const cb of entry.callbacks) {
-			cb(value);
+			try {
+				cb(value);
+			} catch (err) {
+				console.error("[SDK] Subscription callback threw:", err);
+			}
 		}
 	}
 
@@ -423,8 +427,8 @@ export class SubscriptionTracker {
 	): void {
 		const record =
 			op.value !== null &&
-			typeof op.value === "object" &&
-			!Array.isArray(op.value)
+				typeof op.value === "object" &&
+				!Array.isArray(op.value)
 				? unflatten(op.value as Record<string, JsonValue>)
 				: op.value;
 
