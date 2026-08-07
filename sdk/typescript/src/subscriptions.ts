@@ -427,8 +427,8 @@ export class SubscriptionTracker {
 	): void {
 		const record =
 			op.value !== null &&
-				typeof op.value === "object" &&
-				!Array.isArray(op.value)
+			typeof op.value === "object" &&
+			!Array.isArray(op.value)
 				? unflatten(op.value as Record<string, JsonValue>)
 				: op.value;
 
