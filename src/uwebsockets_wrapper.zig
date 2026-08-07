@@ -229,10 +229,15 @@ pub const WebSocket = struct {
     ssl: bool,
     user_data: ?*anyopaque = null,
     session: ?Session = null,
+    /// Test-only send counter hook; null in production.
+    test_send_count: ?*std.atomic.Value(u64) = null,
 
     /// Send a message and return the delivery status.
     /// Callers must inspect the result — never discard it silently.
     pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) SendStatus {
+        if (self.test_send_count) |counter| {
+            _ = counter.fetchAdd(1, .monotonic);
+        }
         if (comptime builtin.is_test) {
             return .success;
         }
@@ -242,6 +247,30 @@ pub const WebSocket = struct {
             .binary => c.UWS_OPCODE_BINARY,
         };
         return @enumFromInt(c.uws_ws_send(if (self.ssl) 1 else 0, self.ws.?, message.ptr, message.len, opcode));
+    }
+
+    /// Run callback inside a uWS cork scope: all sends within it flush as one
+    /// write; falls back to uncorked sends when the cork buffer is taken.
+    /// Runs synchronously.
+    pub fn corkScope(
+        self: *WebSocket,
+        ctx: ?*anyopaque,
+        comptime callback: fn (?*anyopaque) void,
+    ) void {
+        if (comptime builtin.is_test) {
+            callback(ctx);
+            return;
+        }
+        if (self.ws == null) {
+            callback(ctx);
+            return;
+        }
+        const Wrapper = struct {
+            fn run(user_ctx: ?*anyopaque) callconv(.c) void {
+                callback(user_ctx);
+            }
+        };
+        c.uws_ws_cork_scope(if (self.ssl) 1 else 0, self.ws.?, Wrapper.run, ctx);
     }
 
     pub fn close(self: *WebSocket) void {

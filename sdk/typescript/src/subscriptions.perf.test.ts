@@ -4,12 +4,8 @@ import type { StoreDelta, StoreSubscribe } from "./types";
 
 /**
  * Pure unit benchmark for the materialized-view delta path — no network, no
- * schema, no client. Exercises exactly the hot loop that was O(records) per
- * delta (sortedList maintenance + full snapshot per delta): 200-record view,
- * 5000 deltas, one flush.
- *
- * Baseline (per-delta delivery): ~1-3s, one callback per delta.
- * After tick-batching: tens of ms, one callback per flush.
+ * schema, no client. Exercises the hot loop that was O(records) per delta:
+ * 2000-record view, 20000 deltas, one flush.
  */
 describe("SubscriptionTracker delta fan-in performance", () => {
 	test("20000 deltas on a 2000-record view batch into per-tick callbacks", async () => {
@@ -22,10 +18,15 @@ describe("SubscriptionTracker delta fan-in performance", () => {
 			type: "StoreSubscribe",
 			table_index: "items",
 		};
-		tracker.registerCollection(101, params, (value) => {
-			callbackCount++;
-			lastSnapshot = value;
-		}, "items");
+		tracker.registerCollection(
+			101,
+			params,
+			(value) => {
+				callbackCount++;
+				lastSnapshot = value;
+			},
+			"items",
+		);
 
 		const seedOps: StoreDelta["ops"] = Array.from({ length: 2000 }, (_, i) => ({
 			op: "set" as const,
@@ -59,7 +60,7 @@ describe("SubscriptionTracker delta fan-in performance", () => {
 		expect(snapshot.length).toBe(2000);
 		const doc5 = snapshot.find((r) => r.id === "doc-5");
 		expect(doc5?.n).toBe(18005);
-		// Loose perf threshold: per-delta delivery is ~1-3s, batched is tens of ms.
+		// Loose threshold — headroom for CI variance.
 		expect(elapsedMs).toBeLessThan(1000);
 	});
 });

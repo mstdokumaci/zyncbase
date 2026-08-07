@@ -87,7 +87,6 @@ export class SubscriptionTracker {
 			projection: null,
 			materializedView: {
 				records: new Map(),
-				sortedList: [],
 				collection,
 				comparator: buildComparator(orderBy),
 			},
@@ -126,10 +125,9 @@ export class SubscriptionTracker {
 	 * Dispatch a StoreDelta to the appropriate subscription callbacks.
 	 * If disconnected, the delta is queued for later delivery.
 	 *
-	 * Materialized-view (store.subscribe) deltas are batched: ops apply
-	 * immediately to the pending buffer, and callbacks fire once per
-	 * event-loop tick with the current snapshot. Projection (store.listen)
-	 * deltas dispatch synchronously.
+	 * Materialized-view (store.subscribe) deltas batch: ops apply to the
+	 * pending buffer, callbacks fire once per event-loop tick with the current
+	 * snapshot. Projection (store.listen) deltas dispatch synchronously.
 	 */
 	dispatch(delta: StoreDelta): void {
 		if (!this.connected) {
@@ -146,8 +144,8 @@ export class SubscriptionTracker {
 	}
 
 	/**
-	 * Schedule a single flush on the next event-loop tick. Coalesces: a burst
-	 * of deltas within one tick shares one callback per subscription.
+	 * Schedule one flush on the next event-loop tick; a burst of deltas
+	 * within a tick shares one callback per subscription.
 	 */
 	private scheduleFlush(): void {
 		if (this.flushScheduled) return;
@@ -159,8 +157,8 @@ export class SubscriptionTracker {
 	}
 
 	/**
-	 * Apply all pending deltas (per subscription, in arrival order) and invoke
-	 * each subscription's callbacks once with the current snapshot.
+	 * Apply all pending deltas (per subscription, in arrival order) and
+	 * invoke each subscription's callbacks once with the current snapshot.
 	 */
 	private _flushPending(): void {
 		const pending = this.pendingDeltas;
@@ -422,9 +420,8 @@ export class SubscriptionTracker {
 			(record as Record<string, JsonValue>).id = id;
 		}
 
-		// Map.set preserves insertion position for existing keys — identical
-		// to the previous replace-in-place sortedList behavior for unordered
-		// queries. Ordered queries sort at snapshot time.
+		// Map.set keeps insertion position for existing keys; ordered
+		// queries sort at snapshot.
 		view.records.set(id, record);
 	}
 
@@ -433,9 +430,8 @@ export class SubscriptionTracker {
 	}
 
 	/**
-	 * Create the snapshot array from the materialized view. Sorted only when
-	 * an orderBy comparator exists; stable sort matches the previous
-	 * binary-insert-after-equals behavior.
+	 * Snapshot array from the view; sorted only when an orderBy comparator
+	 * exists.
 	 */
 	private _snapshotView(view: MaterializedView): JsonValue[] {
 		const records = Array.from(view.records.values());

@@ -289,6 +289,42 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
 }
 
+test "ConnectionManager: drain sends each entry as its own frame" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-drain-frames", &.{});
+    defer app.deinit();
+
+    var send_count = std.atomic.Value(u64).init(0);
+    var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    dummy_ws.test_send_count = &send_count;
+    try app.connection_manager.onOpen(&dummy_ws);
+    defer app.connection_manager.onClose(&dummy_ws);
+    // onOpen sends connected + schema-sync setup messages — ignore them.
+    send_count.store(0, .monotonic);
+
+    const conn_id = dummy_ws.getConnId();
+    var queue = app.test_context.send_queue orelse return error.TestExpectedValue;
+
+    // Two entries for one connection — never concatenated: the client
+    // decodes exactly one message per frame.
+    const handle = try app.memory_strategy.acquireArenaDeferred();
+    const arena_alloc = handle.allocator();
+    const msg1 = try arena_alloc.dupe(u8, "first-message");
+    const msg2 = try arena_alloc.dupe(u8, "second-message");
+    handle.retain();
+    try queue.push(.{ .conn_id = conn_id, .data = msg1, .arena = handle });
+    handle.retain();
+    try queue.push(.{ .conn_id = conn_id, .data = msg2, .arena = handle });
+    handle.release();
+
+    app.connection_manager.drainSendQueue(&queue);
+
+    // One ws.send per entry — concatenation would produce a frame the SDK
+    // cannot decode.
+    try testing.expectEqual(@as(u64, 2), send_count.load(.monotonic));
+}
+
 test "ConnectionManager: generated IDs are unique under concurrent opens" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;

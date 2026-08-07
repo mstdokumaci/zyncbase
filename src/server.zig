@@ -768,8 +768,8 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
 
-        // Clear the wakeup flag before draining (and before the shutdown early-return
-        // below) so a stale flag can never suppress a future wakeup.
+        // Clear before draining (and the shutdown early-return) so a stale
+        // flag can never suppress a future wakeup.
         self.wakeup_pending.store(false, .release);
 
         // Handle graceful shutdown state machine
@@ -839,10 +839,8 @@ fn handleSignal(_: c_int) callconv(.c) void {
 fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    // Coalesce: the post handler drains the whole send queue every loop iteration,
-    // so a burst of dispatches only needs one wakeup. Workers push their entries
-    // before calling this, so any entry queued here is drained by the post handler
-    // run that clears the flag.
+    // One wakeup per dispatch burst: the post handler drains the whole send
+    // queue every iteration, so later dispatches just set the flag.
     if (server.wakeup_pending.swap(true, .acquire)) return;
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
