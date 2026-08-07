@@ -210,8 +210,7 @@ pub const ConnectionManager = struct {
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
-            _ = self.active_connection_count.fetchSub(1, .acq_rel);
-            if (self.active_connection_count.load(.acquire) == 0) {
+            if (self.active_connection_count.fetchSub(1, .acq_rel) == 1) {
                 self.last_conn_notifier.notify();
             }
             std.log.info("Client disconnected: id={}", .{conn_id});
@@ -228,19 +227,9 @@ pub const ConnectionManager = struct {
     }
 
     fn sendOrClose(conn: *Connection, data: []const u8) void {
-        conn.send(data) catch |err| switch (err) {
-            error.Dropped => {
-                std.log.warn("Connection {} dropped by uWS, closing", .{conn.id});
-                conn.ws.close();
-            },
-            error.Full => {
-                std.log.warn("Connection {} outbox full (slow client), closing", .{conn.id});
-                conn.ws.close();
-            },
-            else => {
-                std.log.err("Connection {} unexpected send error: {}", .{ conn.id, err });
-                conn.ws.close();
-            },
+        conn.send(data) catch |err| {
+            std.log.warn("Connection {} send failed ({}), closing", .{ conn.id, err });
+            conn.ws.close();
         };
     }
 
@@ -284,18 +273,15 @@ pub const ConnectionManager = struct {
         const alloc = self.drain_arena.allocator();
 
         // Phase 1: pop all entries, group by conn_id
-        const Group = struct {
-            entries: std.ArrayListUnmanaged(SendQueueEntry),
-        };
-        var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
+        var groups = std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(SendQueueEntry)).empty;
 
         while (send_queue.pop()) |entry| {
             const g = groups.getOrPut(alloc, entry.conn_id) catch {
                 entry.deinit();
                 continue;
             };
-            if (!g.found_existing) g.value_ptr.* = .{ .entries = .empty };
-            g.value_ptr.entries.append(alloc, entry) catch {
+            if (!g.found_existing) g.value_ptr.* = .empty;
+            g.value_ptr.append(alloc, entry) catch {
                 entry.deinit();
                 continue;
             };
@@ -308,18 +294,18 @@ pub const ConnectionManager = struct {
             const group = kv.value_ptr;
 
             // Skip empty groups
-            if (group.entries.items.len == 0) continue;
+            if (group.items.len == 0) continue;
 
             const conn = self.acquireConnection(conn_id) catch {
                 // Connection gone — release all entries' arenas
-                for (group.entries.items) |e| e.deinit();
+                for (group.items) |e| e.deinit();
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
             // Cork scope: one TCP flush per connection per pass; on flush
             // failure the next send reports backpressure to the outbox.
-            var cork_ctx = DrainCorkCtx{ .conn = conn, .entries = group.entries.items };
+            var cork_ctx = DrainCorkCtx{ .conn = conn, .entries = group.items };
             conn.ws.corkScope(&cork_ctx, sendEntriesInCorkScope);
         }
     }
@@ -426,12 +412,6 @@ pub const ConnectionManager = struct {
         self.sweepExpiredTokens();
     }
 };
-
-// Default send-broadcast helper used by other modules (e.g. presence manager).
-pub fn sendToConnection(ctx: *anyopaque, conn_id: u64, data: []const u8) void {
-    const cm: *ConnectionManager = @ptrCast(@alignCast(ctx));
-    cm.sendToConnection(conn_id, data);
-}
 
 const DrainCorkCtx = struct {
     conn: *Connection,

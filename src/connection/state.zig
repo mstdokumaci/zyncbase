@@ -150,18 +150,13 @@ pub const Connection = struct {
 
     /// Activate a pooled connection for a new client session.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
-        self.resetSession();
+        self.resetSessionLocked();
         self.id = id;
         self.ws = ws;
         self.ref_count.store(1, .release);
         self.created_at = std.time.timestamp();
         self.request_tokens = 0;
         self.last_request_time = null;
-    }
-
-    /// Reset session-specific state and free dynamic memory.
-    pub fn resetSession(self: *Connection) void {
-        self.resetSessionLocked();
     }
 
     pub fn resetSessionLocked(self: *Connection) void {
