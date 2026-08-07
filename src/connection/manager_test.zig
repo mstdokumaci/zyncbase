@@ -2,7 +2,9 @@ const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
 const test_helpers = @import("test_helpers.zig");
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const send_queue_type = @import("send_queue.zig").send_queue;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -304,7 +306,14 @@ test "ConnectionManager: drain sends each entry as its own frame" {
     send_count.store(0, .monotonic);
 
     const conn_id = dummy_ws.getConnId();
-    var queue = app.test_context.send_queue orelse return error.TestExpectedValue;
+
+    // Local queue + node pool: the queue is a pointer-linked structure, so
+    // copies would share nodes with the source — build one of our own.
+    var node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try node_pool.init(app.memory_strategy.generalAllocator(), 64, null, null);
+    defer node_pool.deinit();
+    var queue = try send_queue_type.init(&node_pool);
+    defer queue.deinit();
 
     // Two entries for one connection — never concatenated: the client
     // decodes exactly one message per frame.
