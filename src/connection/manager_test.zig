@@ -2,7 +2,9 @@ const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
 const test_helpers = @import("test_helpers.zig");
+const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const send_queue_type = @import("send_queue.zig").send_queue;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -287,6 +289,49 @@ test "ConnectionManager: concurrent reads preserve live set" {
         app.connection_manager.onClose(ws);
     }
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
+}
+
+test "ConnectionManager: drain sends each entry as its own frame" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-drain-frames", &.{});
+    defer app.deinit();
+
+    var send_count = std.atomic.Value(u64).init(0);
+    var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    dummy_ws.test_send_count = &send_count;
+    try app.connection_manager.onOpen(&dummy_ws);
+    defer app.connection_manager.onClose(&dummy_ws);
+    // onOpen sends connected + schema-sync setup messages — ignore them.
+    send_count.store(0, .monotonic);
+
+    const conn_id = dummy_ws.getConnId();
+
+    // Local queue + node pool: the queue is a pointer-linked structure, so
+    // copies would share nodes with the source — build one of our own.
+    var node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try node_pool.init(app.memory_strategy.generalAllocator(), 64, null, null);
+    defer node_pool.deinit();
+    var queue = try send_queue_type.init(&node_pool);
+    defer queue.deinit();
+
+    // Two entries for one connection — never concatenated: the client
+    // decodes exactly one message per frame.
+    const handle = try app.memory_strategy.acquireArenaDeferred();
+    const arena_alloc = handle.allocator();
+    const msg1 = try arena_alloc.dupe(u8, "first-message");
+    const msg2 = try arena_alloc.dupe(u8, "second-message");
+    handle.retain();
+    try queue.push(.{ .conn_id = conn_id, .data = msg1, .arena = handle });
+    handle.retain();
+    try queue.push(.{ .conn_id = conn_id, .data = msg2, .arena = handle });
+    handle.release();
+
+    app.connection_manager.drainSendQueue(&queue);
+
+    // One ws.send per entry — concatenation would produce a frame the SDK
+    // cannot decode.
+    try testing.expectEqual(@as(u64, 2), send_count.load(.monotonic));
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {

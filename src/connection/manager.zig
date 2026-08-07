@@ -46,7 +46,7 @@ pub const ConnectionManager = struct {
     /// Notifier fired when the last connection closes during shutdown.
     last_conn_notifier: Notifier = .{},
 
-    /// Arena for temporary allocations during drainSendQueue batched processing.
+    /// Arena for temporary allocations during drainSendQueue grouping.
     drain_arena: std.heap.ArenaAllocator,
 
     pub fn init(
@@ -210,8 +210,7 @@ pub const ConnectionManager = struct {
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
-            _ = self.active_connection_count.fetchSub(1, .acq_rel);
-            if (self.active_connection_count.load(.acquire) == 0) {
+            if (self.active_connection_count.fetchSub(1, .acq_rel) == 1) {
                 self.last_conn_notifier.notify();
             }
             std.log.info("Client disconnected: id={}", .{conn_id});
@@ -228,19 +227,9 @@ pub const ConnectionManager = struct {
     }
 
     fn sendOrClose(conn: *Connection, data: []const u8) void {
-        conn.send(data) catch |err| switch (err) {
-            error.Dropped => {
-                std.log.warn("Connection {} dropped by uWS, closing", .{conn.id});
-                conn.ws.close();
-            },
-            error.Full => {
-                std.log.warn("Connection {} outbox full (slow client), closing", .{conn.id});
-                conn.ws.close();
-            },
-            else => {
-                std.log.err("Connection {} unexpected send error: {}", .{ conn.id, err });
-                conn.ws.close();
-            },
+        conn.send(data) catch |err| {
+            std.log.warn("Connection {} send failed ({}), closing", .{ conn.id, err });
+            conn.ws.close();
         };
     }
 
@@ -276,66 +265,48 @@ pub const ConnectionManager = struct {
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
-    /// Groups entries by conn_id and sends one concatenated message per connection.
+    /// Groups entries by conn_id and sends each entry as its own frame under a
+    /// per-connection cork scope. Entries are never concatenated: the client
+    /// decodes exactly one message per frame.
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
         _ = self.drain_arena.reset(.retain_capacity);
         const alloc = self.drain_arena.allocator();
 
         // Phase 1: pop all entries, group by conn_id
-        const Group = struct {
-            entries: std.ArrayListUnmanaged(SendQueueEntry),
-        };
-        var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
+        var groups = std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(SendQueueEntry)).empty;
 
         while (send_queue.pop()) |entry| {
             const g = groups.getOrPut(alloc, entry.conn_id) catch {
                 entry.deinit();
                 continue;
             };
-            if (!g.found_existing) g.value_ptr.* = .{ .entries = .empty };
-            g.value_ptr.entries.append(alloc, entry) catch {
+            if (!g.found_existing) g.value_ptr.* = .empty;
+            g.value_ptr.append(alloc, entry) catch {
                 entry.deinit();
                 continue;
             };
         }
 
-        // Phase 2: per connection, concatenate and send
+        // Phase 2: per connection, send each entry as its own frame
         var it = groups.iterator();
         while (it.next()) |kv| {
             const conn_id = kv.key_ptr.*;
             const group = kv.value_ptr;
 
             // Skip empty groups
-            if (group.entries.items.len == 0) continue;
+            if (group.items.len == 0) continue;
 
             const conn = self.acquireConnection(conn_id) catch {
                 // Connection gone — release all entries' arenas
-                for (group.entries.items) |e| e.deinit();
+                for (group.items) |e| e.deinit();
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            // Compute total size
-            var total: usize = 0;
-            for (group.entries.items) |e| total += e.data.len;
-
-            // Build concatenated buffer in drain arena
-            const buf = alloc.alloc(u8, total) catch {
-                for (group.entries.items) |e| e.deinit();
-                continue;
-            };
-
-            var offset: usize = 0;
-            for (group.entries.items) |e| {
-                @memcpy(buf[offset..][0..e.data.len], e.data);
-                offset += e.data.len;
-            }
-
-            // Release original arenas — data has been copied into drain arena
-            for (group.entries.items) |e| e.deinit();
-
-            // Send — one ws.send() per connection instead of one per entry
-            sendOrClose(conn, buf);
+            // Cork scope: one TCP flush per connection per pass; on flush
+            // failure the next send reports backpressure to the outbox.
+            var cork_ctx = DrainCorkCtx{ .conn = conn, .entries = group.items };
+            conn.ws.corkScope(&cork_ctx, sendEntriesInCorkScope);
         }
     }
 
@@ -442,8 +413,15 @@ pub const ConnectionManager = struct {
     }
 };
 
-// Default send-broadcast helper used by other modules (e.g. presence manager).
-pub fn sendToConnection(ctx: *anyopaque, conn_id: u64, data: []const u8) void {
-    const cm: *ConnectionManager = @ptrCast(@alignCast(ctx));
-    cm.sendToConnection(conn_id, data);
+const DrainCorkCtx = struct {
+    conn: *Connection,
+    entries: []const SendQueueEntry,
+};
+
+fn sendEntriesInCorkScope(ctx: ?*anyopaque) void {
+    const cork_ctx: *DrainCorkCtx = @ptrCast(@alignCast(ctx.?));
+    for (cork_ctx.entries) |e| {
+        ConnectionManager.sendOrClose(cork_ctx.conn, e.data);
+        e.deinit();
+    }
 }

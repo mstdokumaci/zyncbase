@@ -156,6 +156,13 @@ static void *uws_ws_get_user_data_impl(uws_websocket_t *ws) {
 }
 
 template<bool SSL>
+static void uws_ws_cork_scope_impl(uws_websocket_t *ws,
+                                   void (*cb)(void *ctx), void *ctx) {
+    auto *uws = (uWS::WebSocket<SSL, true, void *> *)ws;
+    uws->cork([cb, ctx]() { cb(ctx); });
+}
+
+template<bool SSL>
 static void uws_ws_close_impl(uws_websocket_t *ws) {
     ((uWS::WebSocket<SSL, true, void *> *)ws)->close();
 }
@@ -289,6 +296,13 @@ extern "C"
     {
         if (ssl) return uws_ws_send_impl<true>(ws, message, length, opcode);
         return uws_ws_send_impl<false>(ws, message, length, opcode);
+    }
+
+    void uws_ws_cork_scope(int ssl, uws_websocket_t *ws,
+                           void (*cb)(void *ctx), void *ctx)
+    {
+        if (ssl) uws_ws_cork_scope_impl<true>(ws, cb, ctx);
+        else     uws_ws_cork_scope_impl<false>(ws, cb, ctx);
     }
 
     void uws_res_upgrade(

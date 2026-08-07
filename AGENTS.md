@@ -64,7 +64,7 @@ Important: Project is still in early development stage. Give no consideration to
 ## Linting
 - **Run Linter:** `bun run lint`
 - **Fix Imports & Format:** `bun run lint:fix`
-- **Biome Check:** `bunx biome check --write`
+- **Biome Check:** `bunx biome check --write --error-on-warnings`
 
 # Actions Upon Task Completion
 
@@ -72,7 +72,7 @@ Before submitting a task or notifying the user, ensure the following steps are p
 
 1. **Run Linter:**
    - Run `bun run lint` to ensure no new linting issues were introduced. Fix or suppress as necessary.
-   - **Biome Check:** Run `bunx biome check --write` to format and lint TypeScript/JavaScript code.
+   - **Biome Check:** Run `bunx biome check --write --error-on-warnings` to format and lint TypeScript/JavaScript code.
 
 2. **Run relevant tests:**
    - If core logic was changed, run `zig build test`.

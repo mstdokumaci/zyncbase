@@ -22,11 +22,7 @@ export interface ListenProjection {
 export interface MaterializedView {
 	/** Current records keyed by document id. Values are unflattened. */
 	records: Map<string, JsonValue>;
-	/** Source of truth for sorted order. Kept in sync with records Map. */
-	sortedList: JsonValue[];
-	/** Collection name — needed to extract id from delta op paths. */
-	collection: string;
-	/** Comparator for maintaining orderBy sort. Null = no ordering. */
+	/** Comparator for orderBy sort on snapshot. Null = no ordering. */
 	comparator: ((a: JsonValue, b: JsonValue) => number) | null;
 }
 
@@ -47,6 +43,8 @@ export interface SubscriptionEntry {
 export class SubscriptionTracker {
 	private readonly subscriptions = new Map<number, SubscriptionEntry>();
 	private readonly deltaQueue: StoreDelta[] = [];
+	private pendingDeltas: StoreDelta[] = [];
+	private flushScheduled = false;
 	private connected = true;
 	private debug = false;
 
@@ -78,7 +76,6 @@ export class SubscriptionTracker {
 		subId: number,
 		params: Omit<StoreSubscribe, "id">,
 		callback: (results: JsonValue[]) => void,
-		collection: string,
 		orderBy?: QueryOptions["orderBy"],
 	): void {
 		this.register(subId, {
@@ -87,8 +84,6 @@ export class SubscriptionTracker {
 			projection: null,
 			materializedView: {
 				records: new Map(),
-				sortedList: [],
-				collection,
 				comparator: buildComparator(orderBy),
 			},
 		});
@@ -125,13 +120,85 @@ export class SubscriptionTracker {
 	/**
 	 * Dispatch a StoreDelta to the appropriate subscription callbacks.
 	 * If disconnected, the delta is queued for later delivery.
+	 *
+	 * Materialized-view (store.subscribe) deltas batch: ops apply to the
+	 * pending buffer, callbacks fire once per event-loop tick with the current
+	 * snapshot. Projection (store.listen) deltas dispatch synchronously.
 	 */
 	dispatch(delta: StoreDelta): void {
 		if (!this.connected) {
 			this.deltaQueue.push(delta);
 			return;
 		}
+		const entry = this.subscriptions.get(delta.subId);
+		if (entry?.materializedView) {
+			this.pendingDeltas.push(delta);
+			this.scheduleFlush();
+			return;
+		}
 		this._dispatchDelta(delta);
+	}
+
+	/**
+	 * Schedule one flush on the next event-loop tick; a burst of deltas
+	 * within a tick shares one callback per subscription.
+	 */
+	private scheduleFlush(): void {
+		if (this.flushScheduled) return;
+		this.flushScheduled = true;
+		setTimeout(() => {
+			this.flushScheduled = false;
+			this._flushPending();
+		}, 0);
+	}
+
+	/**
+	 * Apply all pending deltas (per subscription, in arrival order) and
+	 * invoke each subscription's callbacks once with the current snapshot.
+	 */
+	private _flushPending(): void {
+		const pending = this.pendingDeltas;
+		this.pendingDeltas = [];
+		if (pending.length === 0) return;
+
+		if (this.debug) {
+			console.log(`[SDK] Flushing ${pending.length} pending delta(s)`);
+		}
+
+		const bySub = new Map<number, StoreDelta[]>();
+		for (const delta of pending) {
+			const list = bySub.get(delta.subId);
+			if (list) {
+				list.push(delta);
+			} else {
+				bySub.set(delta.subId, [delta]);
+			}
+		}
+
+		for (const [subId, deltas] of bySub) {
+			const entry = this.subscriptions.get(subId);
+			if (entry) {
+				this._applyToSubscription(entry, deltas);
+			}
+		}
+	}
+
+	private _applyToSubscription(
+		entry: SubscriptionEntry,
+		deltas: StoreDelta[],
+	): void {
+		if (!entry.materializedView) return;
+		for (const delta of deltas) {
+			this._applyOpsToView(entry.materializedView, delta.ops);
+		}
+		const value = this._snapshotView(entry.materializedView);
+		for (const cb of entry.callbacks) {
+			try {
+				cb(value);
+			} catch (err) {
+				console.error("[SDK] Subscription callback threw:", err);
+			}
+		}
 	}
 
 	dispatchInitialSnapshot(
@@ -187,6 +254,9 @@ export class SubscriptionTracker {
 			this.subscriptions.set(id, entry);
 		}
 
+		// Drop pre-reconnect deltas still in the pending buffer: an already
+		// armed flush timer would otherwise apply them after the view clear.
+		this.pendingDeltas = [];
 		// Clear materialized views — they'll be re-populated from fresh snapshots
 		this.clearMaterializedViews();
 
@@ -196,10 +266,11 @@ export class SubscriptionTracker {
 			beforeDrain(oldToNew);
 		}
 
-		// Drain queued deltas
+		// Drain queued deltas — routed through dispatch so materialized views
+		// batch them under the same per-tick flush semantics.
 		const queued = this.deltaQueue.splice(0);
 		for (const delta of queued) {
-			this._dispatchDelta(delta);
+			this.dispatch(delta);
 		}
 	}
 
@@ -211,7 +282,6 @@ export class SubscriptionTracker {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
-				entry.materializedView.sortedList.length = 0;
 			}
 		}
 	}
@@ -242,7 +312,11 @@ export class SubscriptionTracker {
 		}
 
 		for (const cb of entry.callbacks) {
-			cb(value);
+			try {
+				cb(value);
+			} catch (err) {
+				console.error("[SDK] Subscription callback threw:", err);
+			}
 		}
 	}
 
@@ -353,8 +427,8 @@ export class SubscriptionTracker {
 	): void {
 		const record =
 			op.value !== null &&
-			typeof op.value === "object" &&
-			!Array.isArray(op.value)
+				typeof op.value === "object" &&
+				!Array.isArray(op.value)
 				? unflatten(op.value as Record<string, JsonValue>)
 				: op.value;
 
@@ -362,86 +436,25 @@ export class SubscriptionTracker {
 			(record as Record<string, JsonValue>).id = id;
 		}
 
-		const oldRecord = view.records.get(id);
-
-		if (view.comparator === null) {
-			this._updateSortedListNoOrder(view, record, oldRecord);
-		} else {
-			this._updateSortedListWithOrder(view, record, oldRecord, view.comparator);
-		}
-
+		// Map.set keeps insertion position for existing keys; ordered
+		// queries sort at snapshot.
 		view.records.set(id, record);
 	}
 
-	private _updateSortedListNoOrder(
-		view: MaterializedView,
-		record: JsonValue,
-		oldRecord: JsonValue | undefined,
-	): void {
-		if (oldRecord !== undefined) {
-			const idx = view.sortedList.indexOf(oldRecord);
-			if (idx !== -1) {
-				view.sortedList.splice(idx, 1, record);
-				return;
-			}
-		}
-		view.sortedList.push(record);
-	}
-
-	private _updateSortedListWithOrder(
-		view: MaterializedView,
-		record: JsonValue,
-		oldRecord: JsonValue | undefined,
-		comparator: (a: JsonValue, b: JsonValue) => number,
-	): void {
-		if (oldRecord !== undefined) {
-			const oldIdx = view.sortedList.indexOf(oldRecord);
-			if (oldIdx !== -1) view.sortedList.splice(oldIdx, 1);
-		}
-		const newIdx = this._binarySearchInsertIndex(
-			view.sortedList,
-			record,
-			comparator,
-		);
-		view.sortedList.splice(newIdx, 0, record);
-	}
-
 	private _handleRemoveOp(view: MaterializedView, id: string): void {
-		const oldRecord = view.records.get(id);
-		if (oldRecord !== undefined) {
-			const idx = view.sortedList.indexOf(oldRecord);
-			if (idx !== -1) view.sortedList.splice(idx, 1);
-		}
 		view.records.delete(id);
 	}
 
 	/**
-	 * Create a sorted snapshot array from the materialized view.
+	 * Snapshot array from the view; sorted only when an orderBy comparator
+	 * exists.
 	 */
 	private _snapshotView(view: MaterializedView): JsonValue[] {
-		return [...view.sortedList];
-	}
-
-	/**
-	 * Find insertion index for stable sort (O(log N)).
-	 */
-	private _binarySearchInsertIndex(
-		list: JsonValue[],
-		item: JsonValue,
-		comparator: (a: JsonValue, b: JsonValue) => number,
-	): number {
-		let low = 0;
-		let high = list.length;
-		while (low < high) {
-			const mid = (low + high) >>> 1;
-			// <= 0 ensures we insert AFTER equal elements (Stable Sort)
-			if (comparator(list[mid], item) <= 0) {
-				low = mid + 1;
-			} else {
-				high = mid;
-			}
+		const records = Array.from(view.records.values());
+		if (view.comparator) {
+			records.sort(view.comparator);
 		}
-		return low;
+		return records;
 	}
 }
 

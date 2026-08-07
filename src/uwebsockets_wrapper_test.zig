@@ -143,6 +143,48 @@ test "WebSocketServer: listen binds configured host" {
     try testing.expect(server.listen_socket != null);
 }
 
+fn testWakeupCheck(ctx: ?*anyopaque) bool {
+    const pending: *std.atomic.Value(bool) = @ptrCast(@alignCast(ctx.?));
+    return pending.load(.acquire);
+}
+
+test "WebSocketServer: listen wakes loop when wakeup raced ahead of loop publish" {
+    const allocator = testing.allocator;
+
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, .{ .port = 0, .host = "127.0.0.1", .ssl = false });
+    defer server.deinit();
+
+    var wakeup_count = std.atomic.Value(u64).init(0);
+    var pending = std.atomic.Value(bool).init(true); // dispatch before publish
+    server.test_wakeup_count = &wakeup_count;
+    server.wakeup_pending_check = testWakeupCheck;
+    server.wakeup_pending_check_ctx = &pending;
+
+    try server.listen();
+
+    try testing.expect(server.loop.load(.acquire) != null);
+    try testing.expectEqual(@as(u64, 1), wakeup_count.load(.acquire));
+}
+
+test "WebSocketServer: listen skips wakeup when nothing is pending" {
+    const allocator = testing.allocator;
+
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, .{ .port = 0, .host = "127.0.0.1", .ssl = false });
+    defer server.deinit();
+
+    var wakeup_count = std.atomic.Value(u64).init(0);
+    var pending = std.atomic.Value(bool).init(false);
+    server.test_wakeup_count = &wakeup_count;
+    server.wakeup_pending_check = testWakeupCheck;
+    server.wakeup_pending_check_ctx = &pending;
+
+    try server.listen();
+
+    try testing.expectEqual(@as(u64, 0), wakeup_count.load(.acquire));
+}
+
 test "WebSocketServer: listen reports bind failure" {
     const allocator = testing.allocator;
 

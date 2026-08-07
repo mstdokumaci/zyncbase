@@ -2,6 +2,7 @@ const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const FlushResult = @import("state.zig").FlushResult;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -252,4 +253,36 @@ test "connection: state deallocation edge cases" {
         }
         app.connection_manager.onClose(&dummy_ws);
     }
+}
+
+test "connection: outbox flush sends one frame per entry under a cork scope" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "state-outbox-flush", &.{});
+    defer app.deinit();
+
+    var send_count = std.atomic.Value(u64).init(0);
+    var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    dummy_ws.test_send_count = &send_count;
+    try app.connection_manager.onOpen(&dummy_ws);
+    // onOpen sends connected + schema-sync setup messages — ignore them.
+    send_count.store(0, .monotonic);
+
+    const conn = try app.connection_manager.acquireConnection(dummy_ws.getConnId());
+    defer if (conn.release()) app.releaseConnection(conn);
+
+    try conn.outbox.enqueue(conn.allocator, "entry-one");
+    try conn.outbox.enqueue(conn.allocator, "entry-two");
+    try conn.outbox.enqueue(conn.allocator, "entry-three");
+    conn.is_backpressured = true;
+
+    const result = conn.flushOutbox();
+    try testing.expectEqual(FlushResult.success, result);
+
+    // All entries sent as individual frames, outbox drained, flag cleared.
+    try testing.expectEqual(@as(u64, 3), send_count.load(.monotonic));
+    try testing.expectEqual(conn.outbox.head, conn.outbox.tail);
+    try testing.expectEqual(false, conn.is_backpressured);
+
+    app.connection_manager.onClose(&dummy_ws);
 }

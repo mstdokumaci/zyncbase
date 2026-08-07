@@ -40,21 +40,17 @@ pub const Outbox = struct {
     }
 
     pub fn flush(self: *Outbox, ws: *WebSocket, allocator: Allocator) FlushResult {
-        while (self.tail != self.head) {
-            const data = self.entries[self.tail];
-            const status = ws.send(data, .binary);
-            allocator.free(data);
-            self.tail = (self.tail + 1) % outbox_capacity;
-            switch (status) {
-                .success => {},
-                .backpressure => return .backpressure,
-                .dropped => {
-                    self.deinit(allocator);
-                    return .dropped;
-                },
-            }
-        }
-        return .success;
+        var result: FlushResult = .success;
+        var ctx = OutboxFlushCtx{
+            .outbox = self,
+            .ws = ws,
+            .allocator = allocator,
+            .result = &result,
+        };
+        // Cork scope: one flush per write; uWS buffers frames internally on
+        // failure (the next send then reports backpressure).
+        ws.corkScope(&ctx, flushEntriesInCorkScope);
+        return result;
     }
 
     pub fn deinit(self: *Outbox, allocator: Allocator) void {
@@ -68,6 +64,35 @@ pub const Outbox = struct {
         return (self.head + 1) % outbox_capacity == self.tail;
     }
 };
+
+const OutboxFlushCtx = struct {
+    outbox: *Outbox,
+    ws: *WebSocket,
+    allocator: Allocator,
+    result: *FlushResult,
+};
+
+fn flushEntriesInCorkScope(ctx: ?*anyopaque) void {
+    const c: *OutboxFlushCtx = @ptrCast(@alignCast(ctx.?));
+    while (c.outbox.tail != c.outbox.head) {
+        const data = c.outbox.entries[c.outbox.tail];
+        const status = c.ws.send(data, .binary);
+        c.allocator.free(data);
+        c.outbox.tail = (c.outbox.tail + 1) % outbox_capacity;
+        switch (status) {
+            .success => {},
+            .backpressure => {
+                c.result.* = .backpressure;
+                return;
+            },
+            .dropped => {
+                c.outbox.deinit(c.allocator);
+                c.result.* = .dropped;
+                return;
+            },
+        }
+    }
+}
 
 pub const unset_namespace_id: i64 = -1;
 
@@ -125,18 +150,13 @@ pub const Connection = struct {
 
     /// Activate a pooled connection for a new client session.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
-        self.resetSession();
+        self.resetSessionLocked();
         self.id = id;
         self.ws = ws;
         self.ref_count.store(1, .release);
         self.created_at = std.time.timestamp();
         self.request_tokens = 0;
         self.last_request_time = null;
-    }
-
-    /// Reset session-specific state and free dynamic memory.
-    pub fn resetSession(self: *Connection) void {
-        self.resetSessionLocked();
     }
 
     pub fn resetSessionLocked(self: *Connection) void {
