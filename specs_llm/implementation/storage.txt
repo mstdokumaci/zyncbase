@@ -28,7 +28,7 @@ Storage [ADR-005-storage-010-resolution-write-018]-acknowledgement-consistency [
 | `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | Type alias for the SPSC write op queue. `IndexPool` provides zero-allocation pooled nodes. |
 | `ReadWorkerPool` / `ReadWorker` | `workerPool`, `managedThread`, `read_request_queue`, `SendQueue`, `Notifier` | Pool of dedicated reader threads; each `ReadWorker` owns an exclusive `ReaderNode` (SQLite connection + statement cache). |
 | `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its writer allocator for safe cross-thread handoff to subscription workers. |
-| `PkSet` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
+| `pk_set_type` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
 | `ColumnValue` | typed values | Represents values bound into SQLite statements. |
 | `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
 | `MigrationPlan` | old/new schema metadata | Describes required schema changes before execution. |
@@ -85,4 +85,4 @@ Buffer| Buffer | Capacity | Notes |
 | Session resolution buffer | Writer thread (producer) → uWS event loop (consumer) | Atomic ring buffer with overflow mutex | SPSC ring buffer with overflow. |
 | Write outcome delivery | Writer thread (producer) → uWS event loop (consumer) | Lock-free MPSC `SendQueue` | Writer encodes `WriteCommitted`/`WriteError` and pushes owned bytes to `SendQueue`. |
 | `SendQueue` drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
-writes enter single-writer path bypassing breaks acknowledgement ordering Write acknowledgement encoding writer thread after transaction outcome writer pushes byte slices `SendQueue wakes event loop Background producers call_wakeup_loop( after enqueue loop Reader threads execute SQLite queries dedicated connections no contention event loop writer thread StoreSubscribe registration `MessageHandler before read request enqueued Metadata cache lock-free safe for concurrent reads reader writer thread Cache uses writer version snapshot race protection Grammar Engine Pagination Taxonomy
+writes enter single-writer path bypassing breaks acknowledgement ordering Write acknowledgement encoding writer thread after transaction outcome writer pushes byte slices `SendQueue wakes event loop Background producers call_wakeup_loop( after enqueue loop Reader threads execute SQLite queries dedicated connections no contention event loop writer thread StoreSubscribe registration `MessageHandler before read request enqueued Metadata cache lock-free safe concurrent reads reader writer Cache uses writer version snapshot race protection Related Specifications Grammar Engine Pagination Taxonomy

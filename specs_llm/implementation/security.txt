@@ -1,6 +1,6 @@
 Security [ADR-016-authorization [ADR-015-session [Auth Exchange System Taxonomy Security layered transport admission parser/resource limits authentication scoped session resolution authorization teardown fail Client SDK checks convenience server-side validation authoritative Source Files| File | Responsibility |
 |------|----------------|
-| `src/config_loader.zig` | Security config values such as origins, message limits, and rate limits. |
+| `src/config/state.zig` | Security config values such as origins, message limits, and rate limits. |
 | `src/uwebsockets_wrapper.zig`, `src/uws_bridge.cpp` | Transport callbacks and origin/frame admission surface. |
 | `src/message_handler.zig` | Rate limiting, parser error handling, scoped session gate, and error propagation. |
 | `src/connection/violations.zig` | Repeated malformed/security-violation tracking. |
@@ -33,4 +33,4 @@ Security [ADR-016-authorization [ADR-015-session [Auth Exchange System Taxonomy 
 | `AuthConfig` | schema, authorization parser | Runtime authorization rule set from `authorization.json`. |
 | `EvalContext` | session, namespace, record/document values | Resolves authorization operands and conditions. |
 | `ReadAuthInput` / `WriteAuthInput` | query/schema/session data | Builds read predicates and write authorization decisions. |
-Fail-Closed Rules Missing auth configuration namespace/store rule denies access unless Store operations require scope presence scope readiness Namespace switching rejected for incompatible.namespaced scope Authorization lowering failure denies operation Unknown fields invalid operators schema mismatches fail before storage mutation error codes retry behavior in Taxonomy Resource Limits Message size limits parser not domain Rate limiting returns_LIMITED error optional malformed-sensitive payloads close connection Allocator exhaustion request/server failure partial authorization success [Auth Exchange System Grammar Handler
+Fail-Closed Rules Missing auth configuration namespace/store rule denies access unless Store require scope presence scope readiness Namespace switching rejected for incompatible.namespaced scope Authorization lowering failure denies operation Unknown fields invalid operators schema mismatches fail before storage mutation error codes retry behavior in Taxonomy Resource Limits Message size limits parser not domain Rate limiting_LIMITED error optional malformed-sensitive payloads close connection Allocator exhaustion request/server failure partial authorization success Related Specifications [Auth Exchange System Grammar Handler

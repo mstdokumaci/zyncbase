@@ -28,8 +28,7 @@ ZyncBase Server Configuration guide with JSON files Table of Contents [Configura
   "authentication": {
     "ticket": {
       "secret": "${TICKET_SECRET}",
-      "ttlSeconds": 60,
-      "singleUse": true
+      "ttlSeconds": 60
     },
     "jwt": {
       "secret": "${JWT_SECRET}",
@@ -109,8 +108,7 @@ ZyncBase Server Configuration guide with JSON files Table of Contents [Configura
   "authentication": {
     "ticket": {
       "secret": "${TICKET_SECRET}",
-      "ttlSeconds": 60,
-      "singleUse": true
+      "ttlSeconds": 60
     },
     "jwt": {
       "secret": "${JWT_SECRET}",
@@ -136,7 +134,7 @@ ZyncBase Server Configuration guide with JSON files Table of Contents [Configura
     }
   }
 }
-```Settings `secret Signing ZyncBase tickets omitted ephemeral secret invalidates tickets restart `ttlSeconds Ticket lifetime before WebSocket upgrade Tickets short-lived WebSocket URL `singleUse` ticket redeemed once enabled Settings `secret Shared secret JWT algorithms `jwksUrl public keys asymmetric JWT algorithms `algorithm Expected JWT algorithm `issuer `iss claim `audience `aud claim `subjectClaim external identity string `sub` Claim Projection `session.claims maps$session names verified JWT claim names permission inputs ZyncBase `users` row not loaded$session authorization reserved `users` collection maps external subject internal `users.id` `owner_id presence identity profile/display data `session.tokenGracePeriodSeconds Grace period after JWT expiry before connection SDK tokens before expiry safety slow refreshes Default 30 seconds **Anonymous Auth.enabled SDK request ticket high-entropy client-generated anonymous subject Anonymous subjects use same `users.id mapping authorization flow authenticated [README API overview [Store API Reference-api.md use store configured API Reference-api.md presence configuration context `dataDir Directory SQLite database data files```json
+```Settings `secret Signing ZyncBase tickets omitted ephemeral secret invalidates tickets restart `ttlSeconds Ticket lifetime before WebSocket upgrade Tickets short-lived travel WebSocket URL Settings `secret Shared secret JWT algorithms `jwksUrl public keys asymmetric JWT algorithms `algorithm Expected JWT algorithm `issuer `iss claim `audience `aud claim `subjectClaim external identity string `sub` Claim Projection.claims maps$session names verified JWT claim names permission inputs ZyncBase `users` row not loaded$session authorization reserved `users` collection maps external subject internal `users.id` `owner_id presence identity profile/display data.tokenGracePeriodSeconds Grace period after JWT expiry before connection SDK tokens before expiry safety slow refreshes Default 30 seconds Auth `anonymous.enabled SDK request ticket high-entropy client-generated anonymous subject Anonymous subjects use same `users.id` mapping authorization flow authenticated subjects Related Specifications [README API overview API Reference [Presence API Reference-api.md presence configuration context SQLite database data files```json
 {
   "dataDir": "./data"
 }
@@ -315,7 +313,7 @@ $data` variable available in `presenceWrite rules exposes incoming field values 
     }
   }
 }
-```Custom fields `users `required server auto-creates identity rows session needs internal user ID before application profile data If `users.namespaced = true external identity different user IDs namespaces ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries document structure```sql
+```Custom fields `users `required server-creates identity rows session user ID before profile data If `users.namespaced = true external identity different user IDs namespaces Automatic Column Flattening ZyncBase flattens objects into column names double underscore separator enables SQL queries document-like structure```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id INTEGER NOT NULL, -- 0 for the default global users collection
@@ -346,7 +344,7 @@ CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, exter
     }
   }
 }
-```Nested Fields Flattening ZyncBase flattens objects querying```json
+```Nested Fields ZyncBase flattens objects```json
 {
   "store": {
     "users": {
@@ -364,7 +362,7 @@ CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, exter
     }
   }
 }
-```API nested objects work```typescript
+```Client API```typescript
 // Set nested fields (at any depth)
 await zyncbase.set('users.user-1', {
   name: 'Alice',
@@ -384,7 +382,7 @@ await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
 const users = await zyncbase.query('users', {
   where: { 'address.location.lat': { gte: 37 } }
 })
-```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings Efficient querying SQLite indexes on flattened columns Unlimited nesting depth for fields to 1024 fields per table Clean client-side experience manual flattening Nested objects contain arrays leaf level recursion depth limited by maximum fields per table (1024) Field names contain `__` flattening separator `presence` fields support **arbitrary nesting depth** to 500 flat fields per tier ZyncBase supports constraints Simple arrays```json
+```Implementation Nested fields flattened to columns double underscore separator field names `__` collisions server reconstructs nested structure operations string identifiers replaced by numeric index mappings SQLite indexes operate on flattened columns nested fields support 1024 fields per table Client applications use JavaScript nested objects without manual flattening Constraints Nested objects arrays recursion depth limited by maximum fields per table (1024) Field names contain `__` `presence fields support arbitrary nesting depth 500 flat fields per ZyncBase supports arrays type constraints Primitive Arrays```json
 {
   "store": {
     "tasks": {
@@ -397,14 +395,11 @@ const users = await zyncbase.query('users', {
     }
   }
 }
-```
-
-**Client API:**
-```typescript
-await zyncbase.set(tasks.task-1', {
+```Client API```typescript
+await zyncbase.set('tasks.task-1', {
   tags: ["urgent", "backend"]
 })
-```array behavior sorted Elements match schema `items type `null nested arrays objects Arrays normalized sorted unique form write Reads query equality observe unique representation Arrays objects```json
+```Array Normalization Elements match schema type `null nested arrays objects rejected Arrays normalized unique form write Reads query equality observe representation Unsupported Arrays Objects```json
 {
   "store": {
     "projects": {
@@ -412,7 +407,7 @@ await zyncbase.set(tasks.task-1', {
         "members": {
           "type": "array",
           "items": {
-            "type": "object",  // ❌ Not allowed
+            "type": "object",  // Not allowed
             "fields": {
               "userId": { "type": "string" },
               "role": { "type": "string" }

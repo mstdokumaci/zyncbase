@@ -73,4 +73,4 @@ function App() {
     </ZyncBaseProvider>
   )
 }
-```See [Store API-api.md store methods [Presence API-api.md methods [Connection Management.md events status [Error Handling].md `ZyncBaseError` interface hook error states
+```Related Specifications [Store API-api.md store methods [Presence API-api.md methods [Connection Management.md events status [Error Handling.md `ZyncBaseError` interface hook error states

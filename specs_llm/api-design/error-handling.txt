@@ -96,4 +96,4 @@ Write Failure Reporting ZyncBase separates state delivery outcome reporting Subs
 | State | ❌ No | 0 | Surface immediately |
 | Validation | ❌ No | 0 | Surface immediately |
 | Client | ❌ No | 0 | Surface immediately |
-See [Connection Management Client lifecycle events API.md Accepted mutation methods [Error Taxonomy internal error catalog retry implementations [Wire Protocol#error-format Error envelope wire format
+Related Specifications [Connection Management Client lifecycle events API.md Accepted mutation methods [Error Taxonomy error catalog retry implementations [Wire Protocol#error-format Error envelope wire format

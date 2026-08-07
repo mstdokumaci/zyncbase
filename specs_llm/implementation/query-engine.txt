@@ -30,4 +30,4 @@ Responsibilities Decode query tuples operators operands Validate table names ope
 | Cursor overfetch | +1 row | `LIMIT` is overfetched by 1 for accurate `hasMore` detection. |
 | Subscription condition matching | Predicate trie + residual evaluation | AND equality branches are indexed; OR/range/residual conditions are evaluated through the query evaluator. |
 | Default query limit | None (unbounded) | Client must supply `limit` for bounded queries. |
-Batch operations exceeding 500 ops return `BATCH_TOO_LARGE Queries without unbounded supply limit predictable performance See [Query Grammar [Cursor Pagination [Storage [TypeScript SDK
+Batch operations exceeding 500 ops return `BATCH_TOO_LARGE Queries without unbounded supply limit predictable performance Related Specifications [Query Grammar [Cursor Pagination [Storage SDK

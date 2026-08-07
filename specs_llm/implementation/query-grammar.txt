@@ -71,4 +71,4 @@ Predicate Normalization Rules Filters simplified execution invariants| Condition
 | `match_all` in AND group | Discarded from evaluation |
 | `match_all` in OR group | OR group simplified to `match_all` |
 | `match_none` in OR group | Discarded from evaluation |
-**Logical Order** AND group OR joined as `AND` `conditions[0` See [Cursor Pagination]-pagination [Storage].md [Schema Grammar]-grammar.md
+**Logical Order** AND group OR joined `AND` `conditions[0` Related Specifications [Cursor Pagination]-pagination [Storage].md [Schema Grammar]-grammar.md

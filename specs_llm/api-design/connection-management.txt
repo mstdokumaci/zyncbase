@@ -108,4 +108,4 @@ client.on('tokenExpired', async () => {
   const newToken = await myAuthService.refresh()
   await client.authRefresh(newToken)
 })
-````token new external JWT `Promise<void>` sends `AuthRefresh wire message See [Wire Protocol#authrefresh details API Persistent state operations [Presence API Ephemeral user awareness [Error Handling Error types retry behavior [Wire Protocol Full wire-level connection lifecycle
+````token new external JWT `Promise<void> sends `AuthRefresh wire message See [Wire Protocol#authrefresh details Related Specifications API Persistent state operations [Presence API Ephemeral user awareness Handling Error types retry behavior [Wire Protocol Full wire-level connection lifecycle

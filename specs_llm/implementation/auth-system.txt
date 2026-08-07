@@ -67,4 +67,4 @@ Authorization Boundaries sub-microsecond performance ZyncBase separates policies
 | Checking `$namespace.project_id` in `$session.read_projects`. | Resolving hierarchical organization tree permissions. |
 | Restricting mutations to `$doc.owner_id == $session.userId`. | Verifying Stripe billing status or credit balances. |
 | Restricting writes to `$session.role` in `["admin", "editor"]`. | Multi-step approval workflows or external policy lookups. |
-See [Auth Exchange]-exchange.md [Auth Grammar].md [Query Grammar-grammar.md [Security].md
+Related Specifications [Auth Exchange-exchange.md [Auth Grammar].md [Query Grammar.md [Security].md

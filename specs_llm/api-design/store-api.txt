@@ -85,4 +85,4 @@ client.store.get(`users.${userId}.name`)
 
 // ✅ Array handles it safely
 client.store.get(['users', userId, 'name'])
-```[Presence API.md user awareness features [Query Language Reference.md Detailed query syntax [Configuration Schema.md schema definitions [Connection Management Client lifecycle events [Error Handling Error types failure reporting
+```Related Specifications [Presence API.md user awareness features Language Reference.md Detailed query syntax [Configuration Schema.md schema definitions Management Client lifecycle events [Error Handling Error types write failure reporting

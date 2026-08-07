@@ -1,7 +1,8 @@
 Configuration Grammar [ADR-003]-configuration-design-zero [Security] [Memory Strategy]-strategy.md defines schema properties constraints server runtime configuration-config.json Source Files| File | Responsibility |
 |------|----------------|
-| `src/config_loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
-| `src/config_loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
+| `src/config/state.zig` | Configuration types: `Config`, `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig`. |
+| `src/config/loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
+| `src/config/loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
 
 ## Important Types
 
@@ -39,7 +40,6 @@ Settings| Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `secret` | `string` | `null` | 32-byte ticket signing secret. If omitted, a runtime secret is generated. |
 | `ttlSeconds` | `number` | `60` | Short-lived WebSocket ticket lifetime. |
-| `singleUse` | `boolean` | `true` | When true, redeemed tickets cannot be used again. |
 `authentication.anonymous| Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `enabled` | `boolean` | `false` | Allows anonymous subjects through the HTTP ticket exchange. |
@@ -67,4 +67,4 @@ Settings| Key | Type | Default | Description |
 | `batchSize` | `number` | `200` | Max number of writes processed in a single transaction. |
 | `batchTimeout` | `number` | `10` | Write batch window collection delay timeout (in ms). |
 | `statementCacheSize` | `number` | `100` | Max number of prepared statements cached per SQLite connection. |
-Configuration Invariants Valid JSON Config loading permissive unknown top-level section keys ignored loader helpers Defaults** duration/timeout parameters parsed milliseconds unless **Variable Substitution** String values support environment variable injection_NAME Validation Failure checks server bootstrap `validateConfig Port range checks (1-65535) Capacity buffer size batch checks > Directory write capability checks `dataDir Missing config file path loads defaults Missing schema file users-only schema configured authorization file readable omitted implicit playground rules used error codes [Error Taxonomy [Security Taxonomy [Auth System
+Configuration Invariants Valid JSON Config loading permissive unknown top-level section keys ignored loader helpers Defaults** duration/timeout parameters parsed milliseconds unless **Variable String values support environment variable injection_NAME Validation Failure checks server bootstrap `validateConfig Port range checks (1-65535) Capacity buffer size batch checks > Directory write capability checks `dataDir Missing config file path loads defaults Missing schema file users-only schema configured authorization file readable omitted implicit playground rules used error codes [Error Taxonomy Related Specifications [Security Taxonomy [Auth System

@@ -302,4 +302,4 @@ client.store.subscribe('tasks', {
     status: { ne: 'archived' }
   }
 }, callback)
-```Limitations Current OR one `or key root level nested Cannot nest OR within OR field Multi-field sorting future release No `count `sum `avg` client-side separate endpoint joins** Query one path at a time (denormalize data Workarounds complex queries **Denormalize Duplicate avoid joins **Multiple queries** Fetch related data separately **Client-side filtering** complex logic **Computed fields** Pre-compute values write [README] API overview entry point API queries SDK [Configuration Schema index configuration
+```Limitations Current OR one `or key root level nested Cannot nest OR within OR field Multi-field sorting future release No `count `sum `avg` client-side separate endpoint joins** Query one path at a time (denormalize data Workarounds complex queries **Denormalize Duplicate avoid joins **Multiple queries** Fetch data separately **Client-side filtering** complex logic **Computed fields** Pre-compute values write Related Specifications [README API overview entry point API queries SDK [Configuration Schema index configuration

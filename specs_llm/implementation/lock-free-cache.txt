@@ -23,4 +23,4 @@ Performance Targets ADR| Metric | Target |
 |--------|--------|
 | Cache throughput | > 100,000 reads/sec on 16-core |
 | Cache latency | Sub-millisecond retrieval |
-**Overflow_deferred_nodes reached cache updates block until reclamation catches backpressure mechanism prevent memory growth See [Threading [Memory Strategy [Storage.md
+_deferred_nodes reached cache updates block until reclamation catches backpressure mechanism prevent memory growth Related Specifications [Threading [Memory Strategy [Storage.md
