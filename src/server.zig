@@ -73,6 +73,7 @@ pub const ZyncBaseServer = struct {
     send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
+    wakeup_pending: std.atomic.Value(bool),
     schema: Schema,
     auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
@@ -215,6 +216,7 @@ pub const ZyncBaseServer = struct {
         self.shutdown_in_progress = false;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
+        self.wakeup_pending = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
         self.shutdown_timeout_timer = null;
 
@@ -766,6 +768,10 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
 
+        // Clear the wakeup flag before draining (and before the shutdown early-return
+        // below) so a stale flag can never suppress a future wakeup.
+        self.wakeup_pending.store(false, .release);
+
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
             if (!self.shutdown_in_progress and !self.shutdown_performed) {
@@ -833,6 +839,11 @@ fn handleSignal(_: c_int) callconv(.c) void {
 fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+    // Coalesce: the post handler drains the whole send queue every loop iteration,
+    // so a burst of dispatches only needs one wakeup. Workers push their entries
+    // before calling this, so any entry queued here is drained by the post handler
+    // run that clears the flag.
+    if (server.wakeup_pending.swap(true, .acquire)) return;
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
     }
