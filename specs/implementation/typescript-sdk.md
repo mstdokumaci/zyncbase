@@ -59,6 +59,12 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
 7. Server pushes update subscription and presence listeners independently of mutation responses.
 
+## Subscription Delivery Contract
+
+- `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load).
+- `store.listen` callbacks are per-delta and synchronous within the message handling task (single-record projection, O(1) per delta).
+- Both preserve per-subscription arrival order; there is no cross-subscription ordering contract.
+
 ## Error And Retry Rules
 
 - Public server codes mirror [Error Taxonomy](./error-taxonomy.md).

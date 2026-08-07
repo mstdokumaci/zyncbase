@@ -284,6 +284,7 @@ async function waitForAllFiredAndConverged(
 	timeoutMs = 15000,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
+	let polls = 0;
 
 	while (!clients.every((c) => c.itemsFired && c.eventsFired)) {
 		if (Date.now() > deadline) {
@@ -295,14 +296,20 @@ async function waitForAllFiredAndConverged(
 			);
 		}
 		await new Promise((resolve) => setTimeout(resolve, 300));
+		polls++;
 	}
 
+	let verifyPasses = 0;
 	while (true) {
 		const errors = [
 			...verifySelfConsistentStates(clients, "A"),
 			...verifySelfConsistentStates(clients, "B"),
 		];
+		verifyPasses++;
 		if (errors.length === 0) {
+			console.log(
+				`[converge] fired after ${polls} polls, verified on pass ${verifyPasses}`,
+			);
 			return;
 		}
 		if (Date.now() > deadline) {
@@ -448,10 +455,13 @@ async function updateRandomRecords(
 export async function run(port: number = 3000) {
 	const TOTAL_CLIENTS = 500;
 	const READ_WRITE_COUNT = 50;
+	const t0 = Date.now();
+	const phase = (label: string) =>
+		console.log(`[t+${Date.now() - t0}ms] ${label}`);
 
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
 	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
-	console.log("All clients connected.");
+	phase("All clients connected.");
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
 
@@ -462,19 +472,17 @@ export async function run(port: number = 3000) {
 	console.log("Creating initial data...");
 	const { createdItemIds, createdEventIds } =
 		await createInitialData(readWriteClients);
-	console.log(
+	phase(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
 
 	console.log("Read-write clients updating random records...");
 	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
-	console.log("All updates complete.");
+	phase("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
 	await waitForAllFiredAndConverged(clients);
-
-	// Sanity check: converged state must be non-empty to guard against
-	// false-positive convergence on empty data (e.g. server sending nothing).
+	phase("All clients converged — filter state is consistent.");
 	const sampleA = clients.find((c) => c.filterSet === "A");
 	const sampleB = clients.find((c) => c.filterSet === "B");
 	if (

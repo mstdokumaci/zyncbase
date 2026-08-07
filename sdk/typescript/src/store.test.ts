@@ -195,11 +195,13 @@ describe("StoreImpl", () => {
 			snapshots.push(value),
 		);
 		await flushPromises();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(handle.hasMore).toBe(true);
 		expect(snapshots).toEqual([[{ id: "u1", name: "Ada" }]]);
 
 		await handle.loadMore();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(messages[1]).toEqual({
 			type: "StoreLoadMore",
@@ -251,7 +253,9 @@ describe("StoreImpl", () => {
 			snapshots.push(value),
 		);
 		await flushPromises();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		await handle.loadMore();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(messages[1]).toEqual({
 			type: "StoreLoadMore",
