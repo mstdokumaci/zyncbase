@@ -52,8 +52,9 @@ describe("SubscriptionTracker delta fan-in performance", () => {
 			`Fan-in (2000 records / 20000 deltas) [ms]: ${elapsedMs.toFixed(2)}  callbacks=${callbackCount}`,
 		);
 
-		// Contract: one callback per flush, not one per delta.
-		expect(callbackCount).toBeLessThan(50);
+		// Contract: exactly two flushes — seed dispatch, then the single-tick
+		// 20000-delta burst. A per-delta callback (or an extra flush) fails here.
+		expect(callbackCount).toBe(2);
 		// Final state: all records present, last write wins per doc.
 		expect(Array.isArray(lastSnapshot)).toBe(true);
 		const snapshot = lastSnapshot as Array<{ id: string; n: number }>;

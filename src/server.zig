@@ -133,14 +133,18 @@ pub const ZyncBaseServer = struct {
         errdefer self.send_queue.deinit();
         errdefer self.change_queue.deinit();
 
+        // Notifier state must exist before the storage engine spawns worker
+        // threads that can invoke storageEngineWakeup.
+        self.wakeup_pending = std.atomic.Value(bool).init(false);
+
+        try self.initWebSocketServer(&config);
+        errdefer self.websocket_server.deinit();
+
         try self.initStorageAndMigrations(&config);
         errdefer self.storage_engine.deinit();
 
         try self.initCheckpoint();
         errdefer self.checkpoint_manager.deinit();
-
-        try self.initWebSocketServer(&config);
-        errdefer self.websocket_server.deinit();
 
         self.store_service = StoreService.init(
             self.memory_strategy.generalAllocator(),
@@ -216,7 +220,6 @@ pub const ZyncBaseServer = struct {
         self.shutdown_in_progress = false;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
-        self.wakeup_pending = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
         self.shutdown_timeout_timer = null;
 

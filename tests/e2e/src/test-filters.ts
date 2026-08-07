@@ -499,7 +499,7 @@ export async function run(port: number = 3000) {
 	) {
 		throw new Error("Filter B converged on empty state — no records received");
 	}
-	console.log("All clients converged — filter state is consistent.");
+	console.log("Final filter assertions passed.");
 
 	closeAllClients(clients);
 	console.log(`E2E Filters test passed — ${TOTAL_CLIENTS} clients.`);

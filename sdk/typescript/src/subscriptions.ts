@@ -254,6 +254,9 @@ export class SubscriptionTracker {
 			this.subscriptions.set(id, entry);
 		}
 
+		// Drop pre-reconnect deltas still in the pending buffer: an already
+		// armed flush timer would otherwise apply them after the view clear.
+		this.pendingDeltas = [];
 		// Clear materialized views — they'll be re-populated from fresh snapshots
 		this.clearMaterializedViews();
 
