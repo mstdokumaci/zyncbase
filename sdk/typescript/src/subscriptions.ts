@@ -181,14 +181,23 @@ export class SubscriptionTracker {
 
 		for (const [subId, deltas] of bySub) {
 			const entry = this.subscriptions.get(subId);
-			if (!entry?.materializedView) continue;
-			for (const delta of deltas) {
-				this._applyOpsToView(entry.materializedView, delta.ops);
+			if (entry) {
+				this._applyToSubscription(entry, deltas);
 			}
-			const value = this._snapshotView(entry.materializedView);
-			for (const cb of entry.callbacks) {
-				cb(value);
-			}
+		}
+	}
+
+	private _applyToSubscription(
+		entry: SubscriptionEntry,
+		deltas: StoreDelta[],
+	): void {
+		if (!entry.materializedView) return;
+		for (const delta of deltas) {
+			this._applyOpsToView(entry.materializedView, delta.ops);
+		}
+		const value = this._snapshotView(entry.materializedView);
+		for (const cb of entry.callbacks) {
+			cb(value);
 		}
 	}
 
