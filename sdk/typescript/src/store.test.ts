@@ -89,6 +89,11 @@ async function flushPromises(): Promise<void> {
 	await Promise.resolve();
 }
 
+/** Waits one macrotask tick so the batched materialized-view flush runs. */
+async function flushTimers(): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("StoreImpl", () => {
 	test("set dispatches one built StoreSet message", async () => {
 		const { store, messages } = makeStore();
@@ -195,13 +200,13 @@ describe("StoreImpl", () => {
 			snapshots.push(value),
 		);
 		await flushPromises();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await flushTimers();
 
 		expect(handle.hasMore).toBe(true);
 		expect(snapshots).toEqual([[{ id: "u1", name: "Ada" }]]);
 
 		await handle.loadMore();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await flushTimers();
 
 		expect(messages[1]).toEqual({
 			type: "StoreLoadMore",
@@ -253,9 +258,9 @@ describe("StoreImpl", () => {
 			snapshots.push(value),
 		);
 		await flushPromises();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await flushTimers();
 		await handle.loadMore();
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await flushTimers();
 
 		expect(messages[1]).toEqual({
 			type: "StoreLoadMore",

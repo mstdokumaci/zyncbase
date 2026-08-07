@@ -40,6 +40,10 @@ pub const WebSocketServer = struct {
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
     drain_handler_ctx: ?*anyopaque = null,
     verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror!Session = null,
+    wakeup_pending_check: ?*const fn (?*anyopaque) bool = null,
+    wakeup_pending_check_ctx: ?*anyopaque = null,
+    /// Test-only counter for the listenCallback wakeup recheck; null in production.
+    test_wakeup_count: ?*std.atomic.Value(u64) = null,
     on_loop_ready: ?*const fn (?*anyopaque, ?*c.struct_us_loop_t) void = null,
     on_loop_ready_ctx: ?*anyopaque = null,
     loop_ready_fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -115,6 +119,9 @@ pub const WebSocketServer = struct {
         self.is_closing = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
+        self.wakeup_pending_check = null;
+        self.wakeup_pending_check_ctx = null;
+        self.test_wakeup_count = null;
         self.drain_handler = null;
         self.drain_handler_ctx = null;
         self.verify_ticket_cb = null;
@@ -316,6 +323,19 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         server.listen_socket = listen_socket;
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
+
+        // A storage-engine wakeup that raced ahead of loop publish left the
+        // coalescing flag set with no loop to wake. Recheck it now so queued
+        // startup entries drain on the first post-handler iteration.
+        if (server.wakeup_pending_check) |check| {
+            if (check(server.wakeup_pending_check_ctx)) {
+                c.us_wakeup_loop(loop);
+                if (server.test_wakeup_count) |count| {
+                    _ = count.fetchAdd(1, .monotonic);
+                }
+            }
+        }
+
         c.uws_loop_addPostHandler(loop, server, postHandler);
     }
 }

@@ -22,8 +22,6 @@ export interface ListenProjection {
 export interface MaterializedView {
 	/** Current records keyed by document id. Values are unflattened. */
 	records: Map<string, JsonValue>;
-	/** Collection name — needed to extract id from delta op paths. */
-	collection: string;
 	/** Comparator for orderBy sort on snapshot. Null = no ordering. */
 	comparator: ((a: JsonValue, b: JsonValue) => number) | null;
 }
@@ -78,7 +76,6 @@ export class SubscriptionTracker {
 		subId: number,
 		params: Omit<StoreSubscribe, "id">,
 		callback: (results: JsonValue[]) => void,
-		collection: string,
 		orderBy?: QueryOptions["orderBy"],
 	): void {
 		this.register(subId, {
@@ -87,7 +84,6 @@ export class SubscriptionTracker {
 			projection: null,
 			materializedView: {
 				records: new Map(),
-				collection,
 				comparator: buildComparator(orderBy),
 			},
 		});
@@ -197,7 +193,11 @@ export class SubscriptionTracker {
 		}
 		const value = this._snapshotView(entry.materializedView);
 		for (const cb of entry.callbacks) {
-			cb(value);
+			try {
+				cb(value);
+			} catch (err) {
+				console.error("[SDK] Subscription callback threw:", err);
+			}
 		}
 	}
 

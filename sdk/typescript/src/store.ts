@@ -280,7 +280,6 @@ export class StoreImpl {
 			state.subId,
 			params,
 			callback,
-			collection,
 			options.orderBy,
 		);
 		if (ok.value !== undefined) {

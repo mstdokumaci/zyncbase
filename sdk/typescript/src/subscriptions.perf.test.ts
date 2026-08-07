@@ -18,15 +18,10 @@ describe("SubscriptionTracker delta fan-in performance", () => {
 			type: "StoreSubscribe",
 			table_index: "items",
 		};
-		tracker.registerCollection(
-			101,
-			params,
-			(value) => {
-				callbackCount++;
-				lastSnapshot = value;
-			},
-			"items",
-		);
+		tracker.registerCollection(101, params, (value) => {
+			callbackCount++;
+			lastSnapshot = value;
+		});
 
 		const seedOps: StoreDelta["ops"] = Array.from({ length: 2000 }, (_, i) => ({
 			op: "set" as const,

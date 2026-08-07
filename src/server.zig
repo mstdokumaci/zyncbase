@@ -205,6 +205,8 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.post_handler_ctx = self;
         self.websocket_server.drain_handler = drainHandler;
         self.websocket_server.drain_handler_ctx = self;
+        self.websocket_server.wakeup_pending_check = takePendingWakeup;
+        self.websocket_server.wakeup_pending_check_ctx = self;
 
         try self.initTicketExchangeInternal(&config);
         errdefer if (self.ticket_exchange) |te| {
@@ -848,6 +850,16 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (server.websocket_server.loop.load(.acquire)) |loop| {
         uws_c.us_wakeup_loop(loop);
     }
+}
+
+/// Called from listenCallback once the loop pointer is published: re-take the
+/// coalescing flag that storageEngineWakeup may have set while the loop was
+/// still null. Swap (not load) closes the release/acquire handshake with
+/// storageEngineWakeup — exactly one of the two paths wakes the loop. The
+/// flag is cleared here, so notifyPostHandler still drains on the wakeup.
+fn takePendingWakeup(ctx: ?*anyopaque) bool {
+    const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+    return self.wakeup_pending.swap(false, .acquire);
 }
 
 fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
