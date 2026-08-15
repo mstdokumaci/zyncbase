@@ -352,10 +352,12 @@ function closeAllClients(clients: ClientState[]) {
 		state.client.close();
 		closeMs += Date.now() - c0;
 	}
+	// unsubscribe/close are fire-and-forget; the timings below are local
+	// synchronous call times, not remote completion.
 	console.log(
 		`[close] ${clients.length} clients: total=${Date.now() - t0}ms ` +
-			`unsubscribe=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
-			`close=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
+			`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
+			`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
 	);
 }
 
@@ -523,12 +525,6 @@ export async function run(port: number = 3000) {
 	}
 	const subMs = Date.now() - subT0;
 	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
-	reportRtts(
-		"subscribe→first-delta",
-		clients
-			.map((c) => c.firstFiredAt - c.subscribeStartedAt)
-			.filter((x) => x > 0),
-	);
 
 	console.log("Creating initial data...");
 	const {
@@ -554,6 +550,12 @@ export async function run(port: number = 3000) {
 	console.log("Waiting for all clients to converge...");
 	await waitForAllFiredAndConverged(clients);
 	phase("All clients converged — filter state is consistent.");
+	reportRtts(
+		"subscribe→first-delta",
+		clients
+			.map((c) => c.firstFiredAt - c.subscribeStartedAt)
+			.filter((x) => x > 0),
+	);
 	const sampleA = clients.find((c) => c.filterSet === "A");
 	const sampleB = clients.find((c) => c.filterSet === "B");
 	if (

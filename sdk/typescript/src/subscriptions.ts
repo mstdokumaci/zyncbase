@@ -431,7 +431,7 @@ export class SubscriptionTracker {
 			!Array.isArray(op.value)
 				? hasNestedKey(op.value as Record<string, JsonValue>)
 					? unflatten(op.value as Record<string, JsonValue>)
-					: op.value
+					: { ...(op.value as Record<string, JsonValue>) }
 				: op.value;
 
 		if (record && typeof record === "object" && !Array.isArray(record)) {

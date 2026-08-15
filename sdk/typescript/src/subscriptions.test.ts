@@ -106,6 +106,34 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
 	});
 
+	test("flat-key set op does not mutate the inbound delta value", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+		const inputValue = { name: "item", priority: 5 };
+
+		tracker.registerCollection(
+			203,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 203,
+			ops: [
+				{
+					op: "set",
+					path: ["items", "doc-1"],
+					value: inputValue,
+				},
+			],
+		});
+		await flushTick();
+
+		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
+		expect(inputValue).toEqual({ name: "item", priority: 5 });
+	});
+
 	test("nested __ keys are still unflattened into nested records", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
