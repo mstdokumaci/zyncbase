@@ -1,7 +1,7 @@
-import { describe, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import { SubscriptionTracker } from "./subscriptions";
-import type { StoreDelta, StoreSubscribe } from "./types";
+import type { JsonValue, StoreDelta, StoreSubscribe } from "./types";
 
 /**
  * Property 9: StoreDelta routing to subscriptions
@@ -78,6 +78,60 @@ describe("SubscriptionTracker", () => {
 		);
 	});
 });
+
+describe("SubscriptionTracker - materialized view set ops", () => {
+	test("flat-key set op stores the value with the doc id injected", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+
+		tracker.registerCollection(
+			201,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 201,
+			ops: [
+				{
+					op: "set",
+					path: ["items", "doc-1"],
+					value: { name: "item", priority: 5 },
+				},
+			],
+		});
+		await flushTick();
+
+		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
+	});
+
+	test("nested __ keys are still unflattened into nested records", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+
+		tracker.registerCollection(
+			202,
+			{ type: "StoreSubscribe", table_index: "users" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 202,
+			ops: [
+				{ op: "set", path: ["users", "u1"], value: { address__city: "NYC" } },
+			],
+		});
+		await flushTick();
+
+		expect(snapshots).toEqual([[{ id: "u1", address: { city: "NYC" } }]]);
+	});
+});
+
+function flushTick(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 /**
  * Property 10: Subscription replay on reconnect
