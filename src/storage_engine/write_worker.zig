@@ -438,7 +438,6 @@ pub const WriteWorker = struct {
             };
             if (!succeeded) {
                 try guard_rejected.append(self.allocator, op_idx);
-                // ponytail: fail_fast calibration knob — batch atomic path
                 // (fail_fast=true) aborts on first guard rejection; flush
                 // path continues so a single rejected guard doesn't stall
                 // a flush of N writes.
