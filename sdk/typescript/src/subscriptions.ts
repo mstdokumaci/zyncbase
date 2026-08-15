@@ -429,7 +429,9 @@ export class SubscriptionTracker {
 			op.value !== null &&
 			typeof op.value === "object" &&
 			!Array.isArray(op.value)
-				? unflatten(op.value as Record<string, JsonValue>)
+				? hasNestedKey(op.value as Record<string, JsonValue>)
+					? unflatten(op.value as Record<string, JsonValue>)
+					: { ...(op.value as Record<string, JsonValue>) }
 				: op.value;
 
 		if (record && typeof record === "object" && !Array.isArray(record)) {
@@ -456,6 +458,10 @@ export class SubscriptionTracker {
 		}
 		return records;
 	}
+}
+
+function hasNestedKey(v: Record<string, JsonValue>): boolean {
+	return Object.keys(v).some((k) => k.includes("__"));
 }
 
 /**

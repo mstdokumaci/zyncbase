@@ -31,6 +31,8 @@ interface ClientState {
 	itemsFired: boolean;
 	eventsFired: boolean;
 	debugId: number;
+	subscribeStartedAt: number;
+	firstFiredAt: number;
 }
 
 function matchesItemFilterA(item: ItemRecord): boolean {
@@ -105,10 +107,13 @@ function subscribeClient(state: ClientState) {
 	const eventsFilter =
 		state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
 
+	state.subscribeStartedAt = Date.now();
+
 	state.itemsSub = state.client.store.subscribe(
 		"items",
 		itemsFilter,
 		(items: JsonValue[]) => {
+			if (state.firstFiredAt === 0) state.firstFiredAt = Date.now();
 			state.itemsFired = true;
 			state.itemsRecords.clear();
 			for (const item of items as unknown as ItemRecord[]) {
@@ -121,6 +126,7 @@ function subscribeClient(state: ClientState) {
 		"events",
 		eventsFilter,
 		(events: JsonValue[]) => {
+			if (state.firstFiredAt === 0) state.firstFiredAt = Date.now();
 			state.eventsFired = true;
 			state.eventsRecords.clear();
 			for (const event of events as unknown as EventRecord[]) {
@@ -138,6 +144,18 @@ function clientIdSet(state: ClientState): {
 		itemIds: [...state.itemsRecords.keys()].sort(),
 		eventIds: [...state.eventsRecords.keys()].sort(),
 	};
+}
+
+function reportRtts(label: string, samples: number[]) {
+	if (samples.length === 0) return;
+	const sorted = [...samples].sort((a, b) => a - b);
+	const p = (q: number) =>
+		sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+	const total = samples.reduce((a, b) => a + b, 0);
+	console.log(
+		`[rtt] ${label}: n=${samples.length} total=${total.toFixed(0)}ms ` +
+			`min=${sorted[0].toFixed(1)} p50=${p(0.5).toFixed(1)} p95=${p(0.95).toFixed(1)} max=${sorted[sorted.length - 1].toFixed(1)}ms`,
+	);
 }
 
 function statesMatch(a: ClientState, b: ClientState): boolean {
@@ -295,7 +313,7 @@ async function waitForAllFiredAndConverged(
 				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
 			);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 300));
+		await new Promise((resolve) => setTimeout(resolve, 25));
 		polls++;
 	}
 
@@ -322,11 +340,25 @@ async function waitForAllFiredAndConverged(
 }
 
 function closeAllClients(clients: ClientState[]) {
+	const t0 = Date.now();
+	let unsubMs = 0;
+	let closeMs = 0;
 	for (const state of clients) {
+		const u0 = Date.now();
 		state.itemsSub?.unsubscribe();
 		state.eventsSub?.unsubscribe();
+		unsubMs += Date.now() - u0;
+		const c0 = Date.now();
 		state.client.close();
+		closeMs += Date.now() - c0;
 	}
+	// unsubscribe/close are fire-and-forget; the timings below are local
+	// synchronous call times, not remote completion.
+	console.log(
+		`[close] ${clients.length} clients: total=${Date.now() - t0}ms ` +
+			`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
+			`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
+	);
 }
 
 async function createClients(
@@ -363,6 +395,8 @@ async function createClients(
 					itemsFired: false,
 					eventsFired: false,
 					debugId: i,
+					subscribeStartedAt: 0,
+					firstFiredAt: 0,
 				} satisfies ClientState;
 			}),
 		);
@@ -371,24 +405,31 @@ async function createClients(
 	return clients;
 }
 
-async function createInitialData(
-	readWriteClients: ClientState[],
-): Promise<{ createdItemIds: string[]; createdEventIds: string[] }> {
+async function createInitialData(readWriteClients: ClientState[]): Promise<{
+	createdItemIds: string[];
+	createdEventIds: string[];
+	rtts: number[];
+}> {
 	const createdItemIds: string[] = [];
 	const createdEventIds: string[] = [];
 	const createPromises: Promise<void>[] = [];
+	const rtts: number[] = [];
 
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 		for (let j = 0; j < 4; j++) {
 			const index = i * 4 + j;
+			const t = Date.now();
 			createPromises.push(
 				rwClient.store.create("items", createItemData(index)).then((id) => {
+					rtts.push(Date.now() - t);
 					createdItemIds.push(id);
 				}),
 			);
+			const te = Date.now();
 			createPromises.push(
 				rwClient.store.create("events", createEventData(index)).then((id) => {
+					rtts.push(Date.now() - te);
 					createdEventIds.push(id);
 				}),
 			);
@@ -396,13 +437,14 @@ async function createInitialData(
 	}
 
 	await Promise.all(createPromises);
-	return { createdItemIds, createdEventIds };
+	return { createdItemIds, createdEventIds, rtts };
 }
 
 async function updateWriterRecords(
 	client: ZyncBaseClient,
 	createdItemIds: string[],
 	createdEventIds: string[],
+	rtts: number[],
 ): Promise<void> {
 	if (createdItemIds.length === 0 || createdEventIds.length === 0) {
 		throw new Error(
@@ -413,23 +455,33 @@ async function updateWriterRecords(
 	for (let j = 0; j < 4; j++) {
 		const randomItemId =
 			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
+		const t = Date.now();
 		promises.push(
-			client.store.set(["items", randomItemId], {
-				name: "updated-item",
-				priority: Math.floor(Math.random() * 10) + 1,
-				active: Math.random() > 0.5,
-				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
-			}),
+			client.store
+				.set(["items", randomItemId], {
+					name: "updated-item",
+					priority: Math.floor(Math.random() * 10) + 1,
+					active: Math.random() > 0.5,
+					tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
+				})
+				.then(() => {
+					rtts.push(Date.now() - t);
+				}),
 		);
 
 		const randomEventId =
 			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
+		const te = Date.now();
 		promises.push(
-			client.store.set(["events", randomEventId], {
-				title: "updated-event",
-				score: Math.random() * 100,
-				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
-			}),
+			client.store
+				.set(["events", randomEventId], {
+					title: "updated-event",
+					score: Math.random() * 100,
+					ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
+				})
+				.then(() => {
+					rtts.push(Date.now() - te);
+				}),
 		);
 	}
 	await Promise.all(promises);
@@ -439,17 +491,19 @@ async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
-): Promise<void> {
+): Promise<number[]> {
 	const updatePromises: Promise<void>[] = [];
+	const rtts: number[] = [];
 
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 		updatePromises.push(
-			updateWriterRecords(rwClient, createdItemIds, createdEventIds),
+			updateWriterRecords(rwClient, createdItemIds, createdEventIds, rtts),
 		);
 	}
 
 	await Promise.all(updatePromises);
+	return rtts;
 }
 
 export async function run(port: number = 3000) {
@@ -465,24 +519,43 @@ export async function run(port: number = 3000) {
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
 
+	const subT0 = Date.now();
 	for (const state of clients) {
 		subscribeClient(state);
 	}
+	const subMs = Date.now() - subT0;
+	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
 
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } =
-		await createInitialData(readWriteClients);
+	const {
+		createdItemIds,
+		createdEventIds,
+		rtts: createRtts,
+	} = await createInitialData(readWriteClients);
 	phase(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
+	reportRtts("create", createRtts);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
+	await updateRandomRecords(
+		readWriteClients,
+		createdItemIds,
+		createdEventIds,
+	).then((rtts) => {
+		reportRtts("update", rtts);
+	});
 	phase("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
 	await waitForAllFiredAndConverged(clients);
 	phase("All clients converged — filter state is consistent.");
+	reportRtts(
+		"subscribe→first-delta",
+		clients
+			.map((c) => c.firstFiredAt - c.subscribeStartedAt)
+			.filter((x) => x > 0),
+	);
 	const sampleA = clients.find((c) => c.filterSet === "A");
 	const sampleB = clients.find((c) => c.filterSet === "B");
 	if (
