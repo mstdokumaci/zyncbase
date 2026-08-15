@@ -9,4 +9,3 @@ test-artifacts/
 node_modules/
 data/
 sdk/typescript/dist
-graphify-out
