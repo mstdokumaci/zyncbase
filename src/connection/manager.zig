@@ -265,9 +265,9 @@ pub const ConnectionManager = struct {
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
-    /// Groups entries by conn_id and sends each entry as its own frame under a
-    /// per-connection cork scope. Entries are never concatenated: the client
-    /// decodes exactly one message per frame.
+    /// Groups entries by conn_id and sends each group as ONE concatenated
+    /// frame: complete msgpack messages are byte-concatenated in pop order.
+    /// The client decodes multiple messages per frame (decodeMulti).
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
         _ = self.drain_arena.reset(.retain_capacity);
         const alloc = self.drain_arena.allocator();
@@ -287,7 +287,7 @@ pub const ConnectionManager = struct {
             };
         }
 
-        // Phase 2: per connection, send each entry as its own frame
+        // Phase 2: per connection, concatenate the group into one frame and send.
         var it = groups.iterator();
         while (it.next()) |kv| {
             const conn_id = kv.key_ptr.*;
@@ -303,10 +303,7 @@ pub const ConnectionManager = struct {
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            // Cork scope: one TCP flush per connection per pass; on flush
-            // failure the next send reports backpressure to the outbox.
-            var cork_ctx = DrainCorkCtx{ .conn = conn, .entries = group.items };
-            conn.ws.corkScope(&cork_ctx, sendEntriesInCorkScope);
+            sendConcatenatedOrClose(conn, group.items, alloc);
         }
     }
 
@@ -413,15 +410,36 @@ pub const ConnectionManager = struct {
     }
 };
 
-const DrainCorkCtx = struct {
-    conn: *Connection,
-    entries: []const SendQueueEntry,
-};
-
-fn sendEntriesInCorkScope(ctx: ?*anyopaque) void {
-    const cork_ctx: *DrainCorkCtx = @ptrCast(@alignCast(ctx.?));
-    for (cork_ctx.entries) |e| {
-        ConnectionManager.sendOrClose(cork_ctx.conn, e.data);
-        e.deinit();
+/// Send a group of send-queue entries as a single frame: complete msgpack
+/// messages concatenated in pop order. A lone entry is sent directly without
+/// copying. Falls back to per-entry sends if the concat buffer cannot be
+/// allocated (graceful degradation). Deinits every entry after sending —
+/// uWS copies the payload into its send buffer synchronously, so the concat
+/// buffer (drain arena) may be reset on the next drain pass.
+fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator) void {
+    if (entries.len == 1) {
+        ConnectionManager.sendOrClose(conn, entries[0].data);
+        entries[0].deinit();
+        return;
     }
+
+    var total: usize = 0;
+    for (entries) |e| total += e.data.len;
+
+    const buf = alloc.alloc(u8, total) catch {
+        for (entries) |e| {
+            ConnectionManager.sendOrClose(conn, e.data);
+            e.deinit();
+        }
+        return;
+    };
+
+    var offset: usize = 0;
+    for (entries) |e| {
+        @memcpy(buf[offset .. offset + e.data.len], e.data);
+        offset += e.data.len;
+    }
+
+    ConnectionManager.sendOrClose(conn, buf);
+    for (entries) |e| e.deinit();
 }

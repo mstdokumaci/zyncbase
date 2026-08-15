@@ -291,7 +291,7 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
 }
 
-test "ConnectionManager: drain sends each entry as its own frame" {
+test "ConnectionManager: drain sends one concatenated frame per connection" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-drain-frames", &.{});
@@ -315,8 +315,8 @@ test "ConnectionManager: drain sends each entry as its own frame" {
     var queue = try send_queue_type.init(&node_pool);
     defer queue.deinit();
 
-    // Two entries for one connection — never concatenated: the client
-    // decodes exactly one message per frame.
+    // Two entries for one connection — concatenated into a single frame:
+    // the client decodes multiple messages per frame (decodeMulti).
     const handle = try app.memory_strategy.acquireArenaDeferred();
     const arena_alloc = handle.allocator();
     const msg1 = try arena_alloc.dupe(u8, "first-message");
@@ -329,9 +329,9 @@ test "ConnectionManager: drain sends each entry as its own frame" {
 
     app.connection_manager.drainSendQueue(&queue);
 
-    // One ws.send per entry — concatenation would produce a frame the SDK
-    // cannot decode.
-    try testing.expectEqual(@as(u64, 2), send_count.load(.monotonic));
+    // One ws.send for the whole group — entries are concatenated into a
+    // single frame per connection per drain pass.
+    try testing.expectEqual(@as(u64, 1), send_count.load(.monotonic));
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {

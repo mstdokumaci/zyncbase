@@ -255,7 +255,7 @@ test "connection: state deallocation edge cases" {
     }
 }
 
-test "connection: outbox flush sends one frame per entry under a cork scope" {
+test "connection: outbox flush sends one concatenated frame" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "state-outbox-flush", &.{});
@@ -279,8 +279,8 @@ test "connection: outbox flush sends one frame per entry under a cork scope" {
     const result = conn.flushOutbox();
     try testing.expectEqual(FlushResult.success, result);
 
-    // All entries sent as individual frames, outbox drained, flag cleared.
-    try testing.expectEqual(@as(u64, 3), send_count.load(.monotonic));
+    // All entries sent as ONE concatenated frame, outbox drained, flag cleared.
+    try testing.expectEqual(@as(u64, 1), send_count.load(.monotonic));
     try testing.expectEqual(conn.outbox.head, conn.outbox.tail);
     try testing.expectEqual(false, conn.is_backpressured);
 

@@ -80,6 +80,52 @@ describe("ConnectionWireCodec", () => {
 		});
 	});
 
+	test("decodeMulti decodes all concatenated messages in a frame", async () => {
+		const codec = await makeCodec();
+		const ok = bufferOf({ type: "ok", id: 7 });
+		const delta = bufferOf({
+			type: "StoreDelta",
+			subId: 1,
+			ops: [
+				{
+					op: "set",
+					path: [0, "u1"],
+					value: [
+						[1, "Ada"],
+						[2, "London"],
+					],
+				},
+			],
+		});
+		const frame = new Uint8Array(ok.byteLength + delta.byteLength);
+		frame.set(new Uint8Array(ok), 0);
+		frame.set(new Uint8Array(delta), ok.byteLength);
+
+		const msgs = codec.decodeMulti(frame);
+		expect(msgs).toHaveLength(2);
+		expect(msgs[0]).toEqual({ type: "ok", id: 7 });
+		expect(msgs[1]).toEqual({
+			type: "StoreDelta",
+			subId: 1,
+			ops: [
+				{
+					op: "set",
+					path: ["users", "u1"],
+					value: { name: "Ada", address__city: "London" },
+				},
+			],
+		});
+	});
+
+	test("decodeMulti handles single-message, empty, and invalid frames", async () => {
+		const codec = await makeCodec();
+		const single = codec.decodeMulti(bufferOf({ type: "ok", id: 1 }));
+		expect(single).toHaveLength(1);
+		expect(single[0]).toEqual({ type: "ok", id: 1 });
+		expect(codec.decodeMulti(new ArrayBuffer(0))).toEqual([]);
+		expect(codec.decodeMulti(new Uint8Array([0xc1]))).toEqual([]);
+	});
+
 	test("decodes query response rows using pending request context", async () => {
 		const codec = await makeCodec();
 		const ok = codec.decodeOkResponse(

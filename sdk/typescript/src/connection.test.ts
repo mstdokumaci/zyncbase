@@ -155,6 +155,41 @@ describe("ConnectionManager", () => {
 			expect((received[0] as Record<string, unknown>).subId).toBe(42);
 		});
 
+		test("routes multiple deltas from one concatenated frame in order", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const received: unknown[] = [];
+			manager.onDelta((delta) => received.push(delta));
+
+			const delta1 = encodeToBuffer({
+				type: "StoreDelta",
+				subId: 1,
+				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
+			});
+			const delta2 = encodeToBuffer({
+				type: "StoreDelta",
+				subId: 2,
+				ops: [{ op: "set", path: ["users", "u2"], value: { name: "Bob" } }],
+			});
+			const frame = new Uint8Array(delta1.byteLength + delta2.byteLength);
+			frame.set(new Uint8Array(delta1), 0);
+			frame.set(new Uint8Array(delta2), delta1.byteLength);
+
+			mockWs.triggerMessage(
+				frame.buffer.slice(
+					frame.byteOffset,
+					frame.byteOffset + frame.byteLength,
+				) as ArrayBuffer,
+			);
+			await (manager as unknown as { processingPromise: Promise<void> })
+				.processingPromise;
+
+			expect(received).toHaveLength(2);
+			expect((received[0] as { subId: number }).subId).toBe(1);
+			expect((received[1] as { subId: number }).subId).toBe(2);
+		});
+
 		test("StoreDelta does not affect pendingQueue", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);

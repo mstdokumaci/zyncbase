@@ -1,6 +1,5 @@
 // Connection Manager
 
-import { decode } from "@msgpack/msgpack";
 import { acquireTicket } from "./auth.js";
 import {
 	ConnectionWireCodec,
@@ -429,8 +428,11 @@ export class ConnectionManager {
 	private async processInbound(data: ArrayBuffer | Uint8Array): Promise<void> {
 		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 		try {
-			const msg = this.wire.decodeMessage(decode(arr));
-			if (msg) await this.dispatchInbound(msg);
+			// A frame may carry one or more complete messages (the server
+			// concatenates per-connection deltas); dispatch each in order.
+			for (const msg of this.wire.decodeMulti(arr)) {
+				await this.dispatchInbound(msg);
+			}
 		} catch (err) {
 			if (this.options.debug) {
 				console.error("[SDK] Error processing inbound frame:", err);
