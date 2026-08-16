@@ -39,6 +39,7 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 - Compression is disabled; MessagePack size/depth limits are enforced before domain routing.
 - TLS is provided by OpenSSL through usockets when configured.
 - The network layer does not authorize store/presence operations; it authenticates/initializes the connection and delegates authorization to `MessageHandler` and `authorization/*`.
+- A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. The server coalesces per-connection outbound messages (deltas, acks, broadcasts) into a single frame per drain pass; the SDK decodes frames with `decodeMulti`.
 
 ## Connection Lifecycle
 

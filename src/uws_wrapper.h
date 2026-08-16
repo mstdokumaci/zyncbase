@@ -101,11 +101,6 @@ uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t *ws, const char *message, 
 void uws_ws_close(int ssl, uws_websocket_t *ws);
 void *uws_ws_get_user_data(int ssl, uws_websocket_t *ws);
 
-// Cork scope helper: runs cb(ctx) inside uWS's per-loop cork buffer, so the
-// callback's sends flush as one write. Falls back to uncorked sends when the
-// cork buffer is taken.
-void uws_ws_cork_scope(int ssl, uws_websocket_t *ws, void (*cb)(void *ctx), void *ctx);
-
 // Upgrade and Request helpers
 size_t uws_req_get_header(uws_req_t *req, const char *lower_case_header, size_t lower_case_header_length, const char **dest);
 size_t uws_req_get_query(uws_req_t *req, const char *key, size_t key_length, const char **dest);

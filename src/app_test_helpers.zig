@@ -44,6 +44,37 @@ var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
 
+/// Test-only recorder for payloads handed to mock `WebSocket.send`, wired via
+/// `test_send_observer`/`test_send_observer_ctx`. Capture is capped: appends
+/// only while the buffer has room, so no allocator is needed in the send path.
+pub const SendRecorder = struct {
+    send_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    capture_buf: []u8,
+    capture_len: usize = 0,
+
+    pub fn init(capture_buf: []u8) SendRecorder {
+        return .{ .capture_buf = capture_buf };
+    }
+
+    pub fn bytes(self: *const SendRecorder) []const u8 {
+        return self.capture_buf[0..self.capture_len];
+    }
+
+    pub fn reset(self: *SendRecorder) void {
+        self.send_count.store(0, .monotonic);
+        self.capture_len = 0;
+    }
+};
+
+pub fn sendRecorderObserver(ctx: ?*anyopaque, bytes: []const u8) void {
+    const recorder: *SendRecorder = @ptrCast(@alignCast(ctx.?));
+    _ = recorder.send_count.fetchAdd(1, .monotonic);
+    if (recorder.capture_len + bytes.len <= recorder.capture_buf.len) {
+        @memcpy(recorder.capture_buf[recorder.capture_len..][0..bytes.len], bytes);
+        recorder.capture_len += bytes.len;
+    }
+}
+
 pub fn createMockWebSocket(allocator: Allocator) WebSocket {
     return createMockWebSocketWithExternalId(allocator, test_external_user_id);
 }

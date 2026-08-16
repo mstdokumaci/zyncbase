@@ -21,6 +21,10 @@ pub const FlushResult = enum { success, backpressure, dropped };
 ///   SUCCESS     → frame delivered; advance and continue.
 ///   BACKPRESSURE → uWS owns the frame; advance and stop until drain fires.
 ///   DROPPED     → connection dead; free remaining entries and signal close.
+///
+/// All queued entries are concatenated into ONE frame per flush (complete
+/// msgpack messages back-to-back; the client decodes multiple messages per
+/// frame). On backpressure uWS buffers the whole frame internally.
 pub const Outbox = struct {
     entries: [outbox_capacity][]u8,
     head: usize,
@@ -47,9 +51,7 @@ pub const Outbox = struct {
             .allocator = allocator,
             .result = &result,
         };
-        // Cork scope: one flush per write; uWS buffers frames internally on
-        // failure (the next send then reports backpressure).
-        ws.corkScope(&ctx, flushEntriesInCorkScope);
+        flushEntries(&ctx);
         return result;
     }
 
@@ -72,8 +74,67 @@ const OutboxFlushCtx = struct {
     result: *FlushResult,
 };
 
-fn flushEntriesInCorkScope(ctx: ?*anyopaque) void {
-    const c: *OutboxFlushCtx = @ptrCast(@alignCast(ctx.?));
+fn flushEntries(c: *OutboxFlushCtx) void {
+    const outbox = c.outbox;
+    const count = (outbox.head + outbox_capacity - outbox.tail) % outbox_capacity;
+    if (count == 0) return;
+
+    // SAFETY: assigned before any use — count==1 takes the direct entry,
+    // otherwise the concat buffer; the alloc-failure path returns early.
+    var data: []const u8 = undefined;
+    var owned = false;
+    if (count == 1) {
+        data = outbox.entries[outbox.tail];
+    } else {
+        var total: usize = 0;
+        var i = outbox.tail;
+        var n: usize = 0;
+        while (n < count) : (n += 1) {
+            total += outbox.entries[i].len;
+            i = (i + 1) % outbox_capacity;
+        }
+        const buf = c.allocator.alloc(u8, total) catch {
+            // Fall back to per-entry sends when the concat buffer cannot be
+            // allocated (graceful degradation).
+            flushEntriesOneByOne(c);
+            return;
+        };
+        var offset: usize = 0;
+        i = outbox.tail;
+        n = 0;
+        while (n < count) : (n += 1) {
+            const entry = outbox.entries[i];
+            @memcpy(buf[offset .. offset + entry.len], entry);
+            offset += entry.len;
+            i = (i + 1) % outbox_capacity;
+        }
+        data = buf;
+        owned = true;
+    }
+
+    const status = c.ws.send(data, .binary);
+
+    // Free every entry regardless of status: uWS owns the frame after send.
+    var i = outbox.tail;
+    var n: usize = 0;
+    while (n < count) : (n += 1) {
+        c.allocator.free(outbox.entries[i]);
+        i = (i + 1) % outbox_capacity;
+    }
+    outbox.tail = i;
+    if (owned) c.allocator.free(data);
+
+    switch (status) {
+        .success => {},
+        .backpressure => c.result.* = .backpressure,
+        .dropped => {
+            // tail already advanced past everything; nothing left to free.
+            c.result.* = .dropped;
+        },
+    }
+}
+
+fn flushEntriesOneByOne(c: *OutboxFlushCtx) void {
     while (c.outbox.tail != c.outbox.head) {
         const data = c.outbox.entries[c.outbox.tail];
         const status = c.ws.send(data, .binary);

@@ -291,19 +291,21 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
 }
 
-test "ConnectionManager: drain sends each entry as its own frame" {
+test "ConnectionManager: drain sends one concatenated frame per connection" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-drain-frames", &.{});
     defer app.deinit();
 
-    var send_count = std.atomic.Value(u64).init(0);
+    var sent_buf: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
     var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-    dummy_ws.test_send_count = &send_count;
+    dummy_ws.test_send_observer = helpers.sendRecorderObserver;
+    dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
     defer app.connection_manager.onClose(&dummy_ws);
     // onOpen sends connected + schema-sync setup messages — ignore them.
-    send_count.store(0, .monotonic);
+    recorder.reset();
 
     const conn_id = dummy_ws.getConnId();
 
@@ -315,8 +317,8 @@ test "ConnectionManager: drain sends each entry as its own frame" {
     var queue = try send_queue_type.init(&node_pool);
     defer queue.deinit();
 
-    // Two entries for one connection — never concatenated: the client
-    // decodes exactly one message per frame.
+    // Two entries for one connection — concatenated into a single frame:
+    // the client decodes multiple messages per frame (decodeMulti).
     const handle = try app.memory_strategy.acquireArenaDeferred();
     const arena_alloc = handle.allocator();
     const msg1 = try arena_alloc.dupe(u8, "first-message");
@@ -329,9 +331,10 @@ test "ConnectionManager: drain sends each entry as its own frame" {
 
     app.connection_manager.drainSendQueue(&queue);
 
-    // One ws.send per entry — concatenation would produce a frame the SDK
-    // cannot decode.
-    try testing.expectEqual(@as(u64, 2), send_count.load(.monotonic));
+    // One ws.send for the whole group — entries are concatenated into a
+    // single frame in queue order per connection per drain pass.
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    try testing.expectEqualSlices(u8, "first-messagesecond-message", recorder.bytes());
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {

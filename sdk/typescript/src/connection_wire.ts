@@ -1,4 +1,4 @@
-import { decode, encode } from "@msgpack/msgpack";
+import { decode, decodeMulti, encode } from "@msgpack/msgpack";
 import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
@@ -109,6 +109,26 @@ export class ConnectionWireCodec {
 			return null;
 		}
 		return this.decodeMessage(raw);
+	}
+
+	/**
+	 * Decode all complete messages in a frame. The server concatenates
+	 * complete MessagePack messages back-to-back into a single binary frame;
+	 * a lone message decodes to a single-element array (backward compatible).
+	 * Malformed/incomplete frames return whatever decoded before the error.
+	 */
+	decodeMulti(data: ArrayBuffer | Uint8Array): InboundMessage[] {
+		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+		const out: InboundMessage[] = [];
+		try {
+			for (const raw of decodeMulti(arr)) {
+				const msg = this.decodeMessage(raw);
+				if (msg) out.push(msg);
+			}
+		} catch {
+			// Malformed or incomplete frame — keep whatever decoded.
+		}
+		return out;
 	}
 
 	decodeMessage(raw: unknown): InboundMessage | null {
