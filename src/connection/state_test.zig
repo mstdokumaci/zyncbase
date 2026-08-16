@@ -261,12 +261,14 @@ test "connection: outbox flush sends one concatenated frame" {
     try app.init(allocator, "state-outbox-flush", &.{});
     defer app.deinit();
 
-    var send_count = std.atomic.Value(u64).init(0);
+    var sent_buf: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
     var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-    dummy_ws.test_send_count = &send_count;
+    dummy_ws.test_send_observer = helpers.sendRecorderObserver;
+    dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
     // onOpen sends connected + schema-sync setup messages — ignore them.
-    send_count.store(0, .monotonic);
+    recorder.reset();
 
     const conn = try app.connection_manager.acquireConnection(dummy_ws.getConnId());
     defer if (conn.release()) app.releaseConnection(conn);
@@ -279,8 +281,10 @@ test "connection: outbox flush sends one concatenated frame" {
     const result = conn.flushOutbox();
     try testing.expectEqual(FlushResult.success, result);
 
-    // All entries sent as ONE concatenated frame, outbox drained, flag cleared.
-    try testing.expectEqual(@as(u64, 1), send_count.load(.monotonic));
+    // All entries sent as ONE concatenated frame in queue order, outbox
+    // drained, flag cleared.
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    try testing.expectEqualSlices(u8, "entry-oneentry-twoentry-three", recorder.bytes());
     try testing.expectEqual(conn.outbox.head, conn.outbox.tail);
     try testing.expectEqual(false, conn.is_backpressured);
 

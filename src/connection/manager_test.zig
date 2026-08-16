@@ -297,13 +297,15 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     try app.init(allocator, "conn-mgr-drain-frames", &.{});
     defer app.deinit();
 
-    var send_count = std.atomic.Value(u64).init(0);
+    var sent_buf: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
     var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-    dummy_ws.test_send_count = &send_count;
+    dummy_ws.test_send_observer = helpers.sendRecorderObserver;
+    dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
     defer app.connection_manager.onClose(&dummy_ws);
     // onOpen sends connected + schema-sync setup messages — ignore them.
-    send_count.store(0, .monotonic);
+    recorder.reset();
 
     const conn_id = dummy_ws.getConnId();
 
@@ -330,8 +332,9 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     app.connection_manager.drainSendQueue(&queue);
 
     // One ws.send for the whole group — entries are concatenated into a
-    // single frame per connection per drain pass.
-    try testing.expectEqual(@as(u64, 1), send_count.load(.monotonic));
+    // single frame in queue order per connection per drain pass.
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    try testing.expectEqualSlices(u8, "first-messagesecond-message", recorder.bytes());
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {
