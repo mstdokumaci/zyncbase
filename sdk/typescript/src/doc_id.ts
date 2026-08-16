@@ -7,8 +7,6 @@ export const SHORT_ID_ALPHABET = "-0123456789_abcdefghijklmnopqrstuvwxyz";
 const SHORT_BASE = 39n;
 const SHORT_DIGITS = 24;
 const UUID_FAMILY_TAG = 1n << 127n;
-const UUID_PAYLOAD_MASK = (1n << 122n) - 1n;
-const UUID_RESERVED_MASK = ((1n << 127n) - 1n) ^ UUID_PAYLOAD_MASK;
 const UUID_V7_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -51,11 +49,37 @@ function parseUuidBytes(uuid: string): Uint8Array {
 	return bytes;
 }
 
+const HEX2 = (() => {
+	const table: string[] = new Array(256);
+	for (let i = 0; i < 256; i += 1) {
+		table[i] = i.toString(16).padStart(2, "0");
+	}
+	return table;
+})();
+
 function formatUuidBytes(bytes: Uint8Array): string {
-	const hex = Array.from(bytes, (byte) =>
-		byte.toString(16).padStart(2, "0"),
-	).join("");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+	return (
+		HEX2[bytes[0]] +
+		HEX2[bytes[1]] +
+		HEX2[bytes[2]] +
+		HEX2[bytes[3]] +
+		"-" +
+		HEX2[bytes[4]] +
+		HEX2[bytes[5]] +
+		"-" +
+		HEX2[bytes[6]] +
+		HEX2[bytes[7]] +
+		"-" +
+		HEX2[bytes[8]] +
+		HEX2[bytes[9]] +
+		"-" +
+		HEX2[bytes[10]] +
+		HEX2[bytes[11]] +
+		HEX2[bytes[12]] +
+		HEX2[bytes[13]] +
+		HEX2[bytes[14]] +
+		HEX2[bytes[15]]
+	);
 }
 
 function encodeShortDocId(id: string): Uint8Array {
@@ -116,38 +140,34 @@ function encodeUuidV7DocId(uuid: string): Uint8Array {
 	return bigIntToBytes(UUID_FAMILY_TAG | payload);
 }
 
-function decodeUuidV7DocId(value: bigint): string {
-	if ((value & UUID_RESERVED_MASK) !== 0n) {
+function decodeUuidV7DocId(packed: Uint8Array): string {
+	// Reserved bits 122..126 (packed[0] bits 2..6) must be zero.
+	if ((packed[0] & 0x7c) !== 0) {
 		throw invalidDocIdError(
 			"Invalid packed UUIDv7 document ID",
 			ErrorCodes.INVALID_MESSAGE,
 		);
 	}
 
-	let payload = value & UUID_PAYLOAD_MASK;
+	// Inverse of packUuidV7Bytes: the 122-bit payload is packed as
+	// [B0..B5 (48b)] [B6&0x0f (4b)] [B7 (8b)] [B8&0x3f (6b)] [B9..B15 (56b)].
 	const bytes = new Uint8Array(DOC_ID_BYTE_LENGTH);
-
-	for (let i = DOC_ID_BYTE_LENGTH - 1; i >= 9; i -= 1) {
-		bytes[i] = Number(payload & 0xffn);
-		payload >>= 8n;
-	}
-	bytes[8] = 0x80 | Number(payload & 0x3fn);
-	payload >>= 6n;
-	bytes[7] = Number(payload & 0xffn);
-	payload >>= 8n;
-	bytes[6] = 0x70 | Number(payload & 0x0fn);
-	payload >>= 4n;
-	for (let i = 5; i >= 0; i -= 1) {
-		bytes[i] = Number(payload & 0xffn);
-		payload >>= 8n;
-	}
-
-	if (payload !== 0n) {
-		throw invalidDocIdError(
-			"Invalid packed UUIDv7 payload length",
-			ErrorCodes.INVALID_MESSAGE,
-		);
-	}
+	bytes[0] = ((packed[0] & 0x03) << 6) | (packed[1] >> 2);
+	bytes[1] = ((packed[1] & 0x03) << 6) | (packed[2] >> 2);
+	bytes[2] = ((packed[2] & 0x03) << 6) | (packed[3] >> 2);
+	bytes[3] = ((packed[3] & 0x03) << 6) | (packed[4] >> 2);
+	bytes[4] = ((packed[4] & 0x03) << 6) | (packed[5] >> 2);
+	bytes[5] = ((packed[5] & 0x03) << 6) | (packed[6] >> 2);
+	bytes[6] = 0x70 | (((packed[6] & 0x03) << 2) | (packed[7] >> 6));
+	bytes[7] = ((packed[7] & 0x3f) << 2) | (packed[8] >> 6);
+	bytes[8] = 0x80 | (packed[8] & 0x3f);
+	bytes[9] = packed[9];
+	bytes[10] = packed[10];
+	bytes[11] = packed[11];
+	bytes[12] = packed[12];
+	bytes[13] = packed[13];
+	bytes[14] = packed[14];
+	bytes[15] = packed[15];
 
 	return formatUuidBytes(bytes);
 }
@@ -188,9 +208,8 @@ export function unpackDocId(bytes: Uint8Array): string {
 		);
 	}
 
-	const value = bytesToBigInt(bytes);
-	if ((value & UUID_FAMILY_TAG) !== 0n) {
-		return decodeUuidV7DocId(value);
+	if ((bytes[0] & 0x80) !== 0) {
+		return decodeUuidV7DocId(bytes);
 	}
-	return decodeShortDocId(value);
+	return decodeShortDocId(bytesToBigInt(bytes));
 }
