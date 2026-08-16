@@ -347,10 +347,15 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
         if (loop_ptr) |loop| {
             c.us_wakeup_loop(@ptrCast(loop));
         }
-        // Remove ourselves from the loop's post-handler map
-        if (loop_ptr) |loop| {
-            c.uws_loop_removePostHandler(loop, server);
-        }
+        // NOTE: do NOT call uws_loop_removePostHandler here. This code runs
+        // inside uWS's postCb, which iterates the post-handler map and calls
+        // this handler synchronously. Erasing the entry from within the
+        // iteration leaves postCb's iterator dangling on freed map memory,
+        // and the next loop iteration crashes inside libc++ __tree traversal
+        // (segfault) — or silently corrupts the map. The event loop exits
+        // immediately after uws_app_close (num_polls reaches zero) and the
+        // post-handler map is destroyed together with the loop at thread
+        // exit, so removal is unnecessary.
     }
 }
 
