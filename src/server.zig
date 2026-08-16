@@ -601,7 +601,12 @@ pub const ZyncBaseServer = struct {
         if (!self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = false;
         self.shutdown_performed = true;
-        self.stopShutdownTimeoutTimer();
+        // Disarm (do NOT free) the shutdown timeout timer: µSockets' us_poll_free
+        // unconditionally decrements loop->num_polls, including for fallthrough
+        // polls whose creation never incremented it. Freeing this timer at
+        // shutdown would push num_polls to -1 and us_loop_run's
+        // `while (num_polls)` would spin forever instead of exiting.
+        uws_timer.disarmTimer(&self.shutdown_timeout_timer);
 
         std.log.info("Flushing pending writes and performing final checkpoint", .{});
 

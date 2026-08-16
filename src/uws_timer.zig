@@ -18,6 +18,13 @@ pub fn startTimer(
     return timer;
 }
 
+pub fn disarmTimer(field: *?*c.struct_us_timer_t) void {
+    if (field.*) |t| {
+        // us_timer_set with 0 ms disarms the timerfd without freeing the poll.
+        c.us_timer_set(t, null, 0, 0);
+    }
+}
+
 pub fn stopTimer(field: *?*c.struct_us_timer_t) void {
     if (field.*) |t| {
         c.us_timer_close(t);
