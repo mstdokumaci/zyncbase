@@ -706,9 +706,6 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
 
-        std.log.debug("Deinitializing presence_service", .{});
-        self.presence_service.deinit();
-
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 

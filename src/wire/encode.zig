@@ -523,8 +523,8 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 
 fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
     const is_leave = update.is_leave;
-    const is_join = update.is_new_user and update.patch != null;
-    const map_size: usize = @as(usize, 2) + @intFromBool(update.patch != null) + @intFromBool(is_join);
+    const is_join = update.is_new_user and update.patch != .nil;
+    const map_size: usize = @as(usize, 2) + @intFromBool(update.patch != .nil) + @intFromBool(is_join);
     try msgpack.encodeMapHeader(writer, map_size);
 
     try writer.writeAll(Keys.user_id);
@@ -534,9 +534,9 @@ fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) 
     try writer.writeAll(Keys.event);
     try writer.writeAll(if (is_leave) Values.event_leave else if (is_join) Values.event_join else Values.event_update);
 
-    if (update.patch) |patch| {
+    if (update.patch != .nil) {
         try writer.writeAll(Keys.data);
-        try msgpack.encode(patch, writer);
+        try msgpack.encode(update.patch, writer);
 
         if (is_join) {
             try writer.writeAll(Keys.joined_at);

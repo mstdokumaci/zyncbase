@@ -276,28 +276,10 @@ pub const PresenceWorker = struct {
         pm.evictExpiredGracePeriods();
 
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
-        defer {
-            for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*update| {
-                    if (update.patch) |patch| patch.free(pm.allocator);
-                }
-                batch.updates.deinit(pm.allocator);
-                batch.subscribers.deinit(pm.allocator);
-            }
-            user_batches.deinit(pm.allocator);
-        }
+        defer deinitBatches(PresenceManager.UserUpdateBatch, &user_batches, pm.allocator);
 
         var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
-        defer {
-            for (shared_batches.items) |*batch| {
-                for (batch.updates.items) |*update| {
-                    update.patch.free(pm.allocator);
-                }
-                batch.updates.deinit(pm.allocator);
-                batch.subscribers.deinit(pm.allocator);
-            }
-            shared_batches.deinit(pm.allocator);
-        }
+        defer deinitBatches(PresenceManager.SharedUpdateBatch, &shared_batches, pm.allocator);
 
         pm.drainPendingBatches(&user_batches, &shared_batches) catch |err| {
             std.log.err("PresenceWorker drain failed: {}", .{err});
@@ -312,6 +294,15 @@ pub const PresenceWorker = struct {
         if (pushed_user or pushed_shared) {
             self.notifier.notify();
         }
+    }
+
+    fn deinitBatches(comptime BatchT: type, batches: *std.ArrayListUnmanaged(BatchT), allocator: Allocator) void {
+        for (batches.items) |*batch| {
+            for (batch.updates.items) |*update| update.patch.free(allocator);
+            batch.updates.deinit(allocator);
+            batch.subscribers.deinit(allocator);
+        }
+        batches.deinit(allocator);
     }
 
     fn dispatchBatches(

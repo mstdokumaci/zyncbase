@@ -85,7 +85,7 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
     try manager.setUser(1, user_id, patch2);
 
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
-    const merged_patch = manager.pending_user_updates.items[0].patch orelse return error.TestExpectedValue;
+    const merged_patch = manager.pending_user_updates.items[0].patch;
     try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
 }
 
@@ -483,7 +483,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -508,14 +508,14 @@ test "PresenceManager - leave event after successful flush is preserved" {
     try manager.removeUser(1, user_id);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(manager.pending_user_updates.items[0].is_leave);
-    try testing.expect(manager.pending_user_updates.items[0].patch == null);
+    try testing.expect(manager.pending_user_updates.items[0].patch == .nil);
 
     // Second flush: leave should survive the cleanup and appear in the batch
     {
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -534,7 +534,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
         try testing.expectEqual(@as(usize, 1), user_batches.items.len);
         try testing.expectEqual(@as(usize, 1), user_batches.items[0].updates.items.len);
         try testing.expect(user_batches.items[0].updates.items[0].is_leave);
-        try testing.expect(user_batches.items[0].updates.items[0].patch == null);
+        try testing.expect(user_batches.items[0].updates.items[0].patch == .nil);
     }
 }
 
@@ -563,7 +563,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -581,21 +581,21 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         try manager.drainPendingBatches(&user_batches, &shared_batches);
     }
 
-    // User makes an update (patch != null)
+    // User makes an update (patch != .nil)
     var patch2 = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 42.0 } },
     });
     defer patch2.free(allocator);
     try manager.setUser(1, user_id, patch2);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
-    try testing.expect(manager.pending_user_updates.items[0].patch != null);
+    try testing.expect(manager.pending_user_updates.items[0].patch != .nil);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
 
     // Now simulate a failed partial drain:
     //   Free the patch and null it (as drainPendingBatches does after transferring to a batch),
     //   but leave the item in the list (as happens when success stays false).
-    if (manager.pending_user_updates.items[0].patch) |p| p.free(allocator);
-    manager.pending_user_updates.items[0].patch = null;
+    if (manager.pending_user_updates.items[0].patch != .nil) manager.pending_user_updates.items[0].patch.free(allocator);
+    manager.pending_user_updates.items[0].patch = .nil;
 
     // User leaves — removeUser should convert the leftover transferred item into a leave
     // (not early-return because is_leave is false on the transferred item).
@@ -608,7 +608,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -655,7 +655,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -687,7 +687,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
     try manager.removeUser(1, user_id);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(manager.pending_user_updates.items[0].is_leave);
-    try testing.expect(manager.pending_user_updates.items[0].patch == null);
+    try testing.expect(manager.pending_user_updates.items[0].patch == .nil);
 
     // Set user again — coalesces with the leave-converted pending update
     var patch3 = try makePresencePatch(allocator, &.{
@@ -699,5 +699,5 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
     try testing.expect(manager.pending_user_updates.items[0].is_new_user);
-    try testing.expect(manager.pending_user_updates.items[0].patch != null);
+    try testing.expect(manager.pending_user_updates.items[0].patch != .nil);
 }

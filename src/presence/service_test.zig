@@ -66,8 +66,6 @@ test "PresenceService: setUser authorized with permissive config" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
     const patch = try makeTestPatch(allocator);
@@ -84,8 +82,6 @@ test "PresenceService: setUser rejected with unauthorized namespace" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = denyWriteSession(&claims, allocator);
     const patch = try makeTestPatch(allocator);
@@ -104,8 +100,6 @@ test "PresenceService: setShared authorized with permissive config" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
     const patch = try makeTestSharedPatch(allocator);
@@ -122,8 +116,6 @@ test "PresenceService: setShared rejected with unauthorized namespace" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = denyWriteSession(&claims, allocator);
     const patch = try makeTestSharedPatch(allocator);
@@ -142,8 +134,6 @@ test "PresenceService: removeUser with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
@@ -158,8 +148,6 @@ test "PresenceService: subscribeUser with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
@@ -174,8 +162,6 @@ test "PresenceService: subscribeShared with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
@@ -190,8 +176,6 @@ test "PresenceService: unsubscribeUser with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
@@ -206,8 +190,6 @@ test "PresenceService: unsubscribeShared with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
 
@@ -222,8 +204,6 @@ test "PresenceService: removeAllForConnection with null worker (no crash)" {
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     svc.removeAllForConnection(1, 42, 100);
 }
 
@@ -237,8 +217,6 @@ test "PresenceService: setUser clones patch — original can be freed after call
     defer config.deinit();
 
     var svc = PresenceService.init(allocator, null, &config, &schema);
-    defer svc.deinit();
-
     const claims = std.StringHashMapUnmanaged(typed.Value){};
     const session = makePermissiveSession(&claims, allocator);
     const patch = try makeTestPatch(allocator);
