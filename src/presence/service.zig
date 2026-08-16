@@ -50,8 +50,6 @@ pub const PresenceService = struct {
         };
     }
 
-    pub fn deinit(_: *PresenceService) void {}
-
     // === Public API — each method owns its full policy chain ===
 
     /// Authorize user presence write, clone patch onto service allocator, enqueue set_user.

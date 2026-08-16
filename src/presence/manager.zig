@@ -42,7 +42,7 @@ pub const PresenceManager = struct {
     pub const PendingUserUpdate = struct {
         namespace_id: i64,
         user_id: typed_doc_id.DocId,
-        patch: ?msgpack.Payload, // null = leave (or transferred to batch)
+        patch: msgpack.Payload, // .nil = leave (or transferred to batch)
         is_new_user: bool, // true = join event, false = update event
         joined_at: i64, // actual join timestamp (0 for non-join)
         is_leave: bool = false, // true = explicit leave event (not a transferred update)
@@ -107,9 +107,7 @@ pub const PresenceManager = struct {
         self.namespace_empty_at.deinit(self.allocator);
 
         for (self.pending_user_updates.items) |*update| {
-            if (update.patch) |patch| {
-                patch.free(self.allocator);
-            }
+            update.patch.free(self.allocator);
         }
         self.pending_user_updates.deinit(self.allocator);
 
@@ -175,8 +173,8 @@ pub const PresenceManager = struct {
         _ = self.namespace_empty_at.fetchRemove(namespace_id);
 
         // Coalesce with any pending update for this user in the current batch.
-        if (self.findPendingUserUpdate(namespace_id, user_id)) |existing| {
-            try self.coalescePendingUpdate(existing, patch, is_new_user, now);
+        if (self.findPendingUserUpdateIndex(namespace_id, user_id)) |idx| {
+            try self.coalescePendingUpdate(&self.pending_user_updates.items[idx], patch, is_new_user, now);
             return;
         }
 
@@ -236,8 +234,8 @@ pub const PresenceManager = struct {
         is_new_user: bool,
         now: i64,
     ) !void {
-        if (existing.patch != null) {
-            try self.mergePayloadArrays(&existing.patch.?, patch);
+        if (existing.patch != .nil) {
+            try self.mergePayloadArrays(&existing.patch, patch);
         } else {
             const cloned_patch = try patch.deepClone(self.allocator);
             existing.patch = cloned_patch;
@@ -336,17 +334,17 @@ pub const PresenceManager = struct {
 
             if (self.findPendingUserUpdateIndex(namespace_id, user_id)) |idx| {
                 var existing = &self.pending_user_updates.items[idx];
-                if (existing.patch == null and existing.is_leave) {
+                if (existing.patch == .nil and existing.is_leave) {
                     return;
                 }
                 if (existing.is_new_user) {
-                    if (existing.patch) |patch| patch.free(self.allocator);
+                    existing.patch.free(self.allocator);
                     _ = self.pending_user_updates.orderedRemove(idx);
                     return;
                 }
 
-                if (existing.patch) |patch| patch.free(self.allocator);
-                existing.patch = null;
+                existing.patch.free(self.allocator);
+                existing.patch = .nil;
                 existing.is_new_user = false;
                 existing.is_leave = true;
                 return;
@@ -356,7 +354,7 @@ pub const PresenceManager = struct {
             try self.pending_user_updates.append(self.allocator, .{
                 .namespace_id = namespace_id,
                 .user_id = user_id,
-                .patch = null, // null signals leave
+                .patch = .nil, // .nil signals leave
                 .is_new_user = false,
                 .joined_at = 0,
                 .is_leave = true,
@@ -375,17 +373,6 @@ pub const PresenceManager = struct {
                 return i;
             }
             i += 1;
-        }
-        return null;
-    }
-
-    fn findPendingUserUpdate(
-        self: *PresenceManager,
-        namespace_id: i64,
-        user_id: typed_doc_id.DocId,
-    ) ?*PendingUserUpdate {
-        for (self.pending_user_updates.items) |*update| {
-            if (update.namespace_id == namespace_id and update.user_id == user_id) return update;
         }
         return null;
     }
@@ -579,14 +566,14 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        compactPendingUserUpdates(self);
-        compactPendingSharedUpdates(self);
+        compactPending(PendingUserUpdate, &self.pending_user_updates, isDroppableUser);
+        compactPending(PendingSharedUpdate, &self.pending_shared_updates, isDroppableShared);
 
         var success = false;
         defer {
             if (success) {
                 for (self.pending_user_updates.items) |*update| {
-                    if (update.patch) |p| p.free(self.allocator);
+                    update.patch.free(self.allocator);
                 }
                 for (self.pending_shared_updates.items) |*update| {
                     update.patch.free(self.allocator);
@@ -597,113 +584,68 @@ pub const PresenceManager = struct {
         }
 
         // Sort by namespace_id to ensure contiguous grouping
-        const SortHelpers = struct {
-            fn compareUser(ctx: void, a: PendingUserUpdate, b: PendingUserUpdate) bool {
-                _ = ctx;
-                return a.namespace_id < b.namespace_id;
-            }
-            fn compareShared(ctx: void, a: PendingSharedUpdate, b: PendingSharedUpdate) bool {
-                _ = ctx;
-                return a.namespace_id < b.namespace_id;
-            }
-        };
+        std.mem.sort(PendingUserUpdate, self.pending_user_updates.items, {}, lessNamespace(PendingUserUpdate));
+        std.mem.sort(PendingSharedUpdate, self.pending_shared_updates.items, {}, lessNamespace(PendingSharedUpdate));
 
-        std.mem.sort(PendingUserUpdate, self.pending_user_updates.items, {}, SortHelpers.compareUser);
-        std.mem.sort(PendingSharedUpdate, self.pending_shared_updates.items, {}, SortHelpers.compareShared);
-
-        try groupUserUpdatesIntoBatches(self, user_batches);
-        try groupSharedUpdatesIntoBatches(self, shared_batches);
+        try groupIntoBatches(PendingUserUpdate, UserUpdateBatch, self.allocator, &self.pending_user_updates, &self.user_subscribers, user_batches);
+        try groupIntoBatches(PendingSharedUpdate, SharedUpdateBatch, self.allocator, &self.pending_shared_updates, &self.shared_subscribers, shared_batches);
 
         success = true;
     }
 
-    fn compactPendingUserUpdates(self: *PresenceManager) void {
-        var write: usize = 0;
-        for (self.pending_user_updates.items, 0..) |_, read_idx| {
-            const u = &self.pending_user_updates.items[read_idx];
-            if (u.patch == null and !u.is_leave) continue;
-            if (write != read_idx)
-                self.pending_user_updates.items[write] = self.pending_user_updates.items[read_idx];
-            write += 1;
-        }
-        self.pending_user_updates.shrinkRetainingCapacity(write);
+    fn isDroppableUser(u: *const PresenceManager.PendingUserUpdate) bool {
+        return u.patch == .nil and !u.is_leave;
     }
 
-    fn compactPendingSharedUpdates(self: *PresenceManager) void {
-        var write: usize = 0;
-        for (self.pending_shared_updates.items, 0..) |_, read_idx| {
-            const u = &self.pending_shared_updates.items[read_idx];
-            if (u.patch == .nil) continue;
-            if (write != read_idx)
-                self.pending_shared_updates.items[write] = self.pending_shared_updates.items[read_idx];
-            write += 1;
-        }
-        self.pending_shared_updates.shrinkRetainingCapacity(write);
+    fn isDroppableShared(u: *const PresenceManager.PendingSharedUpdate) bool {
+        return u.patch == .nil;
     }
 
-    fn groupUserUpdatesIntoBatches(
-        self: *PresenceManager,
-        user_batches: *std.ArrayListUnmanaged(UserUpdateBatch),
+    fn compactPending(comptime T: type, items: *std.ArrayListUnmanaged(T), comptime is_drop: fn (*const T) bool) void {
+        var write: usize = 0;
+        for (items.items, 0..) |_, read_idx| {
+            const u = &items.items[read_idx];
+            if (is_drop(u)) continue;
+            if (write != read_idx) items.items[write] = items.items[read_idx];
+            write += 1;
+        }
+        items.shrinkRetainingCapacity(write);
+    }
+
+    fn groupIntoBatches(
+        comptime T: type,
+        comptime BatchT: type,
+        allocator: Allocator,
+        pending: *std.ArrayListUnmanaged(T),
+        subscribers: *const SubscriberTable,
+        out: *std.ArrayListUnmanaged(BatchT),
     ) !void {
         var i: usize = 0;
-        while (i < self.pending_user_updates.items.len) {
-            const namespace_id = self.pending_user_updates.items[i].namespace_id;
+        while (i < pending.items.len) {
+            const namespace_id = pending.items[i].namespace_id;
             const range_start = i;
 
-            while (i < self.pending_user_updates.items.len and self.pending_user_updates.items[i].namespace_id == namespace_id) : (i += 1) {}
+            while (i < pending.items.len and pending.items[i].namespace_id == namespace_id) : (i += 1) {}
 
-            const ns_updates = self.pending_user_updates.items[range_start..i];
+            const ns_updates = pending.items[range_start..i];
 
-            var batch = UserUpdateBatch{
+            var batch = BatchT{
                 .namespace_id = namespace_id,
-                .updates = std.ArrayListUnmanaged(PendingUserUpdate).empty,
+                .updates = std.ArrayListUnmanaged(T).empty,
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
-                batch.updates.deinit(self.allocator);
-                batch.subscribers.deinit(self.allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
             }
 
-            try batch.updates.appendSlice(self.allocator, ns_updates);
-            if (self.user_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(self.allocator, subs);
+            try batch.updates.appendSlice(allocator, ns_updates);
+            if (subscribers.get(namespace_id)) |subs| {
+                try batch.subscribers.appendSlice(allocator, subs);
             }
-            try user_batches.append(self.allocator, batch);
+            try out.append(allocator, batch);
             // Transfer ownership: batch now owns the patches.
-            for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
-        }
-    }
-
-    fn groupSharedUpdatesIntoBatches(
-        self: *PresenceManager,
-        shared_batches: *std.ArrayListUnmanaged(SharedUpdateBatch),
-    ) !void {
-        var i: usize = 0;
-        while (i < self.pending_shared_updates.items.len) {
-            const namespace_id = self.pending_shared_updates.items[i].namespace_id;
-            const range_start = i;
-
-            while (i < self.pending_shared_updates.items.len and self.pending_shared_updates.items[i].namespace_id == namespace_id) : (i += 1) {}
-
-            const ns_updates = self.pending_shared_updates.items[range_start..i];
-
-            var batch = SharedUpdateBatch{
-                .namespace_id = namespace_id,
-                .updates = std.ArrayListUnmanaged(PendingSharedUpdate).empty,
-                .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
-            };
-            errdefer {
-                batch.updates.deinit(self.allocator);
-                batch.subscribers.deinit(self.allocator);
-            }
-
-            try batch.updates.appendSlice(self.allocator, ns_updates);
-            if (self.shared_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(self.allocator, subs);
-            }
-            try shared_batches.append(self.allocator, batch);
-            // Transfer ownership: batch now owns the patches.
-            for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
+            for (pending.items[range_start..i]) |*update| update.patch = .nil;
         }
     }
 
@@ -736,6 +678,14 @@ pub const PresenceManager = struct {
         }
     }
 };
+
+fn lessNamespace(comptime T: type) fn (void, T, T) bool { // zwanzig-disable-line: unused-parameter
+    return struct {
+        pub fn inner(_: void, a: T, b: T) bool {
+            return a.namespace_id < b.namespace_id;
+        }
+    }.inner;
+}
 
 pub const UserSnapshot = struct {
     users: std.ArrayListUnmanaged(UserEntry),

@@ -336,7 +336,7 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
     const update = PendingUserUpdate{
         .namespace_id = 1,
         .user_id = typed_doc_id.zero,
-        .patch = null,
+        .patch = .nil,
         .is_new_user = false,
         .joined_at = 0,
         .is_leave = true,

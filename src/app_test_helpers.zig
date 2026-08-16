@@ -274,7 +274,6 @@ pub const AppTestContext = struct {
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
-        self.presence_service.deinit();
         self.store_service.deinit();
 
         // 5. Cleanup remaining infrastructure
