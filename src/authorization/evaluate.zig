@@ -43,14 +43,6 @@ pub const ResolvedAuthValue = union(enum) {
     borrowed: Value,
     owned: Value,
 
-    pub fn fromBorrowed(value: Value) ResolvedAuthValue {
-        return .{ .borrowed = value };
-    }
-
-    pub fn fromOwned(value: Value) ResolvedAuthValue {
-        return .{ .owned = value };
-    }
-
     /// Returns a non-owning view. The caller must not deinitialize it.
     pub fn valueView(self: ResolvedAuthValue) Value {
         return switch (self) {
@@ -140,10 +132,10 @@ fn resolveDocOperand(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthV
     }
 
     if (std.mem.eql(u8, var_ctx.field, "id")) {
-        return if (ctx.doc_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
+        return if (ctx.doc_id) |id| .{ .borrowed = .{ .scalar = .{ .doc_id = id } } } else null;
     }
     if (std.mem.eql(u8, var_ctx.field, "owner_id")) {
-        return if (ctx.owner_doc_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
+        return if (ctx.owner_doc_id) |id| .{ .borrowed = .{ .scalar = .{ .doc_id = id } } } else null;
     }
 
     const table = ctx.value_table orelse return null;
@@ -228,27 +220,27 @@ fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthV
         .session => {
             if (session_field_map.get(var_ctx.field)) |sf| switch (sf) {
                 .userId => return if (ctx.session_user_id) |id|
-                    ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } })
+                    .{ .borrowed = .{ .scalar = .{ .doc_id = id } } }
                 else
                     null,
                 .externalId => return if (ctx.session_external_id) |id|
-                    ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } })
+                    .{ .borrowed = .{ .scalar = .{ .text = id } } }
                 else
                     null,
             };
             if (ctx.session_claims) |claims| {
                 if (claims.get(var_ctx.field)) |value| {
-                    return ResolvedAuthValue.fromBorrowed(value);
+                    return .{ .borrowed = value };
                 }
             }
             return null;
         },
         .namespace => if (ctx.namespace_captures) |captures| blk: {
             const val = captures.get(var_ctx.field) orelse break :blk null;
-            break :blk ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = val } });
+            break :blk .{ .borrowed = .{ .scalar = .{ .text = val } } };
         } else null,
         .path => if (std.mem.eql(u8, var_ctx.field, "table"))
-            if (ctx.path_table) |t| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = t } }) else null
+            if (ctx.path_table) |t| .{ .borrowed = .{ .scalar = .{ .text = t } } } else null
         else
             null,
         .value => resolveIncomingValueField(var_ctx.field, ctx),
@@ -258,7 +250,7 @@ fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthV
 
 pub fn resolveOperand(value: types.Operand, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (value) {
-        .literal => |v| ResolvedAuthValue.fromBorrowed(v),
+        .literal => |v| .{ .borrowed = v },
         .context_var => |cv| resolveContextVar(cv, ctx),
     };
 }
@@ -276,9 +268,9 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         const field_type = fields[field_index].declared_type;
 
         // Wire protocol: duplicate field index in one pair-array → last-wins.
-        const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
+        const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
         const value = typed_codec.fromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
-        return ResolvedAuthValue.fromOwned(value);
+        return .{ .owned = value };
     }
 
     const table = ctx.value_table orelse return null;
@@ -287,9 +279,9 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
     const field_meta = table.fields[field_index];
 
     // Wire protocol: duplicate field index in one pair-array → last-wins.
-    const pair = findLastValuePair(pairs, field_index) orelse return ResolvedAuthValue.fromBorrowed(.nil);
+    const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
     const value = typed_codec.fromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
-    return ResolvedAuthValue.fromOwned(value);
+    return .{ .owned = value };
 }
 
 /// Scan a pair-array payload in reverse and return the last pair whose

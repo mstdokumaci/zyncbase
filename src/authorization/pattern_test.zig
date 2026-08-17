@@ -33,8 +33,8 @@ test "matchNamespace matches exact literals and extracts captures" {
     var match = match_opt.?;
     defer match.deinit(allocator);
 
-    try testing.expect(std.mem.eql(u8, match.get("tenant_id").?, "acme"));
-    try testing.expect(std.mem.eql(u8, match.get("user_id").?, "123"));
+    try testing.expect(std.mem.eql(u8, match.captures.get("tenant_id").?, "acme"));
+    try testing.expect(std.mem.eql(u8, match.captures.get("user_id").?, "123"));
 }
 
 test "matchNamespace returns null on mismatch" {
@@ -77,7 +77,7 @@ test "namespaceRuleFor finds matching rule with captures" {
     var match = try authorization_pattern.matchNamespaceRule(allocator, &config, "tenant:acme");
     try testing.expect(match != null);
     try testing.expect(std.mem.eql(u8, match.?.rule.pattern, "tenant:{tenant_id}"));
-    try testing.expect(std.mem.eql(u8, match.?.captures.get("tenant_id").?, "acme"));
+    try testing.expect(std.mem.eql(u8, match.?.captures.captures.get("tenant_id").?, "acme"));
     match.?.deinit(allocator);
 }
 

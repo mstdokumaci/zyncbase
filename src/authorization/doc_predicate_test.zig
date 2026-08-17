@@ -16,6 +16,14 @@ const testing = std.testing;
 const ScalarValue = typed.ScalarValue;
 const EvalContext = authorization_evaluate.EvalContext;
 
+fn makeDocCond(allocator: std.mem.Allocator, field: []const u8, op: query_ast.Operator, rhs: ?authorization_types.Operand) !authorization_types.Condition {
+    return .{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, field) },
+        .op = op,
+        .rhs = rhs,
+    } };
+}
+
 // ─── Doc Predicate Tests ────────────────────────────────────────────────────
 
 test "buildDocPredicate produces filter predicate for $doc comparison" {
@@ -180,11 +188,7 @@ test "validateDocPredicate rejects array literal items with wrong type" {
 
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .integer = 42 };
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
-        .op = .eq,
-        .rhs = .{ .literal = .{ .array = items } },
-    } };
+    var condition = try makeDocCond(allocator, "tags", .eq, .{ .literal = .{ .array = items } });
     defer condition.deinit(allocator);
 
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
@@ -199,11 +203,7 @@ test "validateDocPredicate rejects $value array item type mismatch" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
-        .op = .eq,
-        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "scores") } },
-    } };
+    var condition = try makeDocCond(allocator, "tags", .eq, .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "scores") } });
     defer condition.deinit(allocator);
 
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
@@ -219,27 +219,15 @@ test "validateDocPredicate validates context variable shape by operator" {
     });
     defer table.deinit(allocator);
 
-    var valid_in = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
-        .op = .in,
-        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } },
-    } };
+    var valid_in = try makeDocCond(allocator, "visibility", .in, .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } });
     defer valid_in.deinit(allocator);
     try authorization_doc_predicate.validateDocPredicate(valid_in, &table);
 
-    var scalar_in = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
-        .op = .in,
-        .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } },
-    } };
+    var scalar_in = try makeDocCond(allocator, "visibility", .in, .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } });
     defer scalar_in.deinit(allocator);
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(scalar_in, &table));
 
-    var array_contains_array = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
-        .op = .contains,
-        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "tags") } },
-    } };
+    var array_contains_array = try makeDocCond(allocator, "tags", .contains, .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "tags") } });
     defer array_contains_array.deinit(allocator);
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(array_contains_array, &table));
 }
@@ -295,11 +283,7 @@ test "validateLiteralValue in with valid array of text scalars passes" {
     const items = try allocator.alloc(ScalarValue, 2);
     items[0] = .{ .text = try allocator.dupe(u8, "active") };
     items[1] = .{ .text = try allocator.dupe(u8, "pending") };
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .in,
-        .rhs = .{ .literal = .{ .array = items } },
-    } };
+    var condition = try makeDocCond(allocator, "status", .in, .{ .literal = .{ .array = items } });
     defer condition.deinit(allocator);
 
     try authorization_doc_predicate.validateDocPredicate(condition, &table);
@@ -313,11 +297,7 @@ test "validateLiteralValue in with non-array value returns error.InvalidValue" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .in,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "active") } } },
-    } };
+    var condition = try makeDocCond(allocator, "status", .in, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "active") } } });
     defer condition.deinit(allocator);
 
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
@@ -333,11 +313,7 @@ test "validateLiteralValue notIn with valid array of text scalars passes" {
 
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .text = try allocator.dupe(u8, "banned") };
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
-        .op = .notIn,
-        .rhs = .{ .literal = .{ .array = items } },
-    } };
+    var condition = try makeDocCond(allocator, "status", .notIn, .{ .literal = .{ .array = items } });
     defer condition.deinit(allocator);
 
     try authorization_doc_predicate.validateDocPredicate(condition, &table);
@@ -351,11 +327,7 @@ test "validateLiteralValue contains with array field and scalar value passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
-        .op = .contains,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "zig") } } },
-    } };
+    var condition = try makeDocCond(allocator, "tags", .contains, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "zig") } } });
     defer condition.deinit(allocator);
 
     try authorization_doc_predicate.validateDocPredicate(condition, &table);
@@ -369,11 +341,7 @@ test "validateLiteralValue contains with text field and text scalar passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "description") },
-        .op = .contains,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "hello") } } },
-    } };
+    var condition = try makeDocCond(allocator, "description", .contains, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "hello") } } });
     defer condition.deinit(allocator);
 
     try authorization_doc_predicate.validateDocPredicate(condition, &table);
@@ -390,11 +358,7 @@ test "validateLiteralValue contains with non-scalar value returns error.InvalidV
     // Passing an array where a scalar is required
     const items = try allocator.alloc(ScalarValue, 1);
     items[0] = .{ .text = try allocator.dupe(u8, "zig") };
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
-        .op = .contains,
-        .rhs = .{ .literal = .{ .array = items } },
-    } };
+    var condition = try makeDocCond(allocator, "tags", .contains, .{ .literal = .{ .array = items } });
     defer condition.deinit(allocator);
 
     try testing.expectError(error.InvalidValue, authorization_doc_predicate.validateDocPredicate(condition, &table));
@@ -408,11 +372,7 @@ test "validateLiteralValue generic eq operator with scalar value passes" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
-        .op = .eq,
-        .rhs = .{ .literal = .{ .scalar = .{ .integer = 42 } } },
-    } };
+    var condition = try makeDocCond(allocator, "score", .eq, .{ .literal = .{ .scalar = .{ .integer = 42 } } });
     defer condition.deinit(allocator);
 
     try authorization_doc_predicate.validateDocPredicate(condition, &table);
@@ -428,12 +388,7 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
     });
     defer table.deinit(allocator);
 
-    const status_field = try allocator.dupe(u8, "status");
-    const condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = status_field },
-        .op = .eq,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
-    } };
+    var condition = try makeDocCond(allocator, "status", .eq, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } });
     defer condition.deinit(allocator);
 
     const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
@@ -496,11 +451,7 @@ test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
-        .op = .isNull,
-        .rhs = null,
-    } };
+    var condition = try makeDocCond(allocator, "deletedAt", .isNull, null);
     defer condition.deinit(allocator);
 
     var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
@@ -521,11 +472,7 @@ test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value"
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "deletedAt") },
-        .op = .isNotNull,
-        .rhs = null,
-    } };
+    var condition = try makeDocCond(allocator, "deletedAt", .isNotNull, null);
     defer condition.deinit(allocator);
 
     var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
@@ -545,11 +492,7 @@ test "buildDocPredicate lowers startsWith to query_ast.Condition with text value
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
-        .op = .startsWith,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "pub") } } },
-    } };
+    var condition = try makeDocCond(allocator, "visibility", .startsWith, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "pub") } } });
     defer condition.deinit(allocator);
 
     var predicate = (try authorization_doc_predicate.buildDocPredicate(condition, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
@@ -572,11 +515,7 @@ test "validateDocPredicate rejects startsWith on non-text field" {
     });
     defer table.deinit(allocator);
 
-    var condition = authorization_types.Condition{ .comparison = .{
-        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "score") },
-        .op = .startsWith,
-        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "prefix") } } },
-    } };
+    var condition = try makeDocCond(allocator, "score", .startsWith, .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "prefix") } } });
     defer condition.deinit(allocator);
 
     try testing.expectError(error.UnsupportedOperatorForFieldType, authorization_doc_predicate.validateDocPredicate(condition, &table));

@@ -52,10 +52,7 @@ fn makePublicNamespaceRule(allocator: Allocator) !NamespaceRule {
     const segments = try allocator.alloc(PatternSegment, 1);
     errdefer allocator.free(segments);
     segments[0] = .{ .literal = try allocator.dupe(u8, "public") };
-    errdefer switch (segments[0]) {
-        .literal => |s| allocator.free(s),
-        .capture => |s| allocator.free(s),
-    };
+    errdefer allocator.free(segments[0].literal);
 
     return .{
         .pattern = pattern,
