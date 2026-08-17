@@ -224,20 +224,25 @@ fn runSelectQuerySweep(
         last_ns = now_ns;
 
         // Stage B: mutex.lock → stmt_cache.acquire → execQuery → stmt.release → mutex.unlock
-        worker.node.mutex.lockUncancelable(worker.node.io);
-        var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
-        const exec_res = try read_mod.execQuery(
-            worker.read_arena.allocator(),
-            &worker.node.conn,
-            mstmt.stmt,
-            query_res.values,
-            table_metadata,
-            filter.limit,
-            sort_field_index,
-            &worker.json_buf,
-        );
-        mstmt.release();
-        worker.node.mutex.unlock(worker.node.io);
+        const exec_res = blk: {
+            worker.node.mutex.lockUncancelable(worker.node.io);
+            errdefer worker.node.mutex.unlock(worker.node.io);
+            var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
+            errdefer mstmt.release();
+            const result = try read_mod.execQuery(
+                worker.read_arena.allocator(),
+                &worker.node.conn,
+                mstmt.stmt,
+                query_res.values,
+                table_metadata,
+                filter.limit,
+                sort_field_index,
+                &worker.json_buf,
+            );
+            mstmt.release();
+            worker.node.mutex.unlock(worker.node.io);
+            break :blk result;
+        };
         now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         total_b += @intCast(now_ns - last_ns);
         last_ns = now_ns;

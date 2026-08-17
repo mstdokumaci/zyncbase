@@ -396,9 +396,12 @@ pub const AppTestContext = struct {
         });
         external_id_transferred = true;
 
-        self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
-        try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
-        self.connection_manager.mutex.unlock(self.connection_manager.io);
+        {
+            self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
+            errdefer self.connection_manager.mutex.unlock(self.connection_manager.io);
+            try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
+            self.connection_manager.mutex.unlock(self.connection_manager.io);
+        }
         defer {
             self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
             _ = self.connection_manager.map.remove(mock_conn.id);
