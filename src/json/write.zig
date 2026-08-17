@@ -61,7 +61,7 @@ pub const Writer = struct {
 
     pub fn intValue(self: *Writer, value: anytype) !void {
         try self.separator();
-        try self.buf.writer(self.allocator).print("{d}", .{value});
+        try self.buf.print(self.allocator, "{d}", .{value});
     }
 
     pub fn floatValue(self: *Writer, value: anytype) !void {
@@ -93,7 +93,7 @@ pub const Writer = struct {
         try self.separator();
         try self.writeEscapedString(key);
         try self.buf.append(self.allocator, ':');
-        try self.buf.writer(self.allocator).print("{d}", .{value});
+        try self.buf.print(self.allocator, "{d}", .{value});
     }
 
     pub fn rawField(self: *Writer, key: []const u8, json_bytes: []const u8) !void {

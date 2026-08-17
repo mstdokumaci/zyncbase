@@ -33,18 +33,21 @@ fn parseVersion(s: []const u8) !Version {
 }
 
 pub const MigrationExecutor = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     db: *sqlite.Db,
     ddl_gen: *ddl_generator.DDLGenerator,
     config: MigrationConfig,
 
     pub fn init(
+        io: std.Io,
         allocator: std.mem.Allocator,
         db: *sqlite.Db,
         ddl_gen: *ddl_generator.DDLGenerator,
         config: MigrationConfig,
     ) MigrationExecutor {
         return .{
+            .io = io,
             .allocator = allocator,
             .db = db,
             .ddl_gen = ddl_gen,
@@ -229,7 +232,7 @@ pub const MigrationExecutor = struct {
         );
         try self.db.exec("DELETE FROM schema_meta", .{}, .{});
 
-        const now = std.time.timestamp();
+        const now = std.Io.Clock.real.now(self.io).toSeconds();
         const insert_sql = try std.fmt.allocPrint(
             self.allocator,
             "INSERT INTO schema_meta (version, applied_at) VALUES ('{s}', {d})",

@@ -5,7 +5,6 @@ const auth_types = @import("../authorization/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const th = @import("test_helpers.zig");
 const PresenceService = @import("service.zig").PresenceService;
@@ -29,7 +28,7 @@ fn makePermissiveConfig(allocator: std.mem.Allocator, schema: *const schema_type
 fn makePermissiveSession(claims: *const std.StringHashMapUnmanaged(typed.Value), arena: std.mem.Allocator) PresenceService.Session {
     return .{
         .namespace_id = 1,
-        .user_doc_id = typed_doc_id.generateUuidV7(),
+        .user_doc_id = 1,
         .conn_id = 100,
         .external_user_id = "external-test-user",
         .session_claims = claims,

@@ -191,7 +191,7 @@ Presence tracks global status (online state) and contextual status (room/documen
 ### Security and Transport Verification
 
 Authentication uses short-lived ticket tokens obtained from HTTP endpoints and presented during the WebSocket handshake. This avoids exposing long-lived JWTs in URL query parameters.  
-After handshake, `authorization.json` rules validate incoming MessagePack frames. Using Zig's `GeneralPurposeAllocator` in debug builds combined with non-recursive MessagePack parsing protects against memory exhaustion and stack overflow vectors.
+After handshake, `authorization.json` rules validate incoming MessagePack frames. Using Zig's `DebugAllocator` in debug builds combined with non-recursive MessagePack parsing protects against memory exhaustion and stack overflow vectors.
 
 #### ---
 

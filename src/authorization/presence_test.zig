@@ -17,7 +17,7 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "cursor_x", .declared_type = .real },
     };
@@ -36,7 +36,7 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "status", .declared_type = .text },
     };
@@ -54,7 +54,7 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
@@ -73,7 +73,7 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };

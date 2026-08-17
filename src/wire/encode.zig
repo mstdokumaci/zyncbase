@@ -174,15 +174,15 @@ inline fn writeOkResponseHeader(writer: anytype, msg_id: u64) !void {
 }
 
 pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(msgpack_allocator);
-    const writer = list.writer(msgpack_allocator);
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try writer.writeAll(&success_header);
     try writer.writeByte(0xcf);
     try writer.writeInt(u64, msg_id, .big);
 
-    return list.toOwnedSlice(msgpack_allocator);
+    return output.toOwnedSlice();
 }
 
 pub fn encodeOkWithSession(
@@ -190,9 +190,9 @@ pub fn encodeOkWithSession(
     msg_id: u64,
     session_claims: *const std.StringHashMapUnmanaged(typed.Value),
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(msgpack_allocator);
-    const writer = list.writer(msgpack_allocator);
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 3);
 
@@ -206,16 +206,16 @@ pub fn encodeOkWithSession(
         try typed_codec.writeMsgPack(entry.value_ptr.*, writer);
     }
 
-    return list.toOwnedSlice(msgpack_allocator);
+    return output.toOwnedSlice();
 }
 
 pub fn encodeConnected(
     msgpack_allocator: Allocator,
     user_id: ?[]const u8,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(msgpack_allocator);
-    const writer = list.writer(msgpack_allocator);
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 2);
 
@@ -229,7 +229,7 @@ pub fn encodeConnected(
         try msgpack.encode(.nil, writer);
     }
 
-    return list.toOwnedSlice(msgpack_allocator);
+    return output.toOwnedSlice();
 }
 
 pub fn encodeError(
@@ -237,9 +237,9 @@ pub fn encodeError(
     msg_id: ?u64,
     wire_err: WireError,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(msgpack_allocator);
-    const writer = list.writer(msgpack_allocator);
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     if (wire_err.retry_after_ms) |retry_after| {
         // Slow Path: Dynamic Map
@@ -270,7 +270,7 @@ pub fn encodeError(
         try writer.writeAll(wire_err.message);
     }
 
-    return list.toOwnedSlice(msgpack_allocator);
+    return output.toOwnedSlice();
 }
 
 pub const QueryResponse = struct {
@@ -285,9 +285,9 @@ pub fn encodeQuery(
     arena_allocator: std.mem.Allocator,
     response: QueryResponse,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(arena_allocator);
-    const writer = list.writer(arena_allocator);
+    var output: std.Io.Writer.Allocating = .init(arena_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     const map_size: usize = if (response.sub_id != null) 6 else 4;
     try msgpack.encodeMapHeader(writer, map_size);
@@ -311,7 +311,7 @@ pub fn encodeQuery(
 
     try writeOptional(writer, Keys.next_cursor, response.next_cursor, encodeStr, true);
 
-    return list.toOwnedSlice(arena_allocator);
+    return output.toOwnedSlice();
 }
 
 fn encodeTablesArray(writer: anytype, tables: []const schema_types.Table) !void {
@@ -355,9 +355,9 @@ fn encodePresenceFieldNames(writer: anytype, names: []const []const u8) !void {
 }
 
 pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 6);
 
@@ -381,7 +381,7 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema
     try writer.writeAll(Keys.presence_shared_fields);
     try encodePresenceFieldNames(writer, schema.presence_shared_fields_names);
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 // === Delta encoding ===
@@ -393,9 +393,9 @@ fn encodeDeltaOp(
     id_val: typed.Value,
     maybe_value: ?struct { record: typed.Record, meta: *const schema_types.Table },
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try writer.writeAll(Keys.ops);
     try writer.writeByte(0x91); // fixarray(1)
@@ -419,7 +419,7 @@ fn encodeDeltaOp(
         try encodeRecord(writer, v.record, v.meta);
     }
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 pub const DeltaOp = enum { remove, set };
@@ -456,20 +456,20 @@ pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata
 }
 
 pub fn encodeWriteCommitted(allocator: Allocator, write_id: [16]u8) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try writer.writeAll(&write_committed_header);
     try writeWriteIdHex(writer, write_id);
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireError, batch_index: ?usize) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     // 5 fixed fields + optional batchIndex
     const map_size: usize = @as(usize, 5) + @intFromBool(batch_index != null);
@@ -497,13 +497,13 @@ pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireEr
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
     }
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: []const u8) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 3);
 
@@ -516,7 +516,7 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
     try writer.writeAll(Keys.message);
     try msgpack.writeMsgPackStr(writer, message);
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 // === Presence encoding ===
@@ -551,9 +551,9 @@ pub fn encodePresenceBroadcast(
     sub_id: u64,
     updates: []const PresenceManager.PendingUserUpdate,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 3);
 
@@ -570,7 +570,7 @@ pub fn encodePresenceBroadcast(
         try encodeUserUpdate(writer, update);
     }
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 /// Encode a SharedStateBroadcast message with shared state updates.
@@ -579,9 +579,9 @@ pub fn encodeSharedStateBroadcast(
     sub_id: u64,
     updates: []const PresenceManager.PendingSharedUpdate,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 3);
 
@@ -597,7 +597,7 @@ pub fn encodeSharedStateBroadcast(
         try msgpack.encode(update.patch, writer);
     }
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 /// Encode a PresenceSubscribe ok response with user snapshot.
@@ -607,9 +607,9 @@ pub fn encodePresenceUserSnapshot(
     sub_id: u64,
     users: []const UserEntry,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 4);
 
@@ -636,7 +636,7 @@ pub fn encodePresenceUserSnapshot(
         try msgpack.encode(msgpack.Payload{ .int = user.joined_at }, writer);
     }
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 /// Encode a PresenceSubscribeShared ok response with shared state.
@@ -646,9 +646,9 @@ pub fn encodePresenceSharedSnapshot(
     sub_id: u64,
     shared: ?*const PresenceRecord,
 ) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
 
     try msgpack.encodeMapHeader(writer, 4);
 
@@ -663,7 +663,7 @@ pub fn encodePresenceSharedSnapshot(
         }
     }.encode, true);
 
-    return list.toOwnedSlice(allocator);
+    return output.toOwnedSlice();
 }
 
 /// Encode a PresenceRecord as a pair-array of [field_index, value].

@@ -13,14 +13,14 @@ const destroyMockWebSocket = helpers.destroyMockWebSocket;
 
 const TestSslPaths = struct {
     allocator: Allocator,
-    cert_path: []u8,
-    key_path: []u8,
+    cert_path: [:0]u8,
+    key_path: [:0]u8,
 
     fn init(allocator: Allocator) !TestSslPaths {
         return .{
             .allocator = allocator,
-            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.pem"),
-            .key_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.key"),
+            .cert_path = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, "tests/fixtures/cert.pem", allocator),
+            .key_path = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, "tests/fixtures/cert.key", allocator),
         };
     }
 
@@ -190,20 +190,10 @@ test "WebSocketServer: listen reports bind failure" {
 
     // Pre-occupy a port with a raw TCP socket so the WebSocketServer's bind()
     // fails (REUSEPORT mismatch on the occupied port).
-    const sock = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-    defer std.posix.close(sock);
-
-    var bind_addr = std.posix.sockaddr.in{
-        .port = 0,
-        .addr = @as(u32, @bitCast([4]u8{ 127, 0, 0, 1 })),
-    };
-    try std.posix.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr)));
-    try std.posix.listen(sock, 1);
-
-    var actual_addr: std.posix.sockaddr.in = undefined;
-    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
-    try std.posix.getsockname(sock, @ptrCast(&actual_addr), &addr_len);
-    const occupied_port = std.mem.bigToNative(u16, actual_addr.port);
+    const bind_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var occupied = try bind_addr.listen(testing.io, .{});
+    defer occupied.deinit(testing.io);
+    const occupied_port = occupied.socket.address.getPort();
 
     const config = WebSocketServer.Config{
         .port = occupied_port,

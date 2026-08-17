@@ -21,7 +21,7 @@ test "PresenceManager - setUser creates record and queues pending update" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -45,7 +45,7 @@ test "PresenceManager - setShared creates record and queues pending update" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     var patch = try makePresencePatch(allocator, &.{
@@ -68,7 +68,7 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -97,7 +97,7 @@ test "PresenceManager - setShared coalesces pending shared updates for same name
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     var patch1 = try makePresencePatch(allocator, &.{
@@ -126,7 +126,7 @@ test "PresenceManager - removeUser cleans up and queues leave" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -155,7 +155,7 @@ test "PresenceManager - removeUser on nonexistent namespace is no-op" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     try manager.removeUser(999, zeroDocId);
@@ -171,7 +171,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -200,7 +200,7 @@ test "PresenceManager - onSubscribeShared returns current state" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     var set_patch = try makePresencePatch(allocator, &.{
@@ -228,7 +228,7 @@ test "PresenceManager - onSubscribeShared returns null when no state" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const shared = try manager.onSubscribeShared(1, 200, 1);
@@ -243,7 +243,7 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     _ = try manager.onSubscribeUser(1, 100, 1);
@@ -271,7 +271,7 @@ test "PresenceManager - setUser cancels grace period" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -301,7 +301,7 @@ test "PresenceManager - multiple users in same namespace" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_a = zeroDocId;
@@ -336,7 +336,7 @@ test "PresenceManager - setUser tracks joined_at timestamp" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -373,7 +373,7 @@ test "PresenceManager - removeUser cleans up joined_at" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -403,7 +403,7 @@ test "PresenceManager - is_new_user flag set correctly" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -438,7 +438,7 @@ test "PresenceManager - snapshot includes joined_at" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -463,7 +463,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -546,7 +546,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;
@@ -638,7 +638,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
     defer freeTestFields(allocator, shared_fields);
 
     var manager: PresenceManager = undefined;
-    manager.init(allocator, user_fields, shared_fields);
+    manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
     const user_id = zeroDocId;

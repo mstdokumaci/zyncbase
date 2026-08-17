@@ -11,7 +11,7 @@ const TestItem = struct {
 
 test "SpmcBlockingQueue: empty queue" {
     const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     try testing.expect(q.popTimed(0) == null);
@@ -19,7 +19,7 @@ test "SpmcBlockingQueue: empty queue" {
 
 test "SpmcBlockingQueue: push and pop single item" {
     const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     try q.push(.{ .id = 42, .value = 100 });
@@ -31,7 +31,7 @@ test "SpmcBlockingQueue: push and pop single item" {
 
 test "SpmcBlockingQueue: push and pop multiple items FIFO" {
     const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     try q.push(.{ .id = 1, .value = 10 });
@@ -52,7 +52,7 @@ test "SpmcBlockingQueue: push and pop multiple items FIFO" {
 
 test "SpmcBlockingQueue: deinit frees remaining items" {
     const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
 
     try q.push(.{ .id = 1, .value = 100 });
     try q.push(.{ .id = 2, .value = 200 });

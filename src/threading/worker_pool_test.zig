@@ -11,7 +11,7 @@ const TestWorker = struct {
 
     fn init() TestWorker {
         return .{
-            .thread = managedThread(TestWorker).init(),
+            .thread = managedThread(TestWorker).init(testing.io),
             .started = false,
         };
     }
@@ -28,7 +28,7 @@ const TestWorker = struct {
 
 fn workerFn(ctx: *TestWorker) void {
     while (!ctx.thread.isRequested()) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        std.testing.io.sleep(.fromNanoseconds(1 * std.time.ns_per_ms), .awake) catch return;
     }
 }
 

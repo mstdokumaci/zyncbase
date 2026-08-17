@@ -98,7 +98,7 @@ pub const PresenceWorker = struct {
             .presence_manager = presence_manager,
             .send_queue = send_queue,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
-            .thread = managedThread(PresenceWorker).init(),
+            .thread = managedThread(PresenceWorker).init(presence_manager.io),
             .pool = MemoryStrategy.AllocPool(work_queue_type.Node).init(allocator),
             // SAFETY: work_queue is initialized inline below via init()
             .work_queue = undefined,

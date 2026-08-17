@@ -5,6 +5,7 @@
 .serena
 .agents
 zig-out
+zig-pkg
 test-artifacts/
 node_modules/
 data/

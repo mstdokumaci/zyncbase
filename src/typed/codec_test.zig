@@ -176,10 +176,10 @@ test "Value: payload -> json array -> payload roundtrip" {
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();
             const roundtripped = try typed.fromJson(alloc, ft, items_type, parsed.value);
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed.writeMsgPack(roundtripped, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed.writeMsgPack(roundtripped, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             return try msgpack.decode(alloc, &reader);
         }
     }.do;
@@ -333,10 +333,10 @@ test "Value: scalar roundtrips" {
 
     const roundtripMsgpack = struct {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed.writeMsgPack(tv, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed.writeMsgPack(tv, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             return try msgpack.decode(alloc, &reader);
         }
     }.do;

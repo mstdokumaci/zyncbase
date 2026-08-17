@@ -26,7 +26,7 @@ test "cache: concurrent reads never block" {
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 12345;
@@ -76,7 +76,7 @@ test "cache: ref_count lifecycle" {
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 999;
@@ -96,7 +96,7 @@ test "cache: update increments version" {
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 1;
@@ -113,7 +113,7 @@ test "cache: eviction" {
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 777;
@@ -129,7 +129,7 @@ test "cache: deep free via value deinit" {
     const string_cache = lockFreeCache(OwnedString, i64);
 
     var cache: string_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const val = try allocator.dupe(u8, "hello world");

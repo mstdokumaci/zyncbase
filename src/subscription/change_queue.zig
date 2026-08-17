@@ -36,14 +36,16 @@ pub const ChangeJob = struct {
 const shard_queue_type = spmcBlockingQueue(ChangeJob);
 
 pub const ChangeQueue = struct {
+    io: std.Io,
     shards: []shard_queue_type,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, num_shards: usize) !ChangeQueue {
+    pub fn init(io: std.Io, allocator: Allocator, num_shards: usize) !ChangeQueue {
         std.debug.assert(num_shards > 0);
         const shards = try allocator.alloc(shard_queue_type, num_shards);
-        for (shards) |*s| s.* = shard_queue_type.init(allocator);
+        for (shards) |*s| s.* = shard_queue_type.init(io, allocator);
         return .{
+            .io = io,
             .shards = shards,
             .allocator = allocator,
         };

@@ -21,13 +21,13 @@ pub fn createMessage(
     path_suffix: []const []const u8,
     value: ?[]const u8,
 ) ![]u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    errdefer buf.deinit();
 
-    const writer = buf.writer(allocator);
+    const writer = &buf.writer;
     var num_elements: u8 = if (value != null) 5 else 4;
     if (namespace == null) num_elements -= 1;
-    try buf.append(allocator, 0x80 | num_elements); // fixmap with N elements
+    try writer.writeByte(0x80 | num_elements); // fixmap with N elements
 
     // "type" key
     try writeMsgPackStr(writer, "type");
@@ -35,7 +35,7 @@ pub fn createMessage(
 
     // "id" key
     try writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf); // uint 64
+    try writer.writeByte(0xcf); // uint 64
     try writer.writeInt(u64, id, .big);
 
     // "namespace" key
@@ -47,9 +47,9 @@ pub fn createMessage(
     // "path" key
     try writeMsgPackStr(writer, "path");
     const path_len: u8 = @intCast(path_suffix.len + (if (table_index != null) @as(usize, 1) else 0));
-    try buf.append(allocator, 0x90 | path_len); // fixarray
+    try writer.writeByte(0x90 | path_len); // fixarray
     if (table_index) |idx| {
-        try buf.append(allocator, 0xcf); // uint 64
+        try writer.writeByte(0xcf); // uint 64
         try writer.writeInt(u64, idx, .big);
     }
     for (path_suffix) |p| {
@@ -61,7 +61,7 @@ pub fn createMessage(
         try writeMsgPackStr(writer, "value");
         if (path_suffix.len == 1 and table_index != null) {
             // Document-level update: wrap in a map with a default field "val"
-            try buf.append(allocator, 0x81); // fixmap with 1 element
+            try writer.writeByte(0x81); // fixmap with 1 element
             try writeMsgPackStr(writer, "val"); // field name
             try writeMsgPackStr(writer, val); // field value
         } else {
@@ -69,7 +69,7 @@ pub fn createMessage(
         }
     }
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 pub fn getMapValue(payload: Payload, key: []const u8) !?Payload {

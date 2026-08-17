@@ -90,7 +90,7 @@ pub fn enqueueUpsert(
         .owner_doc_id = owner_doc_id,
         .columns = owned_columns,
         .guard_predicate = owned_guard,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
         .conn_id = conn_id,
         .write_id = write_id,
     } });
@@ -121,7 +121,7 @@ pub fn enqueueUpdate(
         .namespace_id = namespace_id,
         .columns = owned_columns,
         .guard_predicate = owned_guard,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
         .conn_id = conn_id,
         .write_id = write_id,
     } });
@@ -163,8 +163,8 @@ pub fn readDoc(
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = nextReaderNode(engine);
-    node.mutex.lock();
-    defer node.mutex.unlock();
+    node.mutex.lockUncancelable(node.io);
+    defer node.mutex.unlock(node.io);
 
     var dynamic = try node.conn.prepareDynamic(table_metadata.select_document_sql);
     defer dynamic.deinit();
@@ -188,8 +188,8 @@ pub fn queryDocs(
     const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_system.global_namespace_id;
 
     const node = nextReaderNode(engine);
-    node.mutex.lock();
-    defer node.mutex.unlock();
+    node.mutex.lockUncancelable(node.io);
+    defer node.mutex.unlock(node.io);
 
     const query_res = try reader_mod.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter);
     defer query_res.deinit(allocator);

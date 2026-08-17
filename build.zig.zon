@@ -1,19 +1,20 @@
 .{
     .name = .zyncbase,
-    .version = "0.15.2",
+    .version = "0.16.0",
+    .minimum_zig_version = "0.16.0",
     // Licensed under BSL 1.1 (Business Source License). See LICENSE for details.
     .dependencies = .{
         .sqlite = .{
-            .url = "https://github.com/vrischmann/zig-sqlite/archive/0b75ba276d34de3141ec1697e3ef7c836d7b38e7.tar.gz",
-            .hash = "sqlite-3.48.0-F2R_a8eODgD9X8XjvWlZ1K7C-tDuHae4FuShM2N-yIT2",
+            .url = "https://github.com/vrischmann/zig-sqlite/archive/946d77c.tar.gz",
+            .hash = "sqlite-3.48.0-F2R_azCQDgBGaWDIX4g2vxKpuqzYEQOOfAeJGMNocPu0",
         },
         .zig_msgpack = .{
-            .url = "https://github.com/zigcc/zig-msgpack/archive/2795481d1ae75ac5458736e86166e7964116ecba.tar.gz",
-            .hash = "zig_msgpack-0.0.14-evvueEc7BQATytDqy8wFvDb883Jv3yLk_8cF5EoYaKFB",
+            .url = "https://github.com/zigcc/zig-msgpack/archive/e5d5f8604cf7aa50593df8e450686a269a7299c6.tar.gz",
+            .hash = "zig_msgpack-0.0.14-evvueL5SBQACmim6j6klQ9wWIIG_UxGlPvVYdiNy0KT8",
         },
         .httpx = .{
-            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.0.7.tar.gz",
-            .hash = "httpx-0.0.7-8qj2evX4CQDJRRmwgwJtbWrABhBbhWoXprzRM7Xqir5z",
+            .url = "https://github.com/muhammad-fiaz/httpx.zig/archive/refs/tags/0.1.5.tar.gz",
+            .hash = "httpx-0.1.5-8qj2elGlFQAoJQ22AGRef6ckhz_R_RaJ1hkrSiQNrjor",
         },
     },
     .paths = .{

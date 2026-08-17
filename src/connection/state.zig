@@ -210,12 +210,12 @@ pub const Connection = struct {
     }
 
     /// Activate a pooled connection for a new client session.
-    pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
+    pub fn activate(self: *Connection, io: std.Io, id: u64, ws: WebSocket) void {
         self.resetSessionLocked();
         self.id = id;
         self.ws = ws;
         self.ref_count.store(1, .release);
-        self.created_at = std.time.timestamp();
+        self.created_at = std.Io.Clock.real.now(io).toSeconds();
         self.request_tokens = 0;
         self.last_request_time = null;
     }

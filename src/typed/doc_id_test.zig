@@ -48,7 +48,7 @@ test "doc_id: byte and hex roundtrips" {
 }
 
 test "doc_id: generateUuidV7 invariants" {
-    const first = doc_id.generateUuidV7();
+    const first = try doc_id.generateUuidV7(std.testing.io);
 
     // Family tag (bit 127) is set
     {
@@ -59,14 +59,14 @@ test "doc_id: generateUuidV7 invariants" {
     // Timestamp (bits 121..74) is within ~10s of now
     {
         const ts: u64 = @intCast((first >> 74) & 0xffffffffffff);
-        const now_ms: u64 = @intCast(@max(std.time.milliTimestamp(), 0));
+        const now_ms: u64 = @intCast(@max(std.Io.Clock.real.now(std.testing.io).toMilliseconds(), 0));
         try testing.expect(ts <= now_ms + 10_000);
         try testing.expect(ts >= now_ms - 10_000);
     }
 
     // Uniqueness: two calls produce different values
     {
-        const second = doc_id.generateUuidV7();
+        const second = try doc_id.generateUuidV7(std.testing.io);
         try testing.expect(second != first);
     }
 

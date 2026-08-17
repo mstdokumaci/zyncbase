@@ -7,7 +7,7 @@
 
 ### Required Tools
 
-1. **Zig** (0.15.2 or later)
+1. **Zig** (0.16.0)
    - Download from https://ziglang.org/download/
 
 2. **OpenSSL**

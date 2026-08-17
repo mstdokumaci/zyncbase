@@ -47,7 +47,7 @@ test "evaluateCondition $session.userId comparison" {
     } };
     defer cond.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -142,7 +142,7 @@ test "authorizeNamespace enforces storeFilter" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     try authorization_evaluate.authorizeNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null, false);
     try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null, false));
     try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "public", user_id, "external-1", null, false));
@@ -156,7 +156,7 @@ test "authorizeNamespace enforces presenceRead" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     try authorization_evaluate.authorizeNamespace(allocator, &config, "room:lobby", user_id, "external-1", null, true);
     try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null, true));
 }
@@ -169,7 +169,7 @@ test "authorizeNamespace denies when presenceRead is false" {
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     try testing.expectError(error.NamespaceUnauthorized, authorization_evaluate.authorizeNamespace(allocator, &config, "private:secret", user_id, "external-1", null, true));
 }
 
@@ -201,7 +201,7 @@ test "evaluateConditionWithDoc allows $doc.owner_id == $session.userId when owne
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -220,8 +220,8 @@ test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owne
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const session_id = typed_doc_id.generateUuidV7();
-    const other_id = typed_doc_id.generateUuidV7();
+    const session_id = try typed_doc_id.generateUuidV7(std.testing.io);
+    const other_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = session_id,
@@ -253,9 +253,9 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -291,9 +291,9 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -329,9 +329,9 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -374,9 +374,9 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -403,7 +403,7 @@ test "evaluateCondition: isNull allows when session field is absent" {
 test "evaluateCondition: isNull denies when session field is present" {
     const allocator = testing.allocator;
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
         .op = .isNull,
@@ -417,7 +417,7 @@ test "evaluateCondition: isNull denies when session field is present" {
 test "evaluateCondition: isNotNull allows when session field is present" {
     const allocator = testing.allocator;
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
         .op = .isNotNull,

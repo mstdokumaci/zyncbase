@@ -67,11 +67,11 @@ test "CheckpointWorker: shouldCheckpoint - time threshold" {
     manager.wal_size.store(100, .release);
 
     // Recent checkpoint - should not checkpoint
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Old checkpoint - should checkpoint
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release); // 2 minutes ago
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release); // 2 minutes ago
     try testing.expect(manager.shouldCheckpoint());
 }
 
@@ -89,22 +89,22 @@ test "CheckpointWorker: shouldCheckpoint - both thresholds" {
 
     // Neither threshold exceeded
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Only size threshold exceeded
     manager.wal_size.store(2000, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(manager.shouldCheckpoint());
 
     // Only time threshold exceeded
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release);
     try testing.expect(manager.shouldCheckpoint());
 
     // Both thresholds exceeded
     manager.wal_size.store(2000, .release);
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release);
     try testing.expect(manager.shouldCheckpoint());
 }
 
@@ -280,7 +280,7 @@ test "CheckpointWorker: shouldCheckpoint - clock rollback" {
     const manager = &ctx.manager;
 
     // Simulate clock rollback: last_checkpoint is in the future
-    manager.last_checkpoint.store(std.time.timestamp() + 3600, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() + 3600, .release);
     manager.wal_size.store(500, .release);
 
     // Should not panic and should NOT trigger time-based checkpoint
@@ -303,14 +303,14 @@ test "CheckpointWorker: fast shutdown" {
 
     const manager = &ctx.manager;
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
     try manager.spawn();
 
     // Signal shutdown immediately
     manager.stop();
     manager.deinit(); // This will join
 
-    const end_time = std.time.milliTimestamp();
+    const end_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
     const duration = end_time - start_time;
 
     // Should be much faster than 60s
@@ -424,11 +424,11 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
 
     // Property: shouldCheckpoint returns false when under threshold
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Property: shouldCheckpoint returns true when time threshold exceeded
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release); // 2 minutes ago
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release); // 2 minutes ago
     try testing.expect(manager.shouldCheckpoint());
 }
 

@@ -10,8 +10,9 @@ pub fn latch(comptime Result: type) type { // zwanzig-disable-line: unused-param
     return struct {
         const Self = @This();
 
-        mutex: std.Thread.Mutex = .{},
-        cond: std.Thread.Condition = .{},
+        io: std.Io,
+        mutex: std.Io.Mutex = .init,
+        cond: std.Io.Condition = .init,
         state: State = .{ .pending = {} },
 
         const State = union(enum) {
@@ -20,13 +21,17 @@ pub fn latch(comptime Result: type) type { // zwanzig-disable-line: unused-param
             rejected: anyerror,
         };
 
+        pub fn init(io: std.Io) Self {
+            return .{ .io = io };
+        }
+
         /// Block until the latch is resolved or rejected.
         /// Returns the resolved value or propagates the rejection error.
         pub fn wait(self: *Self) !Result {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             while (self.state == .pending) {
-                self.cond.wait(&self.mutex);
+                self.cond.waitUncancelable(self.io, &self.mutex);
             }
             return switch (self.state) {
                 .pending => unreachable,
@@ -38,25 +43,25 @@ pub fn latch(comptime Result: type) type { // zwanzig-disable-line: unused-param
         /// Resolve with a value. Callers of `wait()` receive it.
         /// Panics if the latch has already been resolved or rejected.
         pub fn resolve(self: *Self, result: Result) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             if (self.state != .pending) {
                 std.debug.panic("Latch.resolve called on already-completed latch (state={s})", .{@tagName(self.state)});
             }
             self.state = .{ .resolved = result };
-            self.cond.broadcast();
+            self.cond.broadcast(self.io);
         }
 
         /// Reject with an error. Callers of `wait()` receive the error.
         /// Panics if the latch has already been resolved or rejected.
         pub fn reject(self: *Self, err: anyerror) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             if (self.state != .pending) {
                 std.debug.panic("Latch.reject called on already-completed latch (state={s})", .{@tagName(self.state)});
             }
             self.state = .{ .rejected = err };
-            self.cond.broadcast();
+            self.cond.broadcast(self.io);
         }
     };
 }

@@ -37,7 +37,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -245,7 +245,7 @@ test "buildDocPredicate preserves logical_or predicate" {
     });
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -402,9 +402,9 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -424,11 +424,11 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
-        .doc_id = typed_doc_id.generateUuidV7(),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .owner_doc_id = test_id,
         .value_table = &table,
     };

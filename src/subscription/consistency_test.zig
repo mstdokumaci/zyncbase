@@ -26,7 +26,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    var sub_engine = SubscriptionEngine.init(allocator);
+    var sub_engine = SubscriptionEngine.init(testing.io, allocator);
     defer sub_engine.deinit();
 
     // 2) Queue a write BEFORE any subscription exists.

@@ -41,7 +41,7 @@ pub const Context = struct {
         );
         errdefer self.storage_engine.deinit();
 
-        try self.manager.init(allocator, &self.storage_engine, config);
+        try self.manager.init(std.testing.io, allocator, &self.storage_engine, config);
         errdefer self.manager.deinit();
     }
 

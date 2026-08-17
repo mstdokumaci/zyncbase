@@ -26,7 +26,7 @@ test "storage: error handling invalid database path" {
     defer std.debug.assert(ms.deinit() == .ok);
 
     var storage: StorageEngine = undefined;
-    const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &schema, .{}, .{ .in_memory = false }, null, null);
+    const result = storage.init(std.testing.io, allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &schema, .{}, .{ .in_memory = false }, null, null);
     // Verify we get an error
     if (result) |_| {
         storage.deinit();

@@ -76,7 +76,7 @@ pub const ReadWorker = struct {
         notifier_ctx: ?*anyopaque,
     ) !ReadWorker {
         return .{
-            .thread = managedThread(ReadWorker).init(),
+            .thread = managedThread(ReadWorker).init(node.io),
             .node = node,
             .request_queue = request_queue,
             .send_queue = send_queue,
@@ -259,8 +259,8 @@ pub const ReadWorker = struct {
 
         // Execute DB read under the node mutex
         const result: ?Record = blk: {
-            self.node.mutex.lock();
-            defer self.node.mutex.unlock();
+            self.node.mutex.lockUncancelable(self.node.io);
+            defer self.node.mutex.unlock(self.node.io);
 
             // Stmts are prepared before the pool starts; null means an invariant violation.
             const stmt = self.node.select_document_stmts[table_metadata.index] orelse unreachable;
@@ -319,8 +319,8 @@ pub const ReadWorker = struct {
         const sort_field_index = filter.order_by.field_index;
 
         // Execute DB read under the node mutex
-        self.node.mutex.lock();
-        defer self.node.mutex.unlock();
+        self.node.mutex.lockUncancelable(self.node.io);
+        defer self.node.mutex.unlock(self.node.io);
 
         var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, filter.structural_hash, query_res.sql) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };

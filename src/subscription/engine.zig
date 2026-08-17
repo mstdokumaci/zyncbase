@@ -123,6 +123,7 @@ fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
 }
 
 pub const SubscriptionEngine = struct {
+    io: std.Io,
     allocator: Allocator align(16),
     /// filter -> GroupId
     groups_by_filter: std.HashMapUnmanaged(QueryFilter, u64, CanonicalFilterContext, 80) = .empty,
@@ -135,10 +136,10 @@ pub const SubscriptionEngine = struct {
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
     next_group_id: u64 = 1,
-    mutex: std.Thread.RwLock = .{},
+    mutex: std.Io.RwLock = .init,
 
-    pub fn init(allocator: Allocator) SubscriptionEngine {
-        return .{ .allocator = allocator };
+    pub fn init(io: std.Io, allocator: Allocator) SubscriptionEngine {
+        return .{ .io = io, .allocator = allocator };
     }
 
     pub fn deinit(self: *SubscriptionEngine) void {
@@ -246,8 +247,8 @@ pub const SubscriptionEngine = struct {
         conn_id: u64,
         sub_id: u64,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         const sub_key = SubscriptionGroup.SubscriberKey{ .connection_id = conn_id, .id = sub_id };
 
@@ -322,14 +323,14 @@ pub const SubscriptionEngine = struct {
     }
 
     pub fn unsubscribe(self: *SubscriptionEngine, conn_id: u64, sub_id: u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         self.removeSubscriberLocked(.{ .connection_id = conn_id, .id = sub_id });
     }
 
     pub fn unsubscribeMany(self: *SubscriptionEngine, conn_id: u64, sub_ids: []const u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         for (sub_ids) |sub_id| {
             self.removeSubscriberLocked(.{ .connection_id = conn_id, .id = sub_id });
         }
@@ -364,8 +365,8 @@ pub const SubscriptionEngine = struct {
         allocator: Allocator,
         sub_key: SubscriptionGroup.SubscriberKey,
     ) !?SubscriptionQuery {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
+        self.mutex.lockSharedUncancelable(self.io);
+        defer self.mutex.unlockShared(self.io);
 
         const group_id = self.active_subs.get(sub_key) orelse return null;
         const group = self.groups.get(group_id) orelse return null;
@@ -390,8 +391,8 @@ pub const SubscriptionEngine = struct {
     };
 
     pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
+        self.mutex.lockSharedUncancelable(self.io);
+        defer self.mutex.unlockShared(self.io);
 
         var matches = std.ArrayListUnmanaged(Match).empty;
         errdefer matches.deinit(allocator);

@@ -58,9 +58,9 @@ test "extractEnvelopeFast: non-map payload" {
 test "extractEnvelopeFast: wrong type for field" {
     const allocator = testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try writeFixMapHeader(writer, 2);
     try writeFixStr(writer, "type");
     try writer.writeByte(0xcf);
@@ -68,7 +68,7 @@ test "extractEnvelopeFast: wrong type for field" {
     try writeFixStr(writer, "id");
     try writer.writeByte(0x01); // positive fixint 1
 
-    try testing.expectError(error.InvalidMessageFormat, decode.extractEnvelopeFast(buf.items));
+    try testing.expectError(error.InvalidMessageFormat, decode.extractEnvelopeFast(buf.written()));
 }
 
 test "extractEnvelopeFast: extra fields (lenient)" {
@@ -191,22 +191,22 @@ test "extractStoreLoadMoreFast: missing nextCursor" {
 test "extractStoreUnsubscribeFast: wrong type for subId" {
     const allocator = testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try writeFixMapHeader(writer, 1);
     try writeFixStr(writer, "subId");
     try writeFixStr(writer, "not-a-number"); // subId as string instead of u64
 
-    try testing.expectError(error.InvalidMessageFormat, decode.extractStoreUnsubscribeFast(buf.items));
+    try testing.expectError(error.InvalidMessageFormat, decode.extractStoreUnsubscribeFast(buf.written()));
 }
 
 test "extractEnvelopeFast: duplicate key, last wins" {
     const allocator = testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try writeFixMapHeader(writer, 3);
     try writeFixStr(writer, "type");
     try writeFixStr(writer, "first");
@@ -215,23 +215,23 @@ test "extractEnvelopeFast: duplicate key, last wins" {
     try writeFixStr(writer, "type");
     try writeFixStr(writer, "second"); // duplicate — last write should win
 
-    const result = try decode.extractEnvelopeFast(buf.items);
+    const result = try decode.extractEnvelopeFast(buf.written());
     try testing.expectEqualStrings("second", result.type);
 }
 
 test "extractPresenceSetFast: duplicate data key, last wins" {
     const allocator = testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try writeFixMapHeader(writer, 2);
     try writeFixStr(writer, "data");
     try writer.writeByte(0xc0); // nil — first value
     try writeFixStr(writer, "data");
     try writeFixStr(writer, "hello"); // string — second value (last wins)
 
-    const result = try decode.extractPresenceSetFast(buf.items, allocator);
+    const result = try decode.extractPresenceSetFast(buf.written(), allocator);
     defer result.data.free(allocator);
     try testing.expect(result.data == .str);
     try testing.expectEqualStrings("hello", result.data.str.value());

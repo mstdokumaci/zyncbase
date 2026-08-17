@@ -13,6 +13,7 @@ test "TicketExchange: generate and verify ticket" {
     const allocator = testing.allocator;
 
     const exchange = try TicketExchange.init(
+        testing.io,
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,
@@ -41,6 +42,7 @@ test "TicketExchange: expired ticket verification fails" {
     const allocator = testing.allocator;
 
     const exchange = try TicketExchange.init(
+        testing.io,
         allocator,
         "test-ticket-signing-secret-key-32b",
         0, // ttl_seconds = 0
@@ -64,6 +66,7 @@ test "TicketExchange: validate anonymous subject" {
 
     // 1. Anonymous auth enabled
     const exchange_enabled = try TicketExchange.init(
+        testing.io,
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,
@@ -85,6 +88,7 @@ test "TicketExchange: validate anonymous subject" {
 
     // 2. Anonymous auth disabled
     const exchange_disabled = try TicketExchange.init(
+        testing.io,
         allocator,
         "test-ticket-signing-secret-key-32b",
         60,

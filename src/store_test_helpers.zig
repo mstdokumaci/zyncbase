@@ -14,23 +14,23 @@ pub fn createStoreSetMessageWithPayload(
     value: msgpack_utils.Payload,
 ) ![]u8 {
     _ = _namespace_id;
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    errdefer buf.deinit();
+    const writer = &buf.writer;
 
-    try buf.append(allocator, 0x84); // fixmap(4) - removed namespace
+    try writer.writeByte(0x84); // fixmap(4) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
     try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
 
     try msgpack_utils.writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, id, .big);
 
     try msgpack_utils.writeMsgPackStr(writer, "path");
-    try buf.append(allocator, 0x90 | 2); // fixarray(2)
+    try writer.writeByte(0x90 | 2); // fixarray(2)
 
     // 1. Table Index
-    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, table_index, .big);
 
     // 2. Doc ID
@@ -38,8 +38,8 @@ pub fn createStoreSetMessageWithPayload(
     try msgpack_utils.writeMsgPackBin(writer, &doc_id_bytes);
 
     try msgpack_utils.writeMsgPackStr(writer, "value");
-    try msgpack_utils.encode(value, buf.writer(allocator));
-    return buf.toOwnedSlice(allocator);
+    try msgpack_utils.encode(value, writer);
+    return buf.toOwnedSlice();
 }
 
 pub fn createStoreQueryMessageWithFilterKey(
@@ -68,10 +68,10 @@ pub fn createStoreQueryMessageWithFilterKey(
         try p.mapPut("filter", k_val);
     }
 
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    try msgpack_utils.encode(p, list.writer(allocator));
-    return try list.toOwnedSlice(allocator);
+    var list = std.Io.Writer.Allocating.init(allocator);
+    errdefer list.deinit();
+    try msgpack_utils.encode(p, &list.writer);
+    return try list.toOwnedSlice();
 }
 
 pub fn createStoreQueryMessageWithEmptyFilter(
@@ -120,10 +120,10 @@ pub fn createStoreSubscribeMessage(
         }
     }
 
-    var list: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer list.deinit(allocator);
-    try msgpack_utils.encode(p, list.writer(allocator));
-    return try list.toOwnedSlice(allocator);
+    var list = std.Io.Writer.Allocating.init(allocator);
+    errdefer list.deinit();
+    try msgpack_utils.encode(p, &list.writer);
+    return try list.toOwnedSlice();
 }
 
 pub fn createCustomMessage(
@@ -143,22 +143,22 @@ pub fn createInvalidStoreSetMessageMissingId(
     _namespace_id: i64,
 ) ![]u8 {
     _ = _namespace_id;
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try buf.append(allocator, 0x81); // fixmap(1) - removed namespace
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    errdefer buf.deinit();
+    const writer = &buf.writer;
+    try writer.writeByte(0x81); // fixmap(1) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
     try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Creates a MsgPack Payload representing a document as a pair-array based on schema.
 /// Translates string field names to numeric indices using table metadata.
 /// Returns a pair-array: [[field_index, value], ...]
 pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_types.Table, fields: anytype) !msgpack_utils.Payload {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     const fields_info = @typeInfo(@TypeOf(fields)).@"struct".fields;
     try msgpack_utils.encodeArrayHeader(writer, fields_info.len);
@@ -179,6 +179,6 @@ pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema
         try msgpack_test_helpers.encodeAnyToPayload(allocator, writer, val);
     }
 
-    var reader: std.Io.Reader = .fixed(buf.items);
+    var reader: std.Io.Reader = .fixed(buf.written());
     return try msgpack_utils.decodeTrusted(allocator, &reader);
 }

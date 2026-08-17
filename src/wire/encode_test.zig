@@ -237,15 +237,16 @@ test "encodeWriteError: 6-field map includes batchIndex when set" {
 test "store_delta_header: decodes to StoreDelta type" {
     const allocator = testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    try buf.appendSlice(allocator, &wire_encode.store_delta_header);
-    try buf.append(allocator, 0xcf);
-    try buf.writer(allocator).writeInt(u64, 42, .big);
-    try msgpack.writeMsgPackStr(buf.writer(allocator), "ops");
-    try buf.append(allocator, 0x90);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
+    try writer.writeAll(&wire_encode.store_delta_header);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, 42, .big);
+    try msgpack.writeMsgPackStr(writer, "ops");
+    try writer.writeByte(0x90);
 
-    var reader: std.Io.Reader = .fixed(buf.items);
+    var reader: std.Io.Reader = .fixed(buf.written());
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 

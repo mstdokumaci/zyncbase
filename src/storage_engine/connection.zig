@@ -11,8 +11,9 @@ const CheckpointMode = write_queue.CheckpointMode;
 const CheckpointStats = write_queue.CheckpointStats;
 
 pub const ReaderNode = struct {
+    io: std.Io,
     conn: sqlite.Db,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     stmt_cache: sql.StatementCache,
     /// Pre-prepared `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`
     /// for each table, indexed by `table.index`. Prepared once in `StorageEngine.start()`
@@ -52,25 +53,25 @@ pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     try pragmaChecked(db, "mmap_size", "268435456");
 }
 
-pub fn getWalSize(allocator: Allocator, db_path: []const u8, in_memory: bool) !usize {
+pub fn getWalSize(io: std.Io, allocator: Allocator, db_path: []const u8, in_memory: bool) !usize {
     if (in_memory) return 0;
 
     const wal_path_buf = try std.fmt.allocPrint(allocator, "{s}-wal", .{db_path});
     defer allocator.free(wal_path_buf);
 
-    const file = std.fs.cwd().openFile(wal_path_buf, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(io, wal_path_buf, .{}) catch |err| {
         if (err == error.FileNotFound) return 0;
         return err;
     };
-    defer file.close();
+    defer file.close(io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     return stat.size;
 }
 
-pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path: []const u8, in_memory: bool, mode: CheckpointMode) !CheckpointStats {
-    const start_time = std.time.milliTimestamp();
-    const wal_size_before = try getWalSize(allocator, db_path, in_memory);
+pub fn internalExecuteCheckpoint(io: std.Io, conn: *sqlite.Db, allocator: Allocator, db_path: []const u8, in_memory: bool, mode: CheckpointMode) !CheckpointStats {
+    const start_time = std.Io.Clock.real.now(io).toMilliseconds();
+    const wal_size_before = try getWalSize(io, allocator, db_path, in_memory);
 
     var frames_checkpointed: usize = 0;
     var frames_in_wal: usize = 0;
@@ -94,8 +95,8 @@ pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path
         frames_in_wal = if (res.log > 0) @intCast(res.log) else 0;
     }
 
-    const wal_size_after = try getWalSize(allocator, db_path, in_memory);
-    const duration: u64 = @intCast(@max(@as(i64, 0), std.time.milliTimestamp() - start_time));
+    const wal_size_after = try getWalSize(io, allocator, db_path, in_memory);
+    const duration: u64 = @intCast(@max(@as(i64, 0), std.Io.Clock.real.now(io).toMilliseconds() - start_time));
 
     std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
         @tagName(mode),

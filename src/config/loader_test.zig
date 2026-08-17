@@ -1,9 +1,5 @@
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("stdlib.h");
-});
-
 const schema_helpers = @import("../schema/test_helpers.zig");
 const ConfigLoader = @import("loader.zig").ConfigLoader;
 const Config = @import("state.zig").Config;
@@ -18,24 +14,23 @@ fn writeConfigWithSchema(
     schema_file_path: []const u8,
     config_content: []const u8,
 ) ![]const u8 {
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file_path, .data = "{}" });
     const temp_file_path = try std.fs.path.join(allocator, &.{ test_dir, config_file_name });
     errdefer allocator.free(temp_file_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
     return temp_file_path;
 }
 
-/// Duplicates an optional getenv result into allocator-owned, sentinel-terminated
-/// storage so later setenv/unsetenv calls cannot invalidate it. Returns null for
-/// unset variables. The caller owns the returned copy.
-fn dupeEnvZ(allocator: std.mem.Allocator, value: ?[*:0]const u8) !?[:0]u8 {
-    return if (value) |v| try allocator.dupeZ(u8, std.mem.span(v)) else null;
+fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
+    var environ = try std.testing.environ.createMap(allocator);
+    defer environ.deinit();
+    return ConfigLoader.load(std.testing.io, &environ, allocator, path);
 }
 
 test "ConfigLoader loads defaults when file not found" {
     const allocator = std.testing.allocator;
 
-    var config = try ConfigLoader.load(allocator, "nonexistent-config.json");
+    var config = try loadConfig(allocator, "nonexistent-config.json");
     defer config.deinit();
 
     // Verify default values
@@ -61,10 +56,10 @@ test "ConfigLoader parses valid JSON config" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{ \"server\": { \"port\": 8080, \"host\": \"127.0.0.1\" }, \"dataDir\": \"", context.test_dir, "\", \"logging\": { \"level\": \"debug\", \"format\": \"text\" }, \"performance\": { \"messageBufferSize\": 2000, \"batchWrites\": false, \"batchSize\": 50, \"batchTimeout\": 20 }, \"schema\": \"", context.test_dir, "/test-config-schema.json\" }" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file);
+    var config = try loadConfig(allocator, temp_file);
     defer config.deinit();
 
     // Verify parsed values
@@ -93,10 +88,10 @@ test "ConfigLoader validates port range" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"server\": {\"port\": 70000}, \"schema\": \"", context.test_dir, "/invalid-port-schema.json\"}" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    const result = ConfigLoader.load(allocator, temp_file);
+    const result = loadConfig(allocator, temp_file);
     try std.testing.expectError(error.InvalidPort, result);
 }
 
@@ -114,10 +109,10 @@ test "ConfigLoader validates numeric ranges" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"performance\": {\"messageBufferSize\": 0}, \"schema\": \"", context.test_dir, "/invalid-buffer-schema.json\"}" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    const result = ConfigLoader.load(allocator, temp_file);
+    const result = loadConfig(allocator, temp_file);
     try std.testing.expectError(error.InvalidBufferSize, result);
 }
 
@@ -135,10 +130,10 @@ test "ConfigLoader validates batch size" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"performance\": {\"batchSize\": 0}, \"schema\": \"", context.test_dir, "/invalid-batch-size-schema.json\"}" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    const result = ConfigLoader.load(allocator, temp_file);
+    const result = loadConfig(allocator, temp_file);
     try std.testing.expectError(error.InvalidBatchSize, result);
 }
 
@@ -156,10 +151,10 @@ test "ConfigLoader parses auth config" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"authentication\": {\"jwt\": {\"secret\": \"my-secret-key\", \"algorithm\": \"HS512\", \"issuer\": \"zyncbase\", \"audience\": \"api\"}}, \"schema\": \"", context.test_dir, "/auth-schema.json\"}" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file);
+    var config = try loadConfig(allocator, temp_file);
     defer config.deinit();
 
     // Verify auth config (JWT validation only - Hook Server is managed by CLI)
@@ -186,10 +181,10 @@ test "ConfigLoader parses security config" {
     const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"security\": {\"allowedOrigins\": [\"https://example.com\", \"https://app.example.com\"], \"allowLocalhost\": false, \"maxMessagesPerSecond\": 200, \"maxConnections\": 20, \"maxMessageSize\": 2097152}, \"schema\": \"", context.test_dir, "/security-schema.json\"}" });
     defer allocator.free(final_config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file);
+    var config = try loadConfig(allocator, temp_file);
     defer config.deinit();
 
     // Verify security config
@@ -227,9 +222,9 @@ test "ConfigLoader parses inline schema configuration" {
     const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-inline.json" });
     defer allocator.free(temp_file);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = config_content });
 
-    var config = try ConfigLoader.load(allocator, temp_file);
+    var config = try loadConfig(allocator, temp_file);
     defer config.deinit();
 
     try std.testing.expect(config.schema_content != null);
@@ -270,43 +265,12 @@ test "config: env var substitution" {
     var context = try schema_helpers.TestContext.init(allocator, "config-env-vars");
     defer context.deinit();
 
-    // Set up test environment variables using C setenv
-    const prev_test_port = try dupeEnvZ(allocator, c.getenv("TEST_PORT"));
-    defer if (prev_test_port) |v| allocator.free(v);
-    const prev_test_host = try dupeEnvZ(allocator, c.getenv("TEST_HOST"));
-    defer if (prev_test_host) |v| allocator.free(v);
-    const prev_test_jwt_secret = try dupeEnvZ(allocator, c.getenv("TEST_JWT_SECRET"));
-    defer if (prev_test_jwt_secret) |v| allocator.free(v);
-    const prev_test_data_dir = try dupeEnvZ(allocator, c.getenv("TEST_DATA_DIR"));
-    defer if (prev_test_data_dir) |v| allocator.free(v);
-    defer {
-        if (prev_test_port) |v| {
-            _ = c.setenv("TEST_PORT", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_PORT");
-        }
-        if (prev_test_host) |v| {
-            _ = c.setenv("TEST_HOST", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_HOST");
-        }
-        if (prev_test_jwt_secret) |v| {
-            _ = c.setenv("TEST_JWT_SECRET", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_JWT_SECRET");
-        }
-        if (prev_test_data_dir) |v| {
-            _ = c.setenv("TEST_DATA_DIR", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_DATA_DIR");
-        }
-    }
-    _ = c.setenv("TEST_PORT", "8080", 1);
-    _ = c.setenv("TEST_HOST", "192.168.1.1", 1);
-    _ = c.setenv("TEST_JWT_SECRET", "test-secret-key", 1);
-    const test_data_dir_z = try allocator.dupeZ(u8, context.test_dir);
-    defer allocator.free(test_data_dir_z);
-    _ = c.setenv("TEST_DATA_DIR", test_data_dir_z, 1);
+    var environ = std.process.Environ.Map.init(allocator);
+    defer environ.deinit();
+    try environ.put("TEST_PORT", "8080");
+    try environ.put("TEST_HOST", "192.168.1.1");
+    try environ.put("TEST_JWT_SECRET", "test-secret-key");
+    try environ.put("TEST_DATA_DIR", context.test_dir);
 
     const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-env-vars.json" });
     defer allocator.free(temp_file_path);
@@ -331,10 +295,10 @@ test "config: env var substitution" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file_path, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try ConfigLoader.load(std.testing.io, &environ, allocator, temp_file_path);
     defer config.deinit();
 
     // Verify environment variables were substituted
@@ -347,16 +311,8 @@ test "config: env var substitution" {
 
 test "config: env var substitution - missing variable keeps original" {
     const allocator = std.testing.allocator;
-
-    // Ensure the variable doesn't exist
-    const prev_nonexistent_var = try dupeEnvZ(allocator, c.getenv("NONEXISTENT_VAR"));
-    defer if (prev_nonexistent_var) |v| allocator.free(v);
-    _ = c.unsetenv("NONEXISTENT_VAR");
-    defer {
-        if (prev_nonexistent_var) |v| {
-            _ = c.setenv("NONEXISTENT_VAR", v, 1);
-        }
-    }
+    var environ = std.process.Environ.Map.init(allocator);
+    defer environ.deinit();
 
     var context = try schema_helpers.TestContext.init(allocator, "config-missing-env");
     defer context.deinit();
@@ -376,10 +332,10 @@ test "config: env var substitution - missing variable keeps original" {
     , .{ context.test_dir, schema_file_path });
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file_path, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try ConfigLoader.load(std.testing.io, &environ, allocator, temp_file_path);
     defer config.deinit();
 
     // Verify original pattern is kept when variable doesn't exist
@@ -391,33 +347,11 @@ test "config: env var substitution - missing variable keeps original" {
 test "config: env var substitution - multiple variables" {
     const allocator = std.testing.allocator;
 
-    // Set up multiple test environment variables
-    const prev_test_origin_1 = try dupeEnvZ(allocator, c.getenv("TEST_ORIGIN_1"));
-    defer if (prev_test_origin_1) |v| allocator.free(v);
-    const prev_test_origin_2 = try dupeEnvZ(allocator, c.getenv("TEST_ORIGIN_2"));
-    defer if (prev_test_origin_2) |v| allocator.free(v);
-    const prev_test_rate_limit = try dupeEnvZ(allocator, c.getenv("TEST_RATE_LIMIT"));
-    defer if (prev_test_rate_limit) |v| allocator.free(v);
-    _ = c.setenv("TEST_ORIGIN_1", "https://example.com", 1);
-    _ = c.setenv("TEST_ORIGIN_2", "https://app.example.com", 1);
-    _ = c.setenv("TEST_RATE_LIMIT", "200", 1);
-    defer {
-        if (prev_test_origin_1) |v| {
-            _ = c.setenv("TEST_ORIGIN_1", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_ORIGIN_1");
-        }
-        if (prev_test_origin_2) |v| {
-            _ = c.setenv("TEST_ORIGIN_2", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_ORIGIN_2");
-        }
-        if (prev_test_rate_limit) |v| {
-            _ = c.setenv("TEST_RATE_LIMIT", v, 1);
-        } else {
-            _ = c.unsetenv("TEST_RATE_LIMIT");
-        }
-    }
+    var environ = std.process.Environ.Map.init(allocator);
+    defer environ.deinit();
+    try environ.put("TEST_ORIGIN_1", "https://example.com");
+    try environ.put("TEST_ORIGIN_2", "https://app.example.com");
+    try environ.put("TEST_RATE_LIMIT", "200");
 
     var context = try schema_helpers.TestContext.init(allocator, "config-multiple-env");
     defer context.deinit();
@@ -439,10 +373,10 @@ test "config: env var substitution - multiple variables" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file_path, .data = "{}" });
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try ConfigLoader.load(std.testing.io, &environ, allocator, temp_file_path);
     defer config.deinit();
 
     // Verify all environment variables were substituted
@@ -477,7 +411,7 @@ test "config: validation - port zero" {
     const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-port-zero.json", schema_file_path, config_content);
     defer allocator.free(temp_file_path);
 
-    const result = ConfigLoader.load(allocator, temp_file_path);
+    const result = loadConfig(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidPort, result);
 }
 
@@ -503,7 +437,7 @@ test "config: validation - invalid max message size" {
     const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-max-message-size.json", schema_file_path, config_content);
     defer allocator.free(temp_file_path);
 
-    const result = ConfigLoader.load(allocator, temp_file_path);
+    const result = loadConfig(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidMaxMessageSize, result);
 }
 
@@ -524,8 +458,8 @@ test "config: missing schema file is allowed" {
         \\}
     ;
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
     try std.testing.expectEqualStrings("/nonexistent/schema.json", config.schema_file);
     try std.testing.expect(config.schema_content == null);
@@ -550,10 +484,10 @@ test "config: file existence validation - auth rules file not found" {
     , .{schema_file_path});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file_path, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file_path, .data = "{}" });
 
-    const result = ConfigLoader.load(allocator, temp_file_path);
+    const result = loadConfig(allocator, temp_file_path);
     try std.testing.expectError(error.AuthRulesFileNotFound, result);
 }
 
@@ -568,7 +502,7 @@ test "config: file existence validation - valid schema file" {
     const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-valid-schema.json" });
     defer allocator.free(temp_file_path);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
     const config_content = try std.fmt.allocPrint(allocator,
         \\{{
@@ -577,9 +511,9 @@ test "config: file existence validation - valid schema file" {
     , .{schema_file});
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
 
     // Verify schema file was loaded
@@ -599,8 +533,8 @@ test "config: file existence validation - valid auth rules file" {
     const temp_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-valid-auth-rules.json" });
     defer allocator.free(temp_file_path);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_rules_file, .data = "{}" });
-    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = auth_rules_file, .data = "{}" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
 
     const config_content = try std.fmt.allocPrint(allocator,
         \\{{
@@ -610,9 +544,9 @@ test "config: file existence validation - valid auth rules file" {
     , .{ auth_rules_file, schema_file });
     defer allocator.free(config_content);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file_path, .data = config_content });
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
 
     // Verify auth rules file was loaded
@@ -646,7 +580,7 @@ test "config: load - server config" {
     const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-server.json", schema_file_path, config_content);
     defer allocator.free(temp_file_path);
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
 
     // Verify values match original
@@ -677,7 +611,7 @@ test "config: load - logging config" {
     const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-logging.json", schema_file_path, config_content);
     defer allocator.free(temp_file_path);
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
 
     // Verify values match original
@@ -736,7 +670,7 @@ test "config: load - complete config" {
     const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-roundtrip-complete.json", schema_file_path, config_content);
     defer allocator.free(temp_file_path);
 
-    var config = try ConfigLoader.load(allocator, temp_file_path);
+    var config = try loadConfig(allocator, temp_file_path);
     defer config.deinit();
 
     // Verify all values match original

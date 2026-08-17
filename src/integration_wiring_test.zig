@@ -23,7 +23,7 @@ fn setupTestServer(allocator: std.mem.Allocator, context: *schema_helpers.TestCo
     const data_dir = try std.fs.path.join(allocator, &.{ context.test_dir, "data" });
     defer allocator.free(data_dir);
 
-    return try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_path, null);
+    return try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_path, null);
 }
 
 test "Integration: All components properly wired" {

@@ -99,10 +99,10 @@ test "Value: payload -> sqlite column -> payload roundtrip" {
 
     const roundtripToPayload = struct {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed_codec.writeMsgPack(tv, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed_codec.writeMsgPack(tv, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             const decoded = try msgpack.decode(alloc, &reader);
             return decoded;
         }

@@ -17,7 +17,7 @@ test "logging: connection events" {
     // This property test verifies that for any client connection or disconnection,
     // a log entry is written with the connection ID.
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -148,7 +148,7 @@ test "logging: error details" {
     // cannot be intercepted directly, the tests exercise the error paths
     // (and one null-record lookup) and assert on observable behavior.
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -197,14 +197,14 @@ test "logging: error details" {
         try manager.onOpen(&ws);
 
         // Create message with missing fields (id, namespace, path, value)
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x81); // fixmap(1)
+        var buf = std.Io.Writer.Allocating.init(allocator);
+        defer buf.deinit();
+        const writer = &buf.writer;
+        try writer.writeByte(0x81); // fixmap(1)
         try msgpack_helpers.writeMsgPackStr(writer, "type");
         try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
 
-        const incomplete_msg = buf.items;
+        const incomplete_msg = buf.written();
 
         // This should log: "Failed to extract message info from connection {}: {}"
         manager.onMessage(&ws, incomplete_msg, .binary);
@@ -256,7 +256,7 @@ test "logging: level filtering" {
     // Note: Zig's std.log respects the log level at compile time and runtime.
     // We verify that the logging infrastructure is in place and used correctly.
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -296,7 +296,7 @@ test "logging: message formatting" {
     // can be customized via the log handler, but the default format
     // is text-based with level, scope, and message.
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {

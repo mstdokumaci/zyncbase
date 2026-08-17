@@ -144,16 +144,18 @@ const jwks_refresh_interval_ms: c_int = 6 * 60 * 60 * 1000;
 const jwks_fetch_timeout_ms: u64 = 5 * 60 * 1000;
 
 pub const Jwks = struct {
+    io: std.Io,
     allocator: Allocator,
     jwks_url: ?[]const u8 = null,
     state: ?JwksState = null,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     timer: ?*c.struct_us_timer_t = null,
     refresh_thread: ?std.Thread = null,
     stop_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !Jwks {
+    pub fn init(io: std.Io, allocator: Allocator, jwks_url: ?[]const u8) !Jwks {
         return Jwks{
+            .io = io,
             .allocator = allocator,
             .jwks_url = if (jwks_url) |url| try allocator.dupe(u8, url) else null,
         };
@@ -192,18 +194,18 @@ pub const Jwks = struct {
         self.stop_refresh.store(true, .release);
         uws_timer.stopTimer(&self.timer);
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         const thread = self.refresh_thread;
         self.refresh_thread = null;
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
 
         if (thread) |t| t.join();
     }
 
     /// Returns the JWK matching the given kid, or null if not found.
     pub fn getJwk(self: *Jwks, kid: []const u8) ?Jwk {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         const state = self.state orelse return null;
         for (state.keys) |key| {
             if (std.mem.eql(u8, key.kid, kid)) {
@@ -219,13 +221,13 @@ pub const Jwks = struct {
 
         // Reap the previous ephemeral thread (it has finished; join is instant).
         // Done before locking so the (rare, ~instant) join doesn't hold the mutex.
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         const stale_thread = self.refresh_thread;
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
         if (stale_thread) |thread| thread.join();
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.stop_refresh.load(.acquire)) return;
 
@@ -245,10 +247,10 @@ pub const Jwks = struct {
         };
 
         const new_state = JwksState{ .keys = keys };
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         var old = self.state;
         self.state = new_state;
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
 
         if (old) |*o| o.deinit(self.allocator);
     }
@@ -340,10 +342,11 @@ pub const JwtValidationConfig = struct {
 };
 
 pub const JwtValidator = struct {
+    io: std.Io,
     config: JwtValidationConfig,
 
-    pub fn init(config: JwtValidationConfig) JwtValidator {
-        return .{ .config = config };
+    pub fn init(io: std.Io, config: JwtValidationConfig) JwtValidator {
+        return .{ .io = io, .config = config };
     }
 
     pub const ValidatedToken = struct {
@@ -372,7 +375,7 @@ pub const JwtValidator = struct {
         defer decoded.deinit(allocator);
 
         try verifyTokenSignature(self.config, decoded);
-        try validateStandardClaims(self.config, decoded.payload);
+        try validateStandardClaims(self.io, self.config, decoded.payload);
 
         const sub = (try json_read.getString(decoded.payload.object, self.config.subject_claim)) orelse return error.SubjectClaimMissing;
         var claims = try extractClaimsFromPayload(allocator, decoded.payload, claims_mapping);
@@ -506,8 +509,8 @@ fn verifyHmacSignature(alg: []const u8, secret: []const u8, msg: []const u8, sig
     return error.UnsupportedAlgorithm;
 }
 
-fn validateStandardClaims(config: JwtValidationConfig, payload: std.json.Value) !void {
-    const now = std.time.timestamp();
+fn validateStandardClaims(io: std.Io, config: JwtValidationConfig, payload: std.json.Value) !void {
+    const now = std.Io.Clock.real.now(io).toSeconds();
 
     if (!validateTimeClaims(payload, now)) {
         return error.TokenExpired;

@@ -34,7 +34,7 @@ pub const SubscriberTable = struct {
         const result = try self.map.getOrPut(allocator, namespace_id);
         const created = !result.found_existing;
         if (created) {
-            result.value_ptr.* = .{};
+            result.value_ptr.* = .empty;
         }
         errdefer {
             if (created) {

@@ -19,6 +19,7 @@ const Allocator = std.mem.Allocator;
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
 pub const ConnectionManager = struct {
+    io: std.Io,
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     message_handler: *MessageHandler,
@@ -27,7 +28,7 @@ pub const ConnectionManager = struct {
     map: std.AutoHashMapUnmanaged(u64, *Connection),
 
     /// Mutex for protecting the map during concurrent access
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     max_connections: usize,
 
@@ -51,6 +52,7 @@ pub const ConnectionManager = struct {
 
     pub fn init(
         self: *ConnectionManager,
+        io: std.Io,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
@@ -62,11 +64,12 @@ pub const ConnectionManager = struct {
         const schema_sync_msg = try wire_encode.encodeSchemaSync(allocator, schema);
 
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .message_handler = message_handler,
             .map = .empty,
-            .mutex = .{},
+            .mutex = .init,
             .max_connections = max_connections,
             .schema_sync_msg = schema_sync_msg,
             .token_grace_period_seconds = token_grace_period_seconds,
@@ -78,7 +81,7 @@ pub const ConnectionManager = struct {
         self.stopTokenSweepTimer();
         self.drain_arena.deinit();
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         var it = self.map.valueIterator();
         while (it.next()) |conn_ptr| {
             const conn = conn_ptr.*;
@@ -89,7 +92,7 @@ pub const ConnectionManager = struct {
             }
         }
         self.map.deinit(self.allocator);
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
 
         self.allocator.free(self.schema_sync_msg);
     }
@@ -112,8 +115,8 @@ pub const ConnectionManager = struct {
             return error.MissingSession;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.map.count() >= self.max_connections) {
             std.log.warn("Rejecting connection {}: limit reached", .{conn_id});
@@ -130,7 +133,7 @@ pub const ConnectionManager = struct {
             }
         };
 
-        conn.activate(ws.getConnId(), ws.*);
+        conn.activate(self.io, ws.getConnId(), ws.*);
         conn.setSession(sess);
         sess_transferred = true;
 
@@ -176,8 +179,8 @@ pub const ConnectionManager = struct {
 
         // 2. Thread-safe lookup with reference counting
         const conn = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             const existing = self.map.get(conn_id) orelse return;
             existing.acquire();
             break :blk existing;
@@ -196,8 +199,8 @@ pub const ConnectionManager = struct {
         const conn_id = ws.getConnId();
 
         const maybe_conn = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             break :blk self.map.fetchRemove(conn_id);
         };
 
@@ -219,8 +222,8 @@ pub const ConnectionManager = struct {
 
     /// Helper to get a stable reference to a connection (increments refcount)
     pub fn acquireConnection(self: *ConnectionManager, id: u64) !*Connection {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         const conn = self.map.get(id) orelse return error.ConnectionNotFound;
         conn.acquire();
         return conn;
@@ -244,13 +247,13 @@ pub const ConnectionManager = struct {
     /// Called by the uWS drain callback. Flushes queued delta messages for the given connection.
     /// Closes the connection if uWS signals it is dead (DROPPED).
     pub fn flushOutbox(self: *ConnectionManager, conn_id: u64) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
         const conn = self.map.get(conn_id) orelse {
-            self.mutex.unlock();
+            self.mutex.unlock(self.io);
             return;
         };
         conn.acquire();
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
 
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
@@ -319,8 +322,8 @@ pub const ConnectionManager = struct {
         defer connections.deinit(self.allocator);
 
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             var it = self.map.valueIterator();
             while (it.next()) |state| {
                 const conn = state.*;
@@ -346,12 +349,12 @@ pub const ConnectionManager = struct {
     }
 
     pub fn sweepExpiredTokens(self: *ConnectionManager) void {
-        const now = std.time.timestamp();
+        const now = std.Io.Clock.real.now(self.io).toSeconds();
         const grace_period_seconds = self.token_grace_period_seconds;
         var to_close: std.ArrayListUnmanaged(*Connection) = .empty;
         defer to_close.deinit(self.allocator);
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(self.io);
 
         var it = self.map.valueIterator();
         while (it.next()) |state| {
@@ -369,7 +372,7 @@ pub const ConnectionManager = struct {
             }
         }
 
-        self.mutex.unlock();
+        self.mutex.unlock(self.io);
 
         for (to_close.items) |conn| {
             const msg = wire_encode.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {

@@ -38,6 +38,7 @@ const DirectWriterContext = struct {
         errdefer self.schema.deinit();
 
         try self.engine.init(
+            std.testing.io,
             allocator,
             &self.memory_strategy,
             self.test_context.test_dir,
@@ -107,7 +108,7 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     };
     errdefer if (!session_queued) session_op.deinit(allocator);
 
-    var checkpoint_latch = storage_mod.CheckpointLatch{};
+    var checkpoint_latch = storage_mod.CheckpointLatch.init(std.testing.io);
     const checkpoint_op = storage_mod.WriteOp{
         .checkpoint = .{
             .mode = storage_mod.CheckpointMode.passive,
@@ -140,8 +141,8 @@ test "StorageEngine: init and deinit" {
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ ctx.test_context.test_dir, "zyncbase.db" });
     defer allocator.free(db_path);
-    const file = try std.fs.cwd().openFile(db_path, .{});
-    file.close();
+    const file = try std.Io.Dir.cwd().openFile(std.testing.io, db_path, .{});
+    file.close(std.testing.io);
 }
 test "StorageEngine: insert and select basic" {
     const allocator = testing.allocator;
@@ -329,10 +330,10 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     );
     defer ctx.deinit();
 
-    var timer = std.time.Timer.start() catch unreachable;
+    const start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
     try ctx.insertText("items", 1, 5, "val", "value1");
     try ctx.engine.flushPendingWrites();
-    const elapsed = timer.read();
+    const elapsed = std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - start_ns;
     try testing.expect(elapsed < std.time.ns_per_s);
 
     const record = try (try ctx.table("items")).readDoc(allocator, 1, 5);
@@ -388,7 +389,7 @@ test "StorageEngine: low-level batch writer rejects unsupported ops and rolls ba
     try ctx.init(allocator, table);
     defer ctx.deinit();
 
-    var latch_ckpt = storage_mod.CheckpointLatch{};
+    var latch_ckpt = storage_mod.CheckpointLatch.init(std.testing.io);
     const entries = try allocator.alloc(storage_mod.WriteOp, 1);
     entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
     const version_before = ctx.engine.write_worker.version.load(.acquire);
@@ -462,7 +463,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         ctx.deinitNoCleanup();
     }
     defer allocator.free(test_dir);
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Reopen the same database and verify every key is present.
     // We use setupEngineWithDir which reuses the existing data.
@@ -1060,7 +1061,7 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
     // &engine.document_cache, which is unchanged by deinit+reinit in place.
     var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
     ctx.engine.document_cache.deinit();
-    try ctx.engine.document_cache.init(failing.allocator(), .{});
+    try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
 
     // 1. Initial upsert: Should write-through to document_cache
     const columns = [_]sth.ColumnValue{
@@ -1111,7 +1112,7 @@ test "storage: engine init rejects empty data dir" {
     var sm = try sth.createDummySchema(allocator);
     defer sm.deinit();
     var engine: StorageEngine = undefined;
-    const result = engine.init(allocator, &ms, invalid_dir, &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = engine.init(std.testing.io, allocator, &ms, invalid_dir, &sm, .{}, .{ .in_memory = false }, null, null);
     try testing.expectError(error.InvalidDataDir, result);
 }
 
@@ -1126,13 +1127,13 @@ test "storage: engine init rejects file path as data dir" {
     const test_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test_file_not_dir.txt" });
     defer allocator.free(test_file);
 
-    const file = try std.fs.cwd().createFile(test_file, .{});
-    file.close();
+    const file = try std.Io.Dir.cwd().createFile(std.testing.io, test_file, .{});
+    file.close(std.testing.io);
 
     var sm = try sth.createDummySchema(allocator);
     defer sm.deinit();
     var engine: StorageEngine = undefined;
-    const result = engine.init(allocator, &ms, test_file, &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = engine.init(std.testing.io, allocator, &ms, test_file, &sm, .{}, .{ .in_memory = false }, null, null);
     try testing.expectError(error.NotDir, result);
 }
 

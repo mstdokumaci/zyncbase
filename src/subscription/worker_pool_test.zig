@@ -31,8 +31,8 @@ const TestContext = struct {
         // SAFETY: Immediately initialized by init() call below.
         self.memory_strategy = undefined;
         try self.memory_strategy.init(allocator);
-        self.change_queue = try ChangeQueue.init(allocator, 1);
-        self.subscription_engine = SubscriptionEngine.init(allocator);
+        self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
+        self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
         try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 256, null, null);
         self.send_queue = try send_queue_type.init(&self.send_node_pool);
         self.schema = try sth.createSchema(allocator, &.{
@@ -117,7 +117,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     ctx.change_queue.push(change, allocator);
 
     // Wait for processing
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // Verify send_queue received the delta
     try testing.expect(ctx.send_queue.hasItems());
@@ -177,7 +177,7 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     ctx.change_queue.push(change, allocator);
 
     // Wait for processing
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // Verify send_queue is empty (no match)
     try testing.expect(!ctx.send_queue.hasItems());

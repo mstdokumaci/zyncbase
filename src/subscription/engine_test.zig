@@ -13,7 +13,7 @@ const SubscriptionEngine = subscription_engine.SubscriptionEngine;
 
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -56,7 +56,7 @@ test "SubscriptionEngine: basic subscribe and match" {
 
 test "SubscriptionEngine: group sharing" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -80,7 +80,7 @@ test "SubscriptionEngine: group sharing" {
 
 test "SubscriptionEngine: unsubscribe clean up" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -103,7 +103,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
 
 test "SubscriptionEngine: subscribe/unsubscribe state consistency across all indexes" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -185,7 +185,7 @@ test "SubscriptionEngine: evaluateFilter: startsWith operator" {
 
 test "SubscriptionEngine: canonical filter key includes values" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -218,7 +218,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
 
     // Distinguishes same-length array contents
     {
-        var engine = SubscriptionEngine.init(allocator);
+        var engine = SubscriptionEngine.init(testing.io, allocator);
         defer engine.deinit();
 
         const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
@@ -254,7 +254,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
 
     // Normalizes different-order integer arrays to same group
     {
-        var engine = SubscriptionEngine.init(allocator);
+        var engine = SubscriptionEngine.init(testing.io, allocator);
         defer engine.deinit();
 
         const in_val_1 = try tth.valArray(allocator, &[_]typed.ScalarValue{
@@ -295,7 +295,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
 
 test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter_int = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -321,7 +321,7 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
 
 test "SubscriptionEngine: handleRecordChange with long namespace/collection (heap key)" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
     const long_coll = "b" ** 150;
     // combined length (150 + 1 + 150 = 301) will be > 256 stack buffer
@@ -401,7 +401,7 @@ test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/e
 
 test "SubscriptionEngine: group sharing with different condition order" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     // Filter 1: status=A, type=B
@@ -435,7 +435,7 @@ test "SubscriptionEngine: group sharing with different condition order" {
 
 test "SubscriptionEngine: canonical key includes predicate state" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter_all = try qth.makeDefaultFilter(allocator);
@@ -461,7 +461,7 @@ test "SubscriptionEngine: canonical key includes predicate state" {
 
 test "SubscriptionEngine: match-none filter never matches changes" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var filter = try qth.makeDefaultFilter(allocator);
@@ -499,7 +499,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
 
     // in operator
     {
-        var engine = SubscriptionEngine.init(allocator);
+        var engine = SubscriptionEngine.init(testing.io, allocator);
         defer engine.deinit();
 
         const in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
@@ -540,7 +540,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
 
     // notIn operator
     {
-        var engine = SubscriptionEngine.init(allocator);
+        var engine = SubscriptionEngine.init(testing.io, allocator);
         defer engine.deinit();
 
         const not_in_val = try tth.valArray(allocator, &[_]typed.ScalarValue{
@@ -582,7 +582,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
 
 test "SubscriptionEngine: unsubscribeMany" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -631,7 +631,7 @@ test "SubscriptionEngine: unsubscribeMany" {
 
 test "SubscriptionEngine: getSubscriptionQuery" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -697,7 +697,7 @@ test "SubscriptionEngine: getSubscriptionQuery" {
 
 test "SubscriptionEngine: multiple collections isolation" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -800,7 +800,7 @@ test "SubscriptionEngine: multiple collections isolation" {
 
 test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -917,7 +917,7 @@ test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
 
 test "SubscriptionEngine: filter removal notification when record leaves filter" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -1013,7 +1013,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 
 test "SubscriptionEngine: filter with OR clauses match" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{
@@ -1096,7 +1096,7 @@ test "SubscriptionEngine: filter with OR clauses match" {
 
 test "SubscriptionEngine: OR clause leave/enter on update" {
     const allocator = testing.allocator;
-    var engine = SubscriptionEngine.init(allocator);
+    var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
     var schema = try sth.createSchema(allocator, &.{

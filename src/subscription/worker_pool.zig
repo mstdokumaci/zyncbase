@@ -105,7 +105,7 @@ pub const SubscriptionWorker = struct {
         notifier_ctx: ?*anyopaque,
     ) SubscriptionWorker {
         return .{
-            .thread = managedThread(SubscriptionWorker).init(),
+            .thread = managedThread(SubscriptionWorker).init(change_queue.io),
             .id = id,
             .change_queue = change_queue,
             .subscription_engine = subscription_engine,
@@ -201,14 +201,15 @@ pub const SubscriptionWorker = struct {
         handle: ArenaHandle,
     ) void {
         const alloc = handle.allocator();
-        var out = std.ArrayListUnmanaged(u8).empty;
+        var out = std.Io.Writer.Allocating.init(alloc);
+        defer out.deinit();
         var pushed_any = false;
 
         for (matches) |match| {
             out.clearRetainingCapacity();
-            const writer = out.writer(alloc);
+            const writer = &out.writer;
 
-            out.appendSlice(alloc, &wire_encode.store_delta_header) catch |err| {
+            writer.writeAll(&wire_encode.store_delta_header) catch |err| {
                 std.log.err("SubscriptionWorker failed to write header: {}", .{err});
                 continue;
             };
@@ -223,12 +224,12 @@ pub const SubscriptionWorker = struct {
                 MatchOp.remove => remove_suffix orelse continue,
             };
 
-            out.appendSlice(alloc, suffix) catch |err| {
+            writer.writeAll(suffix) catch |err| {
                 std.log.err("SubscriptionWorker failed to append suffix: {}", .{err});
                 continue;
             };
 
-            const owned_msg = alloc.dupe(u8, out.items) catch |err| {
+            const owned_msg = alloc.dupe(u8, out.written()) catch |err| {
                 std.log.err("SubscriptionWorker failed to dupe encoded delta: {}", .{err});
                 continue;
             };

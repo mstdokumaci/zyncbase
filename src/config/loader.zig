@@ -6,11 +6,12 @@ const Config = @import("state.zig").Config;
 const Allocator = std.mem.Allocator;
 
 pub const ConfigLoader = struct {
-    pub fn load(allocator: Allocator, path: []const u8) !Config {
-        const file_content = std.fs.cwd().readFileAlloc(
-            allocator,
+    pub fn load(io: std.Io, environ: *const std.process.Environ.Map, allocator: Allocator, path: []const u8) !Config {
+        const file_content = std.Io.Dir.cwd().readFileAlloc(
+            io,
             path,
-            10 * 1024 * 1024, // 10MB max
+            allocator,
+            .limited(10 * 1024 * 1024),
         ) catch |err| {
             if (err == error.FileNotFound) {
                 std.log.info("Config file not found, using defaults", .{});
@@ -20,7 +21,7 @@ pub const ConfigLoader = struct {
         };
         defer allocator.free(file_content);
 
-        const substituted = try substituteEnvVars(allocator, file_content);
+        const substituted = try substituteEnvVars(environ, allocator, file_content);
         defer allocator.free(substituted);
 
         const parsed = try std.json.parseFromSlice(
@@ -34,7 +35,7 @@ pub const ConfigLoader = struct {
         var config = try buildConfig(allocator, parsed.value);
         errdefer config.deinit();
 
-        try validateConfig(&config);
+        try validateConfig(io, &config);
 
         return config;
     }
@@ -59,7 +60,7 @@ pub const ConfigLoader = struct {
         };
     }
 
-    fn substituteEnvVars(allocator: Allocator, content: []const u8) ![]const u8 {
+    fn substituteEnvVars(environ: *const std.process.Environ.Map, allocator: Allocator, content: []const u8) ![]const u8 {
         var result: std.ArrayListUnmanaged(u8) = .empty;
         errdefer result.deinit(allocator);
 
@@ -75,10 +76,9 @@ pub const ConfigLoader = struct {
                 if (end < content.len) {
                     const var_name = content[start..end];
 
-                    if (std.process.getEnvVarOwned(allocator, var_name)) |value| {
-                        defer allocator.free(value);
+                    if (environ.get(var_name)) |value| {
                         try result.appendSlice(allocator, value);
-                    } else |_| {
+                    } else {
                         try result.appendSlice(allocator, content[i .. end + 1]);
                     }
 
@@ -257,30 +257,26 @@ pub const ConfigLoader = struct {
         try json_read.setInt(usize, &config.performance.statement_cache_size, perf_obj, "statementCacheSize");
     }
 
-    fn validateConfig(config: *Config) !void {
+    fn validateConfig(io: std.Io, config: *Config) !void {
         if (config.server.port == 0 or config.server.port > 65535) {
             return error.InvalidPort;
         }
 
-        std.fs.cwd().makeDir(config.data_dir) catch |err| {
-            if (err != error.PathAlreadyExists) {
-                return error.InvalidDataDir;
-            }
-        };
+        std.Io.Dir.cwd().createDirPath(io, config.data_dir) catch return error.InvalidDataDir;
 
         if (config.schema_content == null) {
             if (config.schema_file.len == 0) {
                 return error.InvalidSchemaFile;
             }
 
-            std.fs.cwd().access(config.schema_file, .{}) catch |err| {
+            std.Io.Dir.cwd().access(io, config.schema_file, .{}) catch |err| {
                 if (err != error.FileNotFound) return error.SchemaFileNotFound;
                 std.log.info("Schema file not found, using implicit users-only schema", .{});
             };
         }
 
         if (config.authorization_file) |auth_file| {
-            std.fs.cwd().access(auth_file, .{}) catch {
+            std.Io.Dir.cwd().access(io, auth_file, .{}) catch {
                 return error.AuthRulesFileNotFound;
             };
         }

@@ -14,18 +14,20 @@ pub fn spmcBlockingQueue(comptime T: type) type {
 
         head: ?*Node,
         tail: ?*Node,
-        mutex: std.Thread.Mutex,
-        cond: std.Thread.Condition,
+        io: std.Io,
+        mutex: std.Io.Mutex,
+        event: std.Io.Event,
         count: usize,
         shutdown_requested: std.atomic.Value(bool),
         allocator: Allocator,
 
-        pub fn init(allocator: Allocator) Self {
+        pub fn init(io: std.Io, allocator: Allocator) Self {
             return .{
                 .head = null,
                 .tail = null,
-                .mutex = .{},
-                .cond = .{},
+                .io = io,
+                .mutex = .init,
+                .event = .unset,
                 .count = 0,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .allocator = allocator,
@@ -39,8 +41,8 @@ pub fn spmcBlockingQueue(comptime T: type) type {
                 .next = null,
             };
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             if (self.tail) |t| {
                 t.next = node;
@@ -49,16 +51,19 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             }
             self.tail = node;
             self.count += 1;
-            self.cond.signal();
+            self.event.set(self.io);
         }
 
         pub fn pop(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
 
             while (self.head == null and !self.shutdown_requested.load(.acquire)) {
-                self.cond.wait(&self.mutex);
+                self.event.reset();
+                self.mutex.unlock(self.io);
+                self.event.waitUncancelable(self.io);
+                self.mutex.lockUncancelable(self.io);
             }
+            defer self.mutex.unlock(self.io);
 
             if (self.head) |node| {
                 const data = node.data;
@@ -74,25 +79,21 @@ pub fn spmcBlockingQueue(comptime T: type) type {
         }
 
         pub fn popTimed(self: *Self, timeout_ns: u64) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
 
             if (self.head == null and !self.shutdown_requested.load(.acquire) and timeout_ns > 0) {
-                var timer = std.time.Timer.start() catch {
-                    return null;
+                self.event.reset();
+                self.mutex.unlock(self.io);
+                _ = self.event.waitTimeout(self.io, .{ .duration = .{
+                    .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+                    .clock = .awake,
+                } }) catch |err| switch (err) {
+                    error.Timeout => {},
+                    error.Canceled => return null,
                 };
-
-                while (self.head == null and !self.shutdown_requested.load(.acquire)) {
-                    const elapsed = timer.read();
-                    if (elapsed >= timeout_ns) break;
-                    const remaining = timeout_ns - elapsed;
-                    self.cond.timedWait(&self.mutex, remaining) catch |err| {
-                        if (err == error.Timeout) break;
-                        std.log.err("SpmcBlockingQueue popTimed: timedWait failed: {}", .{err});
-                        break;
-                    };
-                }
+                self.mutex.lockUncancelable(self.io);
             }
+            defer self.mutex.unlock(self.io);
 
             if (self.head) |node| {
                 const data = node.data;
@@ -108,15 +109,15 @@ pub fn spmcBlockingQueue(comptime T: type) type {
         }
 
         pub fn shutdown(self: *Self) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             self.shutdown_requested.store(true, .release);
-            self.cond.broadcast();
+            self.event.set(self.io);
         }
 
         pub fn deinit(self: *Self) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             var current = self.head;
             while (current) |node| {

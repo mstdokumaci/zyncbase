@@ -13,6 +13,7 @@ const Session = @import("session.zig").Session;
 const Allocator = std.mem.Allocator;
 
 pub const TicketExchange = struct {
+    io: std.Io,
     allocator: Allocator,
     ticket_secret: [32]u8,
     ttl_seconds: u32,
@@ -23,11 +24,12 @@ pub const TicketExchange = struct {
     claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
     redeemed_tickets: std.StringHashMap(i64),
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     verifications_since_cleanup: u32 = 0,
     cleanup_interval: u32 = 100,
 
     pub fn init(
+        io: std.Io,
         allocator: Allocator,
         ticket_secret_opt: ?[]const u8,
         ttl_seconds: u32,
@@ -49,13 +51,14 @@ pub const TicketExchange = struct {
                 @memcpy(secret_key[0..secret.len], secret);
             }
         } else {
-            std.crypto.random.bytes(&secret_key);
+            try io.randomSecure(&secret_key);
         }
 
         const prefix = if (anonymous_prefix) |p| try allocator.dupe(u8, p) else try allocator.dupe(u8, "anon:");
         errdefer allocator.free(prefix);
 
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .ticket_secret = secret_key,
             .ttl_seconds = ttl_seconds,
@@ -65,7 +68,7 @@ pub const TicketExchange = struct {
             .ssl = ssl,
             .claims_mapping = claims_mapping,
             .redeemed_tickets = std.StringHashMap(i64).init(allocator),
-            .mutex = .{},
+            .mutex = .init,
         };
 
         return self;
@@ -92,7 +95,7 @@ pub const TicketExchange = struct {
 
         const extracted = extractTicketPayloadFast(payload_json) orelse return error.InvalidTicket;
 
-        const now = std.time.timestamp();
+        const now = std.Io.Clock.real.now(self.io).toSeconds();
         if (now >= extracted.exp) {
             return error.TokenExpired;
         }
@@ -126,8 +129,8 @@ pub const TicketExchange = struct {
     }
 
     fn redeemTicket(self: *TicketExchange, jti: []const u8, exp: i64, now: i64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         self.verifications_since_cleanup += 1;
         if (self.verifications_since_cleanup >= self.cleanup_interval) {
@@ -154,9 +157,9 @@ pub const TicketExchange = struct {
         is_anonymous: bool,
         claims: *const std.StringHashMapUnmanaged(typed.Value),
     ) ![]const u8 {
-        const exp = std.time.timestamp() + self.ttl_seconds;
+        const exp = std.Io.Clock.real.now(self.io).toSeconds() + self.ttl_seconds;
         var jti_bytes: [16]u8 = undefined;
-        std.crypto.random.bytes(&jti_bytes);
+        try self.io.randomSecure(&jti_bytes);
         const jti_hex = std.fmt.bytesToHex(jti_bytes, .lower);
 
         var payload_buf = std.ArrayListUnmanaged(u8).empty;
@@ -237,7 +240,7 @@ pub const TicketExchange = struct {
 
         defer allocator.free(subject);
 
-        const exp = std.time.timestamp() + self.ttl_seconds;
+        const exp = std.Io.Clock.real.now(self.io).toSeconds() + self.ttl_seconds;
         const ticket = try self.generateTicket(allocator, subject, is_anonymous, &claims);
         defer allocator.free(ticket);
 

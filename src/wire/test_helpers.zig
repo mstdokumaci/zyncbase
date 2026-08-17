@@ -22,10 +22,10 @@ pub fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: [
 }
 
 pub fn encodePayload(allocator: std.mem.Allocator, payload: msgpack.Payload) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    defer list.deinit(allocator);
-    try msgpack.encode(payload, list.writer(allocator));
-    return list.toOwnedSlice(allocator);
+    var list = std.Io.Writer.Allocating.init(allocator);
+    errdefer list.deinit();
+    try msgpack.encode(payload, &list.writer);
+    return list.toOwnedSlice();
 }
 
 pub fn writeFixStr(writer: anytype, s: []const u8) !void {

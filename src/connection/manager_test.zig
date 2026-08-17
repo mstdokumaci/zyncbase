@@ -163,8 +163,8 @@ test "ConnectionManager - acquire and release" {
 }
 
 fn connectionCount(app: *AppTestContext) usize {
-    app.connection_manager.mutex.lock();
-    defer app.connection_manager.mutex.unlock();
+    app.connection_manager.mutex.lockUncancelable(app.connection_manager.io);
+    defer app.connection_manager.mutex.unlock(app.connection_manager.io);
     return app.connection_manager.map.count();
 }
 

@@ -135,32 +135,32 @@ fn setupTest(
 
 fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
     const target = step.root_module.resolved_target.?.result;
-    step.linkLibCpp();
-    step.linkSystemLibrary("pthread");
+    step.root_module.link_libcpp = true;
+    step.root_module.linkSystemLibrary("pthread", .{});
     
     // Core Linkage fix: Ensure we link the library's static artifact to avoid needing external headers.
     const sqlite_dep = b.dependency("sqlite", .{
         .target = step.root_module.resolved_target.?,
         .optimize = step.root_module.optimize.?,
     });
-    step.linkLibrary(sqlite_dep.artifact("sqlite"));
+    step.root_module.linkLibrary(sqlite_dep.artifact("sqlite"));
 
     const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
 
-    step.addIncludePath(b.path("vendor/uwebsockets"));
-    step.addIncludePath(b.path("vendor/usockets"));
-    step.addIncludePath(b.path("src"));
+    step.root_module.addIncludePath(b.path("vendor/uwebsockets"));
+    step.root_module.addIncludePath(b.path("vendor/usockets"));
+    step.root_module.addIncludePath(b.path("src"));
 
     // System OpenSSL
     if (target.os.tag == .macos) {
-        step.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
-        step.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
+        step.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
+        step.root_module.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
     }
-    step.linkSystemLibrary("ssl");
-    step.linkSystemLibrary("crypto");
+    step.root_module.linkSystemLibrary("ssl", .{});
+    step.root_module.linkSystemLibrary("crypto", .{});
 
     if (is_linux) {
-        step.linkSystemLibrary("dl");
+        step.root_module.linkSystemLibrary("dl", .{});
     }
 
     const linux_flags: []const []const u8 = if (is_linux) &.{
@@ -183,7 +183,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-Wno-nullability-completeness",
     } }) catch |err| @panic(b.fmt("Failed to concat uws_flags: {s}", .{@errorName(err)}));
 
-    step.addCSourceFile(.{
+    step.root_module.addCSourceFile(.{
         .file = b.path("src/uws_bridge.cpp"),
         .flags = uws_flags,
     });
@@ -198,7 +198,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         },
     }) catch |err| @panic(b.fmt("Failed to concat usockets_flags: {s}", .{@errorName(err)}));
 
-    step.addCSourceFiles(.{
+    step.root_module.addCSourceFiles(.{
         .files = &.{
             "vendor/usockets/eventing/epoll_kqueue.c",
             "vendor/usockets/crypto/openssl.c",
@@ -219,16 +219,16 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-DLIBUS_USE_OPENSSL=1",
     } }) catch |err| @panic(b.fmt("Failed to concat sni_flags: {s}", .{@errorName(err)}));
 
-    step.addCSourceFile(.{
+    step.root_module.addCSourceFile(.{
         .file = b.path("vendor/usockets/crypto/sni_tree.cpp"),
         .flags = sni_flags,
     });
 
-    step.linkLibC();
+    step.root_module.link_libc = true;
     if (target.os.tag == .macos) {
         if (sysroot) |s| {
-            step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd", .{s}) });
-            step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/Security.framework/Security.tbd", .{s}) });
+            step.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd", .{s}) });
+            step.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/Security.framework/Security.tbd", .{s}) });
         } else {
             step.root_module.linkFramework("CoreFoundation", .{});
             step.root_module.linkFramework("Security", .{});

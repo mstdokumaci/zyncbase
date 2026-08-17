@@ -74,12 +74,12 @@ test "JwtValidator: valid HS256 signature and claims" {
     const allocator = testing.allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
-    const exp = std.time.timestamp() + 3600;
+    const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
 
     const token = try createHmacJwt(allocator, secret, sub, exp, "issuer_xyz", "audience_abc");
     defer allocator.free(token);
 
-    const validator = JwtValidator.init(.{
+    const validator = JwtValidator.init(testing.io, .{
         .secret = secret,
         .algorithm = "HS256",
         .issuer = "issuer_xyz",
@@ -96,12 +96,12 @@ test "JwtValidator: expired token" {
     const allocator = testing.allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
-    const exp = std.time.timestamp() - 10; // 10 seconds in the past
+    const exp = std.Io.Clock.real.now(testing.io).toSeconds() - 10; // 10 seconds in the past
 
     const token = try createHmacJwt(allocator, secret, sub, exp, "issuer_xyz", "audience_abc");
     defer allocator.free(token);
 
-    const validator = JwtValidator.init(.{
+    const validator = JwtValidator.init(testing.io, .{
         .secret = secret,
         .algorithm = "HS256",
         .issuer = "issuer_xyz",
@@ -116,12 +116,12 @@ test "JwtValidator: secret mismatch fails validation" {
     const secret = "super-secret-key-1234567890123456";
     const wrong_secret = "wrong-secret-key-1234567890123456";
     const sub = "user_12345";
-    const exp = std.time.timestamp() + 3600;
+    const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
 
     const token = try createHmacJwt(allocator, secret, sub, exp, "issuer_xyz", "audience_abc");
     defer allocator.free(token);
 
-    const validator = JwtValidator.init(.{
+    const validator = JwtValidator.init(testing.io, .{
         .secret = wrong_secret,
         .algorithm = "HS256",
         .issuer = "issuer_xyz",
@@ -135,12 +135,12 @@ test "JwtValidator: issuer mismatch fails validation" {
     const allocator = testing.allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
-    const exp = std.time.timestamp() + 3600;
+    const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
 
     const token = try createHmacJwt(allocator, secret, sub, exp, "issuer_xyz", "audience_abc");
     defer allocator.free(token);
 
-    const validator = JwtValidator.init(.{
+    const validator = JwtValidator.init(testing.io, .{
         .secret = secret,
         .algorithm = "HS256",
         .issuer = "issuer_other",
@@ -154,12 +154,12 @@ test "JwtValidator: audience mismatch fails validation" {
     const allocator = testing.allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
-    const exp = std.time.timestamp() + 3600;
+    const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
 
     const token = try createHmacJwt(allocator, secret, sub, exp, "issuer_xyz", "audience_abc");
     defer allocator.free(token);
 
-    const validator = JwtValidator.init(.{
+    const validator = JwtValidator.init(testing.io, .{
         .secret = secret,
         .algorithm = "HS256",
         .issuer = "issuer_xyz",
@@ -172,7 +172,7 @@ test "JwtValidator: audience mismatch fails validation" {
 test "Jwks: getJwk looks up populated keys" {
     const allocator = testing.allocator;
 
-    var jwks = try Jwks.init(allocator, "https://example.com/.well-known/jwks.json");
+    var jwks = try Jwks.init(testing.io, allocator, "https://example.com/.well-known/jwks.json");
     defer jwks.deinit();
 
     // Valid RSA modulus/exponent so setKeys can eagerly build the EVP_PKEY.
@@ -206,7 +206,7 @@ test "Jwks: getJwk looks up populated keys" {
 test "JwtValidator: verify RS256 and PS256 tokens" {
     const allocator = testing.allocator;
 
-    var jwks = try Jwks.init(allocator, "https://example.com/.well-known/jwks.json");
+    var jwks = try Jwks.init(testing.io, allocator, "https://example.com/.well-known/jwks.json");
     defer jwks.deinit();
 
     // Populate the JWK we generated
@@ -225,7 +225,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
 
     // 1. Verify RS256 token with RS256 validator
     {
-        const validator = JwtValidator.init(.{
+        const validator = JwtValidator.init(testing.io, .{
             .algorithm = "RS256",
             .issuer = "issuer_xyz",
             .audience = "audience_abc",
@@ -238,7 +238,7 @@ test "JwtValidator: verify RS256 and PS256 tokens" {
 
     // 2. Verify PS256 token with PS256 validator
     {
-        const validator = JwtValidator.init(.{
+        const validator = JwtValidator.init(testing.io, .{
             .algorithm = "PS256",
             .issuer = "issuer_xyz",
             .audience = "audience_abc",

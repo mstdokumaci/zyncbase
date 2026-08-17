@@ -52,6 +52,8 @@ var global_server: std.atomic.Value(?*ZyncBaseServer) = std.atomic.Value(?*ZyncB
 
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
+    io: std.Io,
+    environ: std.process.Environ,
     allocator: std.mem.Allocator,
     config: Config,
     memory_strategy: MemoryStrategy,
@@ -79,19 +81,21 @@ pub const ZyncBaseServer = struct {
     ticket_exchange: ?*TicketExchange = null,
     jwks: ?*Jwks = null,
     jwt_validator: ?JwtValidator = null,
-    shutdown_mutex: std.Thread.Mutex = .{},
+    shutdown_mutex: std.Io.Mutex = .init,
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
     workers_stopped: bool = false,
     shutdown_timeout_timer: ?*uws_c.struct_us_timer_t = null,
 
     /// Initialize the ZyncBase server with all components
-    pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
-        return initDetailed(allocator, null, null, null, custom_config_path);
+    pub fn init(io: std.Io, environ: std.process.Environ, allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
+        return initDetailed(io, environ, allocator, null, null, null, custom_config_path);
     }
 
     /// Initialize the ZyncBase server with optional custom configuration and data directory
     pub fn initDetailed(
+        io: std.Io,
+        environ: std.process.Environ,
         allocator: std.mem.Allocator,
         custom_config: ?Config,
         custom_data_dir: ?[]const u8,
@@ -100,6 +104,8 @@ pub const ZyncBaseServer = struct {
     ) !*ZyncBaseServer {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
+        self.io = io;
+        self.environ = environ;
         self.allocator = allocator;
 
         try self.memory_strategy.init(allocator);
@@ -111,6 +117,7 @@ pub const ZyncBaseServer = struct {
         // Initialize violation tracker
         std.log.debug("Initializing violation tracker", .{});
         self.violation_tracker.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             config.security.violation_threshold,
         );
@@ -119,6 +126,7 @@ pub const ZyncBaseServer = struct {
         // Initialize subscription engine
         std.log.debug("Initializing subscription engine", .{});
         self.subscription_engine = SubscriptionEngine.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
         );
 
@@ -147,6 +155,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.checkpoint_manager.deinit();
 
         self.store_service = StoreService.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             &self.storage_engine,
             &self.schema,
@@ -154,6 +163,7 @@ pub const ZyncBaseServer = struct {
         );
 
         self.presence_manager.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             self.schema.presence_user_fields,
             self.schema.presence_shared_fields,
@@ -219,7 +229,7 @@ pub const ZyncBaseServer = struct {
         self.config = config;
         self.shutdown_performed = false;
         self.shutdown_in_progress = false;
-        self.shutdown_mutex = .{};
+        self.shutdown_mutex = .init;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
         self.shutdown_timeout_timer = null;
@@ -234,7 +244,7 @@ pub const ZyncBaseServer = struct {
         custom_schema_file: ?[]const u8,
         custom_config_path: ?[]const u8,
     ) !Config {
-        var config = try loadOrCreateConfig(&self.memory_strategy, custom_config, custom_config_path);
+        var config = try self.loadOrCreateConfig(custom_config, custom_config_path);
         if (custom_data_dir) |dir| {
             self.memory_strategy.generalAllocator().free(config.data_dir);
             config.data_dir = try self.memory_strategy.generalAllocator().dupe(u8, dir);
@@ -259,6 +269,7 @@ pub const ZyncBaseServer = struct {
         self.send_queue = try send_queue_type.init(&self.send_node_pool);
         errdefer self.send_queue.deinit();
         self.change_queue = try ChangeQueue.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             self.thread_budget.subscription,
         );
@@ -267,6 +278,7 @@ pub const ZyncBaseServer = struct {
     fn initStorageAndMigrations(self: *ZyncBaseServer, config: *const Config) !void {
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             config.data_dir,
@@ -282,6 +294,7 @@ pub const ZyncBaseServer = struct {
     fn initCheckpoint(self: *ZyncBaseServer) !void {
         std.log.debug("Initializing checkpoint manager", .{});
         try self.checkpoint_manager.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             &self.storage_engine,
             .{},
@@ -323,7 +336,7 @@ pub const ZyncBaseServer = struct {
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
             const jc = try self.memory_strategy.generalAllocator().create(Jwks);
             errdefer self.memory_strategy.generalAllocator().destroy(jc);
-            jc.* = try Jwks.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jc.* = try Jwks.init(self.io, self.memory_strategy.generalAllocator(), jwks_url);
             jwks_ptr = jc;
 
             // Fetch JWKS synchronously at startup. Server must have valid
@@ -343,12 +356,13 @@ pub const ZyncBaseServer = struct {
         else
             null;
         if (jwt_config) |cfg| {
-            self.jwt_validator = JwtValidator.init(cfg);
+            self.jwt_validator = JwtValidator.init(self.io, cfg);
         }
     }
 
     fn initMessageHandlerWired(self: *ZyncBaseServer, config: *const Config) void {
         self.message_handler.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.violation_tracker,
@@ -366,6 +380,7 @@ pub const ZyncBaseServer = struct {
     fn initConnectionManagerInternal(self: *ZyncBaseServer, config: *const Config) !void {
         std.log.debug("Initializing connection manager", .{});
         try self.connection_manager.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.message_handler,
@@ -393,6 +408,7 @@ pub const ZyncBaseServer = struct {
     fn initTicketExchangeInternal(self: *ZyncBaseServer, config: *const Config) !void {
         const auth_cfg = &config.authentication;
         self.ticket_exchange = try TicketExchange.init(
+            self.io,
             self.memory_strategy.generalAllocator(),
             auth_cfg.ticket_secret,
             auth_cfg.ticket_ttl_seconds,
@@ -405,15 +421,18 @@ pub const ZyncBaseServer = struct {
     }
 
     fn loadOrCreateConfig(
-        memory_strategy: *MemoryStrategy,
+        self: *ZyncBaseServer,
         custom_config: ?Config,
         custom_config_path: ?[]const u8,
     ) !Config {
         if (custom_config) |c| return c;
         const path = custom_config_path orelse "zyncbase-config.json";
-        return ConfigLoader.load(memory_strategy.generalAllocator(), path) catch |err| {
+        const allocator = self.memory_strategy.generalAllocator();
+        var environ = try self.environ.createMap(allocator);
+        defer environ.deinit();
+        return ConfigLoader.load(self.io, &environ, allocator, path) catch |err| {
             std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
-            return ConfigLoader.loadDefaults(memory_strategy.generalAllocator());
+            return ConfigLoader.loadDefaults(allocator);
         };
     }
 
@@ -423,10 +442,11 @@ pub const ZyncBaseServer = struct {
             if (config.schema_content) |content| break :blk content;
             const schema_path = config.schema_file;
             std.log.info("Loading schema from: {s}", .{schema_path});
-            const loaded = std.fs.cwd().readFileAlloc(
-                self.memory_strategy.generalAllocator(),
+            const loaded = std.Io.Dir.cwd().readFileAlloc(
+                self.io,
                 schema_path,
-                10 * 1024 * 1024,
+                self.memory_strategy.generalAllocator(),
+                .limited(10 * 1024 * 1024),
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
@@ -450,10 +470,11 @@ pub const ZyncBaseServer = struct {
 
     fn loadAuthConfig(self: *ZyncBaseServer, config: *const Config) !void {
         if (config.authorization_file) |file| {
-            const auth_json = std.fs.cwd().readFileAlloc(
-                self.memory_strategy.generalAllocator(),
+            const auth_json = std.Io.Dir.cwd().readFileAlloc(
+                self.io,
                 file,
-                1 * 1024 * 1024,
+                self.memory_strategy.generalAllocator(),
+                .limited(1 * 1024 * 1024),
             ) catch |err| {
                 if (err == error.FileNotFound) {
                     std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
@@ -490,6 +511,7 @@ pub const ZyncBaseServer = struct {
         if (plan.changes.len > 0) {
             std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
             var executor = MigrationExecutor.init(
+                self.io,
                 self.memory_strategy.generalAllocator(),
                 setup_conn,
                 &gen,
@@ -562,8 +584,8 @@ pub const ZyncBaseServer = struct {
     }
 
     pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
+        self.shutdown_mutex.lockUncancelable(self.io);
+        defer self.shutdown_mutex.unlock(self.io);
         if (self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = true;
 
@@ -595,8 +617,8 @@ pub const ZyncBaseServer = struct {
     }
 
     pub fn finishGracefulShutdown(self: *ZyncBaseServer) !void {
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
+        self.shutdown_mutex.lockUncancelable(self.io);
+        defer self.shutdown_mutex.unlock(self.io);
         if (!self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = false;
         self.shutdown_performed = true;
@@ -625,8 +647,8 @@ pub const ZyncBaseServer = struct {
     /// Must be called after finishGracefulShutdown() and before deinit().
     /// Idempotent: safe to call multiple times.
     pub fn stopBackgroundWorkers(self: *ZyncBaseServer) void {
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
+        self.shutdown_mutex.lockUncancelable(self.io);
+        defer self.shutdown_mutex.unlock(self.io);
         if (self.workers_stopped) return;
         self.workers_stopped = true;
 
@@ -830,7 +852,7 @@ pub const ZyncBaseServer = struct {
 
 /// Signal handler for SIGTERM and SIGINT
 /// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
-fn handleSignal(_: c_int) callconv(.c) void {
+fn handleSignal(_: std.posix.SIG) callconv(.c) void {
     if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
         if (server.websocket_server.loop.load(.acquire)) |loop| {
