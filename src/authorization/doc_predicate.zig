@@ -448,6 +448,28 @@ fn validateScalarType(field_type: schema_types.FieldType, scalar: typed.ScalarVa
     }
 }
 
+/// Move a Condition out of `c`, resetting `c` to a cheap neutral value so the
+/// source slice can be freed without double-deinit.
+fn takeCondition(c: *query_ast.Condition) query_ast.Condition {
+    const moved = c.*;
+    c.* = .{ .field_index = 0, .op = .eq, .value = null, .field_type = .text, .items_type = null };
+    return moved;
+}
+
+fn appendMovedConditions(
+    allocator: Allocator,
+    list: *std.ArrayListUnmanaged(query_ast.Condition),
+    conditions: ?[]query_ast.Condition,
+) !void {
+    const conds = conditions orelse return;
+    for (conds) |*condition| {
+        var moved = takeCondition(condition);
+        errdefer moved.deinit(allocator);
+        try list.append(allocator, moved);
+    }
+    allocator.free(conds);
+}
+
 const PredicateBuilder = struct {
     conditions: std.ArrayListUnmanaged(query_ast.Condition) = .empty,
     or_clauses: std.ArrayListUnmanaged(query_ast.OrClause) = .empty,
@@ -472,7 +494,7 @@ const PredicateBuilder = struct {
         allocator: Allocator,
         filter: *query_ast.FilterPredicate,
     ) !void {
-        try self.appendMovedConditions(allocator, &self.conditions, filter.conditions);
+        try appendMovedConditions(allocator, &self.conditions, filter.conditions);
         filter.conditions = null;
         try self.moveOrClauses(allocator, filter);
     }
@@ -487,10 +509,10 @@ const PredicateBuilder = struct {
         // OR clauses: each appended as-is.
         if (filter.conditions) |mutable_conds| {
             for (mutable_conds) |*cond| {
-                const moved = cond.*;
-                cond.* = .{ .field_index = 0, .op = .eq, .value = null, .field_type = .text, .items_type = null };
                 const single = try allocator.alloc(query_ast.Condition, 1);
-                single[0] = moved;
+                errdefer allocator.free(single);
+                single[0] = takeCondition(cond);
+                errdefer single[0].deinit(allocator);
                 try self.or_clauses.append(allocator, single);
             }
             allocator.free(mutable_conds);
@@ -505,35 +527,16 @@ const PredicateBuilder = struct {
         for (clauses) |clause| {
             var moved = try allocator.alloc(query_ast.Condition, clause.len);
             for (clause, 0..) |*c, i| {
-                moved[i] = c.*;
-                c.* = .{ .field_index = 0, .op = .eq, .value = null, .field_type = .text, .items_type = null };
+                moved[i] = takeCondition(c);
+            }
+            errdefer {
+                for (moved) |*m| m.deinit(allocator);
+                allocator.free(moved);
             }
             try self.or_clauses.append(allocator, moved);
         }
         allocator.free(clauses);
         filter.or_clauses = null;
-    }
-
-    fn appendMovedConditions(
-        _: *PredicateBuilder,
-        allocator: Allocator,
-        list: *std.ArrayListUnmanaged(query_ast.Condition),
-        conditions: ?[]query_ast.Condition,
-    ) !void {
-        const conds = conditions orelse return;
-        for (conds) |*condition| {
-            var moved = condition.*;
-            condition.* = .{
-                .field_index = 0,
-                .op = .eq,
-                .value = null,
-                .field_type = .text,
-                .items_type = null,
-            };
-            errdefer moved.deinit(allocator);
-            try list.append(allocator, moved);
-        }
-        allocator.free(conds);
     }
 
     fn toOwnedPredicate(self: *PredicateBuilder, allocator: Allocator) !query_ast.FilterPredicate {

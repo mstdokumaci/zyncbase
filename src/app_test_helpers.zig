@@ -255,28 +255,24 @@ pub const AppTestContext = struct {
 
         // 10. Initialize Session Resolver
         self.session_resolver.init(gpa, &self.connection_manager, &self.memory_strategy);
-        errdefer self.session_resolver.deinit();
 
         // 11. Wire session_resolver to storage engine for scope resolution
         self.storage_engine.write_worker.session_resolver = &self.session_resolver;
     }
 
     pub fn deinit(self: *AppTestContext) void {
-        // 1. Stop async session delivery before its storage buffer is released.
-        self.session_resolver.deinit();
-
-        // 2. Stop background activity (write worker)
+        // 1. Stop background activity (write worker)
         self.storage_engine.deinit();
 
-        // 3. Shut down subsystems
+        // 2. Shut down subsystems
         self.connection_manager.deinit();
 
-        // 4. Now safe to tear down subsystems that were needed for session teardown
+        // 3. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
         self.store_service.deinit();
 
-        // 5. Cleanup remaining infrastructure
+        // 4. Cleanup remaining infrastructure
         self.auth_config.deinit();
         self.schema.deinit();
         self.test_context.deinit();

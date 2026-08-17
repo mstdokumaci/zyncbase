@@ -15,10 +15,6 @@ pub const PatternMatch = struct {
     pub fn deinit(self: *PatternMatch, allocator: Allocator) void {
         self.captures.deinit(allocator);
     }
-
-    pub fn get(self: *const PatternMatch, key: []const u8) ?[]const u8 {
-        return self.captures.get(key);
-    }
 };
 
 pub const AuthConfig = struct {

@@ -198,7 +198,6 @@ pub const ZyncBaseServer = struct {
             &self.connection_manager,
             &self.memory_strategy,
         );
-        errdefer self.session_resolver.deinit();
 
         // Wire Subscription Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
@@ -717,9 +716,6 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Deinitializing presence_manager", .{});
         self.presence_manager.deinit();
-
-        std.log.debug("Deinitializing session_resolver", .{});
-        self.session_resolver.deinit();
 
         std.log.debug("Deinitializing subscription_worker_pool", .{});
         if (self.subscription_worker_pool) |*pool| pool.deinit();

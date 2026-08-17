@@ -35,10 +35,6 @@ pub const SessionResolver = struct {
         };
     }
 
-    pub fn deinit(self: *SessionResolver) void {
-        _ = self;
-    }
-
     pub fn processResolution(
         self: *SessionResolver,
         conn_id: u64,

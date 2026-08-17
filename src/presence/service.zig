@@ -140,11 +140,12 @@ pub const PresenceService = struct {
             session.session_claims,
             self.schema.presence_user_fields,
             patch,
+            false,
         );
     }
 
     fn authorizeSharedWrite(self: *PresenceService, session: Session, patch: *const msgpack.Payload) !void {
-        try authorization_presence.authorizePresenceSharedWrite(
+        try authorization_presence.authorizePresenceWrite(
             session.arena,
             self.auth_config,
             session.presence_namespace,
@@ -153,6 +154,7 @@ pub const PresenceService = struct {
             session.session_claims,
             self.schema.presence_shared_fields,
             patch,
+            true,
         );
     }
 

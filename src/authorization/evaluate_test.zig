@@ -16,17 +16,11 @@ const EvalContext = authorization_evaluate.EvalContext;
 // ─── RAM Evaluator Tests ────────────────────────────────────────────────────
 
 test "evaluateCondition boolean true allows" {
-    var config = try auth_helpers.implicitTestConfig(testing.allocator);
-    defer config.deinit();
-
     const result = authorization_evaluate.evaluateCondition(.{ .boolean = true }, .{ .allocator = testing.allocator });
     try testing.expect(result == .allow);
 }
 
 test "evaluateCondition boolean false denies" {
-    var config = try auth_helpers.implicitTestConfig(testing.allocator);
-    defer config.deinit();
-
     const result = authorization_evaluate.evaluateCondition(.{ .boolean = false }, .{ .allocator = testing.allocator });
     try testing.expect(result == .deny);
 }
@@ -184,7 +178,7 @@ test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
 
     const text = try allocator.dupe(u8, "private");
     const original_ptr = text.ptr;
-    var resolved = authorization_evaluate.ResolvedAuthValue.fromOwned(.{ .scalar = .{ .text = text } });
+    var resolved: authorization_evaluate.ResolvedAuthValue = .{ .owned = .{ .scalar = .{ .text = text } } };
 
     var owned_value = try resolved.intoOwned(allocator);
     defer owned_value.deinit(allocator);

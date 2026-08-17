@@ -21,16 +21,11 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "cursor_x", .declared_type = .real },
     };
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = .{ .float = 42.0 };
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var patch = msgpack.Payload{ .arr = pairs };
+    var patch = try makePatch(allocator, 0, .{ .float = 42.0 });
     defer patch.free(allocator);
 
-    try authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
-    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+    try authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, false);
+    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch, false));
 }
 
 test "authorizePresenceWrite denies when presenceWrite is false" {
@@ -45,21 +40,16 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "status", .declared_type = .text },
     };
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = try msgpack.Payload.strToPayload("online", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var patch = msgpack.Payload{ .arr = pairs };
+    var patch = try makePatch(allocator, 0, try msgpack.Payload.strToPayload("online", allocator));
     defer patch.free(allocator);
 
-    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch, false));
 }
 
 test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     const allocator = testing.allocator;
     const json =
-        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":true}],"store":[]}
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":false}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
@@ -68,16 +58,11 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = .{ .uint = 5 };
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var patch = msgpack.Payload{ .arr = pairs };
+    var patch = try makePatch(allocator, 0, .{ .uint = 5 });
     defer patch.free(allocator);
 
-    try authorization_presence.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
-    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceSharedWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, true));
+    try authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, false);
 }
 
 test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
@@ -92,13 +77,19 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = .{ .uint = 5 };
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var patch = msgpack.Payload{ .arr = pairs };
+    var patch = try makePatch(allocator, 0, .{ .uint = 5 });
     defer patch.free(allocator);
 
-    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, true));
+}
+
+fn makePatch(allocator: std.mem.Allocator, field_index: usize, value: msgpack.Payload) !msgpack.Payload {
+    errdefer value.free(allocator);
+    const pair = try allocator.alloc(msgpack.Payload, 2);
+    errdefer allocator.free(pair);
+    pair[0] = msgpack.Payload.uintToPayload(field_index);
+    pair[1] = value;
+    const pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    return .{ .arr = pairs };
 }
