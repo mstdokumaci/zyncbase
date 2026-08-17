@@ -510,7 +510,9 @@ const PredicateBuilder = struct {
         if (filter.conditions) |mutable_conds| {
             for (mutable_conds) |*cond| {
                 const single = try allocator.alloc(query_ast.Condition, 1);
+                errdefer allocator.free(single);
                 single[0] = takeCondition(cond);
+                errdefer single[0].deinit(allocator);
                 try self.or_clauses.append(allocator, single);
             }
             allocator.free(mutable_conds);
@@ -526,6 +528,10 @@ const PredicateBuilder = struct {
             var moved = try allocator.alloc(query_ast.Condition, clause.len);
             for (clause, 0..) |*c, i| {
                 moved[i] = takeCondition(c);
+            }
+            errdefer {
+                for (moved) |*m| m.deinit(allocator);
+                allocator.free(moved);
             }
             try self.or_clauses.append(allocator, moved);
         }

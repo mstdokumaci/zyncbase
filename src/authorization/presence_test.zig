@@ -49,7 +49,7 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
 test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     const allocator = testing.allocator;
     const json =
-        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":true}],"store":[]}
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":false}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
@@ -61,8 +61,8 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
     var patch = try makePatch(allocator, 0, .{ .uint = 5 });
     defer patch.free(allocator);
 
-    try authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, true);
-    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch, true));
+    try testing.expectError(error.NamespaceUnauthorized, authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, true));
+    try authorization_presence.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch, false);
 }
 
 test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
@@ -84,6 +84,7 @@ test "authorizePresenceSharedWrite falls back to presenceWrite when not specifie
 }
 
 fn makePatch(allocator: std.mem.Allocator, field_index: usize, value: msgpack.Payload) !msgpack.Payload {
+    errdefer value.free(allocator);
     const pair = try allocator.alloc(msgpack.Payload, 2);
     errdefer allocator.free(pair);
     pair[0] = msgpack.Payload.uintToPayload(field_index);
