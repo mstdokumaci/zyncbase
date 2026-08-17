@@ -9,6 +9,10 @@ runs:
       with:
         version: 0.16.0
 
+    - name: Prepare Zig global cache
+      shell: bash
+      run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/zig}/tmp"
+
     - name: Setup Bun
       uses: oven-sh/setup-bun@v2
       with:
