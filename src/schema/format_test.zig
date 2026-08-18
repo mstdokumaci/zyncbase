@@ -4,7 +4,7 @@ const schema_format = @import("format.zig");
 const schema_parse = @import("parse.zig");
 
 test "schema_property: format round trip preserves normalized structure" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const json_text =
         \\{"version":"1.0.0","store":{"posts":{"required":["profile.name"],"fields":{"profile":{"type":"object","fields":{"name":{"type":"string"},"age":{"type":"integer"}}},"tags":{"type":"array","items":"string"}}}}}

@@ -350,7 +350,7 @@ fn concurrentThreadFn(tctx: *ConcurrentThreadCtx) void {
 }
 
 test "ReadWorker: cache miss → cache hit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_cache_miss_hit", &.{items_table}, .{}, .{
         .in_memory = true,
@@ -427,7 +427,7 @@ test "ReadWorker: cache miss → cache hit" {
 }
 
 test "ReadWorker: version-gated cache update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_version_gate", &.{items_table}, .{}, .{
         .in_memory = true,
@@ -471,7 +471,7 @@ test "ReadWorker: version-gated cache update" {
 }
 
 test "ReadWorker: concurrent readers — no data race" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const reader_pool_size: usize = 4;
 
     var ctx: EngineTestContext = undefined;
@@ -530,7 +530,7 @@ test "ReadWorker: concurrent readers — no data race" {
 }
 
 test "ReadWorker: selectQuery throughput" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_select_query", &.{query_table}, .{}, .{
         .in_memory = true,

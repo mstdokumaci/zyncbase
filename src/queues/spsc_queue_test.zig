@@ -33,7 +33,7 @@ const failing_queue_type = spscQueue(u32, failingPoolFn); // zwanzig-disable-lin
 const failing_pool_type = failingPoolFn(failing_queue_type.Node);
 
 test "SpscQueue: empty queue" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -43,7 +43,7 @@ test "SpscQueue: empty queue" {
 }
 
 test "SpscQueue: single push and pop" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -59,7 +59,7 @@ test "SpscQueue: single push and pop" {
 }
 
 test "SpscQueue: FIFO ordering across multiple pushes" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -79,7 +79,7 @@ test "SpscQueue: FIFO ordering across multiple pushes" {
 }
 
 test "SpscQueue: deinit releases only the stub node" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
 
@@ -97,7 +97,7 @@ test "SpscQueue: deinit releases only the stub node" {
 }
 
 test "SpscQueue: hasItems reflects queue state" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -110,7 +110,7 @@ test "SpscQueue: hasItems reflects queue state" {
 }
 
 test "SpscQueue: pool acquire failure propagates as error from push" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = failing_pool_type.init(alloc);
     var q = try failing_queue_type.init(&pool);
     defer q.deinit();
@@ -120,7 +120,7 @@ test "SpscQueue: pool acquire failure propagates as error from push" {
 }
 
 test "SpscQueue: concurrent single-producer single-consumer" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = pool_type.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();

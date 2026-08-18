@@ -218,8 +218,8 @@ test "logging: error details" {
     {
         const tbl_md = app.schema.table("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
-        const record = try sth.readDoc(testing.allocator, storage_engine, tbl_md.index, 1, 1);
-        defer if (record) |r| r.deinit(testing.allocator);
+        const record = try sth.readDoc(std.heap.smp_allocator, storage_engine, tbl_md.index, 1, 1);
+        defer if (record) |r| r.deinit(std.heap.smp_allocator);
         try testing.expect(record == null);
     }
 

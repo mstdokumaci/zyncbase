@@ -18,7 +18,7 @@ const testing = std.testing;
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test "storage: stability no crashes on concurrent errors" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields);

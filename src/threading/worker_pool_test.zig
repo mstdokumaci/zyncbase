@@ -39,7 +39,7 @@ fn initWorkers(pool: anytype) void {
 }
 
 test "workerPool: init and deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var pool = try workerPool(TestWorker).init(allocator, 2);
     defer pool.deinit();
     initWorkers(&pool);
@@ -47,7 +47,7 @@ test "workerPool: init and deinit" {
 }
 
 test "workerPool: start and stop lifecycle" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var pool = try workerPool(TestWorker).init(allocator, 3);
     defer pool.deinit();
     initWorkers(&pool);
@@ -56,7 +56,7 @@ test "workerPool: start and stop lifecycle" {
 }
 
 test "workerPool: stop does not panic on already stopped" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var pool = try workerPool(TestWorker).init(allocator, 2);
     defer pool.deinit();
     initWorkers(&pool);

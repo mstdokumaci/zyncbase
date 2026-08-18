@@ -71,7 +71,7 @@ fn createHmacJwt(
 }
 
 test "JwtValidator: valid HS256 signature and claims" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
     const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
@@ -93,7 +93,7 @@ test "JwtValidator: valid HS256 signature and claims" {
 }
 
 test "JwtValidator: expired token" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
     const exp = std.Io.Clock.real.now(testing.io).toSeconds() - 10; // 10 seconds in the past
@@ -112,7 +112,7 @@ test "JwtValidator: expired token" {
 }
 
 test "JwtValidator: secret mismatch fails validation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const secret = "super-secret-key-1234567890123456";
     const wrong_secret = "wrong-secret-key-1234567890123456";
     const sub = "user_12345";
@@ -132,7 +132,7 @@ test "JwtValidator: secret mismatch fails validation" {
 }
 
 test "JwtValidator: issuer mismatch fails validation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
     const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
@@ -151,7 +151,7 @@ test "JwtValidator: issuer mismatch fails validation" {
 }
 
 test "JwtValidator: audience mismatch fails validation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const secret = "super-secret-key-1234567890123456";
     const sub = "user_12345";
     const exp = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
@@ -170,7 +170,7 @@ test "JwtValidator: audience mismatch fails validation" {
 }
 
 test "Jwks: getJwk looks up populated keys" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var jwks = try Jwks.init(testing.io, allocator, "https://example.com/.well-known/jwks.json");
     defer jwks.deinit();
@@ -204,7 +204,7 @@ test "Jwks: getJwk looks up populated keys" {
 }
 
 test "JwtValidator: verify RS256 and PS256 tokens" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var jwks = try Jwks.init(testing.io, allocator, "https://example.com/.well-known/jwks.json");
     defer jwks.deinit();

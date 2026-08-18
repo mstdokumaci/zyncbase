@@ -16,17 +16,17 @@ const EvalContext = authorization_evaluate.EvalContext;
 // ─── RAM Evaluator Tests ────────────────────────────────────────────────────
 
 test "evaluateCondition boolean true allows" {
-    const result = authorization_evaluate.evaluateCondition(.{ .boolean = true }, .{ .allocator = testing.allocator });
+    const result = authorization_evaluate.evaluateCondition(.{ .boolean = true }, .{ .allocator = std.heap.smp_allocator });
     try testing.expect(result == .allow);
 }
 
 test "evaluateCondition boolean false denies" {
-    const result = authorization_evaluate.evaluateCondition(.{ .boolean = false }, .{ .allocator = testing.allocator });
+    const result = authorization_evaluate.evaluateCondition(.{ .boolean = false }, .{ .allocator = std.heap.smp_allocator });
     try testing.expect(result == .deny);
 }
 
 test "evaluateCondition $doc reference returns needs_doc_predicate" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "owner_id") },
         .op = .eq,
@@ -39,7 +39,7 @@ test "evaluateCondition $doc reference returns needs_doc_predicate" {
 }
 
 test "evaluateCondition $session.userId comparison" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = try allocator.dupe(u8, "userId") },
         .op = .eq,
@@ -57,7 +57,7 @@ test "evaluateCondition $session.userId comparison" {
 }
 
 test "evaluateCondition $namespace capture lookup" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const cond = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try allocator.dupe(u8, "tenant_id") },
         .op = .eq,
@@ -78,7 +78,7 @@ test "evaluateCondition $namespace capture lookup" {
 }
 
 test "evaluateCondition logical_and short-circuits on deny" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const conds = try allocator.alloc(authorization_types.Condition, 2);
     conds[0] = .{ .boolean = true };
     conds[1] = .{ .boolean = false };
@@ -91,7 +91,7 @@ test "evaluateCondition logical_and short-circuits on deny" {
 }
 
 test "evaluateCondition logical_or short-circuits on allow" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const conds = try allocator.alloc(authorization_types.Condition, 2);
     conds[0] = .{ .boolean = false };
     conds[1] = .{ .boolean = true };
@@ -104,7 +104,7 @@ test "evaluateCondition logical_or short-circuits on allow" {
 }
 
 test "evaluateCondition in works with array" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -135,7 +135,7 @@ test "evaluateCondition in works with array" {
 // ─── Namespace Rule Lookup Tests ────────────────────────────────────────────
 
 test "authorizeNamespace enforces storeFilter" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$namespace.tenant_id":{"eq":"acme"}},"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
@@ -149,7 +149,7 @@ test "authorizeNamespace enforces storeFilter" {
 }
 
 test "authorizeNamespace enforces presenceRead" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
@@ -162,7 +162,7 @@ test "authorizeNamespace enforces presenceRead" {
 }
 
 test "authorizeNamespace denies when presenceRead is false" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"private:{id}","storeFilter":true,"presenceRead":false,"presenceWrite":true}],"store":[]}
     ;
@@ -174,7 +174,7 @@ test "authorizeNamespace denies when presenceRead is false" {
 }
 
 test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const text = try allocator.dupe(u8, "private");
     const original_ptr = text.ptr;
@@ -194,7 +194,7 @@ test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
 // ─── Create Auth Tests (evaluateConditionWithDoc) ───────────────────────────
 
 test "evaluateConditionWithDoc allows $doc.owner_id == $session.userId when owner matches" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
@@ -213,7 +213,7 @@ test "evaluateConditionWithDoc allows $doc.owner_id == $session.userId when owne
 }
 
 test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owner differs" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
@@ -233,7 +233,7 @@ test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owne
 }
 
 test "evaluateConditionWithDoc denies when $doc field is absent from candidate" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -265,7 +265,7 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
 }
 
 test "evaluateConditionWithDoc allows $doc.status == draft when status is draft" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -303,7 +303,7 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
 }
 
 test "evaluateConditionWithDoc denies $doc.status == draft when status is published" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -341,7 +341,7 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
 }
 
 test "duplicate field index in value pair-array resolves to last-wins" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -388,7 +388,7 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 // ─── New operator tests ───────────────────────────────────────────────────────
 
 test "evaluateCondition: isNull allows when session field is absent" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const condition = authorization_types.Condition{ .comparison = .{
         .lhs = .{ .scope = .session, .field = "userId" },
@@ -401,7 +401,7 @@ test "evaluateCondition: isNull allows when session field is absent" {
 }
 
 test "evaluateCondition: isNull denies when session field is present" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const condition = authorization_types.Condition{ .comparison = .{
@@ -415,7 +415,7 @@ test "evaluateCondition: isNull denies when session field is present" {
 }
 
 test "evaluateCondition: isNotNull allows when session field is present" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const condition = authorization_types.Condition{ .comparison = .{

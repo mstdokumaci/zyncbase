@@ -11,7 +11,7 @@ const testing = std.testing;
 // These tests verify specific examples and edge cases
 
 test "CheckpointWorker: initialization" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -27,7 +27,7 @@ test "CheckpointWorker: initialization" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - size threshold" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -52,7 +52,7 @@ test "CheckpointWorker: shouldCheckpoint - size threshold" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - time threshold" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -76,7 +76,7 @@ test "CheckpointWorker: shouldCheckpoint - time threshold" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - both thresholds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -109,7 +109,7 @@ test "CheckpointWorker: shouldCheckpoint - both thresholds" {
 }
 
 test "CheckpointWorker: performCheckpoint - passive mode" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -125,7 +125,7 @@ test "CheckpointWorker: performCheckpoint - passive mode" {
 }
 
 test "CheckpointWorker: performCheckpoint - all modes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -144,7 +144,7 @@ test "CheckpointWorker: performCheckpoint - all modes" {
 }
 
 test "CheckpointWorker: performCheckpoint - metrics update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -169,7 +169,7 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
 }
 
 test "CheckpointWorker: getMetrics" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -192,7 +192,7 @@ test "CheckpointWorker: getMetrics" {
 }
 
 test "CheckpointWorker: Prometheus metrics format" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const metrics = CheckpointWorker.CheckpointMetrics{
         .last_checkpoint_time = 1234567890,
@@ -225,7 +225,7 @@ test "CheckpointWorker: Prometheus metrics format" {
 }
 
 test "CheckpointWorker: performCheckpointWithEscalation - no escalation needed" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -268,7 +268,7 @@ test "CheckpointWorker: CheckpointResult structure" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - clock rollback" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -292,7 +292,7 @@ test "CheckpointWorker: shouldCheckpoint - clock rollback" {
 }
 
 test "CheckpointWorker: fast shutdown" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -324,7 +324,7 @@ test "CheckpointWorker: fast shutdown" {
 // 5. Concurrent reads can continue during checkpoint
 
 test "checkpoint: integrity - no data loss occurs during checkpoint" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -381,7 +381,7 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
 }
 
 test "checkpoint: WAL size management - size decreases or stays same after success" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -406,7 +406,7 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
 }
 
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -433,7 +433,7 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
 }
 
 test "checkpoint: failure handling - failure counter starts at zero" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -453,7 +453,7 @@ test "checkpoint: failure handling - failure counter starts at zero" {
 }
 
 test "checkpoint: escalation logic - works correctly when needed" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{

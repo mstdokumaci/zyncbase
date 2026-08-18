@@ -6,10 +6,9 @@ const MemoryStrategy = @import("strategy.zig").MemoryStrategy;
 const testing = std.testing;
 
 test "MemoryStrategy: init and deinit" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     // Verify allocators are available
     const gpa = strategy.generalAllocator();
@@ -28,10 +27,9 @@ test "MemoryStrategy: init and deinit" {
 }
 
 test "MemoryStrategy: arena allocator pool usage" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const arena1 = try strategy.acquireArena();
     const arena2 = try strategy.acquireArena();
@@ -50,10 +48,9 @@ test "MemoryStrategy: arena allocator pool usage" {
 }
 
 test "MemoryStrategy: arena pool thread safety stress test" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const num_threads = 8;
     const items_per_thread = 200; // Total 1600 acquisitions (exceeds pool size of 1024)
@@ -104,13 +101,10 @@ test "MemoryStrategy: arena pool thread safety stress test" {
 
 test "MemoryStrategy: connection pool capacity reuse" {
     // Isolated GPA pinpoints leaks in this sub-block.
-    var test_gpa: std.heap.DebugAllocator(.{ .safety = true }) = .init;
-    defer std.debug.assert(test_gpa.deinit() == .ok);
-    const alloc = test_gpa.allocator();
 
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(alloc);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     const c1 = try strategy.acquireConnection();
@@ -138,13 +132,9 @@ test "MemoryStrategy: connection pool capacity reuse" {
 }
 
 test "MemoryStrategy: connection pool concurrent access" {
-    var test_gpa: std.heap.DebugAllocator(.{ .safety = true, .thread_safe = true }) = .init;
-    defer _ = test_gpa.deinit();
-    const alloc = test_gpa.allocator();
-
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(alloc);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const ThreadContext = struct {
         strategy: *MemoryStrategy,

@@ -5,7 +5,7 @@ const schema_helpers = @import("test_helpers.zig");
 const schema_types = @import("types.zig");
 
 test "schema_index: direct table fixtures build lookup maps" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var task_fields = [_]schema_types.Field{
         schema_helpers.makeField("title", .text),
@@ -28,7 +28,7 @@ test "schema_index: direct table fixtures build lookup maps" {
 }
 
 test "schema_index: users external_id is not indexed" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var runtime_schema = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{}}

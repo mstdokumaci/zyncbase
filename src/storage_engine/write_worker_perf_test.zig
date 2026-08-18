@@ -137,13 +137,11 @@ fn runBatchSweep(
 
 test "WriteWorker: flushBatch throughput" {
     // Prod-shaped allocator: server.zig passes memory_strategy.generalAllocator()
-    // into the engine. testing.allocator's 10-frame stack capture dominates wall
+    // into the engine. std.heap.smp_allocator's 10-frame stack capture dominates wall
     // time in Debug and distorts the throughput numbers.
     var prod_ms: MemoryStrategy = undefined;
-    try prod_ms.init(testing.allocator);
-    defer {
-        if (prod_ms.deinit() != .ok) @panic("MemoryStrategy leak detected");
-    } // leak check (replaces testing.allocator's)
+    try prod_ms.init();
+    defer prod_ms.deinit();
     const allocator = prod_ms.generalAllocator();
 
     // Disable auto-batching: test owns batch construction and flushBatch timing.

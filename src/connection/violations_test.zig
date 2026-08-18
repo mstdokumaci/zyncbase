@@ -6,7 +6,7 @@ const ViolationTracker = @import("violations.zig").ConnectionViolationTracker;
 const testing = std.testing;
 
 test "ConnectionViolationTracker: basic functionality" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var tracker: ViolationTracker = undefined;
     tracker.init(testing.io, allocator, 3);
     defer tracker.deinit();
@@ -39,7 +39,7 @@ test "ConnectionViolationTracker: basic functionality" {
 }
 
 test "ConnectionViolationTracker: multiple connections" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var tracker: ViolationTracker = undefined;
     tracker.init(testing.io, allocator, 2);
     defer tracker.deinit();

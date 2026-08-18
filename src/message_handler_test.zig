@@ -16,7 +16,7 @@ const routeWithArena = helpers.routeWithArena;
 const routeWithArenaOptional = helpers.routeWithArenaOptional;
 
 test "Connection - init and deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-init", &.{});
     defer app.deinit();
@@ -33,7 +33,7 @@ test "Connection - init and deinit" {
 }
 
 test "Connection - add subscription IDs" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-subs", &.{});
     defer app.deinit();
@@ -53,7 +53,7 @@ test "Connection - add subscription IDs" {
 }
 
 test "MessageHandler: oversized rate limit does not divide by zero" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-rate-limit-large", &.{});
     defer app.deinit();
@@ -84,7 +84,7 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
 }
 
 test "MessageHandler: store operations require ready scope" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-store-not-ready", &.{
         .{ .name = "items", .fields = &.{"value"} },
@@ -122,7 +122,7 @@ test "MessageHandler: store operations require ready scope" {
 }
 
 test "MessageHandler: StoreSet document with auth predicate persists and is readable" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     const schema_json =
         \\{
@@ -172,7 +172,7 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
 }
 
 test "MessageHandler: StoreSet routes and maps StoreService errors" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     const schema_json =
         \\{
@@ -242,7 +242,7 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
 }
 
 test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID_MESSAGE" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-invalid-write-ack", &.{
         .{ .name = "items", .fields = &.{"val"} },
@@ -330,7 +330,7 @@ fn createPresenceSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64,
 }
 
 test "NamespaceSwitch: initial store namespace setup succeeds with users.namespaced=true" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const schema_json =
         \\{
         \\  "version": "1.0.0",
@@ -372,7 +372,7 @@ test "NamespaceSwitch: initial store namespace setup succeeds with users.namespa
 }
 
 test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const schema_json =
         \\{
         \\  "version": "1.0.0",
@@ -453,7 +453,7 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
 }
 
 test "NamespaceSwitch: namespaced=false allows any switch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "ns-switch-allowed", &.{
         .{ .name = "items", .fields = &.{"value"} },
@@ -541,7 +541,7 @@ fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected:
 }
 
 test "message: representative frames route at protocol boundary" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-route", &table_defs);
     defer app.deinit();
@@ -587,7 +587,7 @@ test "message: representative frames route at protocol boundary" {
 }
 
 test "message: response id is preserved across routed requests" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-correlation", &table_defs);
     defer app.deinit();
@@ -629,7 +629,7 @@ test "message: response id is preserved across routed requests" {
 }
 
 test "message: invalid envelopes fail before store dispatch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-invalid-envelope", &table_defs);
     defer app.deinit();
@@ -644,7 +644,7 @@ test "message: invalid envelopes fail before store dispatch" {
 }
 
 test "message: repeated routed requests release per-message allocations" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-lifetime", &table_defs);
     defer app.deinit();
@@ -673,7 +673,7 @@ test "message: repeated routed requests release per-message allocations" {
 }
 
 test "message: concurrent routed requests release response allocations" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-concurrent-lifetime", &table_defs);
     defer app.deinit();

@@ -8,7 +8,8 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
+    // prod allocator: SmpAllocator for all server flows (see memory/strategy.zig)
+    const allocator = std.heap.smp_allocator;
     const io = init.io;
 
     const cpu_count = std.Thread.getCpuCount() catch {

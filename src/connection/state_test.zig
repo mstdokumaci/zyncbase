@@ -12,7 +12,7 @@ const destroyMockWebSocket = helpers.destroyMockWebSocket;
 test "connection: state deallocation on close" {
     // This property test verifies that for any connection that closes,
     // all associated connection state is deallocated properly.
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Test 1: Single connection open and close
     {
@@ -205,7 +205,7 @@ test "connection: state deallocation on close" {
 }
 
 test "connection: state deallocation edge cases" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Test: Remove non-existent connection (should not crash)
     {
@@ -256,7 +256,7 @@ test "connection: state deallocation edge cases" {
 }
 
 test "connection: outbox flush sends one concatenated frame" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "state-outbox-flush", &.{});
     defer app.deinit();

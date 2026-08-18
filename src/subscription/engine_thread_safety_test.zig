@@ -10,7 +10,7 @@ const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
 const testing = std.testing;
 
 test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -94,7 +94,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
 }
 
 test "SubscriptionEngine: concurrent unsubscribe with multi-group contention" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 

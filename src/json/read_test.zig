@@ -3,7 +3,7 @@ const std = @import("std");
 const read = @import("read.zig");
 
 test "getString returns string and rejects non-string" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"name":"alice","age":30,"flag":true,"nothing":null}
     );
     defer p.deinit();
@@ -15,7 +15,7 @@ test "getString returns string and rejects non-string" {
 }
 
 test "getInt returns integer and rejects non-integer" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"age":30,"name":"x","big":9999999999,"nothing":null}
     );
     defer p.deinit();
@@ -28,7 +28,7 @@ test "getInt returns integer and rejects non-integer" {
 }
 
 test "getBool returns bool and rejects non-bool" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"flag":true,"name":"x","nothing":null}
     );
     defer p.deinit();
@@ -40,7 +40,7 @@ test "getBool returns bool and rejects non-bool" {
 }
 
 test "getObject returns object map" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"nested":{"a":1},"name":"x","nothing":null}
     );
     defer p.deinit();
@@ -54,7 +54,7 @@ test "getObject returns object map" {
 }
 
 test "getArray returns array" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"items":[1,2,3],"name":"x","nothing":null}
     );
     defer p.deinit();
@@ -68,49 +68,49 @@ test "getArray returns array" {
 }
 
 test "setString sets optional field only when string present" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"secret":"abc","new_secret":"xyz","noop":42}
     );
     defer p.deinit();
     const obj = p.value.object;
     var field: ?[]const u8 = null;
-    try read.setString(std.testing.allocator, &field, obj, "secret");
-    defer if (field) |f| std.testing.allocator.free(f);
+    try read.setString(std.heap.smp_allocator, &field, obj, "secret");
+    defer if (field) |f| std.heap.smp_allocator.free(f);
     try std.testing.expect(field != null);
     try std.testing.expectEqualStrings("abc", field.?);
 
-    try read.setString(std.testing.allocator, &field, obj, "new_secret");
+    try read.setString(std.heap.smp_allocator, &field, obj, "new_secret");
     try std.testing.expectEqualStrings("xyz", field.?);
 
     var untouched: ?[]const u8 = null;
-    try std.testing.expectError(error.TypeMismatch, read.setString(std.testing.allocator, &untouched, obj, "noop"));
+    try std.testing.expectError(error.TypeMismatch, read.setString(std.heap.smp_allocator, &untouched, obj, "noop"));
     try std.testing.expect(untouched == null);
 }
 
 test "replaceString frees old and dups new" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"host":"1.2.3.4","noop":42}
     );
     defer p.deinit();
     const obj = p.value.object;
-    var field: []const u8 = try std.testing.allocator.dupe(u8, "0.0.0.0");
-    try read.replaceString(std.testing.allocator, &field, obj, "host");
-    defer std.testing.allocator.free(field);
+    var field: []const u8 = try std.heap.smp_allocator.dupe(u8, "0.0.0.0");
+    try read.replaceString(std.heap.smp_allocator, &field, obj, "host");
+    defer std.heap.smp_allocator.free(field);
     try std.testing.expectEqualStrings("1.2.3.4", field);
 
-    var untouched: []const u8 = try std.testing.allocator.dupe(u8, "orig");
-    defer std.testing.allocator.free(untouched);
-    try read.replaceString(std.testing.allocator, &untouched, obj, "missing");
+    var untouched: []const u8 = try std.heap.smp_allocator.dupe(u8, "orig");
+    defer std.heap.smp_allocator.free(untouched);
+    try read.replaceString(std.heap.smp_allocator, &untouched, obj, "missing");
     try std.testing.expectEqualStrings("orig", untouched);
 
-    var type_mismatch: []const u8 = try std.testing.allocator.dupe(u8, "keep");
-    defer std.testing.allocator.free(type_mismatch);
-    try std.testing.expectError(error.TypeMismatch, read.replaceString(std.testing.allocator, &type_mismatch, obj, "noop"));
+    var type_mismatch: []const u8 = try std.heap.smp_allocator.dupe(u8, "keep");
+    defer std.heap.smp_allocator.free(type_mismatch);
+    try std.testing.expectError(error.TypeMismatch, read.replaceString(std.heap.smp_allocator, &type_mismatch, obj, "noop"));
     try std.testing.expectEqualStrings("keep", type_mismatch);
 }
 
 test "setBool assigns when present, no-op when missing or null" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"on":true,"off":false,"noop":"yes","nothing":null}
     );
     defer p.deinit();
@@ -136,7 +136,7 @@ test "setBool assigns when present, no-op when missing or null" {
 }
 
 test "setInt assigns with intCast, no-op when missing or null" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"port":8080,"big":9999999999,"noop":"x","nothing":null}
     );
     defer p.deinit();
@@ -167,24 +167,24 @@ test "setInt assigns with intCast, no-op when missing or null" {
 }
 
 test "null value treated same as absent in setString and replaceString" {
-    var p = try read.parseValue(std.testing.allocator,
+    var p = try read.parseValue(std.heap.smp_allocator,
         \\{"key":"value","empty":null}
     );
     defer p.deinit();
     const obj = p.value.object;
 
     var opt_field: ?[]const u8 = null;
-    try read.setString(std.testing.allocator, &opt_field, obj, "key");
-    defer if (opt_field) |f| std.testing.allocator.free(f);
+    try read.setString(std.heap.smp_allocator, &opt_field, obj, "key");
+    defer if (opt_field) |f| std.heap.smp_allocator.free(f);
     try std.testing.expectEqualStrings("value", opt_field.?);
 
     var opt_field2: ?[]const u8 = null;
-    try read.setString(std.testing.allocator, &opt_field2, obj, "empty");
+    try read.setString(std.heap.smp_allocator, &opt_field2, obj, "empty");
     try std.testing.expect(opt_field2 == null);
 
-    var field: []const u8 = try std.testing.allocator.dupe(u8, "original");
-    defer std.testing.allocator.free(field);
-    try read.replaceString(std.testing.allocator, &field, obj, "empty");
+    var field: []const u8 = try std.heap.smp_allocator.dupe(u8, "original");
+    defer std.heap.smp_allocator.free(field);
+    try read.replaceString(std.heap.smp_allocator, &field, obj, "empty");
     try std.testing.expectEqualStrings("original", field);
 }
 

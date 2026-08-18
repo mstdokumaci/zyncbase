@@ -10,7 +10,7 @@ const auth_helpers = @import("test_helpers.zig");
 const testing = std.testing;
 
 test "authorizePresenceWrite enforces presenceWrite condition" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
@@ -29,7 +29,7 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
 }
 
 test "authorizePresenceWrite denies when presenceWrite is false" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"readonly:{id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
     ;
@@ -47,7 +47,7 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
 }
 
 test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":false}],"store":[]}
     ;
@@ -66,7 +66,7 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
 }
 
 test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
     ;

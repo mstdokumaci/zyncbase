@@ -6,7 +6,7 @@ const auth_helpers = @import("test_helpers.zig");
 const testing = std.testing;
 
 test "AuthConfig implicit defaults" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var config = try auth_helpers.implicitTestConfig(allocator);
     defer config.deinit();
 
@@ -19,7 +19,7 @@ test "AuthConfig implicit defaults" {
 }
 
 test "AuthConfig parses custom namespace and store rules" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$session.userId":{"eq":"$session.userId"}},"presenceRead":true,"presenceWrite":false}],"store":[{"collection":"posts","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
@@ -35,7 +35,7 @@ test "AuthConfig parses custom namespace and store rules" {
 }
 
 test "AuthConfig rejects unknown root keys" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[],"unknownKey":true}
     ;
@@ -43,7 +43,7 @@ test "AuthConfig rejects unknown root keys" {
 }
 
 test "AuthConfig rejects invalid comparison operator" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$doc.owner_id":{"invalidOp":"value"}}}]}
     ;
@@ -51,7 +51,7 @@ test "AuthConfig rejects invalid comparison operator" {
 }
 
 test "AuthConfig parses empty boolean and float array literals" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":{"and":[{"$session.externalId":{"in":[]}},{"$session.externalId":{"in":[true,false]}},{"$session.externalId":{"in":[2.5,1.5]}}]},"write":true}]}
     ;
@@ -84,7 +84,7 @@ test "AuthConfig parses empty boolean and float array literals" {
 }
 
 test "parse accepts isNull string shorthand for $doc field" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":"isNull"}}]}
     ;
@@ -98,7 +98,7 @@ test "parse accepts isNull string shorthand for $doc field" {
 }
 
 test "parse accepts isNotNull string shorthand for $doc field" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":"isNotNull"}}]}
     ;
@@ -112,7 +112,7 @@ test "parse accepts isNotNull string shorthand for $doc field" {
 }
 
 test "parse rejects unknown string shorthand" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$doc.f":"notAnOp"}}]}
     ;
@@ -120,7 +120,7 @@ test "parse rejects unknown string shorthand" {
 }
 
 test "parse accepts startsWith for $doc text field" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"startsWith":"pub"}}}]}
     ;
@@ -135,7 +135,7 @@ test "parse accepts startsWith for $doc text field" {
 }
 
 test "parse accepts endsWith for $doc text field" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"endsWith":"_suffix"}}}]}
     ;

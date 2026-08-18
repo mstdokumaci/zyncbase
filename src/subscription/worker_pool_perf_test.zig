@@ -31,7 +31,7 @@ const TestContext = struct {
         self.allocator = allocator;
         // SAFETY: Immediately initialized by init() call below.
         self.memory_strategy = undefined;
-        try self.memory_strategy.init(allocator);
+        try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
         try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 4096, null, null);
@@ -53,7 +53,7 @@ const TestContext = struct {
         self.send_node_pool.deinit();
         self.subscription_engine.deinit();
         self.change_queue.deinit();
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
     }
 
     fn notifierFn(ctx: ?*anyopaque) void {
@@ -69,7 +69,7 @@ const TestContext = struct {
 //   C: dispatchDeltasToMatches (arena dupe + send_queue push)      — fan-out dispatch
 //   D: drain send_queue (per-match pop + free)                     — consumer side
 test "SubscriptionWorkerPool: dispatch fanout performance" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: TestContext = undefined;
     try ctx.init(allocator);
     defer ctx.deinit();

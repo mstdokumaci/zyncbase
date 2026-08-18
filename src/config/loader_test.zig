@@ -28,7 +28,7 @@ fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
 }
 
 test "ConfigLoader loads defaults when file not found" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var config = try loadConfig(allocator, "nonexistent-config.json");
     defer config.deinit();
@@ -41,7 +41,7 @@ test "ConfigLoader loads defaults when file not found" {
 }
 
 test "ConfigLoader parses valid JSON config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Create a temporary config file
 
@@ -75,7 +75,7 @@ test "ConfigLoader parses valid JSON config" {
 }
 
 test "ConfigLoader validates port range" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-port");
     defer context.deinit();
@@ -96,7 +96,7 @@ test "ConfigLoader validates port range" {
 }
 
 test "ConfigLoader validates numeric ranges" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-buffer");
     defer context.deinit();
@@ -117,7 +117,7 @@ test "ConfigLoader validates numeric ranges" {
 }
 
 test "ConfigLoader validates batch size" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-batch-size");
     defer context.deinit();
@@ -138,7 +138,7 @@ test "ConfigLoader validates batch size" {
 }
 
 test "ConfigLoader parses auth config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-auth");
     defer context.deinit();
@@ -168,7 +168,7 @@ test "ConfigLoader parses auth config" {
 }
 
 test "ConfigLoader parses security config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-security");
     defer context.deinit();
@@ -198,7 +198,7 @@ test "ConfigLoader parses security config" {
 }
 
 test "ConfigLoader parses inline schema configuration" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config_content =
         \\{
@@ -260,7 +260,7 @@ test "ConfigLoader parses inline schema configuration" {
 // Invariant: Environment variable substitution
 // For any configuration field containing ${VAR_NAME} syntax, the environment variable value should be substituted if it exists.
 test "config: env var substitution" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-env-vars");
     defer context.deinit();
@@ -310,7 +310,7 @@ test "config: env var substitution" {
 }
 
 test "config: env var substitution - missing variable keeps original" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var environ = std.process.Environ.Map.init(allocator);
     defer environ.deinit();
 
@@ -345,7 +345,7 @@ test "config: env var substitution - missing variable keeps original" {
 }
 
 test "config: env var substitution - multiple variables" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var environ = std.process.Environ.Map.init(allocator);
     defer environ.deinit();
@@ -390,7 +390,7 @@ test "config: env var substitution - multiple variables" {
 // Invariant: Configuration validation
 // For any configuration, validation should catch invalid values and return descriptive errors.
 test "config: validation - port zero" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-port-zero");
     defer context.deinit();
@@ -416,7 +416,7 @@ test "config: validation - port zero" {
 }
 
 test "config: validation - invalid max message size" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-invalid-max-msg");
     defer context.deinit();
@@ -444,7 +444,7 @@ test "config: validation - invalid max message size" {
 // Logging configuration properties
 // Invariant: Missing schema file falls back to the implicit users-only schema.
 test "config: missing schema file is allowed" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-missing-schema");
     defer context.deinit();
@@ -466,7 +466,7 @@ test "config: missing schema file is allowed" {
 }
 
 test "config: file existence validation - auth rules file not found" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-missing-auth");
     defer context.deinit();
@@ -492,7 +492,7 @@ test "config: file existence validation - auth rules file not found" {
 }
 
 test "config: file existence validation - valid schema file" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-valid-schema");
     defer context.deinit();
@@ -521,7 +521,7 @@ test "config: file existence validation - valid schema file" {
 }
 
 test "config: file existence validation - valid auth rules file" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-valid-auth");
     defer context.deinit();
@@ -558,7 +558,7 @@ test "config: file existence validation - valid auth rules file" {
 // Invariant: Configuration loading
 // For any valid configuration, loading valid configuration produces the expected equivalent configuration.
 test "config: load - server config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-server");
     defer context.deinit();
@@ -589,7 +589,7 @@ test "config: load - server config" {
 }
 
 test "config: load - logging config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-logging");
     defer context.deinit();
@@ -620,7 +620,7 @@ test "config: load - logging config" {
 }
 
 test "config: load - complete config" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-roundtrip-complete");
     defer context.deinit();

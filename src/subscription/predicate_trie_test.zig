@@ -17,7 +17,7 @@ fn listContains(list: *const std.ArrayListUnmanaged(u64), val: u64) bool {
 }
 
 test "PredicateDag: shared equality prefix and GC" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 
@@ -82,7 +82,7 @@ test "PredicateDag: shared equality prefix and GC" {
 }
 
 test "PredicateDag: match_all and match_none" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 
@@ -112,7 +112,7 @@ test "PredicateDag: match_all and match_none" {
 }
 
 test "PredicateDag: non-eq condition branch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 
@@ -142,7 +142,7 @@ test "PredicateDag: non-eq condition branch" {
 }
 
 test "PredicateDag: eq then non-eq path order" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 
@@ -177,7 +177,7 @@ test "PredicateDag: eq then non-eq path order" {
 }
 
 test "PredicateDag: OR clause residual filtering" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 
@@ -223,7 +223,7 @@ test "PredicateDag: OR clause residual filtering" {
 }
 
 test "PredicateTrie: +0.0 and -0.0 share hash bucket" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var trie = PredicateTrie.init(allocator);
     defer trie.deinit();
 

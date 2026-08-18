@@ -58,7 +58,7 @@ fn denyWriteSession(claims: *const std.StringHashMapUnmanaged(typed.Value), aren
 // ─── Auth: setUser ───────────────────────────────────────────────────────────
 
 test "PresenceService: setUser authorized with permissive config" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -74,7 +74,7 @@ test "PresenceService: setUser authorized with permissive config" {
 }
 
 test "PresenceService: setUser rejected with unauthorized namespace" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -92,7 +92,7 @@ test "PresenceService: setUser rejected with unauthorized namespace" {
 // ─── Auth: setShared ─────────────────────────────────────────────────────────
 
 test "PresenceService: setShared authorized with permissive config" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -108,7 +108,7 @@ test "PresenceService: setShared authorized with permissive config" {
 }
 
 test "PresenceService: setShared rejected with unauthorized namespace" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -126,7 +126,7 @@ test "PresenceService: setShared rejected with unauthorized namespace" {
 // ─── Null worker silently drops ops ──────────────────────────────────────────
 
 test "PresenceService: removeUser with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -140,7 +140,7 @@ test "PresenceService: removeUser with null worker (no crash)" {
 }
 
 test "PresenceService: subscribeUser with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -154,7 +154,7 @@ test "PresenceService: subscribeUser with null worker (no crash)" {
 }
 
 test "PresenceService: subscribeShared with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -168,7 +168,7 @@ test "PresenceService: subscribeShared with null worker (no crash)" {
 }
 
 test "PresenceService: unsubscribeUser with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -182,7 +182,7 @@ test "PresenceService: unsubscribeUser with null worker (no crash)" {
 }
 
 test "PresenceService: unsubscribeShared with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -196,7 +196,7 @@ test "PresenceService: unsubscribeShared with null worker (no crash)" {
 }
 
 test "PresenceService: removeAllForConnection with null worker (no crash)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);
@@ -209,7 +209,7 @@ test "PresenceService: removeAllForConnection with null worker (no crash)" {
 // ─── Patch cloning ───────────────────────────────────────────────────────────
 
 test "PresenceService: setUser clones patch — original can be freed after call" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);

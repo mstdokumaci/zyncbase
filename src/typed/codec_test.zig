@@ -18,7 +18,7 @@ fn jsonToOwnedSlice(allocator: std.mem.Allocator, value: Value) ![]u8 {
 }
 
 test "writeJsonToBuf: arrays" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -92,7 +92,7 @@ test "writeJsonToBuf: arrays" {
 }
 
 test "writeJsonToBuf: scalars and nil" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -138,7 +138,7 @@ test "writeJsonToBuf: scalars and nil" {
 }
 
 test "writeJsonToBuf: buffer reuse retains capacity" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(allocator);
@@ -165,7 +165,7 @@ test "writeJsonToBuf: buffer reuse retains capacity" {
 }
 
 test "Value: payload -> json array -> payload roundtrip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -249,7 +249,7 @@ test "Value: payload -> json array -> payload roundtrip" {
 }
 
 test "validateValue: exhaustive type matrix" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const Ft = schema_types.FieldType;
 
     const bin_payload = try msgpack.Payload.binToPayload(&([_]u8{0} ** 16), allocator);
@@ -327,7 +327,7 @@ test "validateValue: exhaustive type matrix" {
 }
 
 test "Value: scalar roundtrips" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -432,7 +432,7 @@ test "Value: scalar roundtrips" {
 }
 
 test "fromDynamicJson: all scalar paths and error cases" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -536,7 +536,7 @@ test "fromDynamicJson: all scalar paths and error cases" {
 }
 
 test "Value: array dedup" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

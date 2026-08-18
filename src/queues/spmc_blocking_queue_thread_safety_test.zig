@@ -10,7 +10,7 @@ const TestItem = struct {
 };
 
 test "SpmcBlockingQueue: pop blocks until item is pushed" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
@@ -37,7 +37,7 @@ test "SpmcBlockingQueue: pop blocks until item is pushed" {
 }
 
 test "SpmcBlockingQueue: shutdown unblocks waiting consumers" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
@@ -63,7 +63,7 @@ test "SpmcBlockingQueue: shutdown unblocks waiting consumers" {
 }
 
 test "SpmcBlockingQueue: multiple consumers process items fairly" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 

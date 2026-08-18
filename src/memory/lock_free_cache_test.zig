@@ -22,7 +22,7 @@ const OwnedString = struct {
 };
 
 test "cache: concurrent reads never block" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
@@ -72,7 +72,7 @@ test "cache: concurrent reads never block" {
 }
 
 test "cache: ref_count lifecycle" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
@@ -92,7 +92,7 @@ test "cache: ref_count lifecycle" {
 }
 
 test "cache: update increments version" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
@@ -109,7 +109,7 @@ test "cache: update increments version" {
 }
 
 test "cache: eviction" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
@@ -125,7 +125,7 @@ test "cache: eviction" {
 }
 
 test "cache: deep free via value deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const string_cache = lockFreeCache(OwnedString, i64);
 
     var cache: string_cache = undefined;

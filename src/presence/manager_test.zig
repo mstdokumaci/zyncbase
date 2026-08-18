@@ -14,7 +14,7 @@ const makeTestSharedFields = th.makeTestSharedFields;
 const makeTestUserFields = th.makeTestUserFields;
 
 test "PresenceManager - setUser creates record and queues pending update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -38,7 +38,7 @@ test "PresenceManager - setUser creates record and queues pending update" {
 }
 
 test "PresenceManager - setShared creates record and queues pending update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -61,7 +61,7 @@ test "PresenceManager - setShared creates record and queues pending update" {
 }
 
 test "PresenceManager - setUser coalesces pending updates for same user" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -90,7 +90,7 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
 }
 
 test "PresenceManager - setShared coalesces pending shared updates for same namespace" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -119,7 +119,7 @@ test "PresenceManager - setShared coalesces pending shared updates for same name
 }
 
 test "PresenceManager - removeUser cleans up and queues leave" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -148,7 +148,7 @@ test "PresenceManager - removeUser cleans up and queues leave" {
 }
 
 test "PresenceManager - removeUser on nonexistent namespace is no-op" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -164,7 +164,7 @@ test "PresenceManager - removeUser on nonexistent namespace is no-op" {
 }
 
 test "PresenceManager - onSubscribeUser returns snapshot" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -193,7 +193,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
 }
 
 test "PresenceManager - onSubscribeShared returns current state" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -221,7 +221,7 @@ test "PresenceManager - onSubscribeShared returns current state" {
 }
 
 test "PresenceManager - onSubscribeShared returns null when no state" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -236,7 +236,7 @@ test "PresenceManager - onSubscribeShared returns null when no state" {
 }
 
 test "PresenceManager - onUnsubscribeUser removes subscriber" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -264,7 +264,7 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
 }
 
 test "PresenceManager - setUser cancels grace period" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -294,7 +294,7 @@ test "PresenceManager - setUser cancels grace period" {
 }
 
 test "PresenceManager - multiple users in same namespace" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -329,7 +329,7 @@ test "PresenceManager - multiple users in same namespace" {
 }
 
 test "PresenceManager - setUser tracks joined_at timestamp" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -366,7 +366,7 @@ test "PresenceManager - setUser tracks joined_at timestamp" {
 }
 
 test "PresenceManager - removeUser cleans up joined_at" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -396,7 +396,7 @@ test "PresenceManager - removeUser cleans up joined_at" {
 }
 
 test "PresenceManager - is_new_user flag set correctly" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -431,7 +431,7 @@ test "PresenceManager - is_new_user flag set correctly" {
 }
 
 test "PresenceManager - snapshot includes joined_at" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -456,7 +456,7 @@ test "PresenceManager - snapshot includes joined_at" {
 }
 
 test "PresenceManager - leave event after successful flush is preserved" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -539,7 +539,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
 }
 
 test "PresenceManager - leave event with leftover transferred item is preserved" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);
@@ -631,7 +631,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
 }
 
 test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);

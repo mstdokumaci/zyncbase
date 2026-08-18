@@ -7,7 +7,7 @@ const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const testing = std.testing;
 
 test "ChangeQueue: computeShard determinism and range" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var queue = try ChangeQueue.init(testing.io, alloc, 8);
     defer queue.deinit();
 
@@ -41,7 +41,7 @@ test "ChangeQueue: computeShard determinism and range" {
 }
 
 test "ChangeQueue: computeShard distribution across shards" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     const num_shards = 8;
     var queue = try ChangeQueue.init(testing.io, alloc, num_shards);
     defer queue.deinit();
@@ -80,7 +80,7 @@ test "ChangeQueue: computeShard distribution across shards" {
 }
 
 test "ChangeQueue: push routes to correct shard" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var queue = try ChangeQueue.init(testing.io, alloc, 4);
     defer queue.deinit();
 
@@ -118,7 +118,7 @@ test "ChangeQueue: push routes to correct shard" {
 }
 
 test "ChangeQueue: multi-shard init and deinit" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
 
     // Test various shard counts
     for ([_]usize{ 1, 2, 4, 8, 16 }) |num_shards| {

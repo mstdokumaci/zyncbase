@@ -12,7 +12,7 @@ const qth = @import("test_helpers.zig");
 const testing = std.testing;
 
 test "basic query filter parsing" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -46,7 +46,7 @@ test "basic query filter parsing" {
 }
 
 test "query with orConditions" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -76,7 +76,7 @@ test "query with orConditions" {
 }
 
 test "query with orderBy and after" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -111,7 +111,7 @@ test "query with orderBy and after" {
 }
 
 test "query rejects invalid Base64 after cursor token" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -132,7 +132,7 @@ test "query rejects invalid Base64 after cursor token" {
 }
 
 test "isNull condition (no value tuple)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -157,7 +157,7 @@ test "isNull condition (no value tuple)" {
 }
 
 test "unknown field name (including flattened paths)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -178,7 +178,7 @@ test "unknown field name (including flattened paths)" {
 }
 
 test "malformed after field (panic regression test)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -197,7 +197,7 @@ test "malformed after field (panic regression test)" {
 }
 
 test "in condition parses to typed array" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -230,7 +230,7 @@ test "in condition parses to typed array" {
 }
 
 test "query normalization drops AND notIn empty set" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -263,7 +263,7 @@ test "query normalization drops AND notIn empty set" {
 }
 
 test "in condition rejects non-array operand" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -283,7 +283,7 @@ test "in condition rejects non-array operand" {
 }
 
 test "in condition rejects nil element" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -309,7 +309,7 @@ test "in condition rejects nil element" {
 }
 
 test "contains on array field parses using element type" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -334,7 +334,7 @@ test "contains on array field parses using element type" {
 }
 
 test "contains on text rejects non-string operand" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -354,7 +354,7 @@ test "contains on text rejects non-string operand" {
 }
 
 test "isNull with operand is rejected" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -380,7 +380,7 @@ test "isNull with operand is rejected" {
 }
 
 test "eq with nil operand is rejected" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -400,7 +400,7 @@ test "eq with nil operand is rejected" {
 }
 
 test "orderBy rejects invalid direction value" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -421,7 +421,7 @@ test "orderBy rejects invalid direction value" {
 }
 
 test "after is parsed using final orderBy regardless of map insertion order" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -453,7 +453,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 }
 
 test "cursor token rejects wrong sort type" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
@@ -470,7 +470,7 @@ fn emptyArrayPayload(allocator: std.mem.Allocator) !msgpack.Payload {
 }
 
 test "property: random valid query filters" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
@@ -535,7 +535,7 @@ test "property: random valid query filters" {
 }
 
 test "property: reject unknown field names" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var prng = std.Random.DefaultPrng.init(1);
     const random = prng.random();
 

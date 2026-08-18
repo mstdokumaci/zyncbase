@@ -12,7 +12,7 @@ const testing = std.testing;
 const SubscriptionEngine = subscription_engine.SubscriptionEngine;
 
 test "SubscriptionEngine: basic subscribe and match" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -55,7 +55,7 @@ test "SubscriptionEngine: basic subscribe and match" {
 }
 
 test "SubscriptionEngine: group sharing" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -79,7 +79,7 @@ test "SubscriptionEngine: group sharing" {
 }
 
 test "SubscriptionEngine: unsubscribe clean up" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -102,7 +102,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
 }
 
 test "SubscriptionEngine: subscribe/unsubscribe state consistency across all indexes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -166,7 +166,7 @@ test "SubscriptionEngine: subscribe/unsubscribe state consistency across all ind
 }
 
 test "SubscriptionEngine: evaluateFilter: startsWith operator" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .startsWith, .value = tth.valText("Al"), .field_type = .text, .items_type = null },
@@ -184,7 +184,7 @@ test "SubscriptionEngine: evaluateFilter: startsWith operator" {
 }
 
 test "SubscriptionEngine: canonical filter key includes values" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -214,7 +214,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
 }
 
 test "SubscriptionEngine: canonical key normalizes array contents" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Distinguishes same-length array contents
     {
@@ -294,7 +294,7 @@ test "SubscriptionEngine: canonical key normalizes array contents" {
 }
 
 test "SubscriptionEngine: canonical key keeps integer and real distinct" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -320,7 +320,7 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
 }
 
 test "SubscriptionEngine: handleRecordChange with long namespace/collection (heap key)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
     const long_coll = "b" ** 150;
@@ -358,7 +358,7 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
 }
 
 test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/endsWith" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const val = tth.valText("Al");
 
@@ -400,7 +400,7 @@ test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/e
 }
 
 test "SubscriptionEngine: group sharing with different condition order" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -434,7 +434,7 @@ test "SubscriptionEngine: group sharing with different condition order" {
 }
 
 test "SubscriptionEngine: canonical key includes predicate state" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -460,7 +460,7 @@ test "SubscriptionEngine: canonical key includes predicate state" {
 }
 
 test "SubscriptionEngine: match-none filter never matches changes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -495,7 +495,7 @@ test "SubscriptionEngine: match-none filter never matches changes" {
 }
 
 test "SubscriptionEngine: in/notIn operator subscribe and match" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // in operator
     {
@@ -581,7 +581,7 @@ test "SubscriptionEngine: in/notIn operator subscribe and match" {
 }
 
 test "SubscriptionEngine: unsubscribeMany" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -630,7 +630,7 @@ test "SubscriptionEngine: unsubscribeMany" {
 }
 
 test "SubscriptionEngine: getSubscriptionQuery" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -696,7 +696,7 @@ test "SubscriptionEngine: getSubscriptionQuery" {
 }
 
 test "SubscriptionEngine: multiple collections isolation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -799,7 +799,7 @@ test "SubscriptionEngine: multiple collections isolation" {
 }
 
 test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -916,7 +916,7 @@ test "SubscriptionEngine: shared predicate prefix matches distinct groups" {
 }
 
 test "SubscriptionEngine: filter removal notification when record leaves filter" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -1012,7 +1012,7 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
 }
 
 test "SubscriptionEngine: filter with OR clauses match" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 
@@ -1095,7 +1095,7 @@ test "SubscriptionEngine: filter with OR clauses match" {
 }
 
 test "SubscriptionEngine: OR clause leave/enter on update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);
     defer engine.deinit();
 

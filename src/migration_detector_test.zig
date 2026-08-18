@@ -40,7 +40,7 @@ fn execSchemaDDL(db: *sqlite.Db, allocator: std.mem.Allocator, gen: *ddl_generat
 // Migration_Detector.detectChanges SHALL contain exactly one Change entry for each
 // table or column that differs between old and new, with the correct ChangeKind.
 test "migration_detector: migration plan accurately describes schema diff" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const table_names = [_][]const u8{ "posts", "items", "orders", "tags", "comments" };
 
@@ -205,7 +205,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
 // For any database whose schema matches the target Schema exactly,
 // Migration_Detector.detectChanges SHALL return a MigrationPlan with zero changes.
 test "migration_detector: matching schema produces empty migration plan" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const table_names = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
     const field_names = [_][]const u8{ "col_a", "col_b", "col_c", "col_d" };

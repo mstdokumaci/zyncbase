@@ -6,7 +6,7 @@ const auth_helpers = @import("test_helpers.zig");
 const testing = std.testing;
 
 test "parsePattern splits literals and captures" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
@@ -21,7 +21,7 @@ test "parsePattern splits literals and captures" {
 }
 
 test "matchNamespace matches exact literals and extracts captures" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}:user:{user_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
@@ -38,7 +38,7 @@ test "matchNamespace matches exact literals and extracts captures" {
 }
 
 test "matchNamespace returns null on mismatch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const segments = try authorization_pattern.parsePattern(allocator, "tenant:{tenant_id}");
     defer {
         for (segments) |seg| seg.deinit(allocator);
@@ -50,7 +50,7 @@ test "matchNamespace returns null on mismatch" {
 }
 
 test "matchNamespace wildcard matches one segment" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const segments = try authorization_pattern.parsePattern(allocator, "*");
     defer {
         for (segments) |seg| seg.deinit(allocator);
@@ -67,7 +67,7 @@ test "matchNamespace wildcard matches one segment" {
 }
 
 test "namespaceRuleFor finds matching rule with captures" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"public","storeFilter":true,"presenceRead":true,"presenceWrite":true},{"pattern":"tenant:{tenant_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
@@ -82,7 +82,7 @@ test "namespaceRuleFor finds matching rule with captures" {
 }
 
 test "namespaceRuleFor returns null when no match" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var config = try auth_helpers.implicitTestConfig(allocator);
     defer config.deinit();
 

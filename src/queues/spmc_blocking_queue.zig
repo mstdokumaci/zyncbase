@@ -16,7 +16,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
         tail: ?*Node,
         io: std.Io,
         mutex: std.Io.Mutex,
-        event: std.Io.Event,
+        condition: std.Io.Condition,
         count: usize,
         shutdown_requested: std.atomic.Value(bool),
         allocator: Allocator,
@@ -27,7 +27,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
                 .tail = null,
                 .io = io,
                 .mutex = .init,
-                .event = .unset,
+                .condition = .init,
                 .count = 0,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .allocator = allocator,
@@ -51,19 +51,16 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             }
             self.tail = node;
             self.count += 1;
-            self.event.set(self.io);
+            self.condition.signal(self.io);
         }
 
         pub fn pop(self: *Self) ?T {
             self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             while (self.head == null and !self.shutdown_requested.load(.acquire)) {
-                self.event.reset();
-                self.mutex.unlock(self.io);
-                self.event.waitUncancelable(self.io);
-                self.mutex.lockUncancelable(self.io);
+                self.condition.waitUncancelable(self.io, &self.mutex);
             }
-            defer self.mutex.unlock(self.io);
 
             if (self.head) |node| {
                 const data = node.data;
@@ -80,20 +77,17 @@ pub fn spmcBlockingQueue(comptime T: type) type {
 
         pub fn popTimed(self: *Self, timeout_ns: u64) ?T {
             self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
-            if (self.head == null and !self.shutdown_requested.load(.acquire) and timeout_ns > 0) {
-                self.event.reset();
+            // timed popTimed is only exercised by the thread-safety test (prod passes 0).
+            var remaining: u64 = timeout_ns;
+            while (self.head == null and !self.shutdown_requested.load(.acquire) and remaining > 0) {
+                const sleep_ns = @min(remaining, std.time.ns_per_ms);
+                remaining -= sleep_ns;
                 self.mutex.unlock(self.io);
-                _ = self.event.waitTimeout(self.io, .{ .duration = .{
-                    .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
-                    .clock = .awake,
-                } }) catch |err| switch (err) {
-                    error.Timeout => {},
-                    error.Canceled => return null,
-                };
+                std.Io.sleep(self.io, .fromNanoseconds(@intCast(sleep_ns)), .awake) catch {};
                 self.mutex.lockUncancelable(self.io);
             }
-            defer self.mutex.unlock(self.io);
 
             if (self.head) |node| {
                 const data = node.data;
@@ -112,7 +106,7 @@ pub fn spmcBlockingQueue(comptime T: type) type {
             self.mutex.lockUncancelable(self.io);
             defer self.mutex.unlock(self.io);
             self.shutdown_requested.store(true, .release);
-            self.event.set(self.io);
+            self.condition.broadcast(self.io);
         }
 
         pub fn deinit(self: *Self) void {

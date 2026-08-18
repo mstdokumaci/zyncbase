@@ -372,8 +372,8 @@ pub const EngineTestContext = struct {
         self.test_context = try createTestContext(allocator, prefix, effective_options);
         errdefer self.test_context.deinit();
 
-        try self.memory_strategy.init(allocator);
-        errdefer _ = self.memory_strategy.deinit();
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
 
         self.schema = try createSchema(allocator, tables);
         errdefer self.schema.deinit();
@@ -458,7 +458,7 @@ pub const EngineTestContext = struct {
         if (self.test_context.send_queue) |*sq| {
             while (sq.pop()) |entry| entry.deinit();
         }
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
         if (cleanup) {
             self.test_context.deinit();
         } else {
@@ -554,8 +554,8 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     ctx.test_context = tc;
     errdefer ctx.test_context.deinit();
 
-    try ctx.memory_strategy.init(allocator);
-    errdefer _ = ctx.memory_strategy.deinit();
+    try ctx.memory_strategy.init();
+    errdefer ctx.memory_strategy.deinit();
 
     ctx.schema = try createSchema(allocator, tables);
     errdefer ctx.schema.deinit();

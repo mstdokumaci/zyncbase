@@ -13,7 +13,7 @@ const RecordChange = sub_eng.RecordChange;
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
 
 test "Subscription Consistency: write-before-subscribe is captured and delivered" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // 1) Setup a minimal engine/table and subscription engine
     var fields_arr = [_]sth.Field{

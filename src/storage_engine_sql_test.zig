@@ -19,7 +19,7 @@ const testing = std.testing;
 const Value = typed.Value;
 
 test "storage SQL builders quote identifiers" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema_types.Table{table};
@@ -39,7 +39,7 @@ test "storage SQL builders quote identifiers" {
 }
 
 test "filter SQL render cleans up all allocation failures" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, renderFilterSqlForAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(std.heap.smp_allocator, renderFilterSqlForAllocationTest, .{});
 }
 
 fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
@@ -93,7 +93,7 @@ fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
 }
 
 test "Value: payload -> sqlite column -> payload roundtrip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

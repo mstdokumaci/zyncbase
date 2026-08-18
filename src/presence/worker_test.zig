@@ -32,7 +32,7 @@ fn setupWorker(
 }
 
 test "PresenceWorker: set_user op produces broadcast to send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
@@ -43,8 +43,8 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -106,7 +106,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
 }
 
 test "PresenceWorker: no ops enqueued does not push to send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
@@ -117,8 +117,8 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -158,7 +158,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
 }
 
 test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
@@ -169,8 +169,8 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -221,7 +221,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
 }
 
 test "PresenceWorker: multiple ops batched into single flush" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
@@ -232,8 +232,8 @@ test "PresenceWorker: multiple ops batched into single flush" {
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);

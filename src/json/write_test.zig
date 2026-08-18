@@ -4,48 +4,48 @@ const write_mod = @import("write.zig");
 
 test "writeEscapedString escapes special characters" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
     try w.writeEscapedString("hello \"world\"");
     try std.testing.expectEqualStrings("\"hello \\\"world\\\"\"", buf.items);
 }
 
 test "writeEscapedString escapes backslash and newline" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
     try w.writeEscapedString("a\\b\nc");
     try std.testing.expectEqualStrings("\"a\\\\b\\nc\"", buf.items);
 }
 
 test "writeEscapedString escapes backspace and form feed" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
     try w.writeEscapedString("a\x08b\x0cc");
     try std.testing.expectEqualStrings("\"a\\bb\\fc\"", buf.items);
 }
 
 test "writeEscapedString escapes null and other control chars" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
     try w.writeEscapedString("\x00\x01\x1f");
     try std.testing.expectEqualStrings("\"\\u0000\\u0001\\u001f\"", buf.items);
 }
 
 test "writeEscapedString passes through high bytes" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
     try w.writeEscapedString("\xc3\xa9"); // é in UTF-8
     try std.testing.expectEqualStrings("\"\xc3\xa9\"", buf.items);
 }
 
 test "Writer builds array field" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.beginArrayField("items");
@@ -59,8 +59,8 @@ test "Writer builds array field" {
 
 test "Writer rawField" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.rawField("data", "{\"x\":1}");
@@ -72,8 +72,8 @@ test "Writer rawField" {
 
 test "Writer intField" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.intField("count", @as(i64, 42));
@@ -84,8 +84,8 @@ test "Writer intField" {
 
 test "Writer floatValue appends .0 for whole numbers" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginArray();
     try w.floatValue(@as(f64, 1.5));
@@ -97,8 +97,8 @@ test "Writer floatValue appends .0 for whole numbers" {
 
 test "Writer complex nested JSON has correct commas" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.field("version", "1.0.0");
@@ -131,8 +131,8 @@ test "Writer complex nested JSON has correct commas" {
 
 test "Writer conditional fields produce correct commas" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.field("sub", "user_1");
@@ -155,8 +155,8 @@ test "Writer conditional fields produce correct commas" {
 
 test "Writer empty object and array" {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    var w = write_mod.Writer{ .buf = &buf, .allocator = std.testing.allocator };
+    defer buf.deinit(std.heap.smp_allocator);
+    var w = write_mod.Writer{ .buf = &buf, .allocator = std.heap.smp_allocator };
 
     try w.beginObject();
     try w.beginObjectField("empty_obj");

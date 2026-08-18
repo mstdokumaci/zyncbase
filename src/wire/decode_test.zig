@@ -12,7 +12,7 @@ const writeFixStr = helpers.writeFixStr;
 // === Fast Decoder Tests (extracted from src/wire_test.zig) ===
 
 test "extractEnvelopeFast: valid envelope" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -27,7 +27,7 @@ test "extractEnvelopeFast: valid envelope" {
 }
 
 test "extractEnvelopeFast: missing type" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -39,7 +39,7 @@ test "extractEnvelopeFast: missing type" {
 }
 
 test "extractEnvelopeFast: missing id" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -56,7 +56,7 @@ test "extractEnvelopeFast: non-map payload" {
 }
 
 test "extractEnvelopeFast: wrong type for field" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
@@ -72,7 +72,7 @@ test "extractEnvelopeFast: wrong type for field" {
 }
 
 test "extractEnvelopeFast: extra fields (lenient)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -88,7 +88,7 @@ test "extractEnvelopeFast: extra fields (lenient)" {
 }
 
 test "extractStoreSetNamespaceFast: valid" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -103,7 +103,7 @@ test "extractStoreSetNamespaceFast: valid" {
 }
 
 test "extractStoreSetNamespaceFast: missing namespace" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -116,7 +116,7 @@ test "extractStoreSetNamespaceFast: missing namespace" {
 }
 
 test "extractStoreUnsubscribeFast: valid" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -131,7 +131,7 @@ test "extractStoreUnsubscribeFast: valid" {
 }
 
 test "extractStoreUnsubscribeFast: missing subId" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -144,7 +144,7 @@ test "extractStoreUnsubscribeFast: missing subId" {
 }
 
 test "extractStoreLoadMoreFast: valid" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -161,7 +161,7 @@ test "extractStoreLoadMoreFast: valid" {
 }
 
 test "extractStoreLoadMoreFast: missing subId" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -175,7 +175,7 @@ test "extractStoreLoadMoreFast: missing subId" {
 }
 
 test "extractStoreLoadMoreFast: missing nextCursor" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
@@ -189,7 +189,7 @@ test "extractStoreLoadMoreFast: missing nextCursor" {
 }
 
 test "extractStoreUnsubscribeFast: wrong type for subId" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
@@ -202,7 +202,7 @@ test "extractStoreUnsubscribeFast: wrong type for subId" {
 }
 
 test "extractEnvelopeFast: duplicate key, last wins" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
@@ -220,7 +220,7 @@ test "extractEnvelopeFast: duplicate key, last wins" {
 }
 
 test "extractPresenceSetFast: duplicate data key, last wins" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
@@ -240,7 +240,7 @@ test "extractPresenceSetFast: duplicate data key, last wins" {
 // === readSubtree single-pass correctness (the decode.zig optimization) ===
 
 test "readSubtree consumes exactly one value and advances pos to its boundary" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // A map {"a":"x","b":"y"} followed by a trailing nil byte.
     var buf = std.ArrayListUnmanaged(u8).empty;
@@ -265,7 +265,7 @@ test "readSubtree consumes exactly one value and advances pos to its boundary" {
 }
 
 test "readSubtree on nested array payload advances pos past the whole value" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // A fixarray of 3 fixints, followed by a trailing nil byte.
     var buf = std.ArrayListUnmanaged(u8).empty;
@@ -288,7 +288,7 @@ test "readSubtree on nested array payload advances pos past the whole value" {
 }
 
 test "readSubtree decodes a large batch-style array payload in a single pass" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // A fixarray of 300 fixints — exercises the iterative parser on a payload
     // large enough that the old skipValue + decode double-walk would be visible.

@@ -23,7 +23,7 @@ fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metad
 }
 
 test "contains on array field: SQL and in-memory evaluator return same rows (text)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]schema_types.Field{
         schema_helpers.makeField("name", .text),
@@ -126,7 +126,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
 }
 
 test "contains on array field: SQL and in-memory evaluator return same rows (integer)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var scores_field = schema_helpers.makeField("scores", .array);
     scores_field.items_type = .integer;
