@@ -47,7 +47,7 @@ Threading Model Architecture-006-thread-budget [ADR-014-subscription-018-acknowl
 | `MpscQueue(T)` | `Allocator` | Generic lock-free MPSC linked list queue (atomic tail swap pattern). |
 | `SpmcBlockingQueue(T)` | `Allocator`, `Mutex`, `Condition` | Generic SPMC blocking queue with mutex + CV; consumers sleep when empty; `shutdown()` wakes all consumers. |
 | `SpscQueue(T, PoolFn)` | Pool | Generic lock-free SPSC queue with pool-parameterized node allocation; not blocking — callers pair with condvar where needed. |
-| `managedThread(T)` | `std.Thread`, `std.atomic.Value(bool)`, `std.Thread.Mutex`, `std.Thread.Condition` | Generic thread wrapper; holds shutdown flag, condvar, mutex; `stop()` sets flag, signals condvar, joins thread safely; `spawn()` is idempotent-safe. |
+| `managedThread(T)` | `std.Thread`, `std.atomic.Value(bool)`, `std.Io.Mutex`, `std.Io.Condition`, `std.Io.Event` | Generic thread wrapper; holds shutdown flag and `std.Io` synchronization primitives; `stop()` sets the flag, wakes the worker, and joins safely; `spawn()` is idempotent-safe. |
 | `workerPool(T)` | `Allocator`, `[]T` | Generic pool of workers; `start()` calls `spawn()` on each, `stop()` calls `stop()` on each. |
 | `WaitGroup` | `std.atomic.Value(usize)`, `Mutex`, `Condition` | Go-style wait group; `add(n)` increments, `done(n)` decrements and broadcasts when zero, `wait()` blocks until zero. Used by `WriteWorker` as `flush_wg` for flush backpressure. |
 | `Notifier` | function pointer + context | Stores one callback (`?*const fn (?*anyopaque) void`) and context pointer. `notify()` invokes the callback if set. Used to wake the uWS event loop from background worker threads. |
