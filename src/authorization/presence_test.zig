@@ -10,14 +10,14 @@ const auth_helpers = @import("test_helpers.zig");
 const testing = std.testing;
 
 test "authorizePresenceWrite enforces presenceWrite condition" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "cursor_x", .declared_type = .real },
     };
@@ -29,14 +29,14 @@ test "authorizePresenceWrite enforces presenceWrite condition" {
 }
 
 test "authorizePresenceWrite denies when presenceWrite is false" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"readonly:{id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "status", .declared_type = .text },
     };
@@ -47,14 +47,14 @@ test "authorizePresenceWrite denies when presenceWrite is false" {
 }
 
 test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":false}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };
@@ -66,14 +66,14 @@ test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
 }
 
 test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const json =
         \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
     ;
     var config = try auth_helpers.initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = typed_doc_id.generateUuidV7();
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const presence_fields = [_]schema_types.PresenceField{
         .{ .name = "slide", .declared_type = .integer },
     };

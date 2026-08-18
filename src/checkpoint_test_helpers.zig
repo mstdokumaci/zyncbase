@@ -25,8 +25,8 @@ pub const Context = struct {
         });
         errdefer self.schema.deinit();
 
-        try self.memory_strategy.init(allocator);
-        errdefer _ = self.memory_strategy.deinit();
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
 
         self.test_context = try schema_helpers.TestContext.initInMemory(allocator);
         errdefer self.test_context.deinit();
@@ -41,7 +41,7 @@ pub const Context = struct {
         );
         errdefer self.storage_engine.deinit();
 
-        try self.manager.init(allocator, &self.storage_engine, config);
+        try self.manager.init(std.testing.io, allocator, &self.storage_engine, config);
         errdefer self.manager.deinit();
     }
 
@@ -50,6 +50,6 @@ pub const Context = struct {
         self.storage_engine.deinit();
         self.test_context.deinit();
         self.schema.deinit();
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
     }
 };

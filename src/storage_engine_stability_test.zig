@@ -4,8 +4,6 @@ const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
-const testing = std.testing;
-
 // This property test verifies that the storage engine stays stable under
 // concurrent insert/read/delete operations: no panics or crashes occur, and
 // the engine keeps operating.
@@ -18,7 +16,7 @@ const testing = std.testing;
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test "storage: stability no crashes on concurrent errors" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields = [_]schema_types.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields);

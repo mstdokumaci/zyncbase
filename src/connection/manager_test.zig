@@ -11,7 +11,7 @@ const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
 
 test "ConnectionManager - init and deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-init", &.{});
     defer app.deinit();
@@ -20,7 +20,7 @@ test "ConnectionManager - init and deinit" {
 }
 
 test "ConnectionManager - onOpen and onClose" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-open", &.{});
     defer app.deinit();
@@ -40,7 +40,7 @@ test "ConnectionManager - onOpen and onClose" {
 }
 
 test "ConnectionManager - onOpen rejects missing external identity" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-missing-identity", &.{});
     defer app.deinit();
@@ -56,7 +56,7 @@ test "ConnectionManager - onOpen rejects missing external identity" {
 }
 
 test "ConnectionManager - onClose clears violation state" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-violations", &.{});
     defer app.deinit();
@@ -76,7 +76,7 @@ test "ConnectionManager - onClose clears violation state" {
 }
 
 test "ConnectionManager - onOpen clears stale violation state" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-stale-violations", &.{});
     defer app.deinit();
@@ -106,7 +106,7 @@ test "ConnectionManager - onOpen clears stale violation state" {
 }
 
 test "ConnectionManager - max connections" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "cm-max", &.{});
     defer app.deinit();
@@ -136,7 +136,7 @@ test "ConnectionManager - max connections" {
 }
 
 test "ConnectionManager - acquire and release" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-id-reuse", &.{});
     defer app.deinit();
@@ -163,13 +163,13 @@ test "ConnectionManager - acquire and release" {
 }
 
 fn connectionCount(app: *AppTestContext) usize {
-    app.connection_manager.mutex.lock();
-    defer app.connection_manager.mutex.unlock();
+    app.connection_manager.mutex.lockUncancelable(app.connection_manager.io);
+    defer app.connection_manager.mutex.unlock(app.connection_manager.io);
     return app.connection_manager.map.count();
 }
 
 test "ConnectionManager: concurrent lifecycle drains to empty" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-property-lifecycle", &.{});
     defer app.deinit();
@@ -226,7 +226,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
 }
 
 test "ConnectionManager: concurrent reads preserve live set" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-property-reads", &.{});
     defer app.deinit();
@@ -292,7 +292,7 @@ test "ConnectionManager: concurrent reads preserve live set" {
 }
 
 test "ConnectionManager: drain sends one concatenated frame per connection" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-mgr-drain-frames", &.{});
     defer app.deinit();
@@ -338,7 +338,7 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-property-unique-ids", &.{});
     defer app.deinit();

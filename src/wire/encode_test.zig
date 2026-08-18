@@ -17,7 +17,7 @@ const testing = std.testing;
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
 test "encodeSuccess: produces valid MsgPack" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const response = try wire_encode.encodeSuccess(allocator, 12345);
     defer allocator.free(response);
 
@@ -33,7 +33,7 @@ test "encodeSuccess: produces valid MsgPack" {
 }
 
 test "encodeError: produces valid MsgPack" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const wire_err = wire_errors.getWireError(error.UnknownTable);
     const response = try wire_encode.encodeError(allocator, 999, wire_err);
     defer allocator.free(response);
@@ -54,7 +54,7 @@ test "encodeError: produces valid MsgPack" {
 }
 
 test "encodeQuery: includes subscription pagination fields" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -111,7 +111,7 @@ test "encodeQuery: includes subscription pagination fields" {
 }
 
 test "encodeSetDeltaSuffix: set operation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
@@ -157,7 +157,7 @@ test "encodeSetDeltaSuffix: set operation" {
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const id_val = tth.valInt(999);
     const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 0, id_val);
@@ -184,7 +184,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
 }
 
 test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const write_id = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
     const msg = try wire_encode.encodeWriteCommitted(allocator, write_id);
     defer allocator.free(msg);
@@ -200,7 +200,7 @@ test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
 }
 
 test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const write_id = [_]u8{0} ** 16;
     const wire_err = wire_errors.getWireError(error.PermissionDenied);
     const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, null);
@@ -218,7 +218,7 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
 }
 
 test "encodeWriteError: 6-field map includes batchIndex when set" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const write_id = [_]u8{0} ** 16;
     const wire_err = wire_errors.getWireError(error.PermissionDenied);
     const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, 2);
@@ -235,17 +235,18 @@ test "encodeWriteError: 6-field map includes batchIndex when set" {
 }
 
 test "store_delta_header: decodes to StoreDelta type" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    try buf.appendSlice(allocator, &wire_encode.store_delta_header);
-    try buf.append(allocator, 0xcf);
-    try buf.writer(allocator).writeInt(u64, 42, .big);
-    try msgpack.writeMsgPackStr(buf.writer(allocator), "ops");
-    try buf.append(allocator, 0x90);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
+    try writer.writeAll(&wire_encode.store_delta_header);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, 42, .big);
+    try msgpack.writeMsgPackStr(writer, "ops");
+    try writer.writeByte(0x90);
 
-    var reader: std.Io.Reader = .fixed(buf.items);
+    var reader: std.Io.Reader = .fixed(buf.written());
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
@@ -257,7 +258,7 @@ test "store_delta_header: decodes to StoreDelta type" {
 }
 
 test "encodeDeleteDeltaSuffix: with string id" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const id_val = tth.valText("doc-abc-123");
     const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 1, id_val);
@@ -282,7 +283,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
 }
 
 test "encodePresenceBroadcast - update event round-trips with correct map size" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
     defer patch.free(allocator);
@@ -331,7 +332,7 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
 }
 
 test "encodePresenceBroadcast - leave event round-trips with correct map size" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const update = PendingUserUpdate{
         .namespace_id = 1,
@@ -364,7 +365,7 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
 }
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const schema_json =
         \\{

@@ -19,7 +19,7 @@ const queue_type = mpscQueue(TestEntry, AllocPool);
 const PoolType = AllocPool(queue_type.Node);
 
 test "MpscQueue: empty queue" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -29,7 +29,7 @@ test "MpscQueue: empty queue" {
 }
 
 test "MpscQueue: push and pop single entry" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -47,7 +47,7 @@ test "MpscQueue: push and pop single entry" {
 }
 
 test "MpscQueue: push multiple entries preserves FIFO order" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -75,7 +75,7 @@ test "MpscQueue: push multiple entries preserves FIFO order" {
 }
 
 test "MpscQueue: pop after drain returns null" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -92,7 +92,7 @@ test "MpscQueue: pop after drain returns null" {
 }
 
 test "MpscQueue: drain releases remaining entries" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
 

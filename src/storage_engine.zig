@@ -49,6 +49,7 @@ pub const StorageEngine = struct {
 
     pub const State = enum(u8) { setup, running, shutdown };
 
+    io: std.Io,
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     reader_nodes: []ReaderNode,
@@ -69,6 +70,7 @@ pub const StorageEngine = struct {
 
     pub fn init(
         self: *StorageEngine,
+        io: std.Io,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         data_dir: []const u8,
@@ -80,7 +82,7 @@ pub const StorageEngine = struct {
     ) !void {
         if (data_dir.len == 0 and !options.in_memory) return error.InvalidDataDir;
 
-        const db_path: [:0]const u8 = try resolveDbPath(allocator, data_dir, options.in_memory);
+        const db_path: [:0]const u8 = try resolveDbPath(io, allocator, data_dir, options.in_memory);
         errdefer allocator.free(db_path); // zwanzig-disable-line: deinit-lifecycle
 
         var writer_conn = try sqlite.Db.init(.{
@@ -101,14 +103,15 @@ pub const StorageEngine = struct {
         if (options.reader_pool_size == 0) {
             return error.InvalidReaderPoolSize;
         }
-        const reader_nodes = try createReaderPool(allocator, db_path, options, performance_config);
+        const reader_nodes = try createReaderPool(io, allocator, db_path, options, performance_config);
         errdefer destroyReaderPool(allocator, reader_nodes);
 
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .reader_nodes = reader_nodes,
-            .read_request_queue = read_buffer.read_request_queue.init(allocator),
+            .read_request_queue = read_buffer.read_request_queue.init(io, allocator),
             .read_worker_pool = null,
             .options = options,
             // SAFETY: Initialized below via .node_pool.init().
@@ -117,18 +120,19 @@ pub const StorageEngine = struct {
             .schema = schema,
             // SAFETY: Initialized below
             .document_cache = undefined,
-            .namespace_cache = storage_cache.namespace_cache_type.empty,
-            .identity_cache = storage_cache.identity_cache_type.empty,
+            .namespace_cache = storage_cache.namespace_cache_type.init(io),
+            .identity_cache = storage_cache.identity_cache_type.init(io),
             .migration_active = std.atomic.Value(bool).init(false),
             .write_worker = .{
+                .io = io,
                 .allocator = allocator,
                 .memory_strategy = memory_strategy,
                 .conn = writer_conn,
                 // SAFETY: Initialized below
                 .stmt_cache = undefined,
                 .version = std.atomic.Value(u64).init(0),
-                .thread = managedThread(WriteWorker).init(),
-                .flush_wg = .{},
+                .thread = managedThread(WriteWorker).init(io),
+                .flush_wg = .init(io),
                 .change_queue = null,
                 .session_resolver = null,
                 .send_queue = null,
@@ -164,7 +168,7 @@ pub const StorageEngine = struct {
         self.write_worker.stmt_cache.init(allocator, self.write_worker.performance_config.statement_cache_size);
         errdefer self.write_worker.stmt_cache.deinit(allocator);
 
-        try self.document_cache.init(allocator, .{});
+        try self.document_cache.init(io, allocator, .{});
         errdefer self.document_cache.deinit();
         self.write_worker.document_cache = &self.document_cache;
 
@@ -181,34 +185,54 @@ pub const StorageEngine = struct {
         self.pk_sets = try allocator.alloc(storage_cache.pk_set_type, num_tables);
         errdefer allocator.free(self.pk_sets);
         for (self.pk_sets) |*pk_set| {
-            pk_set.* = storage_cache.pk_set_type.empty;
+            pk_set.* = storage_cache.pk_set_type.init(io);
         }
 
         self.write_worker.pk_sets = self.pk_sets;
     }
 
-    fn resolveDbPath(allocator: Allocator, data_dir: []const u8, in_memory: bool) ![:0]const u8 {
+    fn resolveDbPath(io: std.Io, allocator: Allocator, data_dir: []const u8, in_memory: bool) ![:0]const u8 {
         if (in_memory) {
             // Use shared-cache in-memory database with a unique name to avoid crosstalk
             // file:zync_mem_{id}?mode=memory&cache=shared
             const id = unique_id_counter.fetchAdd(1, .seq_cst);
-            const ts = std.time.nanoTimestamp();
+            const ts = std.Io.Clock.real.now(io).toNanoseconds();
             return try std.fmt.allocPrintSentinel(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id }, 0);
         }
-        // Ensure data directory exists
-        if (std.fs.cwd().openDir(data_dir, .{})) |_| {
-            // Already exists and is a directory
-        } else |err| switch (err) {
-            error.FileNotFound => {
-                try std.fs.cwd().makePath(data_dir);
-            },
-            error.NotDir => return error.NotDir,
-            else => return err,
-        }
+        try createDirPathBounded(io, data_dir);
         return try std.fmt.allocPrintSentinel(allocator, "{s}/zyncbase.db", .{data_dir}, 0);
     }
 
+    /// Same component walk as `std.Io.Dir.createDirPath`, but with a hard
+    /// iteration bound. The stdlib version loops forever when an existing
+    /// parent's child cannot be created (e.g. `/proc/...` on Linux: mkdir EEXIST
+    /// on `/proc` → walk down → ENOENT on child → walk up → EEXIST → ...).
+    fn createDirPathBounded(io: std.Io, data_dir: []const u8) !void {
+        const dir = std.Io.Dir.cwd();
+        var it = std.fs.path.componentIterator(data_dir);
+        var component = it.last() orelse return error.InvalidDataDir;
+        var budget: usize = 256;
+        while (true) {
+            budget -= 1;
+            if (budget == 0) return error.InvalidDataDir;
+            if (dir.createDir(io, component.path, .default_dir)) |_| {
+                component = it.next() orelse return;
+            } else |err| switch (err) {
+                error.PathAlreadyExists => {
+                    const st = try dir.statFile(io, component.path, .{ .follow_symlinks = false });
+                    if (st.kind != .directory) return error.NotDir;
+                    component = it.next() orelse return;
+                },
+                error.FileNotFound => {
+                    component = it.previous() orelse return err;
+                },
+                else => return err,
+            }
+        }
+    }
+
     fn createReaderPool(
+        io: std.Io,
         allocator: Allocator,
         db_path: [:0]const u8,
         options: Options,
@@ -225,6 +249,7 @@ pub const StorageEngine = struct {
         }
 
         for (reader_nodes) |*node| {
+            node.io = io;
             node.conn = try sqlite.Db.init(.{
                 .mode = sqlite.Db.Mode{ .File = db_path },
                 .open_flags = .{
@@ -235,7 +260,7 @@ pub const StorageEngine = struct {
             errdefer node.conn.deinit();
             try connection.configureDatabase(&node.conn, false);
             node.stmt_cache.init(allocator, performance_config.statement_cache_size);
-            node.mutex = .{};
+            node.mutex = .init;
             node.select_document_stmts = &.{};
             initialized += 1;
         }
@@ -299,7 +324,7 @@ pub const StorageEngine = struct {
     /// Returns statistics about the checkpoint operation
     pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
         try self.ensureRunning();
-        var latch = CheckpointLatch{};
+        var latch = CheckpointLatch.init(self.io);
         const op = WriteOp{
             .checkpoint = .{
                 .mode = mode,
@@ -314,7 +339,7 @@ pub const StorageEngine = struct {
 
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
-        return connection.getWalSize(self.allocator, self.write_worker.db_path, self.write_worker.in_memory);
+        return connection.getWalSize(self.io, self.allocator, self.write_worker.db_path, self.write_worker.in_memory);
     }
 
     pub fn ensureRunning(self: *StorageEngine) !void {
@@ -347,7 +372,7 @@ pub const StorageEngine = struct {
     fn reset_pk_sets(self: *StorageEngine) void {
         for (self.pk_sets) |*pk_set| {
             pk_set.deinit(self.allocator);
-            pk_set.* = storage_cache.pk_set_type.empty;
+            pk_set.* = storage_cache.pk_set_type.init(self.io);
         }
     }
 
@@ -364,11 +389,11 @@ pub const StorageEngine = struct {
         self.write_worker.stmt_cache.deinit(self.allocator);
         self.write_worker.stmt_cache.init(self.allocator, self.write_worker.performance_config.statement_cache_size);
         self.document_cache.deinit();
-        try self.document_cache.init(self.allocator, .{});
+        try self.document_cache.init(self.io, self.allocator, .{});
         self.namespace_cache.deinit(self.allocator);
-        self.namespace_cache = storage_cache.namespace_cache_type.empty;
+        self.namespace_cache = storage_cache.namespace_cache_type.init(self.io);
         self.identity_cache.deinit(self.allocator);
-        self.identity_cache = storage_cache.identity_cache_type.empty;
+        self.identity_cache = storage_cache.identity_cache_type.init(self.io);
         self.reset_pk_sets();
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         self.write_worker.bumpVersion();
@@ -548,7 +573,7 @@ pub const StorageEngine = struct {
                 .scope_seq = scope_seq,
                 .namespace = namespace_owned,
                 .external_user_id = external_user_id_owned,
-                .timestamp = std.time.timestamp(),
+                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
                 .is_presence = is_presence,
             },
         };

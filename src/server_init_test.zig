@@ -13,8 +13,8 @@ const testing = std.testing;
 // 2. No memory leaks occur during init/deinit cycles
 // 3. Each init/deinit cycle is independent and doesn't affect subsequent cycles
 test "server: initialization is idempotent" {
-    // Use GeneralPurposeAllocator to detect memory leaks
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // Use DebugAllocator to detect memory leaks
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -34,7 +34,7 @@ test "server: initialization is idempotent" {
     const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "schema.json" });
     defer allocator.free(schema_file_path);
 
-    try std.fs.cwd().writeFile(.{
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
         .sub_path = schema_file_path,
         .data =
         \\{"version":"1.0.0","store":{"test":{"fields":{"val":{"type":"string"}}}}}
@@ -48,7 +48,7 @@ test "server: initialization is idempotent" {
         // The block scope ensures deinit runs before the next cycle re-creates
         // the data directory (deleteTree after the block).
         {
-            const server = try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_file_path, null);
+            const server = try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_file_path, null);
             defer server.deinit();
 
             // Verify server is properly initialized
@@ -61,7 +61,7 @@ test "server: initialization is idempotent" {
         }
 
         // Clean up database file between cycles
-        std.fs.cwd().deleteTree(data_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        std.Io.Dir.cwd().deleteTree(std.testing.io, data_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // If we reach here without panicking, the property holds

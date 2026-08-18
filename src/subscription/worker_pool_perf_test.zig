@@ -31,9 +31,9 @@ const TestContext = struct {
         self.allocator = allocator;
         // SAFETY: Immediately initialized by init() call below.
         self.memory_strategy = undefined;
-        try self.memory_strategy.init(allocator);
-        self.change_queue = try ChangeQueue.init(allocator, 1);
-        self.subscription_engine = SubscriptionEngine.init(allocator);
+        try self.memory_strategy.init();
+        self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
+        self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
         try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 4096, null, null);
         self.send_queue = try send_queue_type.init(&self.send_node_pool);
         self.schema = try sth.createSchema(allocator, &.{
@@ -53,7 +53,7 @@ const TestContext = struct {
         self.send_node_pool.deinit();
         self.subscription_engine.deinit();
         self.change_queue.deinit();
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
     }
 
     fn notifierFn(ctx: ?*anyopaque) void {
@@ -69,7 +69,7 @@ const TestContext = struct {
 //   C: dispatchDeltasToMatches (arena dupe + send_queue push)      — fan-out dispatch
 //   D: drain send_queue (per-match pop + free)                     — consumer side
 test "SubscriptionWorkerPool: dispatch fanout performance" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: TestContext = undefined;
     try ctx.init(allocator);
     defer ctx.deinit();
@@ -165,18 +165,24 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
 
         // Single timer with lap() so inter-stage bookkeeping is included in the
         // total rather than silently lost to repeated Timer.start() syscalls.
-        var t = try std.time.Timer.start();
+        var last_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
-        total_a += t.lap();
+        var now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_a += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         const id_val = new_record.values[schema_system.id_field_index];
         const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
-        total_b += t.lap();
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_b += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         // Note: notifier callback is a counter increment, not a futex/semaphore
         // wake — C understates the real OS-level notification cost in production.
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
-        total_c += t.lap();
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_c += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         // Same-thread cache-warm drain. Real consumer is on a separate thread with
         // cache-cold access — D understates production consumer latency.
@@ -184,7 +190,8 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         while (ctx.send_queue.pop()) |entry| {
             entry.deinit();
         }
-        total_d += t.lap();
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_d += @intCast(now_ns - last_ns);
     }
 
     const inv_iters: f64 = 1.0 / @as(f64, @floatFromInt(iterations));

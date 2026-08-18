@@ -11,7 +11,7 @@ const testing = std.testing;
 // These tests verify specific examples and edge cases
 
 test "CheckpointWorker: initialization" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -27,7 +27,7 @@ test "CheckpointWorker: initialization" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - size threshold" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -52,7 +52,7 @@ test "CheckpointWorker: shouldCheckpoint - size threshold" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - time threshold" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -67,16 +67,16 @@ test "CheckpointWorker: shouldCheckpoint - time threshold" {
     manager.wal_size.store(100, .release);
 
     // Recent checkpoint - should not checkpoint
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Old checkpoint - should checkpoint
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release); // 2 minutes ago
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release); // 2 minutes ago
     try testing.expect(manager.shouldCheckpoint());
 }
 
 test "CheckpointWorker: shouldCheckpoint - both thresholds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -89,27 +89,27 @@ test "CheckpointWorker: shouldCheckpoint - both thresholds" {
 
     // Neither threshold exceeded
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Only size threshold exceeded
     manager.wal_size.store(2000, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(manager.shouldCheckpoint());
 
     // Only time threshold exceeded
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release);
     try testing.expect(manager.shouldCheckpoint());
 
     // Both thresholds exceeded
     manager.wal_size.store(2000, .release);
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release);
     try testing.expect(manager.shouldCheckpoint());
 }
 
 test "CheckpointWorker: performCheckpoint - passive mode" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -125,7 +125,7 @@ test "CheckpointWorker: performCheckpoint - passive mode" {
 }
 
 test "CheckpointWorker: performCheckpoint - all modes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -144,7 +144,7 @@ test "CheckpointWorker: performCheckpoint - all modes" {
 }
 
 test "CheckpointWorker: performCheckpoint - metrics update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -169,7 +169,7 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
 }
 
 test "CheckpointWorker: getMetrics" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});
@@ -192,7 +192,7 @@ test "CheckpointWorker: getMetrics" {
 }
 
 test "CheckpointWorker: Prometheus metrics format" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const metrics = CheckpointWorker.CheckpointMetrics{
         .last_checkpoint_time = 1234567890,
@@ -225,7 +225,7 @@ test "CheckpointWorker: Prometheus metrics format" {
 }
 
 test "CheckpointWorker: performCheckpointWithEscalation - no escalation needed" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -268,7 +268,7 @@ test "CheckpointWorker: CheckpointResult structure" {
 }
 
 test "CheckpointWorker: shouldCheckpoint - clock rollback" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -280,7 +280,7 @@ test "CheckpointWorker: shouldCheckpoint - clock rollback" {
     const manager = &ctx.manager;
 
     // Simulate clock rollback: last_checkpoint is in the future
-    manager.last_checkpoint.store(std.time.timestamp() + 3600, .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() + 3600, .release);
     manager.wal_size.store(500, .release);
 
     // Should not panic and should NOT trigger time-based checkpoint
@@ -292,7 +292,7 @@ test "CheckpointWorker: shouldCheckpoint - clock rollback" {
 }
 
 test "CheckpointWorker: fast shutdown" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -303,14 +303,14 @@ test "CheckpointWorker: fast shutdown" {
 
     const manager = &ctx.manager;
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
     try manager.spawn();
 
     // Signal shutdown immediately
     manager.stop();
     manager.deinit(); // This will join
 
-    const end_time = std.time.milliTimestamp();
+    const end_time = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
     const duration = end_time - start_time;
 
     // Should be much faster than 60s
@@ -324,7 +324,7 @@ test "CheckpointWorker: fast shutdown" {
 // 5. Concurrent reads can continue during checkpoint
 
 test "checkpoint: integrity - no data loss occurs during checkpoint" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -381,7 +381,7 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
 }
 
 test "checkpoint: WAL size management - size decreases or stays same after success" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -406,7 +406,7 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
 }
 
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -424,16 +424,16 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
 
     // Property: shouldCheckpoint returns false when under threshold
     manager.wal_size.store(500, .release);
-    manager.last_checkpoint.store(std.time.timestamp(), .release);
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds(), .release);
     try testing.expect(!manager.shouldCheckpoint());
 
     // Property: shouldCheckpoint returns true when time threshold exceeded
-    manager.last_checkpoint.store(std.time.timestamp() - 120, .release); // 2 minutes ago
+    manager.last_checkpoint.store(std.Io.Clock.real.now(std.testing.io).toSeconds() - 120, .release); // 2 minutes ago
     try testing.expect(manager.shouldCheckpoint());
 }
 
 test "checkpoint: failure handling - failure counter starts at zero" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{
@@ -453,7 +453,7 @@ test "checkpoint: failure handling - failure counter starts at zero" {
 }
 
 test "checkpoint: escalation logic - works correctly when needed" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{

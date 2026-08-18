@@ -229,14 +229,12 @@ pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Sche
 
     // Ensure directory exists
     if (std.fs.path.dirname(path)) |dir| {
-        std.fs.cwd().makePath(dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
     }
 
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
-    try file.writeAll(json_text);
+    const file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{});
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, json_text);
 }
 
 pub const TestContext = struct {
@@ -249,9 +247,9 @@ pub const TestContext = struct {
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8) !TestContext {
         // Generate a unique directory name using timestamp and random bits
         var random_bytes: [8]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
+        try std.testing.io.randomSecure(&random_bytes);
 
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
         const dir_name = try std.fmt.allocPrint(allocator, "test-artifacts/{s}-{d}-{x}", .{
             prefix,
             timestamp,
@@ -260,9 +258,7 @@ pub const TestContext = struct {
         errdefer allocator.free(dir_name);
 
         // Ensure the directory itself exists
-        std.fs.cwd().makePath(dir_name) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, dir_name);
 
         return TestContext{
             .allocator = allocator,
@@ -287,7 +283,7 @@ pub const TestContext = struct {
         if (self.send_node_pool) |*pool| pool.deinit();
         if (self.change_queue) |*cq| cq.deinit();
         if (self.test_dir.len > 0) {
-            std.fs.cwd().deleteTree(self.test_dir) catch |err| {
+            std.Io.Dir.cwd().deleteTree(std.testing.io, self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
                 std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
             };
@@ -310,7 +306,7 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
 
 pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, performance_config: config_state.Config.PerformanceConfig, options: StorageEngine.Options) !void {
     const effective_options = normalizeTestStorageOptions(options);
-    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
+    try engine.init(std.testing.io, allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -330,6 +326,7 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
 
     if (plan.changes.len > 0) {
         var executor = MigrationExecutor.init(
+            std.testing.io,
             allocator,
             setup_conn,
             &gen,
@@ -353,7 +350,7 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
         context.send_queue = null;
     }
 
-    context.change_queue = try ChangeQueue.init(allocator, 1);
+    context.change_queue = try ChangeQueue.init(std.testing.io, allocator, 1);
     errdefer context.change_queue.?.deinit();
 
     try engine.start(&context.send_queue.?, &context.change_queue.?, null);

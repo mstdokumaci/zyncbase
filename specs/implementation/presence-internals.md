@@ -88,7 +88,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | Subsystem | Thread | Synchronization | Ownership Boundary |
 |-----------|--------|-----------------|-------------------|
-| `PresenceManager` | `PresenceWorker` thread | `data_mutex: std.Thread.Mutex` | All mutable presence state is behind a single mutex; `PresenceWorker` is the sole mutator. |
+| `PresenceManager` | `PresenceWorker` thread | `data_mutex: std.Io.Mutex` | All mutable presence state is behind a single mutex; `PresenceWorker` is the sole mutator. |
 | `PresenceWorker` input queue | `PresenceWorker` thread (consumer) + event loop (producer via `enqueue()`) | `managedThread` mutex + condvar; SPSC queue (`spscQueue(PresenceOp, AllocPool)`) | One producer (event loop), one consumer (`PresenceWorker`). `enqueue()` holds `thread.mutex` while pushing and signals `thread.cond`. |
 | Send path | `PresenceWorker` thread (producer) | Lock-free MPSC `SendQueue` | Worker encodes snapshots/broadcasts, pushes owned `{conn_id, encoded_bytes}` to `SendQueue`, calls `Notifier.notify()`. Event loop drains. |
 

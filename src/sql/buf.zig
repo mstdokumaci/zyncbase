@@ -42,11 +42,6 @@ pub const SqlBuf = struct {
         try self.buf.appendSlice(allocator, slice);
     }
 
-    /// Returns a writer backed by the internal buffer, for use with `std.fmt.format`.
-    pub fn writer(self: *SqlBuf, allocator: Allocator) std.ArrayListUnmanaged(u8).Writer {
-        return self.buf.writer(allocator);
-    }
-
     /// Appends `identifier` wrapped in double quotes: `"name"`.
     pub fn appendQuoted(self: *SqlBuf, allocator: Allocator, identifier: []const u8) !void {
         try self.buf.ensureUnusedCapacity(allocator, identifier.len + 2);

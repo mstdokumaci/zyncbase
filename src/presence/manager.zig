@@ -12,9 +12,10 @@ const Allocator = std.mem.Allocator;
 /// Owns presence state, pending batches, and subscription tracking.
 /// Thread-safe; does not know about networking.
 pub const PresenceManager = struct {
+    io: std.Io,
     allocator: Allocator,
 
-    data_mutex: std.Thread.Mutex,
+    data_mutex: std.Io.Mutex,
 
     // Typed schema built at startup (names + declared types)
     user_fields: []const schema_types.PresenceField,
@@ -56,21 +57,23 @@ pub const PresenceManager = struct {
 
     pub fn init(
         self: *PresenceManager,
+        io: std.Io,
         allocator: Allocator,
         user_fields: []const schema_types.PresenceField,
         shared_fields: []const schema_types.PresenceField,
     ) void {
         self.* = .{
+            .io = io,
             .allocator = allocator,
-            .data_mutex = .{},
+            .data_mutex = .init,
             .user_fields = user_fields,
             .shared_fields = shared_fields,
             .user_state = .{},
             .user_joined_at = .{},
             .shared_state = .{},
             .namespace_empty_at = .{},
-            .pending_user_updates = .{},
-            .pending_shared_updates = .{},
+            .pending_user_updates = .empty,
+            .pending_shared_updates = .empty,
             .user_subscribers = .{},
             .shared_subscribers = .{},
         };
@@ -127,8 +130,8 @@ pub const PresenceManager = struct {
         user_id: typed_doc_id.DocId,
         patch: msgpack.Payload,
     ) !void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         // Get or create namespace map
         const ns_result = try self.user_state.getOrPut(self.allocator, namespace_id);
@@ -159,7 +162,7 @@ pub const PresenceManager = struct {
             }
         };
 
-        const now = std.time.milliTimestamp();
+        const now = std.Io.Clock.real.now(self.io).toMilliseconds();
 
         if (is_new_user) {
             try self.initNewUserRecord(ns_result, user_result, namespace_id, user_id, ns_created, now);
@@ -256,8 +259,8 @@ pub const PresenceManager = struct {
         patch: msgpack.Payload,
         source_conn: u64,
     ) !void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         // Get or create shared record
         const result = try self.shared_state.getOrPut(self.allocator, namespace_id);
@@ -301,8 +304,8 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         user_id: typed_doc_id.DocId,
     ) !void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         const ns_ptr = self.user_state.getPtr(namespace_id) orelse return;
         const removed = ns_ptr.fetchRemove(user_id);
@@ -327,7 +330,7 @@ pub const PresenceManager = struct {
             }
             // Non-critical: record grace period after critical leave broadcast work.
             defer if (ns_was_emptied) {
-                self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp()) catch |err| {
+                self.namespace_empty_at.put(self.allocator, namespace_id, std.Io.Clock.real.now(self.io).toMilliseconds()) catch |err| {
                     std.log.err("Failed to record grace period for namespace {}: {}", .{ namespace_id, err });
                 };
             };
@@ -446,8 +449,8 @@ pub const PresenceManager = struct {
         conn_id: u64,
         sub_id: u64,
     ) !UserSnapshot {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         // Build snapshot before registering subscriber — any failure here
         // must not leave a subscriber registered with no snapshot delivered.
@@ -489,8 +492,8 @@ pub const PresenceManager = struct {
         conn_id: u64,
         sub_id: u64,
     ) !?PresenceRecord {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         // Clone before registering subscriber.
         var cloned_record = if (self.shared_state.get(namespace_id)) |record|
@@ -510,8 +513,8 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         conn_id: u64,
     ) void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         self.user_subscribers.unsubscribe(self.allocator, namespace_id, conn_id);
     }
@@ -522,8 +525,8 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         conn_id: u64,
     ) void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         self.shared_subscribers.unsubscribe(self.allocator, namespace_id, conn_id);
     }
@@ -563,8 +566,8 @@ pub const PresenceManager = struct {
         user_batches: *std.ArrayListUnmanaged(UserUpdateBatch),
         shared_batches: *std.ArrayListUnmanaged(SharedUpdateBatch),
     ) !void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
         compactPending(PendingUserUpdate, &self.pending_user_updates, isDroppableUser);
         compactPending(PendingSharedUpdate, &self.pending_shared_updates, isDroppableShared);
@@ -650,10 +653,10 @@ pub const PresenceManager = struct {
     }
 
     pub fn evictExpiredGracePeriods(self: *PresenceManager) void {
-        self.data_mutex.lock();
-        defer self.data_mutex.unlock();
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
 
-        const now = std.time.milliTimestamp();
+        const now = std.Io.Clock.real.now(self.io).toMilliseconds();
         const grace_ms: i64 = 5_000;
 
         // Collect expired keys first — modifying the map while iterating is UB.

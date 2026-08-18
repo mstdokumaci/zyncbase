@@ -23,11 +23,11 @@ fn setupTestServer(allocator: std.mem.Allocator, context: *schema_helpers.TestCo
     const data_dir = try std.fs.path.join(allocator, &.{ context.test_dir, "data" });
     defer allocator.free(data_dir);
 
-    return try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_path, null);
+    return try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_path, null);
 }
 
 test "Integration: All components properly wired" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try schema_helpers.TestContext.init(allocator, "wiring-all");
     defer context.deinit();
 
@@ -53,7 +53,7 @@ test "Integration: All components properly wired" {
 }
 
 test "Integration: Error propagation through layers" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try schema_helpers.TestContext.init(allocator, "wiring-error");
     defer context.deinit();
 
@@ -71,7 +71,7 @@ test "Integration: Error propagation through layers" {
 }
 
 test "Integration: Graceful shutdown propagation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try schema_helpers.TestContext.init(allocator, "wiring-shutdown");
     defer context.deinit();
 
@@ -90,7 +90,7 @@ test "Integration: Graceful shutdown propagation" {
 }
 
 test "Integration: WebSocket callback wiring" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try schema_helpers.TestContext.init(allocator, "wiring-callback");
     defer context.deinit();
 

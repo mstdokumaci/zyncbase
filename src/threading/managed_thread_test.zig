@@ -17,7 +17,7 @@ fn worker(ctx: *TestContext) void {
 
 test "managedThread: spawn and join lifecycle" {
     var ctx = TestContext{};
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
 
     try mt.spawn(worker, &ctx);
     mt.stop();
@@ -26,14 +26,14 @@ test "managedThread: spawn and join lifecycle" {
 }
 
 test "managedThread: requestStop and isRequested" {
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
     try testing.expect(!mt.isRequested());
     mt.requestStop();
     try testing.expect(mt.isRequested());
 }
 
 test "managedThread: re-spawn guard" {
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
     var ctx = TestContext{};
 
     try mt.spawn(worker, &ctx);
@@ -44,10 +44,10 @@ test "managedThread: re-spawn guard" {
 
 test "managedThread: stop bundles requestStop signal join" {
     var ctx = TestContext{};
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
 
     try mt.spawn(worker, &ctx);
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     mt.stop();
 
     try testing.expect(mt.isRequested());
@@ -55,7 +55,7 @@ test "managedThread: stop bundles requestStop signal join" {
 
 test "managedThread: stop frees the slot for a subsequent spawn" {
     var ctx = TestContext{};
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
 
     try mt.spawn(worker, &ctx);
     mt.stop();
@@ -70,10 +70,10 @@ test "managedThread: stop frees the slot for a subsequent spawn" {
 
 test "managedThread: concurrent stop does not double-join" {
     var ctx = TestContext{};
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
 
     try mt.spawn(worker, &ctx);
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
 
     const Runner = struct {
         fn run(mt_ptr: *@TypeOf(mt)) void {
@@ -89,7 +89,7 @@ test "managedThread: concurrent stop does not double-join" {
 }
 
 test "managedThread: lockWork and unlockWork round-trip" {
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
     mt.lockWork();
     mt.unlockWork();
     mt.lockWork();
@@ -97,8 +97,8 @@ test "managedThread: lockWork and unlockWork round-trip" {
 }
 
 test "managedThread: waitForWork blocks until signal" {
-    var mt = managedThread(TestContext).init();
-    var ready_latch = error_latch{};
+    var mt = managedThread(TestContext).init(testing.io);
+    var ready_latch = error_latch.init(testing.io);
 
     const Signaller = struct {
         fn run(mt_ptr: *@TypeOf(mt), ready: *error_latch) void {
@@ -118,7 +118,7 @@ test "managedThread: waitForWork blocks until signal" {
 }
 
 test "managedThread: waitForWorkTimed returns timeout" {
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
 
     mt.lockWork();
     const result = mt.waitForWorkTimed(10 * std.time.ns_per_ms);
@@ -128,7 +128,7 @@ test "managedThread: waitForWorkTimed returns timeout" {
 }
 
 test "managedThread: waitForWorkTimed returns stop when already requested" {
-    var mt = managedThread(TestContext).init();
+    var mt = managedThread(TestContext).init(testing.io);
     mt.requestStop();
 
     mt.lockWork();
@@ -139,8 +139,8 @@ test "managedThread: waitForWorkTimed returns stop when already requested" {
 }
 
 test "managedThread: waitForWorkTimed returns signaled when woken" {
-    var mt = managedThread(TestContext).init();
-    var ready_latch = error_latch{};
+    var mt = managedThread(TestContext).init(testing.io);
+    var ready_latch = error_latch.init(testing.io);
 
     const Signaller = struct {
         fn run(mt_ptr: *@TypeOf(mt), ready: *error_latch) void {

@@ -6,16 +6,9 @@ const Connection = @import("../connection/state.zig").Connection;
 const Allocator = std.mem.Allocator;
 
 /// MemoryStrategy provides different allocator strategies for different use cases in ZyncBase.
-/// It combines GeneralPurposeAllocator for long-lived allocations, ArenaAllocator for
+/// It combines SmpAllocator for long-lived allocations, ArenaAllocator for
 /// per-request temporary allocations, and connection object pool for high-churn connections.
 pub const MemoryStrategy = struct {
-    /// Parent allocator used to allocate the GPA itself
-    parent_allocator: Allocator,
-
-    /// General-purpose allocator for long-lived allocations (server lifetime)
-    /// Used for: State tree, subscriptions, cache entries
-    gpa: *std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }),
-
     /// Pool of Arena allocators for per-request temporary allocations (freed in bulk).
     arena_pool: IndexPool(std.heap.ArenaAllocator),
 
@@ -24,15 +17,8 @@ pub const MemoryStrategy = struct {
 
     /// Initialize the memory strategy with standard defaults.
     /// Pre-allocates fewer arenas under `zig test` to reduce test overhead.
-    pub fn init(self: *MemoryStrategy, allocator: Allocator) !void {
-        const gpa_ptr = try allocator.create(std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }));
-        errdefer allocator.destroy(gpa_ptr);
-        gpa_ptr.* = .{};
-
-        const gpa_alloc = gpa_ptr.allocator();
+    pub fn init(self: *MemoryStrategy) !void {
         self.* = .{
-            .parent_allocator = allocator,
-            .gpa = gpa_ptr,
             // SAFETY: Initialized below via the .init() calls.
             .arena_pool = undefined,
             // SAFETY: Initialized below via the .init() calls.
@@ -43,7 +29,7 @@ pub const MemoryStrategy = struct {
 
         // Initialize pools
         try self.arena_pool.init(
-            gpa_alloc,
+            std.heap.smp_allocator,
             1024,
             deinitArena,
             initArena,
@@ -51,7 +37,7 @@ pub const MemoryStrategy = struct {
         errdefer self.arena_pool.deinit();
 
         try self.connection_pool.init(
-            gpa_alloc,
+            std.heap.smp_allocator,
             100_000,
             deinitConnection,
             initConnection,
@@ -65,13 +51,9 @@ pub const MemoryStrategy = struct {
     }
 
     /// Deinitialize the memory strategy and free all resources
-    pub fn deinit(self: *MemoryStrategy) std.heap.Check {
+    pub fn deinit(self: *MemoryStrategy) void {
         self.arena_pool.deinit();
         self.connection_pool.deinit();
-
-        const status = self.gpa.deinit();
-        self.parent_allocator.destroy(self.gpa);
-        return status;
     }
 
     fn initArena(arena: *std.heap.ArenaAllocator, allocator: Allocator) void {
@@ -92,7 +74,8 @@ pub const MemoryStrategy = struct {
 
     /// Access the general-purpose allocator
     pub fn generalAllocator(self: *MemoryStrategy) Allocator {
-        return self.gpa.allocator();
+        _ = self;
+        return std.heap.smp_allocator;
     }
 
     /// Acquire an arena from the pool

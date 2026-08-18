@@ -6,10 +6,9 @@ const MemoryStrategy = @import("strategy.zig").MemoryStrategy;
 const testing = std.testing;
 
 test "MemoryStrategy: init and deinit" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     // Verify allocators are available
     const gpa = strategy.generalAllocator();
@@ -28,10 +27,9 @@ test "MemoryStrategy: init and deinit" {
 }
 
 test "MemoryStrategy: arena allocator pool usage" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const arena1 = try strategy.acquireArena();
     const arena2 = try strategy.acquireArena();
@@ -50,10 +48,9 @@ test "MemoryStrategy: arena allocator pool usage" {
 }
 
 test "MemoryStrategy: arena pool thread safety stress test" {
-    const allocator = testing.allocator;
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const num_threads = 8;
     const items_per_thread = 200; // Total 1600 acquisitions (exceeds pool size of 1024)
@@ -69,7 +66,7 @@ test "MemoryStrategy: arena pool thread safety stress test" {
 
     const worker = struct {
         fn run(c: *Context) void {
-            var prng = std.Random.DefaultPrng.init(@intCast(@max(0, std.time.timestamp())));
+            var prng = std.Random.DefaultPrng.init(@intCast(@max(0, std.Io.Clock.real.now(std.testing.io).toSeconds())));
             const random = prng.random();
 
             for (0..items_per_thread) |_| {
@@ -104,17 +101,14 @@ test "MemoryStrategy: arena pool thread safety stress test" {
 
 test "MemoryStrategy: connection pool capacity reuse" {
     // Isolated GPA pinpoints leaks in this sub-block.
-    var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(test_gpa.deinit() == .ok);
-    const alloc = test_gpa.allocator();
 
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(alloc);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     const c1 = try strategy.acquireConnection();
-    c1.activate(1, dummy_ws);
+    c1.activate(std.testing.io, 1, dummy_ws);
 
     // Add some subscriptions to force allocation
     // Must use the connection's internal allocator (from the pool)
@@ -130,7 +124,7 @@ test "MemoryStrategy: connection pool capacity reuse" {
     // Acquire again (should be the same object since it was the last one released)
     const c2 = try strategy.acquireConnection();
     defer if (c2.release()) strategy.releaseConnection(c2);
-    c2.activate(2, dummy_ws);
+    c2.activate(std.testing.io, 2, dummy_ws);
 
     // Verify capacity is preserved but items are cleared
     try testing.expect(c2.subscription_ids.items.len == 0);
@@ -138,13 +132,9 @@ test "MemoryStrategy: connection pool capacity reuse" {
 }
 
 test "MemoryStrategy: connection pool concurrent access" {
-    var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = true }){};
-    defer _ = test_gpa.deinit();
-    const alloc = test_gpa.allocator();
-
     var strategy: MemoryStrategy = undefined;
-    try strategy.init(alloc);
-    defer std.debug.assert(strategy.deinit() == .ok);
+    try strategy.init();
+    defer strategy.deinit();
 
     const ThreadContext = struct {
         strategy: *MemoryStrategy,
@@ -158,7 +148,7 @@ test "MemoryStrategy: connection pool concurrent access" {
                 // Acquire and release connections
                 const dummy_ws = WebSocket{ .ws = null, .ssl = false };
                 const conn = try ctx.strategy.acquireConnection();
-                conn.activate(@intCast(i), dummy_ws);
+                conn.activate(std.testing.io, @intCast(i), dummy_ws);
                 if (conn.release()) ctx.strategy.releaseConnection(conn);
             }
         }

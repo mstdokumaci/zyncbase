@@ -41,11 +41,11 @@ pub fn hexSlice(id: DocId, buf: *[32]u8) []const u8 {
     return buf[0..];
 }
 
-pub fn generateUuidV7() DocId {
+pub fn generateUuidV7(io: std.Io) !DocId {
     var bytes: [16]u8 = undefined;
-    std.crypto.random.bytes(&bytes);
+    try io.randomSecure(&bytes);
 
-    const now = std.time.milliTimestamp();
+    const now = std.Io.Clock.real.now(io).toMilliseconds();
     const millis: u64 = @intCast(@max(now, 0));
     bytes[0] = @intCast((millis >> 40) & 0xff);
     bytes[1] = @intCast((millis >> 32) & 0xff);

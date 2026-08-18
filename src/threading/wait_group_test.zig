@@ -5,7 +5,7 @@ const WaitGroup = @import("wait_group.zig").WaitGroup;
 const testing = std.testing;
 
 test "WaitGroup: add and done" {
-    var wg = WaitGroup.init();
+    var wg = WaitGroup.init(testing.io);
     try testing.expectEqual(@as(usize, 0), wg.value());
 
     wg.add(1);
@@ -16,7 +16,7 @@ test "WaitGroup: add and done" {
 }
 
 test "WaitGroup: wait returns when count reaches zero" {
-    var wg = WaitGroup.init();
+    var wg = WaitGroup.init(testing.io);
     wg.add(1);
 
     const ThreadContext = struct { wg: *WaitGroup };
@@ -24,7 +24,7 @@ test "WaitGroup: wait returns when count reaches zero" {
 
     const thread = try std.Thread.spawn(.{}, struct {
         fn threadFn(tc: *ThreadContext) void {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             tc.wg.done(1);
         }
     }.threadFn, .{&tctx});
@@ -34,7 +34,7 @@ test "WaitGroup: wait returns when count reaches zero" {
 }
 
 test "WaitGroup: broadcast wakes all waiters" {
-    var wg = WaitGroup.init();
+    var wg = WaitGroup.init(testing.io);
     wg.add(2);
 
     var waiter1_done = false;
@@ -62,7 +62,7 @@ test "WaitGroup: broadcast wakes all waiters" {
         }
     }.threadFn, .{&ctx2});
 
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     wg.done(2);
 
     thread1.join();
@@ -73,7 +73,7 @@ test "WaitGroup: broadcast wakes all waiters" {
 }
 
 test "WaitGroup: value returns current count" {
-    var wg = WaitGroup.init();
+    var wg = WaitGroup.init(testing.io);
     try testing.expectEqual(@as(usize, 0), wg.value());
     wg.add(3);
     try testing.expectEqual(@as(usize, 3), wg.value());

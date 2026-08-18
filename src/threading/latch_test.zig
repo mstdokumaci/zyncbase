@@ -7,11 +7,11 @@ const testing = std.testing;
 const error_latch = latch(void);
 
 test "latch(void): resolve unblocks wait" {
-    var l = error_latch{};
+    var l = error_latch.init(testing.io);
 
     const Runner = struct {
         fn run(l_ptr: *error_latch) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             l_ptr.resolve({});
         }
     };
@@ -21,11 +21,11 @@ test "latch(void): resolve unblocks wait" {
 }
 
 test "latch(void): reject propagates error to wait" {
-    var l = error_latch{};
+    var l = error_latch.init(testing.io);
 
     const Runner = struct {
         fn run(l_ptr: *error_latch) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             l_ptr.reject(error.TestRejection);
         }
     };
@@ -35,11 +35,11 @@ test "latch(void): reject propagates error to wait" {
 }
 
 test "latch(u32): resolve with value, wait receives it" {
-    var l = latch(u32){};
+    var l = latch(u32).init(testing.io);
 
     const Runner = struct {
         fn run(l_ptr: *latch(u32)) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             l_ptr.resolve(42);
         }
     };
@@ -50,11 +50,11 @@ test "latch(u32): resolve with value, wait receives it" {
 }
 
 test "latch(u32): reject propagates error" {
-    var l = latch(u32){};
+    var l = latch(u32).init(testing.io);
 
     const Runner = struct {
         fn run(l_ptr: *latch(u32)) void {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             l_ptr.reject(error.OutOfMemory);
         }
     };
@@ -64,7 +64,7 @@ test "latch(u32): reject propagates error" {
 }
 
 test "latch: multiple waiters all unblock on resolve" {
-    var l = latch(u64){};
+    var l = latch(u64).init(testing.io);
     var results = [_]u64{0} ** 4;
     var done = [_]bool{false} ** 4;
 
@@ -84,7 +84,7 @@ test "latch: multiple waiters all unblock on resolve" {
         t.* = try std.Thread.spawn(.{}, Waiter.run, .{ &l, r, d });
     }
 
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     l.resolve(999);
 
     for (threads) |t| t.join();
@@ -98,18 +98,17 @@ test "latch: multiple waiters all unblock on resolve" {
 }
 
 test "latch: resolve before wait returns immediately" {
-    var l = latch(u32){};
+    var l = latch(u32).init(testing.io);
     l.resolve(7);
     const result = try l.wait();
     try testing.expectEqual(@as(u32, 7), result);
 }
 
 test "latch: reject before wait returns immediately" {
-    var l = error_latch{};
+    var l = error_latch.init(testing.io);
     l.reject(error.AlreadyRejected);
     try testing.expectError(error.AlreadyRejected, l.wait());
 }
 
 // Double-resolve/reject panics by design (std.debug.panic in the implementation).
-// Zig 0.15.2 has no std.testing.expectPanic, so this cannot be tested in-process.
 // The safety check is exercised in all build modes.

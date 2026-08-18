@@ -22,11 +22,11 @@ const OwnedString = struct {
 };
 
 test "cache: concurrent reads never block" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 12345;
@@ -72,11 +72,11 @@ test "cache: concurrent reads never block" {
 }
 
 test "cache: ref_count lifecycle" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 999;
@@ -92,11 +92,11 @@ test "cache: ref_count lifecycle" {
 }
 
 test "cache: update increments version" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 1;
@@ -109,11 +109,11 @@ test "cache: update increments version" {
 }
 
 test "cache: eviction" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const key: i64 = 777;
@@ -125,11 +125,11 @@ test "cache: eviction" {
 }
 
 test "cache: deep free via value deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const string_cache = lockFreeCache(OwnedString, i64);
 
     var cache: string_cache = undefined;
-    try cache.init(allocator, .{});
+    try cache.init(testing.io, allocator, .{});
     defer cache.deinit();
 
     const val = try allocator.dupe(u8, "hello world");

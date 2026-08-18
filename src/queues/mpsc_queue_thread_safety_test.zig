@@ -19,7 +19,7 @@ const queue_type = mpscQueue(TestEntry, AllocPool);
 const PoolType = AllocPool(queue_type.Node);
 
 test "MpscQueue: multiple producers single consumer" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -73,7 +73,7 @@ test "MpscQueue: multiple producers single consumer" {
 }
 
 test "MpscQueue: concurrent push and pop stress" {
-    const alloc = testing.allocator;
+    const alloc = std.heap.smp_allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();
@@ -152,7 +152,7 @@ test "MpscQueue: concurrent push and pop stress" {
 }
 
 test "MpscQueue: push during drain" {
-    const alloc = testing.allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();

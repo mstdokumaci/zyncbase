@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 /// and ensure predictable performance. It monitors WAL file size and age, triggering
 /// checkpoints based on configurable thresholds.
 pub const CheckpointWorker = struct {
+    io: std.Io,
     allocator: Allocator,
     storage_engine: *storage_mod.StorageEngine,
     config: Config,
@@ -79,10 +80,11 @@ pub const CheckpointWorker = struct {
     };
 
     /// Initialize a new CheckpointWorker
-    pub fn init(self: *CheckpointWorker, allocator: Allocator, storage_engine: *storage_mod.StorageEngine, config: Config) !void {
-        const now = std.time.timestamp();
+    pub fn init(self: *CheckpointWorker, io: std.Io, allocator: Allocator, storage_engine: *storage_mod.StorageEngine, config: Config) !void {
+        const now = std.Io.Clock.real.now(io).toSeconds();
 
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .storage_engine = storage_engine,
             .config = config,
@@ -91,7 +93,7 @@ pub const CheckpointWorker = struct {
             .checkpoint_count = std.atomic.Value(u64).init(0),
             .failed_checkpoint_count = std.atomic.Value(u64).init(0),
             .last_checkpoint_duration_ms = std.atomic.Value(u64).init(0),
-            .thread = managedThread(CheckpointWorker).init(),
+            .thread = managedThread(CheckpointWorker).init(io),
         };
 
         // Query initial WAL size
@@ -117,7 +119,7 @@ pub const CheckpointWorker = struct {
 
     /// Determine if a checkpoint should be triggered based on thresholds
     pub fn shouldCheckpoint(self: *CheckpointWorker) bool {
-        const now = std.time.timestamp();
+        const now = std.Io.Clock.real.now(self.io).toSeconds();
         const last_checkpoint = self.last_checkpoint.load(.acquire);
         const current_wal_size = self.wal_size.load(.acquire);
 
@@ -135,7 +137,7 @@ pub const CheckpointWorker = struct {
 
     /// Perform a checkpoint operation
     pub fn performCheckpoint(self: *CheckpointWorker, mode: storage_mod.CheckpointMode) !CheckpointResult {
-        const start_time = std.time.milliTimestamp();
+        const start_time = std.Io.Clock.real.now(self.io).toMilliseconds();
         const wal_size_before = self.wal_size.load(.acquire);
 
         // Execute checkpoint
@@ -148,7 +150,7 @@ pub const CheckpointWorker = struct {
 
             return CheckpointResult{
                 .mode = mode,
-                .duration_ms = @intCast(@max(@as(i64, 0), std.time.milliTimestamp() - start_time)),
+                .duration_ms = @intCast(@max(@as(i64, 0), std.Io.Clock.real.now(self.io).toMilliseconds() - start_time)),
                 .wal_size_before = wal_size_before,
                 .wal_size_after = wal_size_before,
                 .success = false,
@@ -156,10 +158,10 @@ pub const CheckpointWorker = struct {
         };
 
         // Update metrics
-        const end_time = std.time.milliTimestamp();
+        const end_time = std.Io.Clock.real.now(self.io).toMilliseconds();
         const duration: u64 = @intCast(end_time - start_time);
 
-        self.last_checkpoint.store(std.time.timestamp(), .release);
+        self.last_checkpoint.store(std.Io.Clock.real.now(self.io).toSeconds(), .release);
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);
         self.last_checkpoint_duration_ms.store(duration, .release);
 
@@ -249,7 +251,7 @@ pub const CheckpointWorker = struct {
             // Exponential backoff
             if (attempt < attempts - 1) {
                 std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, attempt + 1, attempts });
-                std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
+                try self.io.sleep(.fromMilliseconds(@intCast(backoff_ms)), .awake);
                 backoff_ms *= 2; // Double the backoff time
             }
         }
@@ -272,7 +274,7 @@ pub const CheckpointWorker = struct {
             if (self.shouldCheckpoint()) {
                 const wal_size = self.wal_size.load(.acquire);
                 const last_checkpoint = self.last_checkpoint.load(.acquire);
-                const raw_time = std.time.timestamp() - last_checkpoint;
+                const raw_time = std.Io.Clock.real.now(self.io).toSeconds() - last_checkpoint;
                 const time_since_last = if (raw_time < 0) @as(i64, 0) else raw_time;
 
                 std.log.info("Checkpoint triggered: wal_size={} bytes, time_since_last={}s", .{ wal_size, time_since_last });

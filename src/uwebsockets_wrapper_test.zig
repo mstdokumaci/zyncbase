@@ -13,14 +13,14 @@ const destroyMockWebSocket = helpers.destroyMockWebSocket;
 
 const TestSslPaths = struct {
     allocator: Allocator,
-    cert_path: []u8,
-    key_path: []u8,
+    cert_path: [:0]u8,
+    key_path: [:0]u8,
 
     fn init(allocator: Allocator) !TestSslPaths {
         return .{
             .allocator = allocator,
-            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.pem"),
-            .key_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.key"),
+            .cert_path = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, "tests/fixtures/cert.pem", allocator),
+            .key_path = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, "tests/fixtures/cert.key", allocator),
         };
     }
 
@@ -31,7 +31,7 @@ const TestSslPaths = struct {
 };
 
 test "WebSocketServer: init with valid config" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config = WebSocketServer.Config{
         .port = 8080,
@@ -49,7 +49,7 @@ test "WebSocketServer: init with valid config" {
 }
 
 test "WebSocketServer: init with SSL config" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ssl_paths = try TestSslPaths.init(allocator);
     defer ssl_paths.deinit();
 
@@ -74,7 +74,7 @@ test "WebSocketServer: init with SSL config" {
 }
 
 test "WebSocketServer: SSL config requires cert and key paths" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config = WebSocketServer.Config{
         .port = 8443,
@@ -87,7 +87,7 @@ test "WebSocketServer: SSL config requires cert and key paths" {
 }
 
 test "WebSocketServer: invalid SSL files fail init" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config = WebSocketServer.Config{
         .port = 8443,
@@ -102,7 +102,7 @@ test "WebSocketServer: invalid SSL files fail init" {
 }
 
 test "WebSocketServer: registerWebSocketHandlers" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config = WebSocketServer.Config{
         .port = 8080,
@@ -127,7 +127,7 @@ test "WebSocketServer: registerWebSocketHandlers" {
 }
 
 test "WebSocketServer: listen binds configured host" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     const config = WebSocketServer.Config{
         .port = 0,
@@ -149,7 +149,7 @@ fn testWakeupCheck(ctx: ?*anyopaque) bool {
 }
 
 test "WebSocketServer: listen wakes loop when wakeup raced ahead of loop publish" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var server: WebSocketServer = undefined;
     try server.init(allocator, .{ .port = 0, .host = "127.0.0.1", .ssl = false });
@@ -168,7 +168,7 @@ test "WebSocketServer: listen wakes loop when wakeup raced ahead of loop publish
 }
 
 test "WebSocketServer: listen skips wakeup when nothing is pending" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var server: WebSocketServer = undefined;
     try server.init(allocator, .{ .port = 0, .host = "127.0.0.1", .ssl = false });
@@ -186,24 +186,14 @@ test "WebSocketServer: listen skips wakeup when nothing is pending" {
 }
 
 test "WebSocketServer: listen reports bind failure" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Pre-occupy a port with a raw TCP socket so the WebSocketServer's bind()
     // fails (REUSEPORT mismatch on the occupied port).
-    const sock = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-    defer std.posix.close(sock);
-
-    var bind_addr = std.posix.sockaddr.in{
-        .port = 0,
-        .addr = @as(u32, @bitCast([4]u8{ 127, 0, 0, 1 })),
-    };
-    try std.posix.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr)));
-    try std.posix.listen(sock, 1);
-
-    var actual_addr: std.posix.sockaddr.in = undefined;
-    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
-    try std.posix.getsockname(sock, @ptrCast(&actual_addr), &addr_len);
-    const occupied_port = std.mem.bigToNative(u16, actual_addr.port);
+    const bind_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var occupied = try bind_addr.listen(testing.io, .{});
+    defer occupied.deinit(testing.io);
+    const occupied_port = occupied.socket.address.getPort();
 
     const config = WebSocketServer.Config{
         .port = occupied_port,
@@ -258,7 +248,7 @@ fn runFullLifecycleTest(allocator: Allocator, config: WebSocketServer.Config, ad
 }
 
 test "WebSocketServer: full server lifecycle" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const config = WebSocketServer.Config{
         .port = 9005,
         .ssl = false,
@@ -267,7 +257,7 @@ test "WebSocketServer: full server lifecycle" {
 }
 
 test "WebSocketServer: full server lifecycle with SSL" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ssl_paths = try TestSslPaths.init(allocator);
     defer ssl_paths.deinit();
 
@@ -294,7 +284,7 @@ test "WebSocketServer: full server lifecycle with SSL" {
 // 5. Callbacks are not invoked if not registered
 
 test "ws: callback contract - handlers invoked per registration" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Test case structure
     const TestCase = struct {
@@ -419,7 +409,7 @@ test "ws: callback contract - handlers invoked per registration" {
 }
 
 test "ws: message callback content and type" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Test different message types and content
     const MessageTest = struct {
@@ -470,7 +460,7 @@ test "ws: message callback content and type" {
 }
 
 test "ws: close callback code and message" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Test different close codes and messages
     const CloseTest = struct {
@@ -523,7 +513,7 @@ test "ws: close callback code and message" {
 }
 
 test "ws: callback invocation counts reflect events" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var ctx = CallbackContext{};
 

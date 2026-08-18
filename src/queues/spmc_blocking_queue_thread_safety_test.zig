@@ -10,8 +10,8 @@ const TestItem = struct {
 };
 
 test "SpmcBlockingQueue: pop blocks until item is pushed" {
-    const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    const alloc = std.heap.smp_allocator;
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     const Context = struct {
@@ -22,7 +22,7 @@ test "SpmcBlockingQueue: pop blocks until item is pushed" {
 
     const pusher = struct {
         fn run(c: *Context) void {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch @panic("test sleep canceled");
             c.q.push(.{ .id = 99, .value = 999 }) catch @panic("unexpected push failure");
         }
     }.run;
@@ -37,8 +37,8 @@ test "SpmcBlockingQueue: pop blocks until item is pushed" {
 }
 
 test "SpmcBlockingQueue: shutdown unblocks waiting consumers" {
-    const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    const alloc = std.heap.smp_allocator;
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     const Context = struct {
@@ -56,15 +56,15 @@ test "SpmcBlockingQueue: shutdown unblocks waiting consumers" {
 
     const thread = try std.Thread.spawn(.{}, consumer, .{&ctx});
 
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     q.shutdown();
 
     thread.join();
 }
 
 test "SpmcBlockingQueue: multiple consumers process items fairly" {
-    const alloc = testing.allocator;
-    var q = spmcBlockingQueue(TestItem).init(alloc);
+    const alloc = std.heap.smp_allocator;
+    var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 
     const consumer_count = 4;
@@ -100,7 +100,7 @@ test "SpmcBlockingQueue: multiple consumers process items fairly" {
         try q.push(.{ .id = @intCast(i), .value = @intCast(i) });
     }
 
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
 
     q.shutdown();
 

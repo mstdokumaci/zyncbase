@@ -75,7 +75,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         .is_destructive = true,
     };
 
-    var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = true,
     });
@@ -132,7 +132,7 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
         .is_destructive = false,
     };
 
-    var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = false,
     });
@@ -203,7 +203,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         .is_destructive = false,
     };
 
-    var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = false,
     });
@@ -306,7 +306,7 @@ test "migration_executor: additive migration preserves existing data" {
             .is_destructive = false,
         };
 
-        var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+        var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
             .auto_migrate = .full,
             .allow_destructive = false,
         });
@@ -395,7 +395,7 @@ test "migration_executor: destructive migration refused when not allowed" {
                 .is_destructive = true,
             };
 
-            var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+            var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
                 .auto_migrate = .additive_only,
                 .allow_destructive = false,
             });
@@ -467,7 +467,7 @@ test "migration_executor: schema version persisted after migration" {
                 .is_destructive = false,
             };
 
-            var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+            var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
                 .auto_migrate = .full,
                 .allow_destructive = false,
             });
@@ -544,7 +544,7 @@ test "migration_executor: major version bump is refused" {
                 .is_destructive = false,
             };
 
-            var executor = MigrationExecutor.init(allocator, &db, &gen, .{
+            var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{
                 .auto_migrate = .full,
                 .allow_destructive = false,
             });

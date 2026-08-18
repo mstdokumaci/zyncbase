@@ -33,7 +33,7 @@ fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
         .session_claims = null,
         .namespace = "public",
         .namespace_id = namespace_id,
-        .allocator = std.testing.allocator,
+        .allocator = std.heap.smp_allocator,
     };
 }
 
@@ -53,7 +53,7 @@ fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed_doc_
 }
 
 test "StoreService: set - full document replacement" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-test", &.{
         .{
@@ -103,7 +103,7 @@ test "StoreService: set - full document replacement" {
 }
 
 test "StoreService: set - sparse field update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-test-field", &.{
         .{
@@ -172,7 +172,7 @@ test "StoreService: set - sparse field update" {
 }
 
 test "StoreService: setPath path validation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-path-validation", &.{
         .{ .name = "items", .fields = &.{"status"} },
@@ -218,7 +218,7 @@ test "StoreService: setPath path validation" {
 }
 
 test "StoreService: remove" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-test-remove", &.{
         .{
@@ -286,7 +286,7 @@ test "StoreService: remove" {
 }
 
 test "StoreService: array validation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
 
     const schema_json =
@@ -388,7 +388,7 @@ test "StoreService: array validation" {
 }
 
 test "StoreService: persistence and namespace isolation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-isolation", &.{
         .{ .name = "test", .fields = &.{"val"} },
@@ -458,7 +458,7 @@ test "StoreService: persistence and namespace isolation" {
 }
 
 test "StoreService: query - basic search" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-basic", &.{
         .{ .name = "people", .fields = &.{"name"} },
@@ -486,7 +486,7 @@ test "StoreService: query - basic search" {
 }
 
 test "StoreService: query - orderBy and limit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-sort", &.{
         .{ .name = "tasks", .fields = &.{"title"} },
@@ -513,7 +513,7 @@ test "StoreService: query - orderBy and limit" {
 }
 
 test "StoreService: query - negative cases" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-neg", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -544,7 +544,7 @@ test "StoreService: query - negative cases" {
 }
 
 test "StoreService: queryMore - pagination" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-cursor", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -590,7 +590,7 @@ test "StoreService: queryMore - pagination" {
 }
 
 test "StoreService: validateFieldWrite tests" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-validate", &.{
         .{
@@ -680,7 +680,7 @@ fn batchRemoveTuple(
 }
 
 test "StoreService: batchWrite - multi-set inserts documents atomically" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-multi-set", &.{
         .{
@@ -733,7 +733,7 @@ test "StoreService: batchWrite - multi-set inserts documents atomically" {
 }
 
 test "StoreService: batchWrite - mixed set and remove" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-mixed", &.{
         .{
@@ -791,7 +791,7 @@ test "StoreService: batchWrite - mixed set and remove" {
 }
 
 test "StoreService: batchWrite - empty ops is a no-op" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-empty", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -807,7 +807,7 @@ test "StoreService: batchWrite - empty ops is a no-op" {
 }
 
 test "StoreService: batchWrite - rejects invalid kind" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-bad-kind", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -835,7 +835,7 @@ test "StoreService: batchWrite - rejects invalid kind" {
 }
 
 test "StoreService: batchWrite - rejects set with missing value" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-missing-val", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -863,7 +863,7 @@ test "StoreService: batchWrite - rejects set with missing value" {
 }
 
 test "StoreService: batchWrite - rejects unknown table" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-unknown-tbl", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -887,7 +887,7 @@ test "StoreService: batchWrite - rejects unknown table" {
 }
 
 test "StoreService: batchWrite - rejects non-array payload" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-not-array", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -898,7 +898,7 @@ test "StoreService: batchWrite - rejects non-array payload" {
 }
 
 test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "batch-too-large", &.{
         .{ .name = "data", .fields = &.{"val"} },
@@ -915,7 +915,7 @@ test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
 }
 
 test "StoreService: resolveStoreScope uses global users table by default" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "scope-global-users", &.{
         .{ .name = "items", .fields = &.{"name"} },
@@ -937,7 +937,7 @@ test "StoreService: resolveStoreScope uses global users table by default" {
 }
 
 test "StoreService: resolveStoreScope isolates user ids when users is namespaced" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     const schema_json =
         \\{
@@ -967,7 +967,7 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
 }
 
 test "StoreService: create requires all required fields but update does not" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;
     const schema_json =
         \\{

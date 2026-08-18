@@ -11,64 +11,64 @@ const testing = std.testing;
 // ============================================================
 
 test "msgpack_utils: writeMsgPackStr fixstr (≤31 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf = std.Io.Writer.Allocating.init(std.heap.smp_allocator);
+    defer buf.deinit();
 
-    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), "type");
+    try msgpack_utils.writeMsgPackStr(&buf.writer, "type");
     // fixstr(4) = 0xa4 | "type" = 5 bytes
-    try testing.expectEqual(@as(usize, 5), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xa4), buf.items[0]);
-    try testing.expectEqualSlices(u8, "type", buf.items[1..]);
+    try testing.expectEqual(@as(usize, 5), buf.written().len);
+    try testing.expectEqual(@as(u8, 0xa4), buf.written()[0]);
+    try testing.expectEqualSlices(u8, "type", buf.written()[1..]);
 }
 
 test "msgpack_utils: writeMsgPackStr str8 (≤255 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf = std.Io.Writer.Allocating.init(std.heap.smp_allocator);
+    defer buf.deinit();
     const long_str = "a" ** 100;
 
-    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), long_str[0..]);
+    try msgpack_utils.writeMsgPackStr(&buf.writer, long_str[0..]);
     // str8(100) = 0xd9 | 0x64 | "a"*100 = 102 bytes
-    try testing.expectEqual(@as(usize, 102), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xd9), buf.items[0]);
-    try testing.expectEqual(@as(u8, 100), buf.items[1]);
+    try testing.expectEqual(@as(usize, 102), buf.written().len);
+    try testing.expectEqual(@as(u8, 0xd9), buf.written()[0]);
+    try testing.expectEqual(@as(u8, 100), buf.written()[1]);
 }
 
 test "msgpack_utils: writeMsgPackStr empty string" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf = std.Io.Writer.Allocating.init(std.heap.smp_allocator);
+    defer buf.deinit();
 
-    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), "");
+    try msgpack_utils.writeMsgPackStr(&buf.writer, "");
     // fixstr(0) = 0xa0 = 1 byte
-    try testing.expectEqual(@as(usize, 1), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xa0), buf.items[0]);
+    try testing.expectEqual(@as(usize, 1), buf.written().len);
+    try testing.expectEqual(@as(u8, 0xa0), buf.written()[0]);
 }
 
 test "msgpack_utils: writeMsgPackStr str16 (>255 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf = std.Io.Writer.Allocating.init(std.heap.smp_allocator);
+    defer buf.deinit();
     const long_str = "b" ** 300;
 
-    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), long_str[0..]);
+    try msgpack_utils.writeMsgPackStr(&buf.writer, long_str[0..]);
     // str16(300) = 0xda | 0x012c | "b"*300 = 303 bytes
-    try testing.expectEqual(@as(usize, 303), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xda), buf.items[0]);
-    try testing.expectEqual(@as(u16, 300), std.mem.readInt(u16, buf.items[1..3], .big));
+    try testing.expectEqual(@as(usize, 303), buf.written().len);
+    try testing.expectEqual(@as(u8, 0xda), buf.written()[0]);
+    try testing.expectEqual(@as(u16, 300), std.mem.readInt(u16, buf.written()[1..3], .big));
 }
 
 test "msgpack_utils: writeMsgPackStr str32 (>65535 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
+    var buf = std.Io.Writer.Allocating.init(std.heap.smp_allocator);
+    defer buf.deinit();
 
     const len = 70000;
-    const long_str = try testing.allocator.alloc(u8, len);
-    defer testing.allocator.free(long_str);
+    const long_str = try std.heap.smp_allocator.alloc(u8, len);
+    defer std.heap.smp_allocator.free(long_str);
     @memset(long_str, 'c');
 
-    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), long_str);
+    try msgpack_utils.writeMsgPackStr(&buf.writer, long_str);
     // str32(70000) = 0xdb | 0x00011170 | "c"*70000 = 70005 bytes
-    try testing.expectEqual(@as(usize, 70005), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xdb), buf.items[0]);
-    try testing.expectEqual(@as(u32, len), std.mem.readInt(u32, buf.items[1..5], .big));
+    try testing.expectEqual(@as(usize, 70005), buf.written().len);
+    try testing.expectEqual(@as(u8, 0xdb), buf.written()[0]);
+    try testing.expectEqual(@as(u32, len), std.mem.readInt(u32, buf.written()[1..5], .big));
 }
 
 // MessagePack utility properties
@@ -95,7 +95,7 @@ fn expectDecodeError(allocator: std.mem.Allocator, bytes: []const u8, expected_e
 }
 
 test "msgpack: reject oversized payloads (depth, array, map, string)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Depth bomb: array nested 33 levels (max_depth = 32).
     {
@@ -120,7 +120,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
 }
 
 test "msgpack: round-trip encoding/decoding preservation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var prng = std.Random.DefaultPrng.init(0xdeadbeef);
     const random = prng.random();
 
@@ -164,12 +164,12 @@ test "msgpack: round-trip encoding/decoding preservation" {
         defer payload.free(allocator);
 
         // Encode using the project's standard ArrayList writer
-        var list: std.ArrayListUnmanaged(u8) = .empty;
-        defer list.deinit(allocator);
-        try msgpack_utils.encode(payload, list.writer(allocator));
+        var list = std.Io.Writer.Allocating.init(allocator);
+        defer list.deinit();
+        try msgpack_utils.encode(payload, &list.writer);
 
         // Get the encoded bytes
-        const encoded = try list.toOwnedSlice(allocator);
+        const encoded = try list.toOwnedSlice();
         defer allocator.free(encoded);
 
         // Decode using the project's standard fixed reader
@@ -188,7 +188,7 @@ test "msgpack: round-trip encoding/decoding preservation" {
 //
 // Payloads exactly at the wire_limits boundary must decode successfully.
 test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // --- Depth exactly 31 (max allowed with max_depth=32) ---
     {
@@ -286,7 +286,7 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
 //
 // Payloads one unit over the wire_limits boundary must return the appropriate limit error.
 test "msgpack: reject one-over-boundary payloads" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // --- Depth 32 (one over the effective max of 31 with max_depth=32) ---
     {

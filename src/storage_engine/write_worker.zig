@@ -52,6 +52,7 @@ fn mapAndLogError(
 }
 
 pub const WriteWorker = struct {
+    io: std.Io,
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     conn: sqlite.Db,
@@ -632,7 +633,7 @@ pub const WriteWorker = struct {
         }
         batch.clearRetainingCapacity();
         self.endOp(batch_len);
-        last_batch_time.* = std.time.milliTimestamp();
+        last_batch_time.* = std.Io.Clock.real.now(self.io).toMilliseconds();
     }
 
     fn writeThreadLoop(self: *WriteWorker) void {
@@ -686,7 +687,7 @@ pub const WriteWorker = struct {
         else
             0;
 
-        var batch = std.ArrayListUnmanaged(WriteOp){};
+        var batch = std.ArrayListUnmanaged(WriteOp).empty;
         try batch.ensureTotalCapacity(self.allocator, batch_size);
         defer {
             for (batch.items) |op| {
@@ -695,7 +696,7 @@ pub const WriteWorker = struct {
             batch.deinit(self.allocator);
         }
 
-        var last_batch_time = std.time.milliTimestamp();
+        var last_batch_time = std.Io.Clock.real.now(self.io).toMilliseconds();
 
         while (!self.thread.isRequested()) {
             // Collect operations for batch
@@ -707,7 +708,7 @@ pub const WriteWorker = struct {
                 }
             }
 
-            const now = std.time.milliTimestamp();
+            const now = std.Io.Clock.real.now(self.io).toMilliseconds();
             const time_since_last = now - last_batch_time;
 
             const should_flush = batch.items.len >= batch_size or
@@ -825,7 +826,7 @@ pub const WriteWorker = struct {
             }
 
             self.flush_wg.done(1);
-            last_batch_time.* = std.time.milliTimestamp();
+            last_batch_time.* = std.Io.Clock.real.now(self.io).toMilliseconds();
         }
 
         // Execute all entries in a single transaction
@@ -909,6 +910,7 @@ pub const WriteWorker = struct {
 
             if (self.resolve_user_stmt) |user_stmt| {
                 if (sql.resolveUserId(
+                    self.io,
                     &self.conn,
                     user_stmt,
                     identity_namespace_id,
@@ -978,7 +980,7 @@ pub const WriteWorker = struct {
                 self.flush_wg.done(1);
             },
             .checkpoint => |cop| {
-                const ckpt_result = connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode);
+                const ckpt_result = connection.internalExecuteCheckpoint(self.io, &self.conn, self.allocator, self.db_path, self.in_memory, cop.mode);
                 op.deinit(self.allocator);
                 if (ckpt_result) |stats| {
                     cop.latch.resolve(stats);

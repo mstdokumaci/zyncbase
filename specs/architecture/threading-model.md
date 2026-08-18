@@ -300,5 +300,4 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 - [ADRs](./adrs.md) - Architectural Decision Records
 - [Storage Layer](./storage-layer.md) - Details on parallel disk access
 - [Core Principles](./core-principles.md) - Design philosophy
-- [Research](./research.md) - Performance validation and benchmarks
 - [Threading](../implementation/threading.md) - Implementation details: source files, types, queue mechanics, and synchronization invariants

@@ -32,7 +32,7 @@ test "LockFreeCache: pool stability and leak test" {
     };
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, config);
+    try cache.init(testing.io, allocator, config);
     defer cache.deinit();
 
     try cache.update(1, .{ .value = 1 });
@@ -42,7 +42,7 @@ test "LockFreeCache: pool stability and leak test" {
     while (i < num_updates) : (i += 1) {
         try cache.update(1, .{ .value = @intCast(i) });
         if (i % 100 == 0) {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
         }
     }
 
@@ -54,7 +54,7 @@ test "LockFreeCache: pool stability and leak test" {
         cache.reclaim(true);
         active = cache.pool.active_count.load(.acquire);
         if (active < 5) break;
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     }
     try testing.expect(active < 5);
 }
@@ -70,7 +70,7 @@ test "LockFreeCache: pool exhaustion retains and eventually reclaims all resourc
     var deinit_count = std.atomic.Value(usize).init(0);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, config);
+    try cache.init(testing.io, allocator, config);
     defer cache.deinit();
 
     try cache.update(1, .{ .value = 0, .deinit_count = &deinit_count });
@@ -97,7 +97,7 @@ test "LockFreeCache: pool exhaustion retains and eventually reclaims all resourc
         cache.reclaim(true);
         if (deinit_count.load(.acquire) == updates_until_exhaustion and
             cache.pool.active_count.load(.acquire) == 0) break;
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        try std.testing.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake);
     }
     try testing.expectEqual(@as(usize, updates_until_exhaustion), deinit_count.load(.acquire));
     try testing.expectEqual(@as(usize, 0), cache.pool.active_count.load(.acquire));

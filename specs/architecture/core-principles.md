@@ -106,4 +106,3 @@ Writes return immediately on acceptance. Committed state arrives through subscri
 - [Threading Model](./threading-model.md) - Detailed threading implementation
 - [Storage Layer](./storage-layer.md) - SQLite optimization details
 - [Lock-Free Cache](./lock-free-cache.md) - High-concurrency metadata access
-- [Research](./research.md) - Technical validation with citations

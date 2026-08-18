@@ -12,7 +12,7 @@ const StorageEngine = sth.StorageEngine;
 // 3. No panics or crashes occur on database errors
 
 test "storage: error handling invalid database path" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     // Try to create storage engine with invalid path
     var schema = try sth.createSchema(allocator, &.{
@@ -22,11 +22,13 @@ test "storage: error handling invalid database path" {
     defer schema.deinit();
 
     var ms: sth.MemoryStrategy = undefined;
-    try ms.init(allocator);
-    defer std.debug.assert(ms.deinit() == .ok);
+    try ms.init();
+    defer ms.deinit();
 
     var storage: StorageEngine = undefined;
-    const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &schema, .{}, .{ .in_memory = false }, null, null);
+    // /proc cannot be created into even as root, so this fails identically in CI,
+    // Docker, and local development regardless of privileges.
+    const result = storage.init(std.testing.io, allocator, &ms, "/proc/zyncbase-invalid/nonexistent/path", &schema, .{}, .{ .in_memory = false }, null, null);
     // Verify we get an error
     if (result) |_| {
         storage.deinit();
@@ -39,7 +41,7 @@ test "storage: error handling invalid database path" {
     }
 }
 test "storage: write/flush/read round-trip on file-backed engine" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-roundtrip", table, .{ .in_memory = false });
@@ -60,7 +62,7 @@ test "storage: write/flush/read round-trip on file-backed engine" {
     }
 }
 test "storage: error handling constraint violations" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
@@ -86,7 +88,7 @@ test "storage: error handling constraint violations" {
     }
 }
 test "storage: error handling concurrent access safety" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-concurrent", table, .{ .in_memory = false });
@@ -129,7 +131,7 @@ test "storage: error handling concurrent access safety" {
     for (results) |result| try testing.expect(result.outcome == null);
 }
 test "storage: write/flush/read round-trip with empty value" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
@@ -146,7 +148,7 @@ test "storage: write/flush/read round-trip with empty value" {
     }
 }
 test "storage: error handling large values" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
@@ -168,7 +170,7 @@ test "storage: error handling large values" {
     }
 }
 test "storage: error handling delete non-existent key" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const table = schema_helpers.makeTable("data_table", &.{schema_helpers.makeField("val", .text)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });

@@ -48,7 +48,7 @@ fn makeUpsertOp(
         .namespace_id = namespace_id,
         .owner_doc_id = typed_doc_id.zero,
         .columns = columns,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
     } };
 }
 
@@ -68,7 +68,7 @@ fn insertRow(
     }
     try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, 1, val));
     ctx.engine.write_worker.flush_wg.add(batch.items.len);
-    var last_batch_time = std.time.milliTimestamp();
+    var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
     ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
     // Drain change queue so nothing leaks.
     while (ctx.test_context.change_queue.?.shards[0].popTimed(0)) |job| {
@@ -115,7 +115,7 @@ fn makeQueryUpsertOp(
         .namespace_id = namespace_id,
         .owner_doc_id = typed_doc_id.zero,
         .columns = columns,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
     } };
 }
 
@@ -140,7 +140,7 @@ fn insertQueryRows(
 
     // Flush the entire batch at once.
     ctx.engine.write_worker.flush_wg.add(batch.items.len);
-    var last_batch_time = std.time.milliTimestamp();
+    var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
     ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
 
     // Drain change_queue and send_queue so nothing leaks.
@@ -181,8 +181,8 @@ fn runSelectQuerySweep(
 
         const query_res = try read_mod.buildSelectQuery(worker.read_arena.allocator(), table_metadata, namespace_id, filter);
 
-        worker.node.mutex.lock();
-        defer worker.node.mutex.unlock();
+        worker.node.mutex.lockUncancelable(worker.node.io);
+        defer worker.node.mutex.unlock(worker.node.io);
 
         var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
         defer mstmt.release();
@@ -215,28 +215,37 @@ fn runSelectQuerySweep(
     for (0..iterations) |_| {
         _ = worker.read_arena.reset(.retain_capacity);
 
-        var timer = try std.time.Timer.start();
+        var last_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
 
         // Stage A: buildSelectQuery
         const query_res = try read_mod.buildSelectQuery(worker.read_arena.allocator(), table_metadata, namespace_id, filter);
-        total_a += timer.lap();
+        var now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_a += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         // Stage B: mutex.lock → stmt_cache.acquire → execQuery → stmt.release → mutex.unlock
-        worker.node.mutex.lock();
-        var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
-        const exec_res = try read_mod.execQuery(
-            worker.read_arena.allocator(),
-            &worker.node.conn,
-            mstmt.stmt,
-            query_res.values,
-            table_metadata,
-            filter.limit,
-            sort_field_index,
-            &worker.json_buf,
-        );
-        mstmt.release();
-        worker.node.mutex.unlock();
-        total_b += timer.lap();
+        const exec_res = blk: {
+            worker.node.mutex.lockUncancelable(worker.node.io);
+            errdefer worker.node.mutex.unlock(worker.node.io);
+            var mstmt = try worker.node.stmt_cache.acquire(worker.allocator, &worker.node.conn, filter.structural_hash, query_res.sql);
+            errdefer mstmt.release();
+            const result = try read_mod.execQuery(
+                worker.read_arena.allocator(),
+                &worker.node.conn,
+                mstmt.stmt,
+                query_res.values,
+                table_metadata,
+                filter.limit,
+                sort_field_index,
+                &worker.json_buf,
+            );
+            mstmt.release();
+            worker.node.mutex.unlock(worker.node.io);
+            break :blk result;
+        };
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_b += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         // Stage C: encodeQuery
         _ = try wire_encode.encodeQuery(worker.read_arena.allocator(), .{
@@ -244,7 +253,8 @@ fn runSelectQuerySweep(
             .records = exec_res.records,
             .table = table_metadata,
         });
-        total_c += timer.lap();
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_c += @intCast(now_ns - last_ns);
     }
 
     const iter_f: f64 = @floatFromInt(iterations);
@@ -306,7 +316,10 @@ const ConcurrentThreadCtx = struct {
 fn concurrentThreadFn(tctx: *ConcurrentThreadCtx) void {
     _ = tctx.barrier.fetchAdd(1, .acq_rel);
     while (tctx.barrier.load(.acquire) < tctx.pool_size) {
-        std.Thread.sleep(100);
+        std.testing.io.sleep(.fromNanoseconds(100), .awake) catch |err| {
+            tctx.err = err;
+            return;
+        };
     }
 
     tctx.err = null;
@@ -337,7 +350,7 @@ fn concurrentThreadFn(tctx: *ConcurrentThreadCtx) void {
 }
 
 test "ReadWorker: cache miss → cache hit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_cache_miss_hit", &.{items_table}, .{}, .{
         .in_memory = true,
@@ -366,16 +379,16 @@ test "ReadWorker: cache miss → cache hit" {
         // We evict the cache entry between rounds to force a miss.
         _ = ctx.engine.document_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
 
-        var t = try std.time.Timer.start();
+        const miss_start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         const record_a = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-        miss_samples[i] = t.lap();
+        miss_samples[i] = @intCast(std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - miss_start_ns);
         try testing.expect(record_a != null);
         if (record_a) |r| r.deinit(worker.read_arena.allocator());
 
         // Hit: same doc_id — metadata cache now has the entry.
-        var t2 = try std.time.Timer.start();
+        const hit_start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         const record_b = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-        hit_samples[i] = t2.lap();
+        hit_samples[i] = @intCast(std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - hit_start_ns);
         try testing.expect(record_b != null);
         if (record_b) |r| r.deinit(worker.read_arena.allocator());
     }
@@ -414,7 +427,7 @@ test "ReadWorker: cache miss → cache hit" {
 }
 
 test "ReadWorker: version-gated cache update" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_version_gate", &.{items_table}, .{}, .{
         .in_memory = true,
@@ -458,7 +471,7 @@ test "ReadWorker: version-gated cache update" {
 }
 
 test "ReadWorker: concurrent readers — no data race" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const reader_pool_size: usize = 4;
 
     var ctx: EngineTestContext = undefined;
@@ -517,7 +530,7 @@ test "ReadWorker: concurrent readers — no data race" {
 }
 
 test "ReadWorker: selectQuery throughput" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
     try ctx.initWithPerformance(allocator, "read_select_query", &.{query_table}, .{}, .{
         .in_memory = true,

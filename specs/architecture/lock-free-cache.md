@@ -74,4 +74,3 @@ See [ADR-004](./adrs.md#adr-004-performance-targets) for more on our performance
 - [Core Principles](./core-principles.md) - Design philosophy
 - [Threading Model](./threading-model.md) - How this integrates with the multi-threaded core
 - [ADRs](./adrs.md) - Architectural Decision Records
-- [Research](./research.md) - Performance benchmarks

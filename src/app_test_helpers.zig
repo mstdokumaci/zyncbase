@@ -87,7 +87,7 @@ pub fn createMockWebSocketWithExternalId(allocator: Allocator, external_id: []co
         .session = Session{
             .external_id = allocator.dupe(u8, external_id) catch @panic("OOM creating mock WebSocket"),
             .is_anonymous = false,
-            .token_expires_at = std.time.timestamp() + 3600,
+            .token_expires_at = std.Io.Clock.real.now(std.testing.io).toSeconds() + 3600,
         },
     };
 }
@@ -138,10 +138,10 @@ pub fn routeWithArenaOptional(handler: *MessageHandler, allocator: Allocator, co
 }
 
 pub fn encodePayloadToBytes(allocator: Allocator, payload: msgpack.Payload) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    defer list.deinit(allocator);
-    try msgpack.encode(payload, list.writer(allocator));
-    return list.toOwnedSlice(allocator);
+    var output = std.Io.Writer.Allocating.init(allocator);
+    errdefer output.deinit();
+    try msgpack.encode(payload, &output.writer);
+    return output.toOwnedSlice();
 }
 
 /// Parse a response and extract the "type" and "code" fields.
@@ -177,7 +177,7 @@ pub const AppTestContext = struct {
     schema: Schema,
     auth_config: authorization_types.AuthConfig,
     test_context: schema_helpers.TestContext,
-    test_resolution_mutex: std.Thread.Mutex,
+    test_resolution_mutex: std.Io.Mutex,
     empty_claims: std.StringHashMapUnmanaged([]const u8) = .{},
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
@@ -206,18 +206,18 @@ pub const AppTestContext = struct {
 
     pub fn initWithSchemaAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: Schema, options: StorageEngine.Options) !void {
         self.allocator = allocator;
-        self.test_resolution_mutex = .{};
+        self.test_resolution_mutex = .init;
         self.schema = schema;
         errdefer self.schema.deinit();
 
         // 1. Initialize Memory Strategy
-        try self.memory_strategy.init(allocator);
-        errdefer _ = self.memory_strategy.deinit();
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
 
         const gpa = self.memory_strategy.generalAllocator();
 
         // 2. Initialize Violation Tracker
-        self.violation_tracker.init(gpa, 10);
+        self.violation_tracker.init(std.testing.io, gpa, 10);
         errdefer self.violation_tracker.deinit();
 
         // 3. Initialize Schema Helpers TestContext
@@ -232,7 +232,7 @@ pub const AppTestContext = struct {
         errdefer self.storage_engine.deinit();
 
         // 5. Initialize Subscription Engine
-        self.subscription_engine = SubscriptionEngine.init(gpa);
+        self.subscription_engine = SubscriptionEngine.init(std.testing.io, gpa);
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
@@ -240,17 +240,17 @@ pub const AppTestContext = struct {
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service
-        self.store_service = StoreService.init(gpa, &self.storage_engine, &self.schema, &self.auth_config);
+        self.store_service = StoreService.init(std.testing.io, gpa, &self.storage_engine, &self.schema, &self.auth_config);
 
         // 8b. Initialize Presence Service (null worker — no spawn in tests)
         self.presence_service = PresenceService.init(gpa, null, &self.auth_config, &self.schema);
 
         // 9. Initialize Handler and Manager
-        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
+        self.handler.init(std.testing.io, gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
-        try self.connection_manager.init(gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
+        try self.connection_manager.init(std.testing.io, gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
         errdefer self.connection_manager.deinit();
 
         // 10. Initialize Session Resolver
@@ -277,7 +277,7 @@ pub const AppTestContext = struct {
         self.schema.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
     }
 
     pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_types.Table {
@@ -369,8 +369,8 @@ pub const AppTestContext = struct {
         namespace: []const u8,
         external_user_id: []const u8,
     ) !StoreService.ScopedSession {
-        self.test_resolution_mutex.lock();
-        defer self.test_resolution_mutex.unlock();
+        self.test_resolution_mutex.lockUncancelable(std.testing.io);
+        defer self.test_resolution_mutex.unlock(std.testing.io);
 
         if (try self.store_service.tryResolveScopeCached(namespace, external_user_id)) |scope| {
             return scope;
@@ -392,17 +392,20 @@ pub const AppTestContext = struct {
         mock_conn.setSession(.{
             .external_id = external_id_dupe,
             .is_anonymous = false,
-            .token_expires_at = std.time.timestamp() + 3600,
+            .token_expires_at = std.Io.Clock.real.now(std.testing.io).toSeconds() + 3600,
         });
         external_id_transferred = true;
 
-        self.connection_manager.mutex.lock();
-        try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
-        self.connection_manager.mutex.unlock();
+        {
+            self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
+            errdefer self.connection_manager.mutex.unlock(self.connection_manager.io);
+            try self.connection_manager.map.put(self.connection_manager.allocator, mock_conn.id, mock_conn);
+            self.connection_manager.mutex.unlock(self.connection_manager.io);
+        }
         defer {
-            self.connection_manager.mutex.lock();
+            self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
             _ = self.connection_manager.map.remove(mock_conn.id);
-            self.connection_manager.mutex.unlock();
+            self.connection_manager.mutex.unlock(self.connection_manager.io);
         }
 
         // Dupe namespace using mock_conn.allocator since beginStoreScopeResolutionLocked
@@ -500,7 +503,7 @@ pub const AppTestContext = struct {
     pub fn closeAllConnections(self: *AppTestContext) void {
         // Close all active connections (inlined from ConnectionManager since it
         // is test-only logic; production shutdown uses sendDisconnectToAll instead).
-        self.connection_manager.mutex.lock();
+        self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
         {
             var it = self.connection_manager.map.valueIterator();
             while (it.next()) |state| {
@@ -508,14 +511,14 @@ pub const AppTestContext = struct {
                 conn.ws.close();
             }
         }
-        self.connection_manager.mutex.unlock();
+        self.connection_manager.mutex.unlock(self.connection_manager.io);
 
         // Pump onClose for all remaining connections in the manager.
         // We iterate and remove until empty to avoid concurrent modification issues.
         while (true) {
             const maybe_conn = blk: {
-                self.connection_manager.mutex.lock();
-                defer self.connection_manager.mutex.unlock();
+                self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
+                defer self.connection_manager.mutex.unlock(self.connection_manager.io);
                 var it = self.connection_manager.map.valueIterator();
                 if (it.next()) |conn_ptr| {
                     const conn = conn_ptr.*;

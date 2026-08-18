@@ -27,7 +27,7 @@ fn makeDocCond(allocator: std.mem.Allocator, field: []const u8, op: query_ast.Op
 // ─── Doc Predicate Tests ────────────────────────────────────────────────────
 
 test "buildDocPredicate produces filter predicate for $doc comparison" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
@@ -37,7 +37,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -59,7 +59,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
 }
 
 test "buildDocPredicate returns null for RAM-only allow" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":true}]}
     ;
@@ -74,7 +74,7 @@ test "buildDocPredicate returns null for RAM-only allow" {
 }
 
 test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"notIn":[]}}}]}
     ;
@@ -91,7 +91,7 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
 }
 
 test "buildDocPredicate preserves $doc in empty set as match none guard" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"in":[]}}}]}
     ;
@@ -112,7 +112,7 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
 }
 
 test "buildDocPredicate clones borrowed literal RHS into predicate" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"public"}}}]}
     ;
@@ -139,7 +139,7 @@ test "buildDocPredicate clones borrowed literal RHS into predicate" {
 }
 
 test "buildDocPredicate resolves value RHS from incoming payload" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"$value.visibility"}}}]}
     ;
@@ -179,7 +179,7 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
 }
 
 test "validateDocPredicate rejects array literal items with wrong type" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
@@ -195,7 +195,7 @@ test "validateDocPredicate rejects array literal items with wrong type" {
 }
 
 test "validateDocPredicate rejects $value array item type mismatch" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
@@ -210,7 +210,7 @@ test "validateDocPredicate rejects $value array item type mismatch" {
 }
 
 test "validateDocPredicate validates context variable shape by operator" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
@@ -233,7 +233,7 @@ test "validateDocPredicate validates context variable shape by operator" {
 }
 
 test "buildDocPredicate preserves logical_or predicate" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.owner_id":{"eq":"$session.userId"}},{"$doc.visibility":{"eq":"public"}}]}}]}
     ;
@@ -245,7 +245,7 @@ test "buildDocPredicate preserves logical_or predicate" {
     });
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -273,7 +273,7 @@ test "buildDocPredicate preserves logical_or predicate" {
 // validateLiteralValue.
 
 test "validateLiteralValue in with valid array of text scalars passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -290,7 +290,7 @@ test "validateLiteralValue in with valid array of text scalars passes" {
 }
 
 test "validateLiteralValue in with non-array value returns error.InvalidValue" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -304,7 +304,7 @@ test "validateLiteralValue in with non-array value returns error.InvalidValue" {
 }
 
 test "validateLiteralValue notIn with valid array of text scalars passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -320,7 +320,7 @@ test "validateLiteralValue notIn with valid array of text scalars passes" {
 }
 
 test "validateLiteralValue contains with array field and scalar value passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
@@ -334,7 +334,7 @@ test "validateLiteralValue contains with array field and scalar value passes" {
 }
 
 test "validateLiteralValue contains with text field and text scalar passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "description", .field_type = .text },
@@ -348,7 +348,7 @@ test "validateLiteralValue contains with text field and text scalar passes" {
 }
 
 test "validateLiteralValue contains with non-scalar value returns error.InvalidValue" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "tags", .field_type = .array, .items_type = .text },
@@ -365,7 +365,7 @@ test "validateLiteralValue contains with non-scalar value returns error.InvalidV
 }
 
 test "validateLiteralValue generic eq operator with scalar value passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "score", .field_type = .integer },
@@ -381,7 +381,7 @@ test "validateLiteralValue generic eq operator with scalar value passes" {
 // ─── Create Auth Tests (authorizeWriteCondition) ───────────────────────────
 
 test "authorizeWriteCondition denies create when $doc rule fails" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "status", .field_type = .text },
@@ -402,9 +402,9 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
 
     const ctx = EvalContext{
         .allocator = allocator,
-        .session_user_id = typed_doc_id.generateUuidV7(),
-        .doc_id = typed_doc_id.generateUuidV7(),
-        .owner_doc_id = typed_doc_id.generateUuidV7(),
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .value_payload = &payload,
         .value_table = &table,
     };
@@ -414,7 +414,7 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
 }
 
 test "authorizeWriteCondition allows create and returns predicate when $doc rule passes" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
@@ -424,11 +424,11 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
     defer table.deinit(allocator);
 
-    const test_id = typed_doc_id.generateUuidV7();
+    const test_id = try typed_doc_id.generateUuidV7(std.testing.io);
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
-        .doc_id = typed_doc_id.generateUuidV7(),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
         .owner_doc_id = test_id,
         .value_table = &table,
     };
@@ -444,7 +444,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
 // ─── New operator tests (lower to query_ast) ────────────────────────────────
 
 test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "deletedAt", .field_type = .text },
@@ -465,7 +465,7 @@ test "buildDocPredicate lowers isNull to query_ast.Condition with null value" {
 }
 
 test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "deletedAt", .field_type = .text },
@@ -485,7 +485,7 @@ test "buildDocPredicate lowers isNotNull to query_ast.Condition with null value"
 }
 
 test "buildDocPredicate lowers startsWith to query_ast.Condition with text value" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "visibility", .field_type = .text },
@@ -508,7 +508,7 @@ test "buildDocPredicate lowers startsWith to query_ast.Condition with text value
 }
 
 test "validateDocPredicate rejects startsWith on non-text field" {
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
         .{ .name = "score", .field_type = .integer },

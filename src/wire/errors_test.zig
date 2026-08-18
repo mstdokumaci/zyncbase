@@ -21,9 +21,9 @@ test "getWireError: returns non-empty comptime-encoded messages" {
 }
 
 test "getWireError: query parser errors keep distinct human messages" {
-    const allocator = testing.allocator;
     const check = struct {
         fn run(comptime err: anyerror, comptime expected: []const u8) !void {
+            const allocator = std.heap.smp_allocator;
             const wire_err = wire_errors.getWireError(err);
             var reader: std.Io.Reader = .fixed(wire_err.message);
             const decoded = try msgpack.decode(allocator, &reader);

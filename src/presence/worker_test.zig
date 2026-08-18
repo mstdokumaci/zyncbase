@@ -32,19 +32,19 @@ fn setupWorker(
 }
 
 test "PresenceWorker: set_user op produces broadcast to send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
-    presence_manager.init(allocator, user_fields, shared_fields);
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -91,7 +91,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     });
 
     // Wait for processing (condvar-based wakeup should be near-instant)
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // Verify send_queue received the broadcast
     try testing.expect(send_queue.hasItems());
@@ -106,19 +106,19 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
 }
 
 test "PresenceWorker: no ops enqueued does not push to send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
-    presence_manager.init(allocator, user_fields, shared_fields);
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -148,7 +148,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     }
 
     // Wait briefly — no work enqueued, nothing should happen
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // Verify send_queue is empty
     try testing.expect(!send_queue.hasItems());
@@ -158,19 +158,19 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
 }
 
 test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
-    presence_manager.init(allocator, user_fields, shared_fields);
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -208,7 +208,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     });
 
     // Wait for processing
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // Verify send_queue received the snapshot response
     try testing.expect(send_queue.hasItems());
@@ -221,19 +221,19 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
 }
 
 test "PresenceWorker: multiple ops batched into single flush" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedSingleField(allocator);
     defer freeTestFields(allocator, shared_fields);
 
     var presence_manager: PresenceManager = undefined;
-    presence_manager.init(allocator, user_fields, shared_fields);
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
     var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer std.debug.assert(memory_strategy.deinit() == .ok);
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
 
     var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
     try send_node_pool.init(allocator, 256, null, null);
@@ -282,7 +282,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     }
 
     // Wait for processing
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
 
     // The coalesced updates should produce at least one broadcast
     try testing.expect(send_queue.hasItems());

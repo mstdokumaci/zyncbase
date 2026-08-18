@@ -111,13 +111,15 @@ fn validateRequiredFieldsForCreate(
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and ColumnValue construction.
 pub const StoreService = struct {
+    io: std.Io,
     allocator: Allocator,
     storage_engine: *StorageEngine,
     schema: *const schema_types.Schema,
     auth_config: *const authorization_types.AuthConfig,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_types.Schema, auth_config: *const authorization_types.AuthConfig) StoreService {
+    pub fn init(io: std.Io, allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_types.Schema, auth_config: *const authorization_types.AuthConfig) StoreService {
         return .{
+            .io = io,
             .allocator = allocator,
             .storage_engine = storage_engine,
             .schema = schema,
@@ -377,7 +379,7 @@ pub const StoreService = struct {
             self.allocator.free(entries);
         };
 
-        const timestamp = std.time.timestamp();
+        const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
 
         for (ops) |op_payload| {
             if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
@@ -479,7 +481,7 @@ pub const StoreService = struct {
                 .owner_doc_id = ctx.owner_doc_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
-                .timestamp = std.time.timestamp(),
+                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
                 .conn_id = ctx.conn_id,
                 .write_id = ctx.write_id,
             },
@@ -490,7 +492,7 @@ pub const StoreService = struct {
                 .namespace_id = ctx.namespace_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
-                .timestamp = std.time.timestamp(),
+                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
                 .conn_id = ctx.conn_id,
                 .write_id = ctx.write_id,
             },

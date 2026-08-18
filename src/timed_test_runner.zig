@@ -17,11 +17,12 @@ const TimedResult = struct {
 };
 
 var log_err_count: usize = 0;
+const runner_io = std.Io.Threaded.global_single_threaded.io();
 
-pub fn main() void {
+pub fn main(init: std.process.Init.Minimal) void {
     @disableInstrumentation();
 
-    parseArgs();
+    parseArgs(init.args);
 
     const test_fn_list = builtin.test_functions;
     var ok_count: usize = 0;
@@ -30,13 +31,18 @@ pub fn main() void {
     var leaks: usize = 0;
     var slowest_len: usize = 0;
     var slowest: [slowest_count]TimedResult = undefined;
-    var suite_timer = startTimer("suite");
+    const suite_start_ns = nowNs();
 
     for (test_fn_list, 0..) |test_fn, i| {
         testing.allocator_instance = .{};
+        testing.io_instance = .init(testing.allocator, .{
+            .argv0 = .init(init.args),
+            .environ = init.environ,
+        });
         testing.log_level = .warn;
+        testing.environ = init.environ;
 
-        var test_timer = startTimer(test_fn.name);
+        const test_start_ns = nowNs();
         var failed = false;
         var skipped = false;
         var failure_trace: ?std.builtin.StackTrace = null;
@@ -53,12 +59,13 @@ pub fn main() void {
             },
         };
 
-        const elapsed_ns = if (test_timer) |*timer| timer.read() else 0;
+        const elapsed_ns = nowNs() - test_start_ns;
         insertSlowest(&slowest, &slowest_len, .{
             .name = test_fn.name,
             .elapsed_ns = elapsed_ns,
         });
 
+        testing.io_instance.deinit();
         const leaked = testing.allocator_instance.deinit() == .leak;
         if (leaked) {
             leaks += 1;
@@ -71,7 +78,7 @@ pub fn main() void {
                 .{ i + 1, test_fn_list.len, test_fn.name, nsToMs(elapsed_ns) },
             );
             if (failure_trace) |trace| {
-                std.debug.dumpStackTrace(trace);
+                std.debug.dumpErrorReturnTrace(&trace);
             }
             std.debug.print("failed with error.{s}\n", .{failure_err_name orelse "Unknown"});
             continue;
@@ -97,7 +104,7 @@ pub fn main() void {
         ok_count += 1;
     }
 
-    const total_ns = if (suite_timer) |*timer| timer.read() else 0;
+    const total_ns = nowNs() - suite_start_ns;
 
     std.debug.print("{d} passed; {d} skipped; {d} failed.\n", .{ ok_count, skip_count, fail_count });
     if (log_err_count != 0) {
@@ -106,9 +113,7 @@ pub fn main() void {
     if (leaks != 0) {
         std.debug.print("{d} tests leaked memory.\n", .{leaks});
     }
-    if (suite_timer != null) {
-        std.debug.print("Total test time: {d:.3} ms\n", .{nsToMs(total_ns)});
-    }
+    std.debug.print("Total test time: {d:.3} ms\n", .{nsToMs(total_ns)});
 
     if (slowest_len != 0) {
         std.debug.print("Top {d} slowest tests:\n", .{slowest_len});
@@ -122,13 +127,9 @@ pub fn main() void {
     }
 }
 
-fn parseArgs() void {
-    var args = std.process.argsWithAllocator(std.heap.page_allocator) catch
-        @panic("unable to parse command line args");
-    defer args.deinit();
-
-    _ = args.skip();
-    while (args.next()) |arg| {
+fn parseArgs(init_args: std.process.Args) void {
+    const args = init_args.toSlice(std.heap.page_allocator) catch @panic("unable to parse command line args");
+    for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--seed=")) {
             testing.random_seed = std.fmt.parseUnsigned(u32, arg["--seed=".len..], 0) catch
                 @panic("unable to parse --seed command line argument");
@@ -142,11 +143,8 @@ fn parseArgs() void {
     }
 }
 
-fn startTimer(label: []const u8) ?std.time.Timer {
-    return std.time.Timer.start() catch |err| {
-        std.debug.print("warning: timer unavailable for {s}: {s}\n", .{ label, @errorName(err) });
-        return null;
-    };
+fn nowNs() u64 {
+    return @intCast(std.Io.Clock.awake.now(runner_io).toNanoseconds());
 }
 
 fn insertSlowest(slowest: []TimedResult, slowest_len: *usize, candidate: TimedResult) void {
@@ -176,7 +174,7 @@ fn nsToMs(ns: u64) f64 {
 
 pub fn log(
     comptime message_level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
+    comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) void {

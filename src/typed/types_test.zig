@@ -9,7 +9,7 @@ const ScalarValue = types.ScalarValue;
 const Value = types.Value;
 
 test "Value: clone preserves eql and ownership" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -86,7 +86,7 @@ test "Value: clone preserves eql and ownership" {
 }
 
 test "Value: sortedSet invariant" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

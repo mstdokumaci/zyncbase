@@ -35,7 +35,7 @@ fn makeUpsertOp(
         .namespace_id = namespace_id,
         .owner_doc_id = typed_doc_id.zero,
         .columns = columns,
-        .timestamp = std.time.timestamp(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
     } };
 }
 
@@ -70,7 +70,7 @@ fn runBatchSweep(
         // internal endOp(batch_len). This mirrors what enqueueOp does in
         // production without involving the SPSC queue or worker thread.
         ctx.engine.write_worker.flush_wg.add(batch.items.len);
-        var last_batch_time = std.time.milliTimestamp();
+        var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
         ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
 
         while (ctx.test_context.change_queue.?.shards[0].popTimed(0)) |job| {
@@ -101,16 +101,18 @@ fn runBatchSweep(
 
         ctx.engine.write_worker.flush_wg.add(batch.items.len);
 
-        var t = try std.time.Timer.start();
+        var last_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
 
         // Stage BC: full flushBatch (calls endOp internally, balancing the WaitGroup).
         // Includes BEGIN, N sqlite3_step() calls, COMMIT (WAL fsync to in-memory VFS),
         // cache write-through, ChangeQueue.push, and SendQueue.push.
         // In production on NVMe, COMMIT alone is ~3-5x slower than measured here due
         // to WAL file sync.
-        var last_batch_time = std.time.milliTimestamp();
+        var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
         ctx.engine.write_worker.flushBatch(&batch, &last_batch_time);
-        total_flush += t.lap();
+        var now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_flush += @intCast(now_ns - last_ns);
+        last_ns = now_ns;
 
         // Stage D: drains shard 0 of the ChangeQueue (num_shards=1 in tests).
         // In production, changes are sharded across N shards by (namespace_id,
@@ -119,7 +121,8 @@ fn runBatchSweep(
             var j = job;
             j.deinit(allocator);
         }
-        total_drain += t.lap();
+        now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        total_drain += @intCast(now_ns - last_ns);
 
         // Drain SendQueue (outcomes) to prevent arena leak.
         while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
@@ -134,13 +137,11 @@ fn runBatchSweep(
 
 test "WriteWorker: flushBatch throughput" {
     // Prod-shaped allocator: server.zig passes memory_strategy.generalAllocator()
-    // into the engine. testing.allocator's 10-frame stack capture dominates wall
+    // into the engine. std.heap.smp_allocator's 10-frame stack capture dominates wall
     // time in Debug and distorts the throughput numbers.
     var prod_ms: MemoryStrategy = undefined;
-    try prod_ms.init(testing.allocator);
-    defer {
-        if (prod_ms.deinit() != .ok) @panic("MemoryStrategy leak detected");
-    } // leak check (replaces testing.allocator's)
+    try prod_ms.init();
+    defer prod_ms.deinit();
     const allocator = prod_ms.generalAllocator();
 
     // Disable auto-batching: test owns batch construction and flushBatch timing.

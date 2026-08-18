@@ -1,12 +1,13 @@
 const std = @import("std");
 
 pub const WaitGroup = struct {
+    io: std.Io,
     count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    cond: std.Thread.Condition = .{},
-    mutex: std.Thread.Mutex = .{},
+    cond: std.Io.Condition = .init,
+    mutex: std.Io.Mutex = .init,
 
-    pub fn init() WaitGroup {
-        return .{};
+    pub fn init(io: std.Io) WaitGroup {
+        return .{ .io = io };
     }
 
     pub fn add(self: *WaitGroup, delta: usize) void {
@@ -14,12 +15,12 @@ pub const WaitGroup = struct {
     }
 
     pub fn done(self: *WaitGroup, delta: usize) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         const prev = self.count.fetchSub(delta, .acq_rel);
         std.debug.assert(prev >= delta);
         if (prev == delta) {
-            self.cond.broadcast();
+            self.cond.broadcast(self.io);
         }
     }
 
@@ -28,16 +29,16 @@ pub const WaitGroup = struct {
     }
 
     pub fn wait(self: *WaitGroup) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         while (self.value() > 0) {
-            self.cond.wait(&self.mutex);
+            self.cond.waitUncancelable(self.io, &self.mutex);
         }
     }
 
     pub fn broadcast(self: *WaitGroup) void {
-        self.mutex.lock();
-        self.cond.broadcast();
-        self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        self.cond.broadcast(self.io);
+        self.mutex.unlock(self.io);
     }
 };

@@ -74,16 +74,17 @@ pub fn decodeCursorToken(
 /// Encodes a Cursor to a Base64-encoded MessagePack cursor tuple token.
 /// Encoded shape: [sort_value, id_bin]
 pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: Cursor) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
     try msgpack.encodeArrayHeader(writer, 2);
     try writeValueMsgPack(cursor.sort_value, writer);
     const id_bytes = typed_doc_id.toBytes(cursor.id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
-    const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
+    const bytes = output.written();
+    const encoded_len = std.base64.standard.Encoder.calcSize(bytes.len);
     const encoded = try allocator.alloc(u8, encoded_len);
-    _ = std.base64.standard.Encoder.encode(encoded, buf.items);
+    _ = std.base64.standard.Encoder.encode(encoded, bytes);
     return encoded;
 }
 

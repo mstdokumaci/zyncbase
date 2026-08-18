@@ -21,7 +21,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 ## Sanitizer Invariants
 
 - **ThreadSanitizer (TSan)**: Enforces serialized writes (SWMR model) on the lock-free cache, detecting unsynchronized memory access between parallel read threads and the writer thread.
-- **GeneralPurposeAllocator (GPA)**: Enforces leak-free execution in debug builds. The allocator logs an error if memory is not released before program exit.
+- **DebugAllocator**: Enforces leak-free execution in debug builds. The allocator logs an error if memory is not released before program exit.
 - **Address Stability**: Live threads/mutexes must remain at stable heap/arena addresses. Live synchronization objects must never be bit-copied, which triggers panic failures.
 - **Self-Healing Pools**: Releasing non-acquired items back to the `IndexPool` must cause immediate runtime assertions.
 

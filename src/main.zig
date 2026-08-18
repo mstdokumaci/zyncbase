@@ -7,10 +7,10 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    // prod allocator: SmpAllocator for all server flows (see memory/strategy.zig)
+    const allocator = std.heap.smp_allocator;
+    const io = init.io;
 
     const cpu_count = std.Thread.getCpuCount() catch {
         std.log.err("Failed to detect CPU count", .{});
@@ -25,15 +25,13 @@ pub fn main() !void {
     var config_path: ?[]const u8 = null;
 
     // Basic CLI argument parsing
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--config")) {
-            if (i + 1 < args.len) {
-                config_path = args[i + 1];
-                i += 1;
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer args.deinit();
+    _ = args.skip();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (args.next()) |path| {
+                config_path = path;
             } else {
                 std.log.err("--config requires a path argument", .{});
                 return error.InvalidArguments;
@@ -44,7 +42,7 @@ pub fn main() !void {
     std.log.info("Initializing ZyncBase server...", .{});
 
     // Initialize server
-    const server = try ZyncBaseServer.init(allocator, config_path);
+    const server = try ZyncBaseServer.init(io, init.minimal.environ, allocator, config_path);
     defer server.deinit();
 
     // Start server (blocks until shutdown)

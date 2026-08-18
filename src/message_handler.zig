@@ -24,6 +24,7 @@ const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
+    io: std.Io,
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
@@ -39,6 +40,7 @@ pub const MessageHandler = struct {
     /// Initialize message handler with all required components
     pub fn init(
         self: *MessageHandler,
+        io: std.Io,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
@@ -52,6 +54,7 @@ pub const MessageHandler = struct {
         session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
     ) void {
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
@@ -84,7 +87,7 @@ pub const MessageHandler = struct {
         // 1. Enforce rate limiting (integer token bucket)
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
-                const now_us = std.time.microTimestamp();
+                const now_us = std.Io.Clock.real.now(self.io).toMicroseconds();
                 const rate: u64 = self.security_config.max_messages_per_second;
                 const burst_capacity: u64 = rate * 2_000_000;
 

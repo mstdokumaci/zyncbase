@@ -18,7 +18,7 @@ fn jsonToOwnedSlice(allocator: std.mem.Allocator, value: Value) ![]u8 {
 }
 
 test "writeJsonToBuf: arrays" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -92,7 +92,7 @@ test "writeJsonToBuf: arrays" {
 }
 
 test "writeJsonToBuf: scalars and nil" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -138,7 +138,7 @@ test "writeJsonToBuf: scalars and nil" {
 }
 
 test "writeJsonToBuf: buffer reuse retains capacity" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(allocator);
@@ -165,7 +165,7 @@ test "writeJsonToBuf: buffer reuse retains capacity" {
 }
 
 test "Value: payload -> json array -> payload roundtrip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -176,10 +176,10 @@ test "Value: payload -> json array -> payload roundtrip" {
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();
             const roundtripped = try typed.fromJson(alloc, ft, items_type, parsed.value);
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed.writeMsgPack(roundtripped, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed.writeMsgPack(roundtripped, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             return try msgpack.decode(alloc, &reader);
         }
     }.do;
@@ -249,7 +249,7 @@ test "Value: payload -> json array -> payload roundtrip" {
 }
 
 test "validateValue: exhaustive type matrix" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const Ft = schema_types.FieldType;
 
     const bin_payload = try msgpack.Payload.binToPayload(&([_]u8{0} ** 16), allocator);
@@ -327,16 +327,16 @@ test "validateValue: exhaustive type matrix" {
 }
 
 test "Value: scalar roundtrips" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     const roundtripMsgpack = struct {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed.writeMsgPack(tv, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed.writeMsgPack(tv, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             return try msgpack.decode(alloc, &reader);
         }
     }.do;
@@ -432,7 +432,7 @@ test "Value: scalar roundtrips" {
 }
 
 test "fromDynamicJson: all scalar paths and error cases" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -536,7 +536,7 @@ test "fromDynamicJson: all scalar paths and error cases" {
 }
 
 test "Value: array dedup" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

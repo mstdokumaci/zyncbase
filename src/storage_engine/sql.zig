@@ -21,7 +21,7 @@ pub const ColumnValue = struct {
 };
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
-/// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
+/// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList.
 const Entry = struct {
     key: u64,
     stmt: *sqlite.c.sqlite3_stmt,
@@ -376,6 +376,7 @@ pub fn resolveNamespaceId(
 }
 
 pub fn resolveUserId(
+    io: std.Io,
     db: *sqlite.Db,
     stmt_raw: *sqlite.c.sqlite3_stmt,
     namespace_id: i64,
@@ -386,7 +387,7 @@ pub fn resolveUserId(
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    const new_user_id = typed_doc_id.generateUuidV7();
+    const new_user_id = try typed_doc_id.generateUuidV7(io);
     const id_bytes = typed_doc_id.toBytes(new_user_id);
 
     if (bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);

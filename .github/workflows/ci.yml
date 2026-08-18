@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (${{ matrix.optimize }})
@@ -28,7 +31,9 @@ jobs:
 
   test-sanitized:
     name: Test with ThreadSanitizer
-    runs-on: macos-15
+    # Pinned: TSAN_OPTIONS points at /usr/lib/llvm-18/bin/llvm-symbolizer,
+    # which matches ubuntu-24.04's default `llvm` package.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,10 +43,17 @@ jobs:
       - name: Setup project
         uses: ./.github/actions/setup-project
 
+      - name: Install LLVM symbolizer
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
+      - name: Prepare TSAN (zig libc++ guard-symbol workaround)
+        run: bash scripts/tsan-prep.sh
+
       - name: Run tests with ThreadSanitizer
         run: zig build test -Dsanitize=thread --summary all
         env:
-          TSAN_OPTIONS: second_deadlock_stack=1:history_size=7
+          # LLVM's symbolizer can parse Zig 0.16 DWARF; binutils addr2line cannot.
+          TSAN_OPTIONS: second_deadlock_stack=1:history_size=7:external_symbolizer_path=/usr/lib/llvm-18/bin/llvm-symbolizer
 
   typescript:
     name: TypeScript

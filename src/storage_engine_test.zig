@@ -29,8 +29,8 @@ const DirectWriterContext = struct {
         self.test_context = try sth.TestContext.initInMemory(allocator);
         errdefer self.test_context.deinit();
 
-        try self.memory_strategy.init(allocator);
-        errdefer _ = self.memory_strategy.deinit();
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
 
         const users_fields = [_]sth.Field{};
         const users_table = schema_helpers.makeTable("users", &users_fields);
@@ -38,6 +38,7 @@ const DirectWriterContext = struct {
         errdefer self.schema.deinit();
 
         try self.engine.init(
+            std.testing.io,
             allocator,
             &self.memory_strategy,
             self.test_context.test_dir,
@@ -62,15 +63,15 @@ const DirectWriterContext = struct {
     fn deinit(self: *DirectWriterContext) void {
         self.engine.deinit();
         self.schema.deinit();
-        std.debug.assert(self.memory_strategy.deinit() == .ok);
+        self.memory_strategy.deinit();
         self.test_context.deinit();
     }
 };
 
 fn makeDeleteBatchOps(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.WriteOp {
     _ = allocator;
-    const entries = try testing.allocator.alloc(storage_mod.WriteOp, 1);
-    errdefer testing.allocator.free(entries);
+    const entries = try std.heap.smp_allocator.alloc(storage_mod.WriteOp, 1);
+    errdefer std.heap.smp_allocator.free(entries);
     entries[0] = .{ .delete = .{
         .table_index = table_index,
         .id = 1,
@@ -85,7 +86,7 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.WriteOp
 }
 
 test "StorageEngine: shutdown drain completes immediate writer ops" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
@@ -107,7 +108,7 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     };
     errdefer if (!session_queued) session_op.deinit(allocator);
 
-    var checkpoint_latch = storage_mod.CheckpointLatch{};
+    var checkpoint_latch = storage_mod.CheckpointLatch.init(std.testing.io);
     const checkpoint_op = storage_mod.WriteOp{
         .checkpoint = .{
             .mode = storage_mod.CheckpointMode.passive,
@@ -129,7 +130,7 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
 }
 
 test "StorageEngine: init and deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("_dummy", &fields_arr);
@@ -140,11 +141,11 @@ test "StorageEngine: init and deinit" {
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ ctx.test_context.test_dir, "zyncbase.db" });
     defer allocator.free(db_path);
-    const file = try std.fs.cwd().openFile(db_path, .{});
-    file.close();
+    const file = try std.Io.Dir.cwd().openFile(std.testing.io, db_path, .{});
+    file.close(std.testing.io);
 }
 test "StorageEngine: insert and select basic" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("name", .text),
@@ -171,7 +172,7 @@ test "StorageEngine: insert and select basic" {
     _ = try doc.expectFieldInt("age", 30);
 }
 test "StorageEngine: update document" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("val", .text),
@@ -194,7 +195,7 @@ test "StorageEngine: update document" {
     _ = try doc.expectFieldString("val", "v2");
 }
 test "StorageEngine: delete document" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("val", .text),
@@ -217,7 +218,7 @@ test "StorageEngine: delete document" {
     try testing.expect(record == null);
 }
 test "StorageEngine: upsertDocument and selectDocument" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -235,7 +236,7 @@ test "StorageEngine: upsertDocument and selectDocument" {
     _ = try doc.expectFieldString("val", "test");
 }
 test "StorageEngine: selectDocument non-existent key" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -248,7 +249,7 @@ test "StorageEngine: selectDocument non-existent key" {
     try testing.expect(record == null);
 }
 test "StorageEngine: update existing document" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -268,7 +269,7 @@ test "StorageEngine: update existing document" {
     _ = try doc.expectFieldString("val", "updated");
 }
 test "StorageEngine: query collection" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("name", .text)};
     const table = schema_helpers.makeTable("people", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -288,7 +289,7 @@ test "StorageEngine: query collection" {
     try testing.expectEqual(@as(usize, 2), qres.records.len);
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -315,7 +316,7 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
 }
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -329,10 +330,10 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     );
     defer ctx.deinit();
 
-    var timer = std.time.Timer.start() catch unreachable;
+    const start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
     try ctx.insertText("items", 1, 5, "val", "value1");
     try ctx.engine.flushPendingWrites();
-    const elapsed = timer.read();
+    const elapsed = std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - start_ns;
     try testing.expect(elapsed < std.time.ns_per_s);
 
     const record = try (try ctx.table("items")).readDoc(allocator, 1, 5);
@@ -341,7 +342,7 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
 }
 
 test "StorageEngine: low-level batch writer cleans up when begin fails" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
@@ -361,7 +362,7 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 }
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
@@ -381,14 +382,14 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 }
 
 test "StorageEngine: low-level batch writer rejects unsupported ops and rolls back" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: DirectWriterContext = undefined;
     try ctx.init(allocator, table);
     defer ctx.deinit();
 
-    var latch_ckpt = storage_mod.CheckpointLatch{};
+    var latch_ckpt = storage_mod.CheckpointLatch.init(std.testing.io);
     const entries = try allocator.alloc(storage_mod.WriteOp, 1);
     entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
     const version_before = ctx.engine.write_worker.version.load(.acquire);
@@ -403,7 +404,7 @@ test "StorageEngine: low-level batch writer rejects unsupported ops and rolls ba
 }
 
 test "StorageEngine: concurrent reads" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -439,7 +440,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     // thread, which could race and lose in-flight writes. Now it signals
     // work_cond and joins cleanly, guaranteeing the write thread has flushed
     // its remaining batch before deinit returns.
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
     const table = schema_helpers.makeTable("items", &fields_arr);
@@ -462,7 +463,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         ctx.deinitNoCleanup();
     }
     defer allocator.free(test_dir);
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Reopen the same database and verify every key is present.
     // We use setupEngineWithDir which reuses the existing data.
@@ -480,7 +481,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     }
 }
 test "StorageEngine: client writes blocked during migration" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -499,7 +500,7 @@ test "StorageEngine: client writes blocked during migration" {
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
 test "StorageEngine: engine healthy after start" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -510,7 +511,7 @@ test "StorageEngine: engine healthy after start" {
     try testing.expect(ctx.engine.write_worker.isHealthy());
 }
 test "StorageEngine: writes rejected when engine unhealthy" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -530,7 +531,7 @@ test "StorageEngine: writes rejected when engine unhealthy" {
     try testing.expectError(sth.StorageError.EngineUnhealthy, err2);
 }
 test "StorageEngine: ensureHealthy returns error when unhealthy" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -546,12 +547,17 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
     try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
 }
 
-fn drainOutcomes(sq: *send_queue_mod.send_queue) []SendQueueEntry {
+fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
     var entries = std.ArrayListUnmanaged(SendQueueEntry).empty;
-    while (sq.pop()) |entry| {
-        entries.append(std.testing.allocator, entry) catch break;
+    errdefer {
+        for (entries.items) |entry| entry.deinit();
+        entries.deinit(std.heap.smp_allocator);
     }
-    return entries.toOwnedSlice(std.testing.allocator) catch &[_]SendQueueEntry{};
+    while (sq.pop()) |entry| {
+        errdefer entry.deinit();
+        try entries.append(std.heap.smp_allocator, entry);
+    }
+    return try entries.toOwnedSlice(std.heap.smp_allocator);
 }
 
 fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
@@ -567,7 +573,7 @@ fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_ty
 }
 
 test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDenied" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -601,7 +607,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -614,7 +620,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
 }
 
 test "StorageEngine: mixed flush batch commits passing op and rejects guarded op independently" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -662,7 +668,7 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &reject_columns, guard, conn_reject, write_reject);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -692,7 +698,7 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
 }
 
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -724,7 +730,7 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, null, null);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -739,7 +745,7 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
 }
 
 test "StorageEngine: confirmed delete with rejecting guard returns PermissionDenied" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -772,7 +778,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -788,7 +794,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
 }
 
 test "StorageEngine: confirmed delete of non-existent row succeeds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -812,7 +818,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
     try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -823,7 +829,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
 }
 
 test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -849,7 +855,7 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
     try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -861,7 +867,7 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
 }
 
 test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -890,7 +896,7 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -908,7 +914,7 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
 }
 
 test "StorageEngine: confirmed update with rejecting guard on existing row returns PermissionDenied" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("author_id", .doc_id),
         schema_helpers.makeField("val", .text),
@@ -942,7 +948,7 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
     try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -961,7 +967,7 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
 }
 
 test "StorageEngine: write-through cache populates cache post-commit and handles guard rejection without invalidation" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("val", .text),
@@ -1036,7 +1042,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
 }
 
 test "StorageEngine: failed document cache update evicts stale entry post-commit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
 
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("val", .text),
@@ -1060,7 +1066,7 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
     // &engine.document_cache, which is unchanged by deinit+reinit in place.
     var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
     ctx.engine.document_cache.deinit();
-    try ctx.engine.document_cache.init(failing.allocator(), .{});
+    try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
 
     // 1. Initial upsert: Should write-through to document_cache
     const columns = [_]sth.ColumnValue{
@@ -1102,43 +1108,43 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
 }
 
 test "storage: engine init rejects empty data dir" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ms: sth.MemoryStrategy = undefined;
-    try ms.init(allocator);
-    defer std.debug.assert(ms.deinit() == .ok);
+    try ms.init();
+    defer ms.deinit();
 
     const invalid_dir = "";
     var sm = try sth.createDummySchema(allocator);
     defer sm.deinit();
     var engine: StorageEngine = undefined;
-    const result = engine.init(allocator, &ms, invalid_dir, &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = engine.init(std.testing.io, allocator, &ms, invalid_dir, &sm, .{}, .{ .in_memory = false }, null, null);
     try testing.expectError(error.InvalidDataDir, result);
 }
 
 test "storage: engine init rejects file path as data dir" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var ms: sth.MemoryStrategy = undefined;
-    try ms.init(allocator);
-    defer std.debug.assert(ms.deinit() == .ok);
+    try ms.init();
+    defer ms.deinit();
 
     var context = try sth.TestContext.init(allocator, "storage-not-dir");
     defer context.deinit();
     const test_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test_file_not_dir.txt" });
     defer allocator.free(test_file);
 
-    const file = try std.fs.cwd().createFile(test_file, .{});
-    file.close();
+    const file = try std.Io.Dir.cwd().createFile(std.testing.io, test_file, .{});
+    file.close(std.testing.io);
 
     var sm = try sth.createDummySchema(allocator);
     defer sm.deinit();
     var engine: StorageEngine = undefined;
-    const result = engine.init(allocator, &ms, test_file, &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = engine.init(std.testing.io, allocator, &ms, test_file, &sm, .{}, .{ .in_memory = false }, null, null);
     try testing.expectError(error.NotDir, result);
 }
 
 // Storage engine thread safety properties
 test "storage: thread-safe engine access" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1164,11 +1170,11 @@ test "storage: thread-safe engine access" {
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = thread_id * 1_000 + i + 1;
                 const value = try std.fmt.allocPrint(
-                    testing.allocator,
+                    std.heap.smp_allocator,
                     "{{\"thread\":{d},\"op\":{d}}}",
                     .{ thread_id, i },
                 );
-                defer testing.allocator.free(value);
+                defer std.heap.smp_allocator.free(value);
                 try t_ctx.ctx.insertField("test", key, 1, "val", tth.valText(value));
             }
         }
@@ -1183,8 +1189,8 @@ test "storage: thread-safe engine access" {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
-                const record = try sth.readDoc(testing.allocator, eng, table_index, key, 1);
-                defer if (record) |r| r.deinit(testing.allocator);
+                const record = try sth.readDoc(std.heap.smp_allocator, eng, table_index, key, 1);
+                defer if (record) |r| r.deinit(std.heap.smp_allocator);
             }
         }
     };
@@ -1229,7 +1235,7 @@ test "storage: thread-safe engine access" {
 }
 
 test "storage: connection pool reuse and release" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1258,7 +1264,7 @@ test "storage: connection pool reuse and release" {
 }
 
 test "storage: persistence round-trip (various types)" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1296,7 +1302,7 @@ test "storage: persistence round-trip (various types)" {
 }
 
 test "storage: insert/delete inverse consistency" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1334,7 +1340,7 @@ test "storage: insert/delete inverse consistency" {
 }
 
 test "storage: batched writes commit consistently" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1384,7 +1390,7 @@ test "storage: batched writes commit consistently" {
 }
 
 test "storage: multi-batch writes all persist" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1424,7 +1430,7 @@ test "storage: multi-batch writes all persist" {
 
 // Property: Database remains consistent after repeated flush operations
 test "storage: repeated flush consistency" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
     const table = schema_helpers.makeTable("test", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
@@ -1450,7 +1456,7 @@ test "storage: repeated flush consistency" {
 
 // Additional property: Data integrity across engine restarts
 test "storage: data persistence across restarts" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try sth.TestContext.init(allocator, "storage-restart-persistence");
     defer context.deinit();
     const test_dir = context.test_dir;
@@ -1484,7 +1490,7 @@ test "storage: data persistence across restarts" {
 
 // Property: Schema updates are reflected in persistence logic
 test "storage: schema update integrity" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var context = try sth.TestContext.init(allocator, "storage-schema-update");
     defer context.deinit();
     const test_dir = context.test_dir;
@@ -1535,7 +1541,7 @@ test "storage: schema update integrity" {
 
 // Fuzzy testing of random operations to ensure no crashes
 test "storage: random operations fuzzing" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{
         schema_helpers.makeField("title", .text),
         schema_helpers.makeField("score", .integer),

@@ -19,7 +19,7 @@ const testing = std.testing;
 const Value = typed.Value;
 
 test "storage SQL builders quote identifiers" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema_types.Table{table};
@@ -39,7 +39,7 @@ test "storage SQL builders quote identifiers" {
 }
 
 test "filter SQL render cleans up all allocation failures" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, renderFilterSqlForAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(std.heap.smp_allocator, renderFilterSqlForAllocationTest, .{});
 }
 
 fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
@@ -93,16 +93,16 @@ fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
 }
 
 test "Value: payload -> sqlite column -> payload roundtrip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     const roundtripToPayload = struct {
         fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
-            var out_list = std.ArrayListUnmanaged(u8).empty;
-            defer out_list.deinit(alloc);
-            try typed_codec.writeMsgPack(tv, out_list.writer(alloc));
-            var reader: std.Io.Reader = .fixed(out_list.items);
+            var out_list = std.Io.Writer.Allocating.init(alloc);
+            defer out_list.deinit();
+            try typed_codec.writeMsgPack(tv, &out_list.writer);
+            var reader: std.Io.Reader = .fixed(out_list.written());
             const decoded = try msgpack.decode(alloc, &reader);
             return decoded;
         }

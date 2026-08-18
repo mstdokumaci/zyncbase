@@ -6,40 +6,40 @@ pub fn lockedMap(comptime K: type, comptime V: type, comptime lock_type: type) t
     return struct {
         const Self = @This();
 
+        io: std.Io,
         map: std.AutoHashMapUnmanaged(K, V),
         lock: lock_type,
 
-        pub const empty: Self = .{
-            .map = .empty,
-            .lock = .{},
-        };
+        pub fn init(io: std.Io) Self {
+            return .{ .io = io, .map = .empty, .lock = .init };
+        }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
             self.map.deinit(allocator);
         }
 
         fn readLock(self: *Self) void {
-            if (lock_type == std.Thread.RwLock) {
-                self.lock.lockShared();
+            if (lock_type == std.Io.RwLock) {
+                self.lock.lockSharedUncancelable(self.io);
             } else {
-                self.lock.lock();
+                self.lock.lockUncancelable(self.io);
             }
         }
 
         fn readUnlock(self: *Self) void {
-            if (lock_type == std.Thread.RwLock) {
-                self.lock.unlockShared();
+            if (lock_type == std.Io.RwLock) {
+                self.lock.unlockShared(self.io);
             } else {
-                self.lock.unlock();
+                self.lock.unlock(self.io);
             }
         }
 
         fn writeLock(self: *Self) void {
-            self.lock.lock();
+            self.lock.lockUncancelable(self.io);
         }
 
         fn writeUnlock(self: *Self) void {
-            self.lock.unlock();
+            self.lock.unlock(self.io);
         }
 
         pub fn get(self: *Self, key: K) ?V {

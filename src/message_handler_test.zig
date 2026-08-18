@@ -16,7 +16,7 @@ const routeWithArena = helpers.routeWithArena;
 const routeWithArenaOptional = helpers.routeWithArenaOptional;
 
 test "Connection - init and deinit" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-init", &.{});
     defer app.deinit();
@@ -33,7 +33,7 @@ test "Connection - init and deinit" {
 }
 
 test "Connection - add subscription IDs" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-subs", &.{});
     defer app.deinit();
@@ -53,7 +53,7 @@ test "Connection - add subscription IDs" {
 }
 
 test "MessageHandler: oversized rate limit does not divide by zero" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-rate-limit-large", &.{});
     defer app.deinit();
@@ -62,6 +62,7 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
     defer sc.deinit();
 
     app.handler.init(
+        std.testing.io,
         allocator,
         &app.memory_strategy,
         &app.violation_tracker,
@@ -76,14 +77,14 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
     );
 
     sc.conn.request_tokens = 1;
-    sc.conn.last_request_time = std.time.microTimestamp() - 1_000_000;
+    sc.conn.last_request_time = std.Io.Clock.real.now(std.testing.io).toMicroseconds() - 1_000_000;
 
     var message = [_]u8{0x81};
     try app.handler.handleMessage(sc.conn, &message);
 }
 
 test "MessageHandler: store operations require ready scope" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-store-not-ready", &.{
         .{ .name = "items", .fields = &.{"value"} },
@@ -121,7 +122,7 @@ test "MessageHandler: store operations require ready scope" {
 }
 
 test "MessageHandler: StoreSet document with auth predicate persists and is readable" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     const schema_json =
         \\{
@@ -171,7 +172,7 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
 }
 
 test "MessageHandler: StoreSet routes and maps StoreService errors" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     const schema_json =
         \\{
@@ -241,7 +242,7 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
 }
 
 test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID_MESSAGE" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "mh-invalid-write-ack", &.{
         .{ .name = "items", .fields = &.{"val"} },
@@ -255,19 +256,19 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
 
     // Build a StoreSet message with confirm="accepted" + a writeId.
     // The server must reject this combination immediately.
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
-    try buf.append(allocator, 0x86); // fixmap(6)
+    try writer.writeByte(0x86); // fixmap(6)
     try msgpack.writeMsgPackStr(writer, "type");
     try msgpack.writeMsgPackStr(writer, "StoreSet");
     try msgpack.writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf);
+    try writer.writeByte(0xcf);
     try writer.writeInt(u64, 1, .big);
     try msgpack.writeMsgPackStr(writer, "path");
-    try buf.append(allocator, 0x92); // fixarray(2)
-    try buf.append(allocator, 0xcf);
+    try writer.writeByte(0x92); // fixarray(2)
+    try writer.writeByte(0xcf);
     try writer.writeInt(u64, table.index, .big);
     const doc_id_bytes = typed_doc_id.toBytes(1);
     try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
@@ -279,7 +280,7 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     // 32-char hex string (valid format)
     try msgpack.writeMsgPackStr(writer, "00000000000000000000000000000000");
 
-    const message = try buf.toOwnedSlice(allocator);
+    const message = try buf.toOwnedSlice();
     defer allocator.free(message);
 
     const response = try routeWithArena(&app.handler, allocator, conn, message);
@@ -295,41 +296,41 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
 // ─── Namespace switching enforcement tests ────────────────────────────────
 
 fn createStoreSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64, namespace: []const u8) ![]u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    errdefer buf.deinit();
+    const writer = &buf.writer;
 
-    try buf.append(allocator, 0x83); // fixmap(3)
+    try writer.writeByte(0x83); // fixmap(3)
     try msgpack.writeMsgPackStr(writer, "type");
     try msgpack.writeMsgPackStr(writer, "StoreSetNamespace");
     try msgpack.writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, id, .big);
     try msgpack.writeMsgPackStr(writer, "namespace");
     try msgpack.writeMsgPackStr(writer, namespace);
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 fn createPresenceSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64, namespace: []const u8) ![]u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    errdefer buf.deinit();
+    const writer = &buf.writer;
 
-    try buf.append(allocator, 0x83); // fixmap(3)
+    try writer.writeByte(0x83); // fixmap(3)
     try msgpack.writeMsgPackStr(writer, "type");
     try msgpack.writeMsgPackStr(writer, "PresenceSetNamespace");
     try msgpack.writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf); // uint64
+    try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, id, .big);
     try msgpack.writeMsgPackStr(writer, "namespace");
     try msgpack.writeMsgPackStr(writer, namespace);
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 test "NamespaceSwitch: initial store namespace setup succeeds with users.namespaced=true" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const schema_json =
         \\{
         \\  "version": "1.0.0",
@@ -371,7 +372,7 @@ test "NamespaceSwitch: initial store namespace setup succeeds with users.namespa
 }
 
 test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     const schema_json =
         \\{
         \\  "version": "1.0.0",
@@ -452,7 +453,7 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
 }
 
 test "NamespaceSwitch: namespaced=false allows any switch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "ns-switch-allowed", &.{
         .{ .name = "items", .fields = &.{"value"} },
@@ -540,7 +541,7 @@ fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected:
 }
 
 test "message: representative frames route at protocol boundary" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-route", &table_defs);
     defer app.deinit();
@@ -586,7 +587,7 @@ test "message: representative frames route at protocol boundary" {
 }
 
 test "message: response id is preserved across routed requests" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-correlation", &table_defs);
     defer app.deinit();
@@ -628,7 +629,7 @@ test "message: response id is preserved across routed requests" {
 }
 
 test "message: invalid envelopes fail before store dispatch" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-invalid-envelope", &table_defs);
     defer app.deinit();
@@ -643,7 +644,7 @@ test "message: invalid envelopes fail before store dispatch" {
 }
 
 test "message: repeated routed requests release per-message allocations" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-lifetime", &table_defs);
     defer app.deinit();
@@ -672,7 +673,7 @@ test "message: repeated routed requests release per-message allocations" {
 }
 
 test "message: concurrent routed requests release response allocations" {
-    const allocator = testing.allocator;
+    const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-property-concurrent-lifetime", &table_defs);
     defer app.deinit();
