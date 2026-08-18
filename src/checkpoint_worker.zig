@@ -5,6 +5,10 @@ const managedThread = @import("threading/managed_thread.zig").managedThread;
 
 const Allocator = std.mem.Allocator;
 
+fn elapsedMilliseconds(start_time: i64, end_time: i64) u64 {
+    return @intCast(@max(@as(i64, 0), end_time - start_time));
+}
+
 /// CheckpointWorker manages SQLite WAL checkpointing to prevent unbounded WAL growth
 /// and ensure predictable performance. It monitors WAL file size and age, triggering
 /// checkpoints based on configurable thresholds.
@@ -150,7 +154,7 @@ pub const CheckpointWorker = struct {
 
             return CheckpointResult{
                 .mode = mode,
-                .duration_ms = @intCast(@max(@as(i64, 0), std.Io.Clock.real.now(self.io).toMilliseconds() - start_time)),
+                .duration_ms = elapsedMilliseconds(start_time, std.Io.Clock.real.now(self.io).toMilliseconds()),
                 .wal_size_before = wal_size_before,
                 .wal_size_after = wal_size_before,
                 .success = false,
@@ -159,7 +163,7 @@ pub const CheckpointWorker = struct {
 
         // Update metrics
         const end_time = std.Io.Clock.real.now(self.io).toMilliseconds();
-        const duration: u64 = @intCast(end_time - start_time);
+        const duration = elapsedMilliseconds(start_time, end_time);
 
         self.last_checkpoint.store(std.Io.Clock.real.now(self.io).toSeconds(), .release);
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);

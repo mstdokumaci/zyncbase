@@ -7,7 +7,7 @@ const testing = std.testing;
 
 test "MemoryStrategy: init and deinit" {
     var strategy: MemoryStrategy = undefined;
-    try strategy.init();
+    try strategy.initWithAllocator(std.testing.allocator);
     defer strategy.deinit();
 
     // Verify allocators are available

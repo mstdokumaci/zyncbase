@@ -13,20 +13,28 @@ const makePresencePatch = th.makePresencePatch;
 const makeTestSharedSingleField = th.makeTestSharedSingleField;
 const makeTestUserFields = th.makeTestUserFields;
 
-fn notifierFn(ctx: ?*anyopaque) void {
-    const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(ctx));
-    _ = counter.fetchAdd(1, .monotonic);
-}
+const completion_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(5) } };
+
+const TestNotifier = struct {
+    called: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    completion: std.Io.Event = .unset,
+
+    fn notify(ctx: ?*anyopaque) void {
+        const self: *TestNotifier = @ptrCast(@alignCast(ctx));
+        _ = self.called.fetchAdd(1, .monotonic);
+        self.completion.set(testing.io);
+    }
+};
 
 fn setupWorker(
     allocator: std.mem.Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
     send_queue: *send_queue_type,
-    notifier_counter: *std.atomic.Value(u32),
+    notifier: *TestNotifier,
 ) !*PresenceWorker {
     const worker = try allocator.create(PresenceWorker);
-    try worker.init(allocator, memory_strategy, presence_manager, send_queue, notifierFn, notifier_counter);
+    try worker.init(allocator, memory_strategy, presence_manager, send_queue, TestNotifier.notify, notifier);
     try worker.spawn();
     return worker;
 }
@@ -56,7 +64,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
         send_queue.deinit();
     }
 
-    var notifier_called = std.atomic.Value(u32).init(0);
+    var notifier: TestNotifier = .{};
 
     const conn_id: u64 = 100;
     const sub_id: u64 = 200;
@@ -66,7 +74,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
     defer {
         worker.stop();
         worker.deinit();
@@ -90,14 +98,13 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
         .allocator = allocator,
     });
 
-    // Wait for processing (condvar-based wakeup should be near-instant)
-    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
+    try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
     // Verify send_queue received the broadcast
     try testing.expect(send_queue.hasItems());
 
     // Verify notifier was called
-    try testing.expect(notifier_called.load(.monotonic) > 0);
+    try testing.expect(notifier.called.load(.monotonic) > 0);
 
     // Drain and release the send_queue entry
     if (send_queue.pop()) |entry| {
@@ -130,7 +137,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
         send_queue.deinit();
     }
 
-    var notifier_called = std.atomic.Value(u32).init(0);
+    var notifier: TestNotifier = .{};
 
     const conn_id: u64 = 100;
     const sub_id: u64 = 200;
@@ -140,7 +147,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
     defer {
         worker.stop();
         worker.deinit();
@@ -154,7 +161,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     try testing.expect(!send_queue.hasItems());
 
     // Verify notifier was NOT called
-    try testing.expectEqual(@as(u32, 0), notifier_called.load(.monotonic));
+    try testing.expectEqual(@as(u32, 0), notifier.called.load(.monotonic));
 }
 
 test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
@@ -182,9 +189,9 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
         send_queue.deinit();
     }
 
-    var notifier_called = std.atomic.Value(u32).init(0);
+    var notifier: TestNotifier = .{};
 
-    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
     defer {
         worker.stop();
         worker.deinit();
@@ -207,12 +214,11 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
         .allocator = allocator,
     });
 
-    // Wait for processing
-    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
+    try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
     // Verify send_queue received the snapshot response
     try testing.expect(send_queue.hasItems());
-    try testing.expect(notifier_called.load(.monotonic) > 0);
+    try testing.expect(notifier.called.load(.monotonic) > 0);
 
     // Drain and release
     if (send_queue.pop()) |entry| {
@@ -245,7 +251,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
         send_queue.deinit();
     }
 
-    var notifier_called = std.atomic.Value(u32).init(0);
+    var notifier: TestNotifier = .{};
 
     const conn_id: u64 = 100;
     const sub_id: u64 = 200;
@@ -256,7 +262,8 @@ test "PresenceWorker: multiple ops batched into single flush" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier_called);
+    const worker = try allocator.create(PresenceWorker);
+    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, TestNotifier.notify, &notifier);
     defer {
         worker.stop();
         worker.deinit();
@@ -281,14 +288,15 @@ test "PresenceWorker: multiple ops batched into single flush" {
         });
     }
 
-    // Wait for processing
-    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
+    // Start only after the final op is queued, so this notification acknowledges
+    // the single flush that drained the complete batch.
+    try worker.spawn();
+    try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
-    // The coalesced updates should produce at least one broadcast
-    try testing.expect(send_queue.hasItems());
-
-    // Drain all entries
+    var broadcast_count: usize = 0;
     while (send_queue.pop()) |entry| {
         entry.deinit();
+        broadcast_count += 1;
     }
+    try testing.expectEqual(@as(usize, 1), broadcast_count);
 }

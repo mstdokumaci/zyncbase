@@ -25,7 +25,7 @@ pub const Context = struct {
         });
         errdefer self.schema.deinit();
 
-        try self.memory_strategy.init();
+        try self.memory_strategy.initWithAllocator(allocator);
         errdefer self.memory_strategy.deinit();
 
         self.test_context = try schema_helpers.TestContext.initInMemory(allocator);

@@ -19,12 +19,15 @@ import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
 import { run as runSync } from "./test-sync";
 
-setDefaultTimeout(200_000);
+setDefaultTimeout(100_000);
 
-beforeAll(() => {
-	buildServerIfNeeded();
-	resetE2ERoots();
-});
+beforeAll(
+	() => {
+		buildServerIfNeeded();
+		resetE2ERoots();
+	},
+	{ timeout: 600_000 },
+);
 
 afterAll(() => {
 	cleanupE2EArtifacts();
