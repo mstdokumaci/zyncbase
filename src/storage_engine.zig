@@ -199,8 +199,36 @@ pub const StorageEngine = struct {
             const ts = std.Io.Clock.real.now(io).toNanoseconds();
             return try std.fmt.allocPrintSentinel(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id }, 0);
         }
-        try std.Io.Dir.cwd().createDirPath(io, data_dir);
+        try createDirPathBounded(io, data_dir);
         return try std.fmt.allocPrintSentinel(allocator, "{s}/zyncbase.db", .{data_dir}, 0);
+    }
+
+    /// Same component walk as `std.Io.Dir.createDirPath`, but with a hard
+    /// iteration bound. The stdlib version loops forever when an existing
+    /// parent's child cannot be created (e.g. `/proc/...` on Linux: mkdir EEXIST
+    /// on `/proc` → walk down → ENOENT on child → walk up → EEXIST → ...).
+    fn createDirPathBounded(io: std.Io, data_dir: []const u8) !void {
+        const dir = std.Io.Dir.cwd();
+        var it = std.fs.path.componentIterator(data_dir);
+        var component = it.last() orelse return error.InvalidDataDir;
+        var budget: usize = 256;
+        while (true) {
+            budget -= 1;
+            if (budget == 0) return error.InvalidDataDir;
+            if (dir.createDir(io, component.path, .default_dir)) |_| {
+                component = it.next() orelse return;
+            } else |err| switch (err) {
+                error.PathAlreadyExists => {
+                    const st = try dir.statFile(io, component.path, .{ .follow_symlinks = false });
+                    if (st.kind != .directory) return error.NotDir;
+                    component = it.next() orelse return;
+                },
+                error.FileNotFound => {
+                    component = it.previous() orelse return err;
+                },
+                else => return err,
+            }
+        }
     }
 
     fn createReaderPool(
