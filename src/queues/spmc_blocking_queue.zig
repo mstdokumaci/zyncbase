@@ -85,7 +85,9 @@ pub fn spmcBlockingQueue(comptime T: type) type {
                 const sleep_ns = @min(remaining, std.time.ns_per_ms);
                 remaining -= sleep_ns;
                 self.mutex.unlock(self.io);
-                std.Io.sleep(self.io, .fromNanoseconds(@intCast(sleep_ns)), .awake) catch {};
+                std.Io.sleep(self.io, .fromNanoseconds(@intCast(sleep_ns)), .awake) catch |err| switch (err) { // zwanzig-disable-line: swallowed-error
+                    error.Canceled => remaining = 0, // shutdown: stop waiting, fall through to head check
+                };
                 self.mutex.lockUncancelable(self.io);
             }
 
