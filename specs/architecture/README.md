@@ -26,5 +26,4 @@ Detailed technical specifications and implementation strategies for core system 
 ---
 
 ## Related Specifications
-- **[Research](./research.md)**: Technical validation, academic citations, and performance benchmarks that inform our designs.
 - **[API Design](../api-design/README.md)**: Specifications for public-facing interfaces and communication protocols.
