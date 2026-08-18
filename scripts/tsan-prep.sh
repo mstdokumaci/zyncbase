@@ -22,29 +22,13 @@ zig build test -Dsanitize=thread -Dtest-filter="__tsan_prep__" --summary none >/
 count=0
 for archive in "$cache_dir"/o/*/libc++.a "$cache_dir"/o/*/libc++abi.a; do
     [ -f "$archive" ] || continue
-    dir="$(dirname "$archive")"
-    work="$dir/.tsan-work"
-    rm -rf "$work"
-    mkdir -p "$work"
-    (
-        cd "$work"
-        ar x "$archive"
-        for member in *.o; do
-            objcopy --localize-symbol=__cxa_guard_acquire \
-                    --localize-symbol=__cxa_guard_release \
-                    --localize-symbol=__cxa_guard_abort \
-                    "$member" "$member.loc" 2>/dev/null
-            mv "$member.loc" "$member"
-        done
-        # Rebuild to a temp path and only mv over the original once ar has
-        # succeeded; a failed objcopy or ar leaves the original archive intact
-        # (set -e aborts the subshell before any mv).
-        tmp_archive="${archive}.tsan-tmp"
-        rm -f "$tmp_archive"
-        ar rcs "$tmp_archive" ./*.o
-        mv "$tmp_archive" "$archive"
-    )
-    rm -rf "$work"
+    tmp_archive="${archive}.tsan-tmp"
+    rm -f "$tmp_archive"
+    llvm-objcopy --localize-symbol=__cxa_guard_acquire \
+                 --localize-symbol=__cxa_guard_release \
+                 --localize-symbol=__cxa_guard_abort \
+                 "$archive" "$tmp_archive"
+    mv "$tmp_archive" "$archive"
     count=$((count + 1))
 done
 echo "tsan-prep: localized __cxa_guard_* symbols in $count archive(s)"
