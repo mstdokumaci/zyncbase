@@ -108,7 +108,7 @@ pub const ZyncBaseServer = struct {
         self.environ = environ;
         self.allocator = allocator;
 
-        try self.memory_strategy.init();
+        try self.memory_strategy.initWithAllocator(allocator);
         errdefer self.memory_strategy.deinit();
 
         var config = try self.initConfigAndBudget(custom_config, custom_data_dir, custom_schema_file, custom_config_path);

@@ -262,7 +262,8 @@ test "PresenceWorker: multiple ops batched into single flush" {
     var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
     defer snapshot.deinit(allocator);
 
-    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
+    const worker = try allocator.create(PresenceWorker);
+    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, TestNotifier.notify, &notifier);
     defer {
         worker.stop();
         worker.deinit();
@@ -287,13 +288,15 @@ test "PresenceWorker: multiple ops batched into single flush" {
         });
     }
 
+    // Start only after the final op is queued, so this notification acknowledges
+    // the single flush that drained the complete batch.
+    try worker.spawn();
     try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
-    // The coalesced updates should produce at least one broadcast
-    try testing.expect(send_queue.hasItems());
-
-    // Drain all entries
+    var broadcast_count: usize = 0;
     while (send_queue.pop()) |entry| {
         entry.deinit();
+        broadcast_count += 1;
     }
+    try testing.expectEqual(@as(usize, 1), broadcast_count);
 }

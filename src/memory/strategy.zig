@@ -6,8 +6,11 @@ const Connection = @import("../connection/state.zig").Connection;
 const Allocator = std.mem.Allocator;
 
 /// MemoryStrategy provides different allocator strategies for different use cases in ZyncBase.
-/// It combines SmpAllocator for long-lived allocations, ArenaAllocator for
-/// per-request temporary allocations, and connection object pool for high-churn connections.
+/// It combines a caller-supplied allocator for long-lived allocations,
+/// ArenaAllocator for per-request temporary allocations, and a connection
+/// object pool for high-churn connections. The backing allocator must support
+/// concurrent use and remain valid until deinit() returns, including for all
+/// pools and generalAllocator() consumers.
 pub const MemoryStrategy = struct {
     allocator: Allocator,
 
@@ -23,6 +26,8 @@ pub const MemoryStrategy = struct {
         try self.initWithAllocator(std.heap.smp_allocator);
     }
 
+    /// `allocator` must support concurrent use and remain valid until deinit()
+    /// returns; release all pool and generalAllocator() allocations first.
     pub fn initWithAllocator(self: *MemoryStrategy, allocator: Allocator) !void {
         self.* = .{
             .allocator = allocator,

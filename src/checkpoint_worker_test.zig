@@ -121,7 +121,32 @@ test "CheckpointWorker: performCheckpoint - passive mode" {
 
     try testing.expect(result.success);
     try testing.expect(result.mode == .passive);
-    try testing.expect(result.duration_ms >= 0);
+}
+
+test "CheckpointWorker: duration clamps clock rollback to zero" {
+    const RollbackClock = struct {
+        calls: usize = 0,
+
+        fn now(ctx: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            defer self.calls += 1;
+            const milliseconds: i64 = if (self.calls == 0) 200 else 100;
+            return .fromNanoseconds(@as(i96, milliseconds) * std.time.ns_per_ms);
+        }
+    };
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(std.heap.smp_allocator, .{});
+    defer ctx.deinit();
+
+    var clock: RollbackClock = .{};
+    var io_vtable = testing.io.vtable.*;
+    io_vtable.now = RollbackClock.now;
+    ctx.manager.io = .{ .userdata = &clock, .vtable = &io_vtable };
+
+    const result = try ctx.manager.performCheckpoint(.passive);
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(u64, 0), result.duration_ms);
 }
 
 test "CheckpointWorker: performCheckpoint - all modes" {
@@ -154,7 +179,7 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
 
     const metrics_before = manager.getMetrics();
 
-    _ = try manager.performCheckpoint(.passive);
+    const result = try manager.performCheckpoint(.passive);
 
     const metrics_after = manager.getMetrics();
 
@@ -164,8 +189,7 @@ test "CheckpointWorker: performCheckpoint - metrics update" {
     // Verify timestamp was updated
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 
-    // Duration may be 0 for very fast runs; verify value is valid.
-    try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
+    try testing.expectEqual(result.duration_ms, metrics_after.last_checkpoint_duration_ms);
 }
 
 test "CheckpointWorker: getMetrics" {
@@ -474,6 +498,4 @@ test "checkpoint: escalation logic - works correctly when needed" {
     try testing.expect(result.success);
     // Verify escalation actually occurred (passive would mean no escalation)
     try testing.expect(result.mode != .passive);
-    // Duration may be 0 in fast runs, but should be >= 0
-    try testing.expect(result.duration_ms >= 0);
 }

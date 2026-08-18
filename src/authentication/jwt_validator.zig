@@ -150,6 +150,7 @@ pub const Jwks = struct {
     state: ?JwksState = null,
     mutex: std.Io.Mutex = .init,
     timer: ?*c.struct_us_timer_t = null,
+    timer_thread_id: ?std.Thread.Id = null,
     refresh_thread: ?std.Thread = null,
     stop_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -187,12 +188,19 @@ pub const Jwks = struct {
     pub fn startRefreshTimer(self: *Jwks, loop: *c.struct_us_loop_t) !void {
         if (self.jwks_url == null) return;
         self.timer = try uws_timer.startTimer(Jwks, self, loop, timerCallback, jwks_refresh_interval_ms, jwks_refresh_interval_ms);
+        self.timer_thread_id = std.Thread.getCurrentId();
     }
 
     /// Signal the refresh timer to stop, close the timer, and join the ephemeral thread.
+    /// A started timer must be stopped by its event-loop thread, before run() or
+    /// after run() returns, so timerCallback cannot be in flight during deinit.
     pub fn stopRefreshTimer(self: *Jwks) void {
+        if (self.timer != null) {
+            std.debug.assert(self.timer_thread_id == std.Thread.getCurrentId());
+        }
         self.stop_refresh.store(true, .release);
         uws_timer.stopTimer(&self.timer);
+        self.timer_thread_id = null;
 
         self.mutex.lockUncancelable(self.io);
         const thread = self.refresh_thread;
