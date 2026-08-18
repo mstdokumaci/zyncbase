@@ -547,12 +547,17 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
     try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
 }
 
-fn drainOutcomes(sq: *send_queue_mod.send_queue) []SendQueueEntry {
+fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
     var entries = std.ArrayListUnmanaged(SendQueueEntry).empty;
-    while (sq.pop()) |entry| {
-        entries.append(std.heap.smp_allocator, entry) catch break;
+    errdefer {
+        for (entries.items) |entry| entry.deinit();
+        entries.deinit(std.heap.smp_allocator);
     }
-    return entries.toOwnedSlice(std.heap.smp_allocator) catch &[_]SendQueueEntry{};
+    while (sq.pop()) |entry| {
+        errdefer entry.deinit();
+        try entries.append(std.heap.smp_allocator, entry);
+    }
+    return try entries.toOwnedSlice(std.heap.smp_allocator);
 }
 
 fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
@@ -602,7 +607,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -663,7 +668,7 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &reject_columns, guard, conn_reject, write_reject);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -725,7 +730,7 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, null, null);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -773,7 +778,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -813,7 +818,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
     try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -850,7 +855,7 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
     try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -891,7 +896,7 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);
@@ -943,7 +948,7 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
     try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
-    const entries = drainOutcomes(&ctx.test_context.send_queue.?);
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
     defer {
         for (entries) |e| e.deinit();
         allocator.free(entries);

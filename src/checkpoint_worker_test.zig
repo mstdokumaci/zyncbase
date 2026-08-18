@@ -303,14 +303,14 @@ test "CheckpointWorker: fast shutdown" {
 
     const manager = &ctx.manager;
 
-    const start_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
+    const start_time = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
     try manager.spawn();
 
     // Signal shutdown immediately
     manager.stop();
     manager.deinit(); // This will join
 
-    const end_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
+    const end_time = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
     const duration = end_time - start_time;
 
     // Should be much faster than 60s

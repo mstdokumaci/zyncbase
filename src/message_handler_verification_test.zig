@@ -17,7 +17,7 @@ const table_defs = [_]helpers.TableDef{
 };
 
 test "Verification: WebSocket connection lifecycle" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "verify-mixed", &table_defs);
     defer app.deinit();
@@ -48,7 +48,7 @@ test "Verification: WebSocket connection lifecycle" {
 }
 
 test "Verification: StoreQuery routes to query response" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "verify-query-route", &table_defs);
     defer app.deinit();
@@ -79,7 +79,7 @@ test "Verification: StoreQuery routes to query response" {
 }
 
 test "Verification: Error handling for invalid messages" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "verify-invalid-messages", &table_defs);
     defer app.deinit();
@@ -134,7 +134,7 @@ test "Verification: Error handling for invalid messages" {
 }
 
 test "Verification: StoreLoadMore uses subscription state and returns requested subId" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "verify-loadmore", &table_defs);
     defer app.deinit();

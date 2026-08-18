@@ -5,7 +5,7 @@ const query_ast = @import("ast.zig");
 const query_eval = @import("eval.zig");
 
 test "evaluatePredicate respects explicit predicate states" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var record = try tth.recordFromValues(allocator, &.{});
     defer record.deinit(allocator);
@@ -17,7 +17,7 @@ test "evaluatePredicate respects explicit predicate states" {
 }
 
 test "evaluatePredicate keeps conditional AND plus OR semantics" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var conds = try allocator.alloc(query_ast.Condition, 1);
     conds[0] = .{

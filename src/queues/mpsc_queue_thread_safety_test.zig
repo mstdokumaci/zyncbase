@@ -152,7 +152,7 @@ test "MpscQueue: concurrent push and pop stress" {
 }
 
 test "MpscQueue: push during drain" {
-    const alloc = std.heap.smp_allocator;
+    const alloc = std.testing.allocator;
     var pool = PoolType.init(alloc);
     var q = try queue_type.init(&pool);
     defer q.deinit();

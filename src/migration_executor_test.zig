@@ -33,7 +33,7 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
 
 // Unit test 5.5: destructive migration with allow_destructive = true preserves common-column data
 test "migration_executor: 5.5 - destructive migration preserves common-column data" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var db = try openMemDb();
     defer db.deinit();
@@ -103,7 +103,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
 
 // Unit test 5.7: empty schema_meta triggers full schema creation
 test "migration_executor: 5.7 - empty schema_meta triggers full schema creation" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var db = try openMemDb();
     defer db.deinit();
@@ -164,7 +164,7 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
 
 // Unit test 5.8: unparseable version in schema_meta halts startup
 test "migration_executor: 5.8 - unparseable version in schema_meta halts startup" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var db = try openMemDb();
     defer db.deinit();
@@ -253,7 +253,7 @@ fn columnType(db: *sqlite.Db, allocator: std.mem.Allocator, table_name: []const 
 // changes), after Migration_Executor.execute completes, every row that existed before the migration
 // SHALL still exist with all its original column values intact.
 test "migration_executor: additive migration preserves existing data" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const table_names = [_][]const u8{ "posts", "items", "orders", "tags", "comments" };
 
@@ -345,7 +345,7 @@ test "migration_executor: additive migration preserves existing data" {
 // when MigrationConfig.allow_destructive is false, Migration_Executor.execute SHALL return
 // an error and SHALL NOT modify the database.
 test "migration_executor: destructive migration refused when not allowed" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const table_names = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
     const destructive_kinds = [_]migration_detector.ChangeKind{ .change_type, .remove_column };
@@ -435,7 +435,7 @@ test "migration_executor: destructive migration refused when not allowed" {
 // Migration_Executor.execute returns SHALL yield a row whose version column equals
 // the version string from the target Schema.
 test "migration_executor: schema version persisted after migration" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const table_names = [_][]const u8{ "things", "stuff", "items", "records", "entries" };
     const versions = [_][]const u8{ "1.0.0", "1.1.0", "1.2.3", "2.0.0", "0.1.0" };
@@ -493,7 +493,7 @@ test "migration_executor: schema version persisted after migration" {
 // component in the target Schema, Migration_Executor.execute SHALL return an error and
 // SHALL NOT apply any changes.
 test "migration_executor: major version bump is refused" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const table_names = [_][]const u8{ "docs", "notes", "files", "blobs", "chunks" };
 

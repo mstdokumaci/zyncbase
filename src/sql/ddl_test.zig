@@ -12,7 +12,7 @@ const OnDelete = schema_types.OnDelete;
 const DDLGenerator = ddl_generator.DDLGenerator;
 
 test "ddl_generator: generate DDL for a known table" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
@@ -47,7 +47,7 @@ test "ddl_generator: generate DDL for a known table" {
 }
 
 test "ddl_generator: generate DDL with foreign key and on delete cascade" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     var user_id_field = schema_helpers.makeRequiredField("user_id", .doc_id);
@@ -72,7 +72,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
 }
 
 test "ddl_generator: array field uses BLOB column type" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
@@ -92,7 +92,7 @@ test "ddl_generator: array field uses BLOB column type" {
 }
 
 test "ddl_generator: quoted identifiers allow SQLite keywords" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     var from_field = schema_helpers.makeRequiredField("from", .text);
@@ -127,7 +127,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
 // (with NOT NULL for required fields, FOREIGN KEY for referenced fields),
 // created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, and a CREATE INDEX on namespace_id.
 test "ddl_generator: DDL contains required columns and constraints" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(42);
@@ -223,7 +223,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
 // For any Table value t, executing the DDL produced by DDL_Generator.generateDDL(t)
 // against an empty in-memory SQLite database SHALL succeed without error.
 test "ddl_generator: generated DDL is executable" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(99);
@@ -306,7 +306,7 @@ test "ddl_generator: generated DDL is executable" {
 // For any Table with a mix of field types including at least one .array field,
 // generateDDL shall emit BLOB for array columns and the correct type for all others.
 test "ddl_generator: DDL emits BLOB for array fields" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(0xABCD_1234);

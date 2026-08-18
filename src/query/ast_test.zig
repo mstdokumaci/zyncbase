@@ -79,7 +79,7 @@ fn expectUnsupported(op: Operator, field_type: schema_types.FieldType) !void {
 }
 
 test "Operator.compare semantics" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const txt_a = tth.valText("a");
     const txt_b = tth.valText("b");
@@ -144,7 +144,7 @@ test "Operator.compareNullary semantics" {
 }
 
 test "FilterPredicate.normalize collapses in/notIn empty sets" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const empty = try tth.valArray(allocator, &[_]typed.ScalarValue{});
     defer empty.deinit(allocator);

@@ -5,7 +5,7 @@ const schema_helpers = @import("test_helpers.zig");
 const schema_types = @import("types.zig");
 
 test "schema_index: exposes field kinds and writable ranges" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     var tables = [_]schema_types.Table{schema_helpers.makeTable("posts", &fields)};

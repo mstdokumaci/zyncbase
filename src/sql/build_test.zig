@@ -6,7 +6,7 @@ const buf_mod = @import("buf.zig");
 const build = @import("build.zig");
 
 test "appendProjectedColumnsSql projects all fields with proper quoting" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema_types.Table{table};
@@ -24,7 +24,7 @@ test "appendProjectedColumnsSql projects all fields with proper quoting" {
 }
 
 test "appendSelectFromTableSql builds SELECT ... FROM with quoted identifiers" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema_types.Table{table};
@@ -42,7 +42,7 @@ test "appendSelectFromTableSql builds SELECT ... FROM with quoted identifiers" {
 }
 
 test "append helpers compose into a complete SELECT query" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema_types.Table{table};
@@ -66,7 +66,7 @@ test "append helpers compose into a complete SELECT query" {
 }
 
 test "buildSelectDocumentSql builds no-guard SELECT document query" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
     var tables = [_]schema_types.Table{table};
@@ -85,7 +85,7 @@ test "buildSelectDocumentSql builds no-guard SELECT document query" {
 }
 
 test "buildSelectAllIdsSql builds simple id projection" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const sql = try build.buildSelectAllIdsSql(allocator, "\"test_table\"");
     defer allocator.free(sql);
     try std.testing.expectEqualStrings(
@@ -95,7 +95,7 @@ test "buildSelectAllIdsSql builds simple id projection" {
 }
 
 test "buildDeleteDocumentSqlPrefix builds delete prefix" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
     var tables = [_]schema_types.Table{table};
@@ -112,7 +112,7 @@ test "buildDeleteDocumentSqlPrefix builds delete prefix" {
 }
 
 test "buildDeleteDocumentSqlSuffix builds returning clause" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};
     const table = schema_helpers.makeTable("docs", &fields);
     var tables = [_]schema_types.Table{table};

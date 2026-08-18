@@ -10,7 +10,7 @@ const makePresencePatch = th.makePresencePatch;
 const makeTestUserFields = th.makeTestUserFields;
 
 test "PresenceRecord - init creates all-null slots" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var record = try PresenceRecord.init(allocator, 3);
     defer record.deinit(allocator);
 
@@ -21,7 +21,7 @@ test "PresenceRecord - init creates all-null slots" {
 }
 
 test "PresenceRecord - mergeFromPayload applies sparse patch" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, fields);
 
@@ -48,7 +48,7 @@ test "PresenceRecord - mergeFromPayload applies sparse patch" {
 }
 
 test "PresenceRecord - mergeFromPayload rejects out-of-bounds field index" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, fields);
 
@@ -64,7 +64,7 @@ test "PresenceRecord - mergeFromPayload rejects out-of-bounds field index" {
 }
 
 test "PresenceRecord - mergeFromPayload rejects non-map payload" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, fields);
 
@@ -76,7 +76,7 @@ test "PresenceRecord - mergeFromPayload rejects non-map payload" {
 }
 
 test "PresenceRecord - clone deep copies values" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, fields);
 
@@ -99,7 +99,7 @@ test "PresenceRecord - clone deep copies values" {
 }
 
 test "PresenceRecord - mergeFromPayload overwrites existing value" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, fields);
 

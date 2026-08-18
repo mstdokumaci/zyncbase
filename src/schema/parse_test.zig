@@ -5,13 +5,13 @@ const schema_helpers = @import("test_helpers.zig");
 const schema_types = @import("types.zig");
 
 test "schema_parse: rejects malformed root shape" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidSchema, schema_parse.initFromJson(allocator, "[]"));
 }
 
 test "schema_parse: validates root version and store" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.MissingVersion, schema_parse.initFromJson(allocator,
         \\{"store":{}}
@@ -28,7 +28,7 @@ test "schema_parse: validates root version and store" {
 }
 
 test "schema_parse: preserves allowed metadata objects" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{
@@ -59,7 +59,7 @@ test "schema_parse: preserves allowed metadata objects" {
 }
 
 test "schema_parse: rejects non-object metadata" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidMetadata, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","metadata":"core","store":{}}
@@ -73,7 +73,7 @@ test "schema_parse: rejects non-object metadata" {
 }
 
 test "schema_parse: rejects unknown keys outside extension points" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{},"owner":"core"}
@@ -87,7 +87,7 @@ test "schema_parse: rejects unknown keys outside extension points" {
 }
 
 test "schema_parse: accepts planned constraint keys without enforcement" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{
@@ -117,7 +117,7 @@ test "schema_parse: accepts planned constraint keys without enforcement" {
 }
 
 test "schema_parse: implicit users is canonical first table" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{}},"comments":{"fields":{}}}}
@@ -133,7 +133,7 @@ test "schema_parse: implicit users is canonical first table" {
 }
 
 test "schema_parse: explicit users moves to canonical first table" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{}},"users":{"namespaced":true,"fields":{"name":{"type":"string"}}}}}
@@ -147,7 +147,7 @@ test "schema_parse: explicit users moves to canonical first table" {
 }
 
 test "schema_parse: builds canonical field order and user range" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"done":{"type":"boolean"}}}}}
@@ -169,7 +169,7 @@ test "schema_parse: builds canonical field order and user range" {
 }
 
 test "schema_parse: users external_id is internal only" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.ReservedFieldName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"users":{"fields":{"external_id":{"type":"string"}}}}}
@@ -186,7 +186,7 @@ test "schema_parse: users external_id is internal only" {
 }
 
 test "schema_parse: rejects reserved names and internal table prefix" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidTableName, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"_zync_shadow":{"fields":{}}}}
@@ -203,7 +203,7 @@ test "schema_parse: rejects reserved names and internal table prefix" {
 }
 
 test "schema_parse: flattens nested fields and resolves required leaves" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{
@@ -228,7 +228,7 @@ test "schema_parse: flattens nested fields and resolves required leaves" {
 }
 
 test "schema_parse: rejects object-level and missing required paths" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"profiles":{"required":["profile"],"fields":{"profile":{"type":"object","fields":{"name":{"type":"string"}}}}}}}
@@ -239,7 +239,7 @@ test "schema_parse: rejects object-level and missing required paths" {
 }
 
 test "schema_parse: validates array items" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.MissingArrayItems, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array"}}}}}
@@ -260,7 +260,7 @@ test "schema_parse: validates array items" {
 }
 
 test "schema_parse: validates references and on delete rules" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     try std.testing.expectError(error.InvalidReference, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"author_id":{"type":"string","references":"missing"}}}}}
@@ -284,7 +284,7 @@ test "schema_parse: validates references and on delete rules" {
 }
 
 test "schema_property: generated valid identifiers survive normalization" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(42);
     const random = prng.random();
@@ -311,7 +311,7 @@ test "schema_property: generated valid identifiers survive normalization" {
 }
 
 test "schema_property: generated invalid identifiers fail" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const invalid_names = [_][]const u8{ "", "1bad", "bad-name", "bad.name", "bad__name" };
 
@@ -336,7 +336,7 @@ test "schema_property: generated invalid identifiers fail" {
 }
 
 test "schema_property: nested flattening uses only internal separator" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const cases = [_][]const u8{
         \\{"version":"1.0.0","store":{"t":{"fields":{"addr":{"type":"object","fields":{"city":{"type":"string"}}}}}}}

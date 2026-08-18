@@ -33,10 +33,16 @@ for archive in "$cache_dir"/o/*/libc++.a "$cache_dir"/o/*/libc++abi.a; do
             objcopy --localize-symbol=__cxa_guard_acquire \
                     --localize-symbol=__cxa_guard_release \
                     --localize-symbol=__cxa_guard_abort \
-                    "$member" "$member.loc" 2>/dev/null && mv "$member.loc" "$member"
+                    "$member" "$member.loc" 2>/dev/null
+            mv "$member.loc" "$member"
         done
-        rm -f "$archive"
-        ar rcs "$archive" *.o
+        # Rebuild to a temp path and only mv over the original once ar has
+        # succeeded; a failed objcopy or ar leaves the original archive intact
+        # (set -e aborts the subshell before any mv).
+        tmp_archive="${archive}.tsan-tmp"
+        rm -f "$tmp_archive"
+        ar rcs "$tmp_archive" ./*.o
+        mv "$tmp_archive" "$archive"
     )
     rm -rf "$work"
     count=$((count + 1))

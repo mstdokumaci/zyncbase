@@ -10,7 +10,7 @@ const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 const empty_claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{};
 
 test "TicketExchange: generate and verify ticket" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const exchange = try TicketExchange.init(
         testing.io,
@@ -39,7 +39,7 @@ test "TicketExchange: generate and verify ticket" {
 }
 
 test "TicketExchange: expired ticket verification fails" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     const exchange = try TicketExchange.init(
         testing.io,
@@ -62,7 +62,7 @@ test "TicketExchange: expired ticket verification fails" {
 }
 
 test "TicketExchange: validate anonymous subject" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     // 1. Anonymous auth enabled
     const exchange_enabled = try TicketExchange.init(
