@@ -3,13 +3,12 @@ FROM ubuntu:24.04
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies for Zig, OpenSSL, and the TSAN libc++ workaround
-# (binutils provides ar/objcopy; llvm provides llvm-symbolizer for TSAN reports,
-# as binutils addr2line cannot parse Zig's DWARF)
+# Install dependencies for Zig, OpenSSL, and TSAN
+# (llvm provides llvm-objcopy for the libc++ workaround and llvm-symbolizer for
+# TSAN reports, as binutils addr2line cannot parse Zig's DWARF)
 RUN apt-get update && apt-get install -y \
     curl \
     xz-utils \
-    binutils \
     libssl-dev \
     unzip \
     llvm \
