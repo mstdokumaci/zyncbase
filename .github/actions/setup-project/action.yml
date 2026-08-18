@@ -8,6 +8,8 @@ runs:
       uses: mlugg/setup-zig@v2
       with:
         version: 0.16.0
+        cache-key: ${{ matrix.optimize }}-${{ matrix.target }}
+        cache-size-limit: 4096
 
     - name: Prepare Zig global cache
       shell: bash
