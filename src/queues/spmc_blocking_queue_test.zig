@@ -10,7 +10,7 @@ const TestItem = struct {
 };
 
 test "SpmcBlockingQueue: empty queue" {
-    const alloc = std.heap.smp_allocator;
+    const alloc = std.testing.allocator;
     var q = spmcBlockingQueue(TestItem).init(testing.io, alloc);
     defer q.deinit();
 

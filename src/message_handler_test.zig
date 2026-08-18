@@ -16,7 +16,7 @@ const routeWithArena = helpers.routeWithArena;
 const routeWithArenaOptional = helpers.routeWithArenaOptional;
 
 test "Connection - init and deinit" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "conn-init", &.{});
     defer app.deinit();

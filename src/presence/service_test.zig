@@ -58,7 +58,7 @@ fn denyWriteSession(claims: *const std.StringHashMapUnmanaged(typed.Value), aren
 // ─── Auth: setUser ───────────────────────────────────────────────────────────
 
 test "PresenceService: setUser authorized with permissive config" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     var schema = try makeServiceTestSchema(allocator);
     defer schema.deinit();
     var config = try makePermissiveConfig(allocator, &schema);

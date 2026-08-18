@@ -11,7 +11,7 @@ const testing = std.testing;
 // These tests verify specific examples and edge cases
 
 test "CheckpointWorker: initialization" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
     try ctx.init(allocator, .{});

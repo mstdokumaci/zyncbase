@@ -93,6 +93,7 @@ pub const SubscriptionWorker = struct {
     schema: *const schema_types.Schema,
     send_queue: *send_queue_type,
     notifier: Notifier,
+    completion: ?*std.Io.Event,
 
     pub fn init(
         id: usize,
@@ -113,6 +114,7 @@ pub const SubscriptionWorker = struct {
             .schema = schema,
             .send_queue = send_queue,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
+            .completion = null,
         };
     }
 
@@ -140,6 +142,7 @@ pub const SubscriptionWorker = struct {
 
     fn processChange(self: *SubscriptionWorker, job: ChangeJob) void {
         var job_mut = job;
+        defer if (self.completion) |completion| completion.set(self.change_queue.io);
         defer job_mut.deinit(job_mut.allocator);
 
         const change = job_mut.change;

@@ -14,7 +14,7 @@ const makeTestSharedFields = th.makeTestSharedFields;
 const makeTestUserFields = th.makeTestUserFields;
 
 test "PresenceManager - setUser creates record and queues pending update" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
     defer freeTestFields(allocator, user_fields);
     const shared_fields = try makeTestSharedFields(allocator);

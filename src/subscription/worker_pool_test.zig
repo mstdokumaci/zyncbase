@@ -16,6 +16,8 @@ const SubscriptionWorkerPool = @import("worker_pool.zig").SubscriptionWorkerPool
 
 const testing = std.testing;
 
+const completion_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(5) } };
+
 const TestContext = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,
@@ -100,6 +102,8 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     defer pool.deinit();
     defer pool.stop();
 
+    var completion: std.Io.Event = .unset;
+    pool.pool.workers[0].completion = &completion;
     try pool.start();
 
     // Push a matching change (status = "active")
@@ -116,8 +120,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     };
     ctx.change_queue.push(change, allocator);
 
-    // Wait for processing
-    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
+    try completion.waitTimeout(testing.io, completion_timeout);
 
     // Verify send_queue received the delta
     try testing.expect(ctx.send_queue.hasItems());
@@ -160,6 +163,8 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     defer pool.deinit();
     defer pool.stop();
 
+    var completion: std.Io.Event = .unset;
+    pool.pool.workers[0].completion = &completion;
     try pool.start();
 
     // Push a non-matching change (status = "inactive")
@@ -176,8 +181,7 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     };
     ctx.change_queue.push(change, allocator);
 
-    // Wait for processing
-    try std.testing.io.sleep(.fromNanoseconds(50 * std.time.ns_per_ms), .awake);
+    try completion.waitTimeout(testing.io, completion_timeout);
 
     // Verify send_queue is empty (no match)
     try testing.expect(!ctx.send_queue.hasItems());

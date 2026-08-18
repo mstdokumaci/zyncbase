@@ -9,6 +9,8 @@ const Allocator = std.mem.Allocator;
 /// It combines SmpAllocator for long-lived allocations, ArenaAllocator for
 /// per-request temporary allocations, and connection object pool for high-churn connections.
 pub const MemoryStrategy = struct {
+    allocator: Allocator,
+
     /// Pool of Arena allocators for per-request temporary allocations (freed in bulk).
     arena_pool: IndexPool(std.heap.ArenaAllocator),
 
@@ -18,7 +20,12 @@ pub const MemoryStrategy = struct {
     /// Initialize the memory strategy with standard defaults.
     /// Pre-allocates fewer arenas under `zig test` to reduce test overhead.
     pub fn init(self: *MemoryStrategy) !void {
+        try self.initWithAllocator(std.heap.smp_allocator);
+    }
+
+    pub fn initWithAllocator(self: *MemoryStrategy, allocator: Allocator) !void {
         self.* = .{
+            .allocator = allocator,
             // SAFETY: Initialized below via the .init() calls.
             .arena_pool = undefined,
             // SAFETY: Initialized below via the .init() calls.
@@ -29,7 +36,7 @@ pub const MemoryStrategy = struct {
 
         // Initialize pools
         try self.arena_pool.init(
-            std.heap.smp_allocator,
+            allocator,
             1024,
             deinitArena,
             initArena,
@@ -37,7 +44,7 @@ pub const MemoryStrategy = struct {
         errdefer self.arena_pool.deinit();
 
         try self.connection_pool.init(
-            std.heap.smp_allocator,
+            allocator,
             100_000,
             deinitConnection,
             initConnection,
@@ -74,8 +81,7 @@ pub const MemoryStrategy = struct {
 
     /// Access the general-purpose allocator
     pub fn generalAllocator(self: *MemoryStrategy) Allocator {
-        _ = self;
-        return std.heap.smp_allocator;
+        return self.allocator;
     }
 
     /// Acquire an arena from the pool

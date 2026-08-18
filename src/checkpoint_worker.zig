@@ -159,7 +159,7 @@ pub const CheckpointWorker = struct {
 
         // Update metrics
         const end_time = std.Io.Clock.real.now(self.io).toMilliseconds();
-        const duration: u64 = @intCast(end_time - start_time);
+        const duration: u64 = @intCast(@max(@as(i64, 0), end_time - start_time));
 
         self.last_checkpoint.store(std.Io.Clock.real.now(self.io).toSeconds(), .release);
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);

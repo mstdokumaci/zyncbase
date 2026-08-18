@@ -223,6 +223,7 @@ pub const Jwks = struct {
         // Done before locking so the (rare, ~instant) join doesn't hold the mutex.
         self.mutex.lockUncancelable(self.io);
         const stale_thread = self.refresh_thread;
+        self.refresh_thread = null;
         self.mutex.unlock(self.io);
         if (stale_thread) |thread| thread.join();
 

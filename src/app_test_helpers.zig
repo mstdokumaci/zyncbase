@@ -211,7 +211,7 @@ pub const AppTestContext = struct {
         errdefer self.schema.deinit();
 
         // 1. Initialize Memory Strategy
-        try self.memory_strategy.init();
+        try self.memory_strategy.initWithAllocator(allocator);
         errdefer self.memory_strategy.deinit();
 
         const gpa = self.memory_strategy.generalAllocator();

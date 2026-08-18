@@ -12,7 +12,7 @@ const writeFixStr = helpers.writeFixStr;
 // === Fast Decoder Tests (extracted from src/wire_test.zig) ===
 
 test "extractEnvelopeFast: valid envelope" {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.testing.allocator;
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
