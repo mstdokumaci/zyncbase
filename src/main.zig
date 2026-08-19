@@ -7,6 +7,18 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
+const logo_color = "\x1b[95m";
+const logo_reset = "\x1b[0m";
+const logo =
+    \\███████╗██╗   ██╗███╗   ██╗ ██████╗██████╗  █████╗ ███████╗███████╗
+    \\╚══███╔╝╚██╗ ██╔╝████╗  ██║██╔════╝██╔══██╗██╔══██╗██╔════╝██╔════╝
+    \\  ███╔╝  ╚████╔╝ ██╔██╗ ██║██║     ██████╔╝███████║███████╗█████╗  
+    \\ ███╔╝    ╚██╔╝  ██║╚██╗██║██║     ██╔══██╗██╔══██║╚════██║██╔══╝  
+    \\███████╗   ██║   ██║ ╚████║╚██████╗██████╔╝██║  ██║███████║███████╗
+    \\╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝
+    \\
+;
+
 pub fn main(init: std.process.Init) !void {
     // prod allocator: SmpAllocator for all server flows (see memory/strategy.zig)
     const allocator = std.heap.smp_allocator;
@@ -39,6 +51,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    try std.Io.File.writeStreamingAll(.stdout(), io, logo_color ++ logo ++ logo_reset);
     std.log.info("Initializing ZyncBase server...", .{});
 
     // Initialize server
