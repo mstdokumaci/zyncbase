@@ -28,6 +28,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "InvalidFieldName", wireError("INVALID_FIELD_NAME", "Field name contains forbidden characters") },
     .{ "InvalidMessageFormat", wireError("INVALID_MESSAGE_FORMAT", "Malformed MessagePack frame") },
     .{ "InvalidMessageType", wireError("INVALID_MESSAGE_TYPE", "Only binary MessagePack frames are supported") },
+    .{ "UnknownMessageType", wireError("INVALID_MESSAGE_TYPE", "Unknown or invalid message type") },
     .{ "MissingRequiredFields", wireError("INVALID_MESSAGE", "Request missing required fields") },
     .{ "MissingSubscriptionId", wireError("INVALID_MESSAGE_FORMAT", "Request missing subscription ID") },
     .{ "InvalidPayload", wireError("INVALID_MESSAGE", "Invalid payload structure") },

@@ -10,11 +10,46 @@ const tth = @import("../typed/test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("encode.zig");
 const wire_errors = @import("errors.zig");
+const msgpack_skip = @import("msgpack_skip.zig");
 const helpers = @import("test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
+const MessageType = @import("message_type.zig").MessageType;
 
 const testing = std.testing;
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
+
+fn expectType(bytes: []const u8, parsed: msgpack.Payload, expected: MessageType) !void {
+    // Walk the top-level map structurally so only the "type" key at the top
+    // level is located; nested payloads or truncated matches elsewhere in the
+    // buffer cannot be mistaken for it. The value must be a one-byte positive
+    // fixint (0x00-0x7f), never a uint8/16/32/64 marker (0xcc-0xcf).
+    if (bytes.len == 0) return error.Truncated;
+    if (bytes[0] < 0x80 or bytes[0] > 0x8f) return error.NotFixMap;
+    const map_size = bytes[0] & 0x0f;
+    var idx: usize = 1;
+    for (0..map_size) |_| {
+        if (idx >= bytes.len) return error.Truncated;
+        const key_marker = bytes[idx];
+        if (key_marker < 0xa0 or key_marker > 0xbf) return error.MalformedKey;
+        const key_len: usize = key_marker & 0x1f;
+        idx += 1;
+        if (idx + key_len > bytes.len) return error.Truncated;
+        const key = bytes[idx .. idx + key_len];
+        idx += key_len;
+        if (std.mem.eql(u8, key, "type")) {
+            if (idx >= bytes.len) return error.Truncated;
+            const type_byte = bytes[idx];
+            try testing.expect(type_byte < 0x80);
+
+            const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
+            try testing.expect(type_val == .uint);
+            try testing.expectEqual(expected, std.enums.fromInt(MessageType, type_val.uint) orelse return error.TestExpectedError);
+            return;
+        }
+        try msgpack_skip.skipValue(bytes, &idx);
+    }
+    return error.MissingType;
+}
 
 test "encodeSuccess: produces valid MsgPack" {
     const allocator = std.heap.smp_allocator;
@@ -26,8 +61,7 @@ test "encodeSuccess: produces valid MsgPack" {
     defer parsed.free(allocator);
 
     try testing.expect(parsed == .map);
-    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("ok", type_val.str.value());
+    try expectType(response, parsed, .ok);
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 12345), id_val.uint);
 }
@@ -43,8 +77,7 @@ test "encodeError: produces valid MsgPack" {
     defer parsed.free(allocator);
 
     try testing.expect(parsed == .map);
-    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("error", type_val.str.value());
+    try expectType(response, parsed, .@"error");
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 999), id_val.uint);
     const code_val = (try parsed.mapGet("code")) orelse return error.MissingCode;
@@ -90,8 +123,7 @@ test "encodeQuery: includes subscription pagination fields" {
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("ok", type_val.str.value());
+    try expectType(response, parsed, .ok);
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 44), id_val.uint);
     const sub_id_val = (try parsed.mapGet("subId")) orelse return error.MissingSubId;
@@ -193,8 +225,7 @@ test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
     const p = try msgpack.decode(allocator, &reader);
     defer p.free(allocator);
 
-    const type_val = (try p.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("WriteCommitted", type_val.str.value());
+    try expectType(msg, p, .write_committed);
     const wid_val = (try p.mapGet("writeId")) orelse return error.MissingWriteId;
     try testing.expectEqualStrings("0102030405060708090a0b0c0d0e0f10", wid_val.str.value());
 }
@@ -210,8 +241,7 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
     const p = try msgpack.decode(allocator, &reader);
     defer p.free(allocator);
 
-    const type_val = (try p.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("WriteError", type_val.str.value());
+    try expectType(msg, p, .write_error);
     const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
     try testing.expectEqualStrings("write", phase_val.str.value());
     try testing.expect((try p.mapGet("batchIndex")) == null);
@@ -251,8 +281,7 @@ test "store_delta_header: decodes to StoreDelta type" {
     defer p.free(allocator);
 
     try testing.expect(p == .map);
-    const type_val = (try p.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("StoreDelta", type_val.str.value());
+    try expectType(buf.written(), p, .store_delta);
     const sub_id_val = (try p.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
 }
@@ -309,8 +338,7 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
     defer decoded.free(allocator);
 
     try testing.expect(decoded == .map);
-    const type_val = (try decoded.mapGet("type")) orelse return error.MissingType;
-    try testing.expectEqualStrings("PresenceBroadcast", type_val.str.value());
+    try expectType(bytes, decoded, .presence_broadcast);
     const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
     const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;

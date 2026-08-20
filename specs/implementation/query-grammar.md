@@ -65,7 +65,7 @@ Queries use compact integer tuples on the wire to minimize message size.
 
 ```json
 {
-  "type": "StoreQuery",
+  "type": 20,
   "id": 6,
   "table_index": 0,
   "conditions": [[3, 4, 18], [4, 0, "active"]],
@@ -75,6 +75,8 @@ Queries use compact integer tuples on the wire to minimize message size.
   "after": "eyJpZCI6..."
 }
 ```
+
+`type` is the numeric wire ID for `StoreQuery` from the [Message Type Registry](./wire-protocol.md#message-type-registry).
 
 ---
 

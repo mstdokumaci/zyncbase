@@ -1,10 +1,25 @@
 import { encode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
+import { WireMessageType } from "./connection_wire";
 import type { AuthConfig, ClientOptions } from "./types";
 
-/** Encode a message to an exact-size ArrayBuffer. */
+/**
+ * Encode a message to an exact-size ArrayBuffer. Logical message type names
+ * (e.g. "ok", "StoreDelta") are translated to their numeric wire IDs so test
+ * helpers can keep speaking the SDK's logical vocabulary.
+ */
 export function encodeToBuffer(msg: unknown): ArrayBuffer {
-	const encoded = encode(msg);
+	let wireMsg = msg;
+	if (msg && typeof msg === "object" && !Array.isArray(msg)) {
+		const type = (msg as { type?: unknown }).type;
+		if (typeof type === "string" && Object.hasOwn(WireMessageType, type)) {
+			wireMsg = {
+				...(msg as Record<string, unknown>),
+				type: WireMessageType[type as keyof typeof WireMessageType],
+			};
+		}
+	}
+	const encoded = encode(wireMsg);
 	return encoded.buffer.slice(
 		encoded.byteOffset,
 		encoded.byteOffset + encoded.byteLength,
@@ -83,11 +98,7 @@ export class AutoMockWebSocket {
 	}
 
 	private _autoRespondOk(id: number): void {
-		const encoded = encode({ type: "ok", id }) as Uint8Array;
-		const buf = encoded.buffer.slice(
-			encoded.byteOffset,
-			encoded.byteOffset + encoded.byteLength,
-		) as ArrayBuffer;
+		const buf = encodeToBuffer({ type: "ok", id });
 		if (this.onmessage) {
 			this.onmessage({ data: buf });
 		}

@@ -44,9 +44,9 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 | Transport | WebSocket. |
 | Frame type | Binary MessagePack frames. |
 | Compression | Disabled. |
-| Request envelope | MessagePack map with `type: string` and `id: u64`. |
-| Response envelope | MessagePack map with `type: "ok"` or `type: "error"` and matching `id`. |
-| Push envelope | MessagePack map with a push `type`; no request `id`. |
+| Request envelope | MessagePack map with `type: u8` (numeric message type ID, one-byte positive fixint) and `id: u64`. |
+| Response envelope | MessagePack map with `type: 0x00` (`ok`) or `type: 0x01` (`error`) and matching `id`. |
+| Push envelope | MessagePack map with a numeric push `type` ID; no request `id`. |
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
@@ -81,6 +81,52 @@ All values that represent integer-keyed field maps (store documents, presence da
 - Duplicate field index in one pair-array: processed in order, last-wins.
 - Ordering: pairs are unordered; server/SDK must not assume sorted-by-index.
 - Empty `[]`: valid; means no fields.
+
+## Message Type Registry
+
+Every top-level message carries a fixed numeric `type` ID. The registry is the
+single source of truth shared by the Zig enum (`src/wire/message_type.zig`),
+the SDK registry (`sdk/typescript/src/connection_wire.ts`), and this spec.
+All IDs are ≤ `0x7f` so MessagePack encodes them as a one-byte positive
+fixint. **Never reuse or renumber an assigned ID.**
+
+| ID | Name | Direction | Purpose |
+|----|------|-----------|---------|
+| `0x00` | `ok` | S→C | Successful correlated response. |
+| `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
+| `0x02` | `Connected` | S→C | Connection/session bootstrap. |
+| `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
+| `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
+| `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
+| `0x10` | `StoreSetNamespace` | C→S | Establish store scope. |
+| `0x11` | `StoreSet` | C→S | Set a document or field. |
+| `0x12` | `StoreRemove` | C→S | Remove a document or field. |
+| `0x13` | `StoreBatch` | C→S | Apply a write batch. |
+| `0x14` | `StoreQuery` | C→S | Execute a one-shot query. |
+| `0x15` | `StoreSubscribe` | C→S | Start a live query. |
+| `0x16` | `StoreUnsubscribe` | C→S | Stop a live query. |
+| `0x17` | `StoreLoadMore` | C→S | Page an active query. |
+| `0x18` | `StoreDelta` | S→C | Push committed subscription changes. |
+| `0x19` | `WriteCommitted` | S→C | Confirm a tracked write. |
+| `0x1a` | `WriteError` | S→C | Fail a tracked write. |
+| `0x20` | `PresenceSetNamespace` | C→S | Establish presence scope. |
+| `0x21` | `PresenceSet` | C→S | Update user presence. |
+| `0x22` | `PresenceSetShared` | C→S | Update shared presence state. |
+| `0x23` | `PresenceSubscribe` | C→S | Subscribe to user presence. |
+| `0x24` | `PresenceUnsubscribe` | C→S | Unsubscribe from user presence. |
+| `0x25` | `PresenceSubscribeShared` | C→S | Subscribe to shared state. |
+| `0x26` | `PresenceUnsubscribeShared` | C→S | Unsubscribe from shared state. |
+| `0x27` | `PresenceRemove` | C→S | Remove user presence. |
+| `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
+| `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
+
+**Direction rules:** server-only IDs (`0x00`–`0x03`, `0x05`, `0x18`–`0x1a`,
+`0x28`–`0x29`) received as client requests are rejected with
+`INVALID_MESSAGE_TYPE`. `0x04` (`AuthRefresh`) is a client request; unknown or
+unassigned IDs are rejected the same way.
+Legacy string `type` values fail envelope decoding with
+`INVALID_MESSAGE_FORMAT`. The map key remains the string `"type"`; only the
+value is numeric.
 
 ## Client Messages
 
@@ -164,7 +210,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 ## Extensibility
 
 - Additive fields are allowed when older decoders can safely ignore them.
-- New message types must be added to `MessageHandler.classifyMsgType`, `src/wire/decode.zig`, SDK wire code, and this file in the same change.
+- New message types must be added to `MessageType` (`src/wire/message_type.zig`), the message routing switch in `src/message_handler.zig`, the SDK registry in `sdk/typescript/src/connection_wire.ts`, this file, and the [Message Type Registry](#message-type-registry) in the same change.
 - New public errors must be added to `src/wire/errors.zig`, `sdk/typescript/src/errors.ts`, and [Error Taxonomy](./error-taxonomy.md).
 - Breaking wire changes are acceptable during the current green-field stage, but the docs and SDK must move in the same commit.
 

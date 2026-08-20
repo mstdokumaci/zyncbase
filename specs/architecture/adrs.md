@@ -242,6 +242,7 @@ WebSocket per-message deflate compression is disabled. MessagePack is already co
 - Smaller wire payloads than JSON without pre-compiled stubs.
 - Stack-overflow attacks via deeply nested payloads are impossible by construction.
 - No compression overhead on the critical path.
+- Message type discriminators are one-byte positive fixint IDs (`0x00`–`0x29`) from the canonical registry in `src/wire/message_type.zig` / `sdk/typescript/src/connection_wire.ts`, replacing the legacy top-level `type` strings. Direction is enforced by routing, not by the numeric value; see ADR-009.
 
 **Principles**: P-PPF, P-SBD
 
@@ -282,6 +283,11 @@ The SDK is responsible for translating developer-facing syntax into compact wire
 | `{ age: { gte: 18 } }` (query condition) | `[field_index, op_code, 18]` (positional tuple) |
 | `{ created_at: 'desc' }` (sort) | `[field_index, 1]` (positional tuple, desc flag) |
 | `'address.city'` (nested field) | field index for `address__city` (flattened with `__`) |
+| `{ type: "StoreSet" }` (message) | `type: 0x11` — one-byte positive fixint message ID |
+
+### Message Type IDs
+
+Message type discriminators are fixed numeric IDs (`0x00`–`0x29`), a single byte each on the wire. The registry is a shared contract — the Zig enum (`src/wire/message_type.zig`) and the SDK registry (`sdk/typescript/src/connection_wire.ts`) encode the same table, and routing is an exhaustive switch: server-only or unknown IDs sent by a client return `INVALID_MESSAGE_TYPE`, and legacy string types fail with `INVALID_MESSAGE_FORMAT`. The SDK maps IDs back to logical type names on decode, so the wire change is invisible above the codec boundary.
 
 Nested field paths are flattened in the SDK using the `__` separator convention before being mapped to integer indices. The server sees only flat field names.
 

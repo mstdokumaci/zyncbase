@@ -15,7 +15,7 @@ const TableMetadata = schema_types.Table;
 pub fn createMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    msg_type: []const u8,
+    msg_type: u8,
     namespace: ?[]const u8,
     table_index: ?usize,
     path_suffix: []const []const u8,
@@ -29,9 +29,9 @@ pub fn createMessage(
     if (namespace == null) num_elements -= 1;
     try writer.writeByte(0x80 | num_elements); // fixmap with N elements
 
-    // "type" key
+    // "type" key (numeric message ID)
     try writeMsgPackStr(writer, "type");
-    try writeMsgPackStr(writer, msg_type);
+    try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(msg_type), writer);
 
     // "id" key
     try writeMsgPackStr(writer, "id");

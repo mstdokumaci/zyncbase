@@ -28,6 +28,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StoreService = @import("store_service.zig").StoreService;
 const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("wire/message_type.zig").MessageType;
 
 const Allocator = std.mem.Allocator;
 const Session = authentication_session.Session;
@@ -146,17 +147,18 @@ pub fn encodePayloadToBytes(allocator: Allocator, payload: msgpack.Payload) ![]c
 
 /// Parse a response and extract the "type" and "code" fields.
 /// Caller is responsible for freeing the fields in the returned struct.
-pub fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { resp_type: []const u8, code: ?[]const u8 } {
+pub fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { resp_type: MessageType, code: ?[]const u8 } {
     var reader: std.Io.Reader = .fixed(response);
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
 
     const resp_type_val_opt = try msgpack.getMapValue(parsed, "type");
     const resp_type_val = resp_type_val_opt orelse return error.MissingType;
+    const resp_type = std.enums.fromInt(MessageType, resp_type_val.uint) orelse return error.InvalidMessageType;
     const resp_code_val = try msgpack.getMapValue(parsed, "code");
 
     return .{
-        .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),
+        .resp_type = resp_type,
         .code = if (resp_code_val) |v| try allocator.dupe(u8, v.str.value()) else null,
     };
 }

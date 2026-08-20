@@ -202,7 +202,7 @@ test "logging: error details" {
         const writer = &buf.writer;
         try writer.writeByte(0x81); // fixmap(1)
         try msgpack_helpers.writeMsgPackStr(writer, "type");
-        try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
+        try writer.writeByte(0x11); // StoreSet numeric ID
 
         const incomplete_msg = buf.written();
 

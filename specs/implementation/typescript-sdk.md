@@ -53,7 +53,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 
 1. Public store/presence method validates SDK inputs and builds a semantic command.
 2. `ConnectionManager` ensures the connection and required namespace scope are ready.
-3. `ConnectionWireCodec` encodes the command using current schema dictionaries.
+3. `ConnectionWireCodec` encodes the command using current schema dictionaries and replaces the logical `type` name with its numeric wire ID from the shared registry (`WireMessageType`); `decodeMessage` maps numeric IDs back to the logical `InboundMessage` type names, so the rest of the SDK never sees numeric wire IDs.
 4. `PendingRequests` records the request id, timeout, and optional committed write id.
 5. Server response resolves/rejects the immediate request.
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
@@ -74,7 +74,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 
 ## Maintenance Rules
 
-- A wire message change must update `connection_wire.ts`, server `src/wire/*`, [Wire Protocol](./wire-protocol.md), and relevant tests together.
+- A wire message change must update `connection_wire.ts` (registry + encode/decode), server `src/wire/*`, [Wire Protocol](./wire-protocol.md), and relevant tests together.
 - A public API type change must update `types.ts` and `index.ts` exports together.
 - SDK distribution changes must keep `sdk/typescript/src/index.ts`, emitted declarations, and the CLI build entry aligned.
 - Store and presence APIs stay separate; do not reintroduce presence through store paths.

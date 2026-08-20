@@ -4,6 +4,7 @@ const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const schema_types = @import("schema/types.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
+const MessageType = @import("wire/message_type.zig").MessageType;
 
 pub fn createStoreSetMessageWithPayload(
     allocator: std.mem.Allocator,
@@ -20,7 +21,7 @@ pub fn createStoreSetMessageWithPayload(
 
     try writer.writeByte(0x84); // fixmap(4) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
-    try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
+    try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(@intFromEnum(MessageType.store_set)), writer);
 
     try msgpack_utils.writeMsgPackStr(writer, "id");
     try writer.writeByte(0xcf); // uint64
@@ -54,8 +55,7 @@ pub fn createStoreQueryMessageWithFilterKey(
     defer p.free(allocator);
 
     {
-        const k_val = try msgpack_utils.Payload.strToPayload("StoreQuery", allocator);
-        errdefer k_val.free(allocator);
+        const k_val = msgpack_utils.Payload.uintToPayload(@intFromEnum(MessageType.store_query));
         try p.mapPut("type", k_val);
     }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
@@ -99,8 +99,7 @@ pub fn createStoreSubscribeMessage(
 
     _ = _subscription_id;
     {
-        const k_val = try msgpack_utils.Payload.strToPayload("StoreSubscribe", allocator);
-        errdefer k_val.free(allocator);
+        const k_val = msgpack_utils.Payload.uintToPayload(@intFromEnum(MessageType.store_subscribe));
         try p.mapPut("type", k_val);
     }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
@@ -129,7 +128,7 @@ pub fn createStoreSubscribeMessage(
 pub fn createCustomMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    msg_type: []const u8,
+    msg_type: u8,
     namespace_id: i64,
     table_index: ?usize,
     path_suffix: []const []const u8,
@@ -148,7 +147,7 @@ pub fn createInvalidStoreSetMessageMissingId(
     const writer = &buf.writer;
     try writer.writeByte(0x81); // fixmap(1) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
-    try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
+    try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(@intFromEnum(MessageType.store_set)), writer);
     return buf.toOwnedSlice();
 }
 

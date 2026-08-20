@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { encode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
 import {
+	encodeToBuffer,
 	installMockFetchTicket,
 	installMockWs,
 	MockWebSocket,
@@ -135,13 +135,13 @@ describe("ZyncBaseClient", () => {
 		const { decode } = await import("@msgpack/msgpack");
 		const decoded = decode(lastMsg) as Record<string, unknown>;
 
-		const errorResponse = encode({
+		const errorResponse = encodeToBuffer({
 			type: "error",
 			id: decoded.id,
 			code: "SCHEMA_VALIDATION_FAILED",
 			message: "oops",
 		});
-		mockWs.triggerMessage(errorResponse as unknown as ArrayBuffer);
+		mockWs.triggerMessage(errorResponse);
 
 		await setPromise;
 		expect(errors.length).toBeGreaterThan(0);
@@ -166,12 +166,10 @@ describe("ZyncBaseClient", () => {
 		const lastMsg = mockWs.sentMessages[mockWs.sentMessages.length - 1];
 		const { decode } = await import("@msgpack/msgpack");
 		const decoded = decode(lastMsg) as Record<string, unknown>;
-		expect(decoded.type).toBe("AuthRefresh");
+		expect(decoded.type).toBe(0x04);
 		expect(decoded.token).toBe("new-jwt-token");
 
-		mockWs.triggerMessage(
-			encode({ type: "ok", id: decoded.id }) as unknown as ArrayBuffer,
-		);
+		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: decoded.id }));
 		await refreshPromise;
 
 		client.disconnect();

@@ -1,15 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { decode, encode } from "@msgpack/msgpack";
+import { decode } from "@msgpack/msgpack";
 import { ConnectionWireCodec } from "./connection_wire.js";
+import { encodeToBuffer } from "./test-helpers.js";
 import type { StoreDelta } from "./types.js";
-
-function bufferOf(value: unknown): ArrayBuffer {
-	const bytes = encode(value);
-	return bytes.buffer.slice(
-		bytes.byteOffset,
-		bytes.byteOffset + bytes.byteLength,
-	) as ArrayBuffer;
-}
 
 async function makeCodec(): Promise<ConnectionWireCodec> {
 	const codec = new ConnectionWireCodec();
@@ -40,7 +33,7 @@ describe("ConnectionWireCodec", () => {
 			responseTableIndex: 0,
 		});
 		expect(decode(encoded.bytes)).toEqual({
-			type: "StoreQuery",
+			type: 0x14,
 			id: 7,
 			table_index: 0,
 			conditions: [[1, 0, "Ada"]],
@@ -51,7 +44,7 @@ describe("ConnectionWireCodec", () => {
 	test("decodes schema-aware deltas", async () => {
 		const codec = await makeCodec();
 		const msg = codec.decode(
-			bufferOf({
+			encodeToBuffer({
 				type: "StoreDelta",
 				subId: 1,
 				ops: [
@@ -82,8 +75,8 @@ describe("ConnectionWireCodec", () => {
 
 	test("decodeMulti decodes all concatenated messages in a frame", async () => {
 		const codec = await makeCodec();
-		const ok = bufferOf({ type: "ok", id: 7 });
-		const delta = bufferOf({
+		const ok = encodeToBuffer({ type: "ok", id: 7 });
+		const delta = encodeToBuffer({
 			type: "StoreDelta",
 			subId: 1,
 			ops: [
@@ -119,7 +112,7 @@ describe("ConnectionWireCodec", () => {
 
 	test("decodeMulti handles single-message, empty, and invalid frames", async () => {
 		const codec = await makeCodec();
-		const single = codec.decodeMulti(bufferOf({ type: "ok", id: 1 }));
+		const single = codec.decodeMulti(encodeToBuffer({ type: "ok", id: 1 }));
 		expect(single).toHaveLength(1);
 		expect(single[0]).toEqual({ type: "ok", id: 1 });
 		expect(codec.decodeMulti(new ArrayBuffer(0))).toEqual([]);

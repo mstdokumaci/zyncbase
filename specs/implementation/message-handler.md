@@ -35,8 +35,8 @@
 1. Apply per-connection message rate limiting from `Config.SecurityConfig`.
 2. Decode `wire.Envelope` from the raw MessagePack frame.
 3. Acquire a request arena from `MemoryStrategy`.
-4. Classify the message type with `classifyMsgType`.
-5. Route to the store, auth, or presence handler.
+4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.
+5. Route to the store, auth, or presence handler with an exhaustive `switch` over `MessageType` (adding a registry member is a compile-time routing decision).
 6. Send an immediate response when the route completes synchronously.
 7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current.
 8. Convert route failures through `wire.getWireError` and send a canonical error response.

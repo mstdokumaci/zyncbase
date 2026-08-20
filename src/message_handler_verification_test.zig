@@ -3,6 +3,7 @@ const std = @import("std");
 const helpers = @import("app_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
+const MessageType = @import("wire/message_type.zig").MessageType;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -71,7 +72,8 @@ test "Verification: StoreQuery routes to query response" {
     defer decoded.free(allocator);
 
     const msg_type = (try msgpack.getMapValue(decoded, "type")) orelse return error.TestExpectedError;
-    try testing.expectEqualStrings("ok", msg_type.str.value());
+    try testing.expect(msg_type == .uint);
+    try testing.expectEqual(MessageType.ok, std.enums.fromInt(MessageType, msg_type.uint) orelse return error.TestExpectedError);
 
     const value = (try msgpack.getMapValue(decoded, "value")) orelse return error.TestExpectedError;
     try testing.expect(value == .arr);
@@ -94,7 +96,7 @@ test "Verification: Error handling for invalid messages" {
     {
         var parsed = msgpack.Payload.mapPayload(allocator);
         defer parsed.free(allocator);
-        try parsed.mapPut("type", try msgpack.Payload.strToPayload("StoreSet", allocator));
+        try parsed.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_set)));
 
         const sc = try app.setupMockConnection();
         defer sc.deinit();
@@ -112,9 +114,10 @@ test "Verification: Error handling for invalid messages" {
     }
 
     {
+        // Unassigned numeric ID routes to INVALID_MESSAGE_TYPE.
         var parsed = msgpack.Payload.mapPayload(allocator);
         defer parsed.free(allocator);
-        try parsed.mapPut("type", try msgpack.Payload.strToPayload("UnknownType", allocator));
+        try parsed.mapPut("type", msgpack.Payload.uintToPayload(0x7e));
         try parsed.mapPut("id", msgpack.Payload.uintToPayload(1));
 
         const sc = try app.setupMockConnection();
@@ -125,11 +128,46 @@ test "Verification: Error handling for invalid messages" {
         const response = try routeWithArena(&app.handler, allocator, sc.conn, bytes);
         defer allocator.free(response);
         const decoded = try helpers.parseResponse(allocator, response);
-        defer allocator.free(decoded.resp_type);
         defer if (decoded.code) |code| allocator.free(code);
 
-        try testing.expectEqualStrings("error", decoded.resp_type);
-        try testing.expectEqualStrings("INTERNAL_ERROR", decoded.code.?);
+        try testing.expectEqual(MessageType.@"error", decoded.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_TYPE", decoded.code.?);
+    }
+
+    {
+        // Server-only ID received as a client request routes to INVALID_MESSAGE_TYPE.
+        var parsed = msgpack.Payload.mapPayload(allocator);
+        defer parsed.free(allocator);
+        try parsed.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_delta)));
+        try parsed.mapPut("id", msgpack.Payload.uintToPayload(1));
+
+        const sc = try app.setupMockConnection();
+        defer sc.deinit();
+
+        const bytes = try encodePayloadToBytes(allocator, parsed);
+        defer allocator.free(bytes);
+        const response = try routeWithArena(&app.handler, allocator, sc.conn, bytes);
+        defer allocator.free(response);
+        const decoded = try helpers.parseResponse(allocator, response);
+        defer if (decoded.code) |code| allocator.free(code);
+
+        try testing.expectEqual(MessageType.@"error", decoded.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_TYPE", decoded.code.?);
+    }
+
+    {
+        // Legacy string request type fails envelope decoding with INVALID_MESSAGE_FORMAT.
+        var parsed = msgpack.Payload.mapPayload(allocator);
+        defer parsed.free(allocator);
+        try parsed.mapPut("type", try msgpack.Payload.strToPayload("StoreSet", allocator));
+        try parsed.mapPut("id", msgpack.Payload.uintToPayload(1));
+
+        const sc = try app.setupMockConnection();
+        defer sc.deinit();
+
+        const bytes = try encodePayloadToBytes(allocator, parsed);
+        defer allocator.free(bytes);
+        try testing.expectError(error.InvalidMessageFormat, routeWithArena(&app.handler, allocator, sc.conn, bytes));
     }
 }
 
@@ -169,7 +207,8 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     defer subscribe_decoded.free(allocator);
 
     const subscribe_type = (try msgpack.getMapValue(subscribe_decoded, "type")) orelse return error.TestExpectedError;
-    try testing.expectEqualStrings("ok", subscribe_type.str.value());
+    try testing.expect(subscribe_type == .uint);
+    try testing.expectEqual(MessageType.ok, std.enums.fromInt(MessageType, subscribe_type.uint) orelse return error.TestExpectedError);
 
     const sub_id_payload = (try msgpack.getMapValue(subscribe_decoded, "subId")) orelse return error.TestExpectedError;
     try testing.expect(sub_id_payload == .uint);
@@ -187,7 +226,7 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
 
     var load_more = msgpack.Payload.mapPayload(allocator);
     defer load_more.free(allocator);
-    try load_more.mapPut("type", try msgpack.Payload.strToPayload("StoreLoadMore", allocator));
+    try load_more.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_load_more)));
     try load_more.mapPut("id", msgpack.Payload.uintToPayload(78));
     try load_more.mapPut("subId", msgpack.Payload.uintToPayload(sub_id));
     try load_more.mapPut("nextCursor", try msgpack.Payload.strToPayload(next_cursor, allocator));
@@ -202,7 +241,8 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     defer load_decoded.free(allocator);
 
     const load_type = (try msgpack.getMapValue(load_decoded, "type")) orelse return error.TestExpectedError;
-    try testing.expectEqualStrings("ok", load_type.str.value());
+    try testing.expect(load_type == .uint);
+    try testing.expectEqual(MessageType.ok, std.enums.fromInt(MessageType, load_type.uint) orelse return error.TestExpectedError);
 
     const load_sub_id = (try msgpack.getMapValue(load_decoded, "subId")) orelse return error.TestExpectedError;
     try testing.expectEqual(sub_id, load_sub_id.uint);
