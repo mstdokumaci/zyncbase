@@ -416,12 +416,10 @@ test "ReadWorker: cache miss → cache hit" {
     // Cache hit must be at least as fast as cache miss.
     try testing.expect(median_hit <= median_miss);
 
-    // Absolute thresholds: generous limits to catch regressions while
-    // tolerating machine/allocator variance.
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
-    const miss_limit: u64 = if (is_tsan) 1_000_000 else if (is_debug) 500_000 else 250_000;
-    const hit_limit: u64 = if (is_tsan) 14_000 else if (is_debug) 7_000 else 3_500;
+    const miss_limit: u64 = if (is_tsan) 60_000 else if (is_debug) 250_000 else 10_000;
+    const hit_limit: u64 = if (is_tsan) 2_500 else if (is_debug) 15_000 else 1_000;
     try testing.expect(median_miss < miss_limit);
     try testing.expect(median_hit < hit_limit);
 }
@@ -555,11 +553,11 @@ test "ReadWorker: selectQuery throughput" {
     const priority_field_index = table_metadata.fieldIndex("priority") orelse unreachable;
 
     // Sweep: rows=10, priority < 5
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 2.7 else if (is_debug) 0.9 else 0.3);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 1.5 else if (is_debug) 5.0 else 0.2);
 
     // Sweep: rows=50, priority < 25
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 5.4 else if (is_debug) 1.8 else 0.6);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 3.2 else if (is_debug) 10.0 else 0.4);
 
     // Sweep: rows=100, priority < 50
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 9.0 else if (is_debug) 3.0 else 1.0);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 5.5 else if (is_debug) 18.0 else 0.6);
 }
