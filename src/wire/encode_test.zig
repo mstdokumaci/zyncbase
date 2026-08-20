@@ -10,6 +10,7 @@ const tth = @import("../typed/test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("encode.zig");
 const wire_errors = @import("errors.zig");
+const msgpack_skip = @import("msgpack_skip.zig");
 const helpers = @import("test_helpers.zig");
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 const MessageType = @import("message_type.zig").MessageType;
@@ -18,17 +19,36 @@ const testing = std.testing;
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
 fn expectType(bytes: []const u8, parsed: msgpack.Payload, expected: MessageType) !void {
-    // The top-level "type" key (fixstr "type") is always the first key; the
-    // byte directly after it must be the ID as a one-byte positive fixint
-    // (0x00-0x7f), never a uint8/16/32/64 marker (0xcc-0xcf).
-    const type_key = &[_]u8{ 0xa4, 't', 'y', 'p', 'e' };
-    const key_idx = std.mem.indexOf(u8, bytes, type_key) orelse return error.MissingTypeKey;
-    const type_byte = bytes[key_idx + type_key.len];
-    try testing.expect(type_byte < 0x80);
+    // Walk the top-level map structurally so only the "type" key at the top
+    // level is located; nested payloads or truncated matches elsewhere in the
+    // buffer cannot be mistaken for it. The value must be a one-byte positive
+    // fixint (0x00-0x7f), never a uint8/16/32/64 marker (0xcc-0xcf).
+    if (bytes.len == 0) return error.Truncated;
+    if (bytes[0] < 0x80 or bytes[0] > 0x8f) return error.NotFixMap;
+    const map_size = bytes[0] & 0x0f;
+    var idx: usize = 1;
+    for (0..map_size) |_| {
+        if (idx >= bytes.len) return error.Truncated;
+        const key_marker = bytes[idx];
+        if (key_marker < 0xa0 or key_marker > 0xbf) return error.MalformedKey;
+        const key_len: usize = key_marker & 0x1f;
+        idx += 1;
+        if (idx + key_len > bytes.len) return error.Truncated;
+        const key = bytes[idx .. idx + key_len];
+        idx += key_len;
+        if (std.mem.eql(u8, key, "type")) {
+            if (idx >= bytes.len) return error.Truncated;
+            const type_byte = bytes[idx];
+            try testing.expect(type_byte < 0x80);
 
-    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
-    try testing.expect(type_val == .uint);
-    try testing.expectEqual(expected, std.enums.fromInt(MessageType, type_val.uint) orelse return error.TestExpectedError);
+            const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
+            try testing.expect(type_val == .uint);
+            try testing.expectEqual(expected, std.enums.fromInt(MessageType, type_val.uint) orelse return error.TestExpectedError);
+            return;
+        }
+        try msgpack_skip.skipValue(bytes, &idx);
+    }
+    return error.MissingType;
 }
 
 test "encodeSuccess: produces valid MsgPack" {
@@ -103,9 +123,7 @@ test "encodeQuery: includes subscription pagination fields" {
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
-    try testing.expect(type_val == .uint);
-    try testing.expectEqual(MessageType.ok, std.enums.fromInt(MessageType, type_val.uint) orelse return error.TestExpectedError);
+    try expectType(response, parsed, .ok);
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 44), id_val.uint);
     const sub_id_val = (try parsed.mapGet("subId")) orelse return error.MissingSubId;
