@@ -10,6 +10,7 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
+const wire_message_type = @import("wire/message_type.zig");
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const SecurityConfig = @import("config/state.zig").Config.SecurityConfig;
 const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
@@ -175,8 +176,40 @@ pub const MessageHandler = struct {
         envelope: wire_decode.Envelope,
         message: []const u8,
     ) !?[]const u8 {
-        const msg_type = classifyMsgType(envelope.type) orelse return error.UnknownMessageType;
-        return handler_table[@intFromEnum(msg_type)](self, arena_allocator, conn, envelope.id, message);
+        const msg_type = std.enums.fromInt(wire_message_type.MessageType, envelope.type) orelse return error.UnknownMessageType;
+        return switch (msg_type) {
+            // Client request cases — exhaustive dispatch keeps newly added
+            // enum members a compile-time routing decision.
+            .store_set_namespace => try wrap(&MessageHandler.handleStoreSetNamespace)(self, arena_allocator, conn, envelope.id, message),
+            .store_set => try wrap(&MessageHandler.handleStoreSet)(self, arena_allocator, conn, envelope.id, message),
+            .store_remove => try wrap(&MessageHandler.handleStoreRemove)(self, arena_allocator, conn, envelope.id, message),
+            .store_batch => try wrap(&MessageHandler.handleStoreBatch)(self, arena_allocator, conn, envelope.id, message),
+            .store_query => try wrap(&MessageHandler.handleStoreQuery)(self, arena_allocator, conn, envelope.id, message),
+            .store_subscribe => try wrap(&MessageHandler.handleStoreSubscribe)(self, arena_allocator, conn, envelope.id, message),
+            .store_unsubscribe => try wrap(&MessageHandler.handleStoreUnsubscribe)(self, arena_allocator, conn, envelope.id, message),
+            .store_load_more => try wrap(&MessageHandler.handleStoreLoadMore)(self, arena_allocator, conn, envelope.id, message),
+            .auth_refresh => try wrap(&MessageHandler.handleAuthRefresh)(self, arena_allocator, conn, envelope.id, message),
+            .presence_set_namespace => try wrap(&MessageHandler.handlePresenceSetNamespace)(self, arena_allocator, conn, envelope.id, message),
+            .presence_set => try wrap(&MessageHandler.handlePresenceSet)(self, arena_allocator, conn, envelope.id, message),
+            .presence_set_shared => try wrap(&MessageHandler.handlePresenceSetShared)(self, arena_allocator, conn, envelope.id, message),
+            .presence_subscribe => try wrap(&MessageHandler.handlePresenceSubscribe)(self, arena_allocator, conn, envelope.id, message),
+            .presence_unsubscribe => try wrap(&MessageHandler.handlePresenceUnsubscribe)(self, arena_allocator, conn, envelope.id, message),
+            .presence_subscribe_shared => try wrap(&MessageHandler.handlePresenceSubscribeShared)(self, arena_allocator, conn, envelope.id, message),
+            .presence_unsubscribe_shared => try wrap(&MessageHandler.handlePresenceUnsubscribeShared)(self, arena_allocator, conn, envelope.id, message),
+            .presence_remove => try wrap(&MessageHandler.handlePresenceRemove)(self, arena_allocator, conn, envelope.id, message),
+            // Server response/push types must never be received as client requests.
+            .ok,
+            .@"error",
+            .connected,
+            .schema_sync,
+            .server_disconnect,
+            .store_delta,
+            .write_committed,
+            .write_error,
+            .presence_broadcast,
+            .shared_state_broadcast,
+            => error.UnknownMessageType,
+        };
     }
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
@@ -779,51 +812,6 @@ pub const MessageHandler = struct {
     }
 };
 
-const MsgType = enum {
-    store_set_namespace,
-    store_set,
-    store_subscribe,
-    store_unsubscribe,
-    store_query,
-    store_load_more,
-    store_remove,
-    store_batch,
-    auth_refresh,
-    presence_set_namespace,
-    presence_set,
-    presence_set_shared,
-    presence_subscribe,
-    presence_unsubscribe,
-    presence_subscribe_shared,
-    presence_unsubscribe_shared,
-    presence_remove,
-};
-
-const msg_type_map = std.StaticStringMap(MsgType).initComptime(.{
-    .{ "StoreSetNamespace", .store_set_namespace },
-    .{ "StoreSet", .store_set },
-    .{ "StoreSubscribe", .store_subscribe },
-    .{ "StoreUnsubscribe", .store_unsubscribe },
-    .{ "StoreQuery", .store_query },
-    .{ "StoreLoadMore", .store_load_more },
-    .{ "StoreRemove", .store_remove },
-    .{ "StoreBatch", .store_batch },
-    .{ "AuthRefresh", .auth_refresh },
-    .{ "PresenceSetNamespace", .presence_set_namespace },
-    .{ "PresenceSet", .presence_set },
-    .{ "PresenceSetShared", .presence_set_shared },
-    .{ "PresenceSubscribe", .presence_subscribe },
-    .{ "PresenceUnsubscribe", .presence_unsubscribe },
-    .{ "PresenceSubscribeShared", .presence_subscribe_shared },
-    .{ "PresenceUnsubscribeShared", .presence_unsubscribe_shared },
-    .{ "PresenceRemove", .presence_remove },
-});
-
-fn classifyMsgType(t: []const u8) ?MsgType {
-    if (t.len < 8) return null;
-    return msg_type_map.get(t);
-}
-
 const HandlerFn = *const fn (*MessageHandler, std.mem.Allocator, *Connection, u64, []const u8) anyerror!?[]const u8;
 
 fn wrap(comptime f: anytype) HandlerFn { // zwanzig-disable-line: unused-parameter
@@ -832,29 +820,6 @@ fn wrap(comptime f: anytype) HandlerFn { // zwanzig-disable-line: unused-paramet
             return try f(self, arena, conn, id, msg);
         }
     }.call;
-}
-
-const handler_table = [_]HandlerFn{
-    wrap(&MessageHandler.handleStoreSetNamespace),
-    wrap(&MessageHandler.handleStoreSet),
-    wrap(&MessageHandler.handleStoreSubscribe),
-    wrap(&MessageHandler.handleStoreUnsubscribe),
-    wrap(&MessageHandler.handleStoreQuery),
-    wrap(&MessageHandler.handleStoreLoadMore),
-    wrap(&MessageHandler.handleStoreRemove),
-    wrap(&MessageHandler.handleStoreBatch),
-    wrap(&MessageHandler.handleAuthRefresh),
-    wrap(&MessageHandler.handlePresenceSetNamespace),
-    wrap(&MessageHandler.handlePresenceSet),
-    wrap(&MessageHandler.handlePresenceSetShared),
-    wrap(&MessageHandler.handlePresenceSubscribe),
-    wrap(&MessageHandler.handlePresenceUnsubscribe),
-    wrap(&MessageHandler.handlePresenceSubscribeShared),
-    wrap(&MessageHandler.handlePresenceUnsubscribeShared),
-    wrap(&MessageHandler.handlePresenceRemove),
-};
-comptime {
-    std.debug.assert(handler_table.len == @typeInfo(MsgType).@"enum".fields.len);
 }
 
 fn isSecurityError(err: anyerror) bool {

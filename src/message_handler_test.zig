@@ -8,6 +8,7 @@ const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("wire/message_type.zig").MessageType;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -114,10 +115,10 @@ test "MessageHandler: store operations require ready scope" {
     const response = try routeWithArena(&app.handler, allocator, conn, message);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
-    defer allocator.free(result.resp_type);
+
     defer if (result.code) |code| allocator.free(code);
 
-    try testing.expectEqualStrings("error", result.resp_type);
+    try testing.expectEqual(MessageType.@"error", result.resp_type);
     try testing.expectEqualStrings("SESSION_NOT_READY", result.code.?);
 }
 
@@ -154,10 +155,10 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
     const response = try routeWithArena(&app.handler, allocator, conn, message);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
-    defer allocator.free(result.resp_type);
+
     defer if (result.code) |code| allocator.free(code);
 
-    try testing.expectEqualStrings("ok", result.resp_type);
+    try testing.expectEqual(MessageType.ok, result.resp_type);
 
     // Flush writes to ensure persistence
     try app.storage_engine.flushPendingWrites();
@@ -208,10 +209,10 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const response = try routeWithArena(&app.handler, allocator, conn, message);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
-        defer allocator.free(result.resp_type);
+
         defer if (result.code) |code| allocator.free(code);
 
-        try testing.expectEqualStrings("ok", result.resp_type);
+        try testing.expectEqual(MessageType.ok, result.resp_type);
     }
 
     {
@@ -233,10 +234,10 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const response = try routeWithArena(&app.handler, allocator, conn, message);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
-        defer allocator.free(result.resp_type);
+
         defer if (result.code) |code| allocator.free(code);
 
-        try testing.expectEqualStrings("error", result.resp_type);
+        try testing.expectEqual(MessageType.@"error", result.resp_type);
         try testing.expectEqualStrings("INVALID_ARRAY_ELEMENT", result.code.?);
     }
 }
@@ -262,7 +263,7 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
 
     try writer.writeByte(0x86); // fixmap(6)
     try msgpack.writeMsgPackStr(writer, "type");
-    try msgpack.writeMsgPackStr(writer, "StoreSet");
+    try writer.writeByte(@intFromEnum(MessageType.store_set));
     try msgpack.writeMsgPackStr(writer, "id");
     try writer.writeByte(0xcf);
     try writer.writeInt(u64, 1, .big);
@@ -286,10 +287,10 @@ test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID
     const response = try routeWithArena(&app.handler, allocator, conn, message);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
-    defer allocator.free(result.resp_type);
+
     defer if (result.code) |code| allocator.free(code);
 
-    try testing.expectEqualStrings("error", result.resp_type);
+    try testing.expectEqual(MessageType.@"error", result.resp_type);
     try testing.expectEqualStrings("INVALID_MESSAGE", result.code.?);
 }
 
@@ -302,7 +303,7 @@ fn createStoreSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64, na
 
     try writer.writeByte(0x83); // fixmap(3)
     try msgpack.writeMsgPackStr(writer, "type");
-    try msgpack.writeMsgPackStr(writer, "StoreSetNamespace");
+    try writer.writeByte(@intFromEnum(MessageType.store_set_namespace));
     try msgpack.writeMsgPackStr(writer, "id");
     try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, id, .big);
@@ -319,7 +320,7 @@ fn createPresenceSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64,
 
     try writer.writeByte(0x83); // fixmap(3)
     try msgpack.writeMsgPackStr(writer, "type");
-    try msgpack.writeMsgPackStr(writer, "PresenceSetNamespace");
+    try writer.writeByte(@intFromEnum(MessageType.presence_set_namespace));
     try msgpack.writeMsgPackStr(writer, "id");
     try writer.writeByte(0xcf); // uint64
     try writer.writeInt(u64, id, .big);
@@ -365,10 +366,10 @@ test "NamespaceSwitch: initial store namespace setup succeeds with users.namespa
     const response = try routeWithArena(&app.handler, allocator, conn, msg);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
-    defer allocator.free(result.resp_type);
+
     defer if (result.code) |code| allocator.free(code);
 
-    try testing.expectEqualStrings("ok", result.resp_type);
+    try testing.expectEqual(MessageType.ok, result.resp_type);
 }
 
 test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
@@ -408,9 +409,9 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
         const resp = try routeWithArena(&app.handler, allocator, conn, msg);
         defer allocator.free(resp);
         const r = try parseResponse(allocator, resp);
-        defer allocator.free(r.resp_type);
+
         defer if (r.code) |c| allocator.free(c);
-        try testing.expectEqualStrings("ok", r.resp_type);
+        try testing.expectEqual(MessageType.ok, r.resp_type);
     }
 
     // Same-scope store switch rejected
@@ -420,9 +421,9 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
         const resp = try routeWithArena(&app.handler, allocator, conn, msg);
         defer allocator.free(resp);
         const r = try parseResponse(allocator, resp);
-        defer allocator.free(r.resp_type);
+
         defer if (r.code) |c| allocator.free(c);
-        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqual(MessageType.@"error", r.resp_type);
         try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
     }
 
@@ -433,9 +434,9 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
         const resp = try routeWithArena(&app.handler, allocator, conn, msg);
         defer allocator.free(resp);
         const r = try parseResponse(allocator, resp);
-        defer allocator.free(r.resp_type);
+
         defer if (r.code) |c| allocator.free(c);
-        try testing.expectEqualStrings("error", r.resp_type);
+        try testing.expectEqual(MessageType.@"error", r.resp_type);
         try testing.expectEqualStrings("NAMESPACE_SWITCH_REJECTED", r.code.?);
     }
 
@@ -446,9 +447,9 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
         const resp = try routeWithArena(&app.handler, allocator, conn, msg);
         defer allocator.free(resp);
         const r = try parseResponse(allocator, resp);
-        defer allocator.free(r.resp_type);
+
         defer if (r.code) |c| allocator.free(c);
-        try testing.expectEqualStrings("ok", r.resp_type);
+        try testing.expectEqual(MessageType.ok, r.resp_type);
     }
 }
 
@@ -478,18 +479,18 @@ test "NamespaceSwitch: namespaced=false allows any switch" {
     const resp1 = try routeWithArena(&app.handler, allocator, conn, msg1);
     defer allocator.free(resp1);
     const result1 = try parseResponse(allocator, resp1);
-    defer allocator.free(result1.resp_type);
+
     defer if (result1.code) |code| allocator.free(code);
-    try testing.expectEqualStrings("ok", result1.resp_type);
+    try testing.expectEqual(MessageType.ok, result1.resp_type);
 
     const msg2 = try createStoreSetNamespaceMessageBytes(allocator, 2, "public");
     defer allocator.free(msg2);
     const resp2 = try routeWithArena(&app.handler, allocator, conn, msg2);
     defer allocator.free(resp2);
     const result2 = try parseResponse(allocator, resp2);
-    defer allocator.free(result2.resp_type);
+
     defer if (result2.code) |code| allocator.free(code);
-    try testing.expectEqualStrings("ok", result2.resp_type);
+    try testing.expectEqual(MessageType.ok, result2.resp_type);
 }
 
 const table_defs = [_]helpers.TableDef{
@@ -509,13 +510,13 @@ fn decodeResponse(allocator: std.mem.Allocator, response: []const u8) !msgpack_h
     return try msgpack_helpers.decode(allocator, &reader);
 }
 
-fn expectResponseType(allocator: std.mem.Allocator, response: []const u8, expected: []const u8) !void {
+fn expectResponseType(allocator: std.mem.Allocator, response: []const u8, expected: MessageType) !void {
     const parsed = try decodeResponse(allocator, response);
     defer parsed.free(allocator);
 
     const value = (try msgpack_helpers.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
-    try testing.expect(value == .str);
-    try testing.expectEqualStrings(expected, value.str.value());
+    try testing.expect(value == .uint);
+    try testing.expectEqual(expected, std.enums.fromInt(MessageType, value.uint) orelse return error.TestExpectedError);
 }
 
 fn expectResponseId(allocator: std.mem.Allocator, response: []const u8, expected: u64) !void {
@@ -532,8 +533,8 @@ fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected:
     defer parsed.free(allocator);
 
     const resp_type = (try msgpack_helpers.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
-    try testing.expect(resp_type == .str);
-    try testing.expectEqualStrings("error", resp_type.str.value());
+    try testing.expect(resp_type == .uint);
+    try testing.expectEqual(MessageType.@"error", std.enums.fromInt(MessageType, resp_type.uint) orelse return error.TestExpectedError);
 
     const code = (try msgpack_helpers.getMapValue(parsed, "code")) orelse return error.TestExpectedError;
     try testing.expect(code == .str);
@@ -561,7 +562,7 @@ test "message: representative frames route at protocol boundary" {
         const response = try routeBytes(&app, sc.conn, allocator, message);
         defer allocator.free(response);
 
-        try expectResponseType(allocator, response, "ok");
+        try expectResponseType(allocator, response, MessageType.ok);
         try expectResponseId(allocator, response, 11);
     }
 
@@ -575,13 +576,13 @@ test "message: representative frames route at protocol boundary" {
     }
 
     {
-        const message = try store_helpers.createCustomMessage(allocator, 13, "UnknownType", 1, table.index, &.{});
+        const message = try store_helpers.createCustomMessage(allocator, 13, 0x7e, 1, table.index, &.{});
         defer allocator.free(message);
 
         const response = try routeBytes(&app, sc.conn, allocator, message);
         defer allocator.free(response);
 
-        try expectErrorCode(allocator, response, "INTERNAL_ERROR");
+        try expectErrorCode(allocator, response, "INVALID_MESSAGE_TYPE");
         try expectResponseId(allocator, response, 13);
     }
 }
@@ -619,11 +620,12 @@ test "message: response id is preserved across routed requests" {
     }
 
     {
-        const message = try store_helpers.createCustomMessage(allocator, 303, "InvalidType", 1, table.index, &.{});
+        const message = try store_helpers.createCustomMessage(allocator, 303, 0x7f, 1, table.index, &.{});
         defer allocator.free(message);
 
         const response = try routeBytes(&app, sc.conn, allocator, message);
         defer allocator.free(response);
+        try expectErrorCode(allocator, response, "INVALID_MESSAGE_TYPE");
         try expectResponseId(allocator, response, 303);
     }
 }
@@ -667,7 +669,7 @@ test "message: repeated routed requests release per-message allocations" {
         const response = try routeBytes(&app, sc.conn, allocator, message);
         defer allocator.free(response);
 
-        try expectResponseType(allocator, response, "ok");
+        try expectResponseType(allocator, response, MessageType.ok);
         try expectResponseId(allocator, response, msg_id);
     }
 }
@@ -723,7 +725,7 @@ test "message: concurrent routed requests release response allocations" {
                 const response = try routeBytes(ctx.app, sc.conn, thread_allocator, message);
                 defer thread_allocator.free(response);
 
-                try expectResponseType(thread_allocator, response, "ok");
+                try expectResponseType(thread_allocator, response, MessageType.ok);
                 try expectResponseId(thread_allocator, response, msg_id);
             }
         }

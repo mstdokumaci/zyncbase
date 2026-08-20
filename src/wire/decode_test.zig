@@ -16,13 +16,13 @@ test "extractEnvelopeFast: valid envelope" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreSet", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x11));
     try map.mapPut("id", msgpack.Payload.uintToPayload(42));
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
 
     const result = try decode.extractEnvelopeFast(bytes);
-    try testing.expectEqualStrings("StoreSet", result.type);
+    try testing.expectEqual(@as(u64, 0x11), result.type);
     try testing.expectEqual(@as(u64, 42), result.id);
 }
 
@@ -43,7 +43,7 @@ test "extractEnvelopeFast: missing id" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreSet", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x11));
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
 
@@ -63,8 +63,7 @@ test "extractEnvelopeFast: wrong type for field" {
     const writer = &buf.writer;
     try writeFixMapHeader(writer, 2);
     try writeFixStr(writer, "type");
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, 999, .big); // type as uint64 instead of string
+    try writeFixStr(writer, "StoreSet"); // type as string instead of numeric ID
     try writeFixStr(writer, "id");
     try writer.writeByte(0x01); // positive fixint 1
 
@@ -76,14 +75,14 @@ test "extractEnvelopeFast: extra fields (lenient)" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreSet", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x11));
     try map.mapPut("id", msgpack.Payload.uintToPayload(99));
     try map.mapPut("extra", msgpack.Payload.uintToPayload(123)); // unknown field
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
 
     const result = try decode.extractEnvelopeFast(bytes);
-    try testing.expectEqualStrings("StoreSet", result.type);
+    try testing.expectEqual(@as(u64, 0x11), result.type);
     try testing.expectEqual(@as(u64, 99), result.id);
 }
 
@@ -92,7 +91,7 @@ test "extractStoreSetNamespaceFast: valid" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreSetNamespace", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x10));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("namespace", try msgpack.Payload.strToPayload("my-ns", allocator));
     const bytes = try encodePayload(allocator, map);
@@ -107,7 +106,7 @@ test "extractStoreSetNamespaceFast: missing namespace" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreSetNamespace", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x10));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
@@ -120,7 +119,7 @@ test "extractStoreUnsubscribeFast: valid" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreUnsubscribe", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x15));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("subId", msgpack.Payload.uintToPayload(12345));
     const bytes = try encodePayload(allocator, map);
@@ -135,7 +134,7 @@ test "extractStoreUnsubscribeFast: missing subId" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreUnsubscribe", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x15));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
@@ -148,7 +147,7 @@ test "extractStoreLoadMoreFast: valid" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreLoadMore", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x17));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("subId", msgpack.Payload.uintToPayload(99));
     try map.mapPut("nextCursor", try msgpack.Payload.strToPayload("abc123", allocator));
@@ -165,7 +164,7 @@ test "extractStoreLoadMoreFast: missing subId" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreLoadMore", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x17));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("nextCursor", try msgpack.Payload.strToPayload("abc123", allocator));
     const bytes = try encodePayload(allocator, map);
@@ -179,7 +178,7 @@ test "extractStoreLoadMoreFast: missing nextCursor" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", try msgpack.Payload.strToPayload("StoreLoadMore", allocator));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(0x17));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("subId", msgpack.Payload.uintToPayload(99));
     const bytes = try encodePayload(allocator, map);
@@ -209,14 +208,14 @@ test "extractEnvelopeFast: duplicate key, last wins" {
     const writer = &buf.writer;
     try writeFixMapHeader(writer, 3);
     try writeFixStr(writer, "type");
-    try writeFixStr(writer, "first");
+    try writer.writeByte(0x01); // positive fixint 1 — first value
     try writeFixStr(writer, "id");
     try writer.writeByte(0x01); // positive fixint 1
     try writeFixStr(writer, "type");
-    try writeFixStr(writer, "second"); // duplicate — last write should win
+    try writer.writeByte(0x02); // positive fixint 2 — duplicate, last write should win
 
     const result = try decode.extractEnvelopeFast(buf.written());
-    try testing.expectEqualStrings("second", result.type);
+    try testing.expectEqual(@as(u64, 2), result.type);
 }
 
 test "extractPresenceSetFast: duplicate data key, last wins" {

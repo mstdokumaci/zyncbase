@@ -12,10 +12,16 @@ const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
 const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
+const MessageType = @import("wire/message_type.zig").MessageType;
 
 const testing = std.testing;
 const SendQueueEntry = send_queue_mod.Entry;
 const StorageEngine = sth.StorageEngine;
+
+// Wire marker for the "type" key + numeric message ID, e.g. type:"WriteError"
+fn typeMarker(comptime t: MessageType) [6]u8 {
+    return .{ 0xa4, 't', 'y', 'p', 'e', @intFromEnum(t) };
+}
 
 const DirectWriterContext = struct {
     allocator: std.mem.Allocator,
@@ -615,7 +621,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
 
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expectEqual(conn_id, entries[0].conn_id);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_error)) != null);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 }
 
@@ -677,11 +683,11 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     try testing.expectEqual(@as(usize, 2), entries.len);
     for (entries) |e| {
         if (e.conn_id == conn_reject) {
-            try testing.expect(std.mem.indexOf(u8, e.data, "WriteError") != null);
+            try testing.expect(std.mem.indexOf(u8, e.data, &typeMarker(.write_error)) != null);
             try testing.expect(std.mem.indexOf(u8, e.data, "PERMISSION_DENIED") != null);
         } else {
             try testing.expectEqual(conn_ok, e.conn_id);
-            try testing.expect(std.mem.indexOf(u8, e.data, "WriteError") == null);
+            try testing.expect(std.mem.indexOf(u8, e.data, &typeMarker(.write_error)) == null);
         }
     }
 
@@ -785,7 +791,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
     }
 
     try testing.expectEqual(@as(usize, 1), entries.len);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_error)) != null);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 
     const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
@@ -825,7 +831,7 @@ test "StorageEngine: confirmed delete of non-existent row succeeds" {
     }
 
     try testing.expectEqual(@as(usize, 1), entries.len);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_committed)) != null);
 }
 
 test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
@@ -863,7 +869,7 @@ test "StorageEngine: confirmed update with guard on non-existent row succeeds" {
 
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expectEqual(conn_id, entries[0].conn_id);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_committed)) != null);
 }
 
 test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
@@ -904,7 +910,7 @@ test "StorageEngine: confirmed upsert with guard on non-existent row succeeds" {
 
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expectEqual(conn_id, entries[0].conn_id);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteCommitted") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_committed)) != null);
 
     const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
     defer if (record) |r| r.deinit(allocator);
@@ -956,7 +962,7 @@ test "StorageEngine: confirmed update with rejecting guard on existing row retur
 
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expectEqual(conn_id, entries[0].conn_id);
-    try testing.expect(std.mem.indexOf(u8, entries[0].data, "WriteError") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_error)) != null);
     try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
 
     const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);

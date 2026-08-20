@@ -9,6 +9,7 @@ const typed = @import("../typed/types.zig");
 const PresenceRecord = @import("../presence/record.zig").PresenceRecord;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 const WireError = @import("errors.zig").WireError;
+const MessageType = @import("message_type.zig").MessageType;
 
 const Allocator = std.mem.Allocator;
 const PresenceManager = presence_mgr.PresenceManager;
@@ -46,20 +47,22 @@ const Keys = struct {
     pub const joined_at = comptimeEncodeKey("joinedAt");
 };
 
+// Top-level message names encode as one-byte positive fixints; nested
+// operation/event/phase values stay strings.
 const Values = struct {
-    pub const ok = comptimeEncodeKey("ok");
-    pub const @"error" = comptimeEncodeKey("error");
-    pub const connected = comptimeEncodeKey("Connected");
-    pub const schema_sync = comptimeEncodeKey("SchemaSync");
-    pub const store_delta = comptimeEncodeKey("StoreDelta");
+    pub const ok = &[_]u8{@intFromEnum(MessageType.ok)};
+    pub const @"error" = &[_]u8{@intFromEnum(MessageType.@"error")};
+    pub const connected = &[_]u8{@intFromEnum(MessageType.connected)};
+    pub const schema_sync = &[_]u8{@intFromEnum(MessageType.schema_sync)};
+    pub const store_delta = &[_]u8{@intFromEnum(MessageType.store_delta)};
     pub const op_remove = comptimeEncodeKey("remove");
     pub const op_set = comptimeEncodeKey("set");
-    pub const write_committed = comptimeEncodeKey("WriteCommitted");
-    pub const presence_broadcast = comptimeEncodeKey("PresenceBroadcast");
-    pub const shared_state_broadcast = comptimeEncodeKey("SharedStateBroadcast");
-    pub const write_error = comptimeEncodeKey("WriteError");
+    pub const write_committed = &[_]u8{@intFromEnum(MessageType.write_committed)};
+    pub const presence_broadcast = &[_]u8{@intFromEnum(MessageType.presence_broadcast)};
+    pub const shared_state_broadcast = &[_]u8{@intFromEnum(MessageType.shared_state_broadcast)};
+    pub const write_error = &[_]u8{@intFromEnum(MessageType.write_error)};
     pub const phase_write = comptimeEncodeKey("write");
-    pub const server_disconnect = comptimeEncodeKey("ServerDisconnect");
+    pub const server_disconnect = &[_]u8{@intFromEnum(MessageType.server_disconnect)};
     pub const event_join = comptimeEncodeKey("join");
     pub const event_update = comptimeEncodeKey("update");
     pub const event_leave = comptimeEncodeKey("leave");

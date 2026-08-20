@@ -30,17 +30,74 @@ import type {
 	StoreUnsubscribe,
 } from "./types.js";
 
-const VALID_INBOUND_TYPES = new Set<InboundMessage["type"]>([
-	"ok",
-	"error",
-	"StoreDelta",
-	"SchemaSync",
-	"Connected",
-	"WriteCommitted",
-	"WriteError",
-	"PresenceBroadcast",
-	"SharedStateBroadcast",
-]);
+/**
+ * Canonical registry of every top-level wire message type ID (wire-protocol.md).
+ * All IDs stay <= 0x7f so MessagePack encodes them as a one-byte positive
+ * fixint. Never reuse or renumber an assigned ID.
+ */
+export const WireMessageType = {
+	ok: 0x00,
+	error: 0x01,
+	Connected: 0x02,
+	SchemaSync: 0x03,
+	AuthRefresh: 0x04,
+	ServerDisconnect: 0x05,
+	StoreSetNamespace: 0x10,
+	StoreSet: 0x11,
+	StoreRemove: 0x12,
+	StoreBatch: 0x13,
+	StoreQuery: 0x14,
+	StoreSubscribe: 0x15,
+	StoreUnsubscribe: 0x16,
+	StoreLoadMore: 0x17,
+	StoreDelta: 0x18,
+	WriteCommitted: 0x19,
+	WriteError: 0x1a,
+	PresenceSetNamespace: 0x20,
+	PresenceSet: 0x21,
+	PresenceSetShared: 0x22,
+	PresenceSubscribe: 0x23,
+	PresenceUnsubscribe: 0x24,
+	PresenceSubscribeShared: 0x25,
+	PresenceUnsubscribeShared: 0x26,
+	PresenceRemove: 0x27,
+	PresenceBroadcast: 0x28,
+	SharedStateBroadcast: 0x29,
+} as const;
+
+const OUTBOUND_WIRE_TYPES = {
+	AuthRefresh: WireMessageType.AuthRefresh,
+	StoreSet: WireMessageType.StoreSet,
+	StoreRemove: WireMessageType.StoreRemove,
+	StoreBatch: WireMessageType.StoreBatch,
+	StoreSetNamespace: WireMessageType.StoreSetNamespace,
+	StoreQuery: WireMessageType.StoreQuery,
+	StoreSubscribe: WireMessageType.StoreSubscribe,
+	StoreUnsubscribe: WireMessageType.StoreUnsubscribe,
+	StoreLoadMore: WireMessageType.StoreLoadMore,
+	PresenceSetNamespace: WireMessageType.PresenceSetNamespace,
+	PresenceSet: WireMessageType.PresenceSet,
+	PresenceSetShared: WireMessageType.PresenceSetShared,
+	PresenceSubscribe: WireMessageType.PresenceSubscribe,
+	PresenceUnsubscribe: WireMessageType.PresenceUnsubscribe,
+	PresenceSubscribeShared: WireMessageType.PresenceSubscribeShared,
+	PresenceUnsubscribeShared: WireMessageType.PresenceUnsubscribeShared,
+	PresenceRemove: WireMessageType.PresenceRemove,
+} satisfies Record<OutboundMessage["type"], number>;
+
+// ServerDisconnect (0x05) is intentionally absent: it is known but unsupported,
+// so it decodes to null rather than being surfaced to consumers.
+const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
+	[WireMessageType.ok]: "ok",
+	[WireMessageType.error]: "error",
+	[WireMessageType.Connected]: "Connected",
+	[WireMessageType.SchemaSync]: "SchemaSync",
+	[WireMessageType.StoreDelta]: "StoreDelta",
+	[WireMessageType.WriteCommitted]: "WriteCommitted",
+	[WireMessageType.WriteError]: "WriteError",
+	[WireMessageType.PresenceBroadcast]: "PresenceBroadcast",
+	[WireMessageType.SharedStateBroadcast]: "SharedStateBroadcast",
+} as const;
 
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
@@ -84,6 +141,13 @@ export class ConnectionWireCodec {
 			wireMessage = this.encodeWireMessage(
 				debugMessage as unknown as Record<string, unknown>,
 			);
+			const wireType = OUTBOUND_WIRE_TYPES[debugMessage.type];
+			if (wireType === undefined) {
+				throw new Error(
+					`Unregistered outbound message type: ${debugMessage.type}`,
+				);
+			}
+			wireMessage.type = wireType;
 		} catch (err) {
 			throw this.mapSchemaEncodingError(err);
 		}
@@ -133,8 +197,10 @@ export class ConnectionWireCodec {
 
 	decodeMessage(raw: unknown): InboundMessage | null {
 		if (!raw || typeof raw !== "object" || !("type" in raw)) return null;
+		const name = this.inboundTypeName(raw);
+		if (!name) return null;
 		const msg = raw as InboundMessage;
-		if (!VALID_INBOUND_TYPES.has(msg.type)) return null;
+		msg.type = name;
 		switch (msg.type) {
 			case "StoreDelta":
 				if (!Array.isArray(msg.ops)) return null;
@@ -147,6 +213,18 @@ export class ConnectionWireCodec {
 				return this.decodeSharedStateBroadcast(msg);
 		}
 		return msg;
+	}
+
+	private inboundTypeName(raw: object): InboundMessage["type"] | null {
+		const rawType = (raw as { type?: unknown }).type;
+		if (
+			typeof rawType !== "number" ||
+			!Number.isInteger(rawType) ||
+			rawType < 0
+		) {
+			return null;
+		}
+		return INBOUND_WIRE_TYPES[rawType] ?? null;
 	}
 
 	decodeOkResponse(

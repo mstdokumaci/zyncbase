@@ -6,7 +6,7 @@ const msgpack_skip = @import("msgpack_skip.zig");
 const Payload = msgpack.Payload;
 
 pub const Envelope = struct {
-    type: []const u8,
+    type: u64,
     id: u64,
 };
 
@@ -271,7 +271,7 @@ fn extractMap(
 // === Fast Envelope Extractor ===
 
 const envelope_table = [_]Field{
-    .{ .key = "type", .kind = .str, .field = "type", .required = true },
+    .{ .key = "type", .kind = .u64, .field = "type", .required = true },
     .{ .key = "id", .kind = .u64, .field = "id", .required = true },
 };
 
