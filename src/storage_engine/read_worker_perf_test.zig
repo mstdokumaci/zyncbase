@@ -418,8 +418,8 @@ test "ReadWorker: cache miss → cache hit" {
 
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
-    const miss_limit: u64 = if (is_tsan) 60_000 else if (is_debug) 250_000 else 10_000;
-    const hit_limit: u64 = if (is_tsan) 2_500 else if (is_debug) 15_000 else 1_000;
+    const miss_limit: u64 = if (is_tsan) 60_000 else if (is_debug) 60_000 else 10_000;
+    const hit_limit: u64 = if (is_tsan) 2_500 else if (is_debug) 4_000 else 1_000;
     try testing.expect(median_miss < miss_limit);
     try testing.expect(median_hit < hit_limit);
 }
@@ -553,11 +553,11 @@ test "ReadWorker: selectQuery throughput" {
     const priority_field_index = table_metadata.fieldIndex("priority") orelse unreachable;
 
     // Sweep: rows=10, priority < 5
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 1.5 else if (is_debug) 5.0 else 0.2);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 5, 10, iterations, if (is_tsan) 1.5 else if (is_debug) 1.5 else 0.2);
 
     // Sweep: rows=50, priority < 25
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 3.2 else if (is_debug) 10.0 else 0.4);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 25, 50, iterations, if (is_tsan) 3.2 else if (is_debug) 2.5 else 0.4);
 
     // Sweep: rows=100, priority < 50
-    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 5.5 else if (is_debug) 18.0 else 0.6);
+    try runPrioritySweep(allocator, worker, table_metadata, priority_field_index, 50, 100, iterations, if (is_tsan) 5.5 else if (is_debug) 4.0 else 0.6);
 }

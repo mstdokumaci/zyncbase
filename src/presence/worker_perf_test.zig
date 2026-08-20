@@ -212,11 +212,11 @@ test "PresenceWorker: batched user update fanout throughput" {
 
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
-    const target_update: f64 = if (is_tsan) 0.1 else if (is_debug) 0.5 else 0.03;
-    const target_batch: f64 = if (is_tsan) 0.05 else if (is_debug) 1.0 else 0.2;
-    const target_dispatch: f64 = if (is_tsan) 35.0 else if (is_debug) 125.0 else 7.0;
-    const target_drain: f64 = if (is_tsan) 0.2 else if (is_debug) 1.0 else 0.05;
-    const target_total: f64 = if (is_tsan) 35.0 else if (is_debug) 130.0 else 7.0;
+    const target_update: f64 = if (is_tsan) 0.1 else if (is_debug) 0.15 else 0.03;
+    const target_batch: f64 = if (is_tsan) 0.05 else if (is_debug) 0.3 else 0.2;
+    const target_dispatch: f64 = if (is_tsan) 35.0 else if (is_debug) 35.0 else 7.0;
+    const target_drain: f64 = if (is_tsan) 0.2 else if (is_debug) 0.25 else 0.05;
+    const target_total: f64 = if (is_tsan) 35.0 else if (is_debug) 35.0 else 7.0;
 
     try testing.expect(avg_update < target_update);
     try testing.expect(avg_batch < target_batch);

@@ -206,11 +206,11 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         .{ avg_a, avg_b, avg_c, avg_d, avg_total },
     );
 
-    const target_a: f64 = if (is_tsan) 0.7 else if (is_debug) 2.5 else 0.15;
-    const target_b: f64 = if (is_tsan) 0.01 else if (is_debug) 0.1 else 0.01;
-    const target_c: f64 = if (is_tsan) 5.5 else if (is_debug) 22.0 else 1.0;
-    const target_d: f64 = if (is_tsan) 1.0 else if (is_debug) 5.0 else 0.2;
-    const target_total: f64 = if (is_tsan) 7.0 else if (is_debug) 30.0 else 1.3;
+    const target_a: f64 = if (is_tsan) 0.7 else if (is_debug) 0.7 else 0.15;
+    const target_b: f64 = if (is_tsan) 0.01 else if (is_debug) 0.02 else 0.01;
+    const target_c: f64 = if (is_tsan) 5.5 else if (is_debug) 6.0 else 1.0;
+    const target_d: f64 = if (is_tsan) 1.0 else if (is_debug) 1.2 else 0.2;
+    const target_total: f64 = if (is_tsan) 7.0 else if (is_debug) 8.0 else 1.3;
 
     try testing.expect(avg_a < target_a);
     try testing.expect(avg_b < target_b);
