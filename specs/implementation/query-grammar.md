@@ -65,7 +65,7 @@ Queries use compact integer tuples on the wire to minimize message size.
 
 ```json
 {
-  "type": 0x14,
+  "type": 20,
   "id": 6,
   "table_index": 0,
   "conditions": [[3, 4, 18], [4, 0, "active"]],

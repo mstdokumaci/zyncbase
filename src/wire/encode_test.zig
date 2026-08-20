@@ -17,7 +17,15 @@ const MessageType = @import("message_type.zig").MessageType;
 const testing = std.testing;
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
-fn expectType(parsed: msgpack.Payload, expected: MessageType) !void {
+fn expectType(bytes: []const u8, parsed: msgpack.Payload, expected: MessageType) !void {
+    // The top-level "type" key (fixstr "type") is always the first key; the
+    // byte directly after it must be the ID as a one-byte positive fixint
+    // (0x00-0x7f), never a uint8/16/32/64 marker (0xcc-0xcf).
+    const type_key = &[_]u8{ 0xa4, 't', 'y', 'p', 'e' };
+    const key_idx = std.mem.indexOf(u8, bytes, type_key) orelse return error.MissingTypeKey;
+    const type_byte = bytes[key_idx + type_key.len];
+    try testing.expect(type_byte < 0x80);
+
     const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
     try testing.expect(type_val == .uint);
     try testing.expectEqual(expected, std.enums.fromInt(MessageType, type_val.uint) orelse return error.TestExpectedError);
@@ -33,7 +41,7 @@ test "encodeSuccess: produces valid MsgPack" {
     defer parsed.free(allocator);
 
     try testing.expect(parsed == .map);
-    try expectType(parsed, .ok);
+    try expectType(response, parsed, .ok);
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 12345), id_val.uint);
 }
@@ -49,7 +57,7 @@ test "encodeError: produces valid MsgPack" {
     defer parsed.free(allocator);
 
     try testing.expect(parsed == .map);
-    try expectType(parsed, .@"error");
+    try expectType(response, parsed, .@"error");
     const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
     try testing.expectEqual(@as(u64, 999), id_val.uint);
     const code_val = (try parsed.mapGet("code")) orelse return error.MissingCode;
@@ -199,7 +207,7 @@ test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
     const p = try msgpack.decode(allocator, &reader);
     defer p.free(allocator);
 
-    try expectType(p, .write_committed);
+    try expectType(msg, p, .write_committed);
     const wid_val = (try p.mapGet("writeId")) orelse return error.MissingWriteId;
     try testing.expectEqualStrings("0102030405060708090a0b0c0d0e0f10", wid_val.str.value());
 }
@@ -215,7 +223,7 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
     const p = try msgpack.decode(allocator, &reader);
     defer p.free(allocator);
 
-    try expectType(p, .write_error);
+    try expectType(msg, p, .write_error);
     const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
     try testing.expectEqualStrings("write", phase_val.str.value());
     try testing.expect((try p.mapGet("batchIndex")) == null);
@@ -255,7 +263,7 @@ test "store_delta_header: decodes to StoreDelta type" {
     defer p.free(allocator);
 
     try testing.expect(p == .map);
-    try expectType(p, .store_delta);
+    try expectType(buf.written(), p, .store_delta);
     const sub_id_val = (try p.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
 }
@@ -312,7 +320,7 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
     defer decoded.free(allocator);
 
     try testing.expect(decoded == .map);
-    try expectType(decoded, .presence_broadcast);
+    try expectType(bytes, decoded, .presence_broadcast);
     const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
     const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;

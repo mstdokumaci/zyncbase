@@ -120,9 +120,10 @@ fixint. **Never reuse or renumber an assigned ID.**
 | `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
 | `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
 
-**Direction rules:** server-only IDs (`0x00`–`0x05`, `0x18`–`0x1a`,
+**Direction rules:** server-only IDs (`0x00`–`0x03`, `0x05`, `0x18`–`0x1a`,
 `0x28`–`0x29`) received as client requests are rejected with
-`INVALID_MESSAGE_TYPE`. Unknown or unassigned IDs are rejected the same way.
+`INVALID_MESSAGE_TYPE`. `0x04` (`AuthRefresh`) is a client request; unknown or
+unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. The map key remains the string `"type"`; only the
 value is numeric.

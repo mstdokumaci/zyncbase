@@ -3,6 +3,7 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const decode = @import("decode.zig");
 const helpers = @import("test_helpers.zig");
+const MessageType = @import("message_type.zig").MessageType;
 
 const testing = std.testing;
 const encodePayload = helpers.encodePayload;
@@ -119,7 +120,7 @@ test "extractStoreUnsubscribeFast: valid" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", msgpack.Payload.uintToPayload(0x15));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_unsubscribe)));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     try map.mapPut("subId", msgpack.Payload.uintToPayload(12345));
     const bytes = try encodePayload(allocator, map);
@@ -134,7 +135,7 @@ test "extractStoreUnsubscribeFast: missing subId" {
 
     var map = msgpack.Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", msgpack.Payload.uintToPayload(0x15));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_unsubscribe)));
     try map.mapPut("id", msgpack.Payload.uintToPayload(1));
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);

@@ -12,7 +12,7 @@ export function encodeToBuffer(msg: unknown): ArrayBuffer {
 	let wireMsg = msg;
 	if (msg && typeof msg === "object" && !Array.isArray(msg)) {
 		const type = (msg as { type?: unknown }).type;
-		if (typeof type === "string" && type in WireMessageType) {
+		if (typeof type === "string" && Object.hasOwn(WireMessageType, type)) {
 			wireMsg = {
 				...(msg as Record<string, unknown>),
 				type: WireMessageType[type as keyof typeof WireMessageType],
