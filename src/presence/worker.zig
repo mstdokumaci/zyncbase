@@ -305,7 +305,7 @@ pub const PresenceWorker = struct {
         batches.deinit(allocator);
     }
 
-    fn dispatchBatches(
+    pub fn dispatchBatches(
         self: *PresenceWorker,
         batches: anytype,
         comptime encode_fn: anytype,
