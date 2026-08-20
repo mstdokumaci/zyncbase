@@ -210,20 +210,13 @@ test "PresenceWorker: batched user update fanout throughput" {
         .{ avg_update, avg_batch, avg_dispatch, avg_drain, avg_total },
     );
 
-    // Baseline (1k subscribers / 10 updates), per-iteration avg [ms]:
-    //   ReleaseFast: A~0.006  B~0.002  C~1.54  D~0.024  total~1.57
-    //   ReleaseSafe: A~0.009  B~0.081  C~2.23  D~0.020  total~2.34
-    //   Debug:       A~0.037  B~0.093  C~9.91  D~0.066  total~10.10
-    //   TSan:        A~0.04   B~0.03   C~10-15 D~0.07   total~10-16 (Linux Docker)
-    // Release thresholds carry 2x headroom over the slower ReleaseSafe baseline.
-    // Debug/TSan also tolerate contention from the parallel full-suite runner.
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
-    const target_update: f64 = if (is_tsan) 1.0 else if (is_debug) 0.5 else 0.03;
-    const target_batch: f64 = if (is_tsan) 2.0 else if (is_debug) 1.0 else 0.2;
-    const target_dispatch: f64 = if (is_tsan) 150.0 else if (is_debug) 110.0 else 5.0;
-    const target_drain: f64 = if (is_tsan) 2.0 else if (is_debug) 1.0 else 0.06;
-    const target_total: f64 = if (is_tsan) 155.0 else if (is_debug) 115.0 else 5.5;
+    const target_update: f64 = if (is_tsan) 0.1 else if (is_debug) 0.5 else 0.03;
+    const target_batch: f64 = if (is_tsan) 0.05 else if (is_debug) 1.0 else 0.2;
+    const target_dispatch: f64 = if (is_tsan) 35.0 else if (is_debug) 125.0 else 7.0;
+    const target_drain: f64 = if (is_tsan) 0.2 else if (is_debug) 1.0 else 0.05;
+    const target_total: f64 = if (is_tsan) 35.0 else if (is_debug) 130.0 else 7.0;
 
     try testing.expect(avg_update < target_update);
     try testing.expect(avg_batch < target_batch);

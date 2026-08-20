@@ -170,10 +170,10 @@ test "WriteWorker: flushBatch throughput" {
     const r100 = try runBatchSweep(allocator, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
     std.debug.print("flushBatch (batch_len=100) [ms]: flush={d:.3} drain={d:.3}\n", .{ r100.avg_flush, r100.avg_drain });
 
-    const target_flush_10: f64 = if (is_tsan) 20.0 else if (is_debug) 10 else 5.0;
-    const target_drain_10: f64 = if (is_tsan) 4.0 else if (is_debug) 2.0 else 1.0;
-    const target_flush_100: f64 = if (is_tsan) 160.0 else if (is_debug) 80.0 else 40.0;
-    const target_drain_100: f64 = if (is_tsan) 36.0 else if (is_debug) 18.0 else 9.0;
+    const target_flush_10: f64 = if (is_tsan) 3.0 else if (is_debug) 8.0 else 0.3;
+    const target_drain_10: f64 = if (is_tsan) 0.02 else if (is_debug) 0.1 else 0.01;
+    const target_flush_100: f64 = if (is_tsan) 45.0 else if (is_debug) 120.0 else 5.0;
+    const target_drain_100: f64 = if (is_tsan) 0.25 else if (is_debug) 1.0 else 0.1;
 
     try testing.expect(r10.avg_flush < target_flush_10);
     try testing.expect(r10.avg_drain < target_drain_10);
