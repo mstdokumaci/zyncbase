@@ -30,20 +30,23 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 	await client.setNamespace(ns);
 	const committed = { confirm: "committed" } as const;
 
+	let orphanError: { code?: string } | undefined;
 	try {
 		await client.store.set(
 			["fk_restrict_children", "orphan"],
 			{ parent_id: "missing" },
 			committed,
 		);
-		throw new Error("Expected orphan write to fail");
 	} catch (err: unknown) {
-		const error = err as { code: string };
-		if (error.code !== "SCHEMA_VALIDATION_FAILED") {
-			throw new Error(
-				`Expected SCHEMA_VALIDATION_FAILED but got ${error.code}`,
-			);
-		}
+		orphanError = err as { code?: string };
+	}
+	if (orphanError === undefined) {
+		throw new Error("Expected orphan write to fail");
+	}
+	if (orphanError.code !== "SCHEMA_VALIDATION_FAILED") {
+		throw new Error(
+			`Expected SCHEMA_VALIDATION_FAILED but got ${orphanError.code}`,
+		);
 	}
 
 	await client.store.set(["fk_parents", "restricted"], {}, committed);
@@ -52,16 +55,19 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 		{ parent_id: "restricted" },
 		committed,
 	);
+	let restrictedDeleteError: { code?: string } | undefined;
 	try {
 		await client.store.remove(["fk_parents", "restricted"], committed);
-		throw new Error("Expected restricted parent delete to fail");
 	} catch (err: unknown) {
-		const error = err as { code: string };
-		if (error.code !== "SCHEMA_VALIDATION_FAILED") {
-			throw new Error(
-				`Expected SCHEMA_VALIDATION_FAILED but got ${error.code}`,
-			);
-		}
+		restrictedDeleteError = err as { code?: string };
+	}
+	if (restrictedDeleteError === undefined) {
+		throw new Error("Expected restricted parent delete to fail");
+	}
+	if (restrictedDeleteError.code !== "SCHEMA_VALIDATION_FAILED") {
+		throw new Error(
+			`Expected SCHEMA_VALIDATION_FAILED but got ${restrictedDeleteError.code}`,
+		);
 	}
 
 	await client.store.set(["fk_parents", "actions"], {}, committed);

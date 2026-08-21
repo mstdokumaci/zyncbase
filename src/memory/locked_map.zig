@@ -54,6 +54,18 @@ pub fn lockedMap(comptime K: type, comptime V: type, comptime lock_type: type) t
             try self.map.put(allocator, key, value);
         }
 
+        pub fn ensureUnusedCapacity(self: *Self, allocator: Allocator, additional_count: u32) !void {
+            self.writeLock();
+            defer self.writeUnlock();
+            try self.map.ensureUnusedCapacity(allocator, additional_count);
+        }
+
+        pub fn putAssumeCapacity(self: *Self, key: K, value: V) void {
+            self.writeLock();
+            defer self.writeUnlock();
+            self.map.putAssumeCapacity(key, value);
+        }
+
         pub fn remove(self: *Self, key: K) void {
             self.writeLock();
             defer self.writeUnlock();

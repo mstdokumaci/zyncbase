@@ -147,10 +147,25 @@ pub const MigrationExecutor = struct {
                 defer self.allocator.free(sql);
                 try self.db.execDynamic(sql, .{}, .{});
             },
+            .change_foreign_key_indexes => try self.recreateForeignKeyIndexes(change.table.*),
             .change_type, .remove_column, .change_foreign_keys => {
-                // Only reached when allow_destructive = true
                 try self.recreateTable(change.table.*);
             },
+        }
+    }
+
+    fn recreateForeignKeyIndexes(self: *MigrationExecutor, table: schema_types.Table) !void {
+        for (table.userFields()) |field| {
+            if (field.references == null) continue;
+            const sql = try std.fmt.allocPrint(
+                self.allocator,
+                "DROP INDEX IF EXISTS \"idx_{s}_{s}\"; CREATE INDEX \"idx_{s}_{s}\" ON {s}({s})",
+                .{ table.name, field.name, table.name, field.name, table.name_quoted, field.name_quoted },
+            );
+            defer self.allocator.free(sql);
+            const sql_z = try self.allocator.dupeZ(u8, sql);
+            defer self.allocator.free(sql_z);
+            try self.db.execMulti(sql_z, .{});
         }
     }
 

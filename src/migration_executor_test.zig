@@ -61,8 +61,8 @@ test "foreign key migration rebuilds constraints without triggering cascades" {
         .table = children,
         .field = null,
     }};
-    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
-    try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = false }, target.version);
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{ .allow_destructive = true });
+    try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = true }, target.version);
 
     try std.testing.expectEqual(@as(?i64, 1), try db.pragma(i64, .{}, "foreign_keys", null));
     const child_count = try db.one(i64, "SELECT count(*) FROM children", .{}, .{});
@@ -71,6 +71,37 @@ test "foreign key migration rebuilds constraints without triggering cascades" {
     defer if (action) |value| allocator.free(value);
     try std.testing.expect(action != null);
     try std.testing.expectEqualStrings("CASCADE", action.?);
+}
+
+test "foreign key index migration replaces partial indexes in place" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var target = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.1","store":{"parents":{"fields":{}},"children":{"fields":{"parent_id":{"type":"string","references":"parents"}}}}}
+    );
+    defer target.deinit();
+    for (target.tables) |table| {
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+        try execMultiSql(&db, allocator, ddl);
+    }
+    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
+
+    const children = target.table("children") orelse return error.TestExpectedValue;
+    const changes = [_]migration_detector.Change{.{
+        .kind = .change_foreign_key_indexes,
+        .table = children,
+        .field = null,
+    }};
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
+    try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = false }, target.version);
+
+    const partial = try db.one(i64, "SELECT partial FROM pragma_index_list('children') WHERE name = 'idx_children_parent_id'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 0), partial);
 }
 
 // Unit test 5.5: destructive migration with allow_destructive = true preserves common-column data
@@ -390,7 +421,7 @@ test "migration_executor: destructive migration refused when not allowed" {
     const allocator = std.testing.allocator;
 
     const table_names = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
-    const destructive_kinds = [_]migration_detector.ChangeKind{ .change_type, .remove_column };
+    const destructive_kinds = [_]migration_detector.ChangeKind{ .change_type, .remove_column, .change_foreign_keys };
 
     for (table_names) |tname| {
         for (destructive_kinds) |kind| {

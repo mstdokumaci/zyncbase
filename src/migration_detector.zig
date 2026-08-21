@@ -5,7 +5,7 @@ const sqlite = @import("sqlite");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 
-pub const ChangeKind = enum { create_table, add_column, change_type, remove_column, change_foreign_keys };
+pub const ChangeKind = enum { create_table, add_column, change_type, remove_column, change_foreign_keys, change_foreign_key_indexes };
 
 pub const Change = struct {
     kind: ChangeKind,
@@ -67,10 +67,15 @@ pub const MigrationDetector = struct {
 
             try self.detectColumnChanges(&changes, table, &col_result.columns);
             try self.detectRemovedColumns(&changes, table, &col_result.columns);
-            const foreign_keys_match = try self.foreignKeysMatch(table);
-            if (!foreign_keys_match or !try self.foreignKeyIndexesMatch(table)) {
+            if (!try self.foreignKeysMatch(table)) {
                 try changes.append(self.allocator, .{
                     .kind = .change_foreign_keys,
+                    .table = table,
+                    .field = null,
+                });
+            } else if (!try self.foreignKeyIndexesMatch(table)) {
+                try changes.append(self.allocator, .{
+                    .kind = .change_foreign_key_indexes,
                     .table = table,
                     .field = null,
                 });
@@ -79,7 +84,7 @@ pub const MigrationDetector = struct {
 
         var is_destructive = false;
         for (changes.items) |c| {
-            if (c.kind == .change_type or c.kind == .remove_column) {
+            if (c.kind == .change_type or c.kind == .remove_column or c.kind == .change_foreign_keys) {
                 is_destructive = true;
                 break;
             }
@@ -316,6 +321,7 @@ pub const MigrationDetector = struct {
                 self.allocator.free(row.name);
                 self.allocator.free(row.origin);
             }
+            if (row.partial != 0) continue;
             for (fields, 0..) |field, field_idx| {
                 if (field.references == null or seen[field_idx]) continue;
                 if (isExpectedIndexName(row.name, table.name, field.name) and

@@ -43,7 +43,7 @@ test "foreign key migration detector finds missing constraints and action drift"
     defer detector.deinit(missing_plan);
     try std.testing.expectEqual(@as(usize, 1), missing_plan.changes.len);
     try std.testing.expectEqual(ChangeKind.change_foreign_keys, missing_plan.changes[0].kind);
-    try std.testing.expect(!missing_plan.is_destructive);
+    try std.testing.expect(missing_plan.is_destructive);
 
     const child = target.table("children") orelse return error.TestExpectedValue;
     const child_ddl = try gen.generateDDL(child.*);
@@ -59,7 +59,14 @@ test "foreign key migration detector finds missing constraints and action drift"
     const missing_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(missing_index_plan);
     try std.testing.expectEqual(@as(usize, 1), missing_index_plan.changes.len);
-    try std.testing.expectEqual(ChangeKind.change_foreign_keys, missing_index_plan.changes[0].kind);
+    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, missing_index_plan.changes[0].kind);
+    try std.testing.expect(!missing_index_plan.is_destructive);
+
+    try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
+    const partial_index_plan = try detector.detectChanges(&target);
+    defer detector.deinit(partial_index_plan);
+    try std.testing.expectEqual(@as(usize, 1), partial_index_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, partial_index_plan.changes[0].kind);
 
     try db.exec("DROP TABLE children", .{}, .{});
     try db.exec(
@@ -71,6 +78,7 @@ test "foreign key migration detector finds missing constraints and action drift"
     defer detector.deinit(action_plan);
     try std.testing.expectEqual(@as(usize, 1), action_plan.changes.len);
     try std.testing.expectEqual(ChangeKind.change_foreign_keys, action_plan.changes[0].kind);
+    try std.testing.expect(action_plan.is_destructive);
 }
 
 fn execDDL(db: *sqlite.Db, allocator: std.mem.Allocator, ddl: []const u8) !void {

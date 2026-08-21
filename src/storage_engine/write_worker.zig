@@ -1039,6 +1039,12 @@ pub const WriteWorker = struct {
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
     ) !void {
+        for (pk_inserts.items) |item| {
+            if (item.table_index < self.pk_sets.len) {
+                try self.pk_sets[item.table_index].ensureUnusedCapacity(self.allocator, @intCast(pk_inserts.items.len));
+            }
+        }
+
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");
         tx_started.* = false;
         self.bumpVersion();
@@ -1064,9 +1070,7 @@ pub const WriteWorker = struct {
 
         for (pk_inserts.items) |item| {
             if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].put(self.allocator, item.id, {}) catch |err| {
-                    std.log.warn("Failed to insert into pk_set (OOM): {}", .{err});
-                };
+                self.pk_sets[item.table_index].putAssumeCapacity(item.id, {});
             }
         }
         for (pk_deletes.items) |item| {
