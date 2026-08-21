@@ -119,6 +119,26 @@ pub const store_delta_header = blk: {
     break :blk buf[0..w.end].*;
 };
 
+pub const presence_broadcast_header = blk: {
+    var buf: [1 + Keys.type.len + Values.presence_broadcast.len + Keys.sub_id.len]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.presence_broadcast) catch @panic("comptime: failed to write presence_broadcast value");
+    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
+    break :blk buf[0..w.end].*;
+};
+
+pub const shared_state_broadcast_header = blk: {
+    var buf: [1 + Keys.type.len + Values.shared_state_broadcast.len + Keys.sub_id.len]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.shared_state_broadcast) catch @panic("comptime: failed to write shared_state_broadcast value");
+    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
+    break :blk buf[0..w.end].*;
+};
+
 const write_committed_header = blk: {
     var buf: [1 + Keys.type.len + Values.write_committed.len + Keys.write_id.len]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
@@ -548,23 +568,16 @@ fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) 
     }
 }
 
-/// Encode a PresenceBroadcast message with multiple user updates.
-pub fn encodePresenceBroadcast(
+/// Encode the recipient-independent suffix of a PresenceBroadcast message:
+/// the `users` key plus all encoded user updates. Assemble per recipient as
+/// `presence_broadcast_header` + encoded subId + this suffix.
+pub fn encodePresenceBroadcastSuffix(
     allocator: Allocator,
-    sub_id: u64,
     updates: []const PresenceManager.PendingUserUpdate,
 ) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
-
-    try msgpack.encodeMapHeader(writer, 3);
-
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.presence_broadcast);
-
-    try writer.writeAll(Keys.sub_id);
-    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
 
     try writer.writeAll(Keys.users);
     try msgpack.encodeArrayHeader(writer, updates.len);
@@ -576,23 +589,16 @@ pub fn encodePresenceBroadcast(
     return output.toOwnedSlice();
 }
 
-/// Encode a SharedStateBroadcast message with shared state updates.
-pub fn encodeSharedStateBroadcast(
+/// Encode the recipient-independent suffix of a SharedStateBroadcast message:
+/// the `data` key plus all encoded shared patches. Assemble per recipient as
+/// `shared_state_broadcast_header` + encoded subId + this suffix.
+pub fn encodeSharedStateBroadcastSuffix(
     allocator: Allocator,
-    sub_id: u64,
     updates: []const PresenceManager.PendingSharedUpdate,
 ) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
-
-    try msgpack.encodeMapHeader(writer, 3);
-
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.shared_state_broadcast);
-
-    try writer.writeAll(Keys.sub_id);
-    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
 
     try writer.writeAll(Keys.data);
     try msgpack.encodeArrayHeader(writer, updates.len);

@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const msgpack = @import("../msgpack_utils.zig");
 const typed = @import("../typed/doc_id.zig");
 const th = @import("test_helpers.zig");
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
@@ -66,13 +67,19 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
 
     var notifier: TestNotifier = .{};
 
-    const conn_id: u64 = 100;
-    const sub_id: u64 = 200;
+    // Two subscribers on different connections whose subIds have different
+    // MessagePack widths (fixint vs uint8) to catch scratch-buffer aliasing.
+    const conn_a: u64 = 100;
+    const sub_a: u64 = 1;
+    const conn_b: u64 = 200;
+    const sub_b: u64 = 256;
     const namespace_id: i64 = 1;
 
-    // Subscribe synchronously so the worker has a subscriber to broadcast to
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
-    defer snapshot.deinit(allocator);
+    // Subscribe synchronously so the worker has subscribers to broadcast to
+    var snapshot_a = try presence_manager.onSubscribeUser(namespace_id, conn_a, sub_a);
+    defer snapshot_a.deinit(allocator);
+    var snapshot_b = try presence_manager.onSubscribeUser(namespace_id, conn_b, sub_b);
+    defer snapshot_b.deinit(allocator);
 
     const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
     defer {
@@ -100,16 +107,37 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
 
     try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
-    // Verify send_queue received the broadcast
-    try testing.expect(send_queue.hasItems());
-
     // Verify notifier was called
     try testing.expect(notifier.called.load(.monotonic) > 0);
 
-    // Drain and release the send_queue entry
-    if (send_queue.pop()) |entry| {
-        entry.deinit();
+    // Drain both entries only after dispatch completed; decode each while its
+    // arena retain is live.
+    var routed: usize = 0;
+    while (send_queue.pop()) |entry| {
+        defer entry.deinit();
+
+        var reader: std.Io.Reader = .fixed(entry.data);
+        const decoded = try msgpack.decode(allocator, &reader);
+        defer decoded.free(allocator);
+
+        const expected_sub: u64 = switch (entry.conn_id) {
+            conn_a => sub_a,
+            conn_b => sub_b,
+            else => return error.UnexpectedConnId,
+        };
+        const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
+        try testing.expectEqual(expected_sub, sub_id_val.uint);
+
+        const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
+        try testing.expect(users_val == .arr);
+        try testing.expectEqual(@as(usize, 1), users_val.arr.len);
+        const data_val = (try users_val.arr[0].mapGet("data")) orelse return error.MissingData;
+        try testing.expect(data_val == .arr);
+        try testing.expectEqual(@as(f64, 100.0), data_val.arr[0].arr[1].float);
+
+        routed += 1;
     }
+    try testing.expectEqual(@as(usize, 2), routed);
 }
 
 test "PresenceWorker: no ops enqueued does not push to send_queue" {
