@@ -73,6 +73,50 @@ test "foreign key migration rebuilds constraints without triggering cascades" {
     try std.testing.expectEqualStrings("CASCADE", action.?);
 }
 
+test "foreign key migration rolls back when rebuilt tables contain orphaned rows" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var target = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.1","store":{"parents":{"fields":{}},"children":{"fields":{"parent_id":{"type":"string","references":"parents"}}}}}
+    );
+    defer target.deinit();
+    const parents = target.table("parents") orelse return error.TestExpectedValue;
+    const parent_ddl = try gen.generateDDL(parents.*);
+    defer allocator.free(parent_ddl);
+    try execMultiSql(&db, allocator, parent_ddl);
+    try db.exec(
+        "CREATE TABLE children (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, owner_id BLOB NOT NULL, parent_id BLOB, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(id))",
+        .{},
+        .{},
+    );
+    try db.exec("INSERT INTO children VALUES (zeroblob(16), 1, zeroblob(16), randomblob(16), 0, 0)", .{}, .{});
+    try db.exec("CREATE TABLE schema_meta (version TEXT NOT NULL, applied_at INTEGER NOT NULL)", .{}, .{});
+    try db.exec("INSERT INTO schema_meta VALUES ('1.0.0', 0)", .{}, .{});
+    _ = try db.pragma(void, .{}, "foreign_keys", "on");
+
+    const children = target.table("children") orelse return error.TestExpectedValue;
+    const changes = [_]migration_detector.Change{.{
+        .kind = .change_foreign_keys,
+        .table = children,
+        .field = null,
+    }};
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{ .allow_destructive = true });
+    try std.testing.expectError(
+        error.ForeignKeyViolation,
+        executor.execute(.{ .changes = @constCast(&changes), .is_destructive = true }, target.version),
+    );
+
+    try std.testing.expectEqual(@as(?i64, 1), try db.pragma(i64, .{}, "foreign_keys", null));
+    try std.testing.expectEqual(@as(?i64, 1), try db.one(i64, "SELECT count(*) FROM children", .{}, .{}));
+    try std.testing.expectEqual(@as(?i64, 0), try db.one(i64, "SELECT count(*) FROM pragma_foreign_key_list('children')", .{}, .{}));
+    const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+    defer if (version) |value| allocator.free(value);
+    try std.testing.expectEqualStrings("1.0.0", version orelse return error.TestExpectedValue);
+}
+
 test "foreign key index migration replaces partial indexes in place" {
     const allocator = std.testing.allocator;
     var db = try openMemDb();
@@ -102,6 +146,13 @@ test "foreign key index migration replaces partial indexes in place" {
 
     const partial = try db.one(i64, "SELECT partial FROM pragma_index_list('children') WHERE name = 'idx_children_parent_id'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), partial);
+
+    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    try db.exec("CREATE UNIQUE INDEX idx_children_parent_id ON children(parent_id)", .{}, .{});
+    try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = false }, target.version);
+
+    const unique = try db.one(i64, "SELECT \"unique\" FROM pragma_index_list('children') WHERE name = 'idx_children_parent_id'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 0), unique);
 }
 
 // Unit test 5.5: destructive migration with allow_destructive = true preserves common-column data

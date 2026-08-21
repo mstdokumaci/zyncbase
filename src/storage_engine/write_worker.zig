@@ -1039,10 +1039,16 @@ pub const WriteWorker = struct {
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
     ) !void {
+        const insert_counts = try self.allocator.alloc(u32, self.pk_sets.len);
+        defer self.allocator.free(insert_counts);
+        @memset(insert_counts, 0);
         for (pk_inserts.items) |item| {
             if (item.table_index < self.pk_sets.len) {
-                try self.pk_sets[item.table_index].ensureUnusedCapacity(self.allocator, @intCast(pk_inserts.items.len));
+                insert_counts[item.table_index] += 1;
             }
+        }
+        for (self.pk_sets, insert_counts) |*pk_set, insert_count| {
+            if (insert_count > 0) try pk_set.ensureUnusedCapacity(self.allocator, insert_count);
         }
 
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");

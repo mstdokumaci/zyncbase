@@ -6,6 +6,7 @@ const migration_detector = @import("migration_detector.zig");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const ddl_generator = @import("sql/ddl.zig");
+const connection = @import("storage_engine/connection.zig");
 
 pub const AutoMigrateMode = enum { full, additive_only, disabled };
 
@@ -110,6 +111,11 @@ pub const MigrationExecutor = struct {
                 return err;
             };
         }
+
+        connection.verifyForeignKeys(self.db) catch |err| {
+            self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
+            return err;
+        };
 
         // Commit
         self.db.exec("COMMIT", .{}, .{}) catch |err| {

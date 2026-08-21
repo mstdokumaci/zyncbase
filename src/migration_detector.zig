@@ -322,6 +322,7 @@ pub const MigrationDetector = struct {
                 self.allocator.free(row.origin);
             }
             if (row.partial != 0) continue;
+            if (row.unique != 0) continue;
             for (fields, 0..) |field, field_idx| {
                 if (field.references == null or seen[field_idx]) continue;
                 if (isExpectedIndexName(row.name, table.name, field.name) and
