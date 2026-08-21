@@ -68,7 +68,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     var notifier: TestNotifier = .{};
 
     // Two subscribers on different connections whose subIds have different
-    // MessagePack widths (fixint vs uint8) to catch scratch-buffer aliasing.
+    // MessagePack widths (fixint vs uint16) to catch scratch-buffer aliasing.
     const conn_a: u64 = 100;
     const sub_a: u64 = 1;
     const conn_b: u64 = 200;
