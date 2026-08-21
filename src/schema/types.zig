@@ -132,6 +132,7 @@ pub const Table = struct {
     namespaced: bool = true,
     is_users_table: bool = false,
     index: usize = 0,
+    has_incoming_cascade_or_set_null: bool = false,
     /// Always populated for runtime tables (built by `buildRuntimeTable`).
     /// Bare declared-table literals use the empty default — they are never
     /// queried and only `deinit`'d (a no-op on an empty map).

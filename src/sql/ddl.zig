@@ -102,9 +102,7 @@ fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_typ
             try buf.appendSlice(allocator, "(");
             try buf.appendSlice(allocator, schema_system.quoted_id);
             try buf.append(allocator, ')');
-            if (field.on_delete) |od| {
-                try emitOnDelete(allocator, buf, od);
-            }
+            try emitOnDelete(allocator, buf, field.on_delete orelse .restrict);
         }
     }
 }
@@ -153,7 +151,7 @@ fn emitUsersUniqueIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: schem
 
 fn emitFieldIndexes(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     for (table.userFields()) |field| {
-        if (field.indexed) {
+        if (field.indexed or field.references != null) {
             try buf.appendSlice(allocator, ";\nCREATE INDEX IF NOT EXISTS ");
             try buf.appendIndexName(allocator, table.name, field.name);
             try buf.appendSlice(allocator, " ON ");

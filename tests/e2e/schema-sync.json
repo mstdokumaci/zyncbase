@@ -22,6 +22,30 @@
 					"items": "string"
 				}
 			}
+		},
+		"fk_parents": { "fields": {} },
+		"fk_restrict_children": {
+			"fields": {
+				"parent_id": { "type": "string", "references": "fk_parents" }
+			}
+		},
+		"fk_cascade_children": {
+			"fields": {
+				"parent_id": {
+					"type": "string",
+					"references": "fk_parents",
+					"onDelete": "cascade"
+				}
+			}
+		},
+		"fk_nullable_children": {
+			"fields": {
+				"parent_id": {
+					"type": "string",
+					"references": "fk_parents",
+					"onDelete": "set_null"
+				}
+			}
 		}
 	}
 }

@@ -70,6 +70,7 @@ test {
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_sql_test.zig");
+    _ = @import("storage_engine/connection_test.zig");
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");

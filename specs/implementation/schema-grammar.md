@@ -61,9 +61,9 @@ Schema configuration is rooted, not a bare table map:
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `array`, `object`. |
-| `indexed` | `boolean` | `false` | Creates a database index for this column. |
-| `references` | `string` | `null` | Target table name for foreign key reference. Stored as `BLOB(16)` internally. |
-| `onDelete` | `string` | `"restrict"` | Foreign key delete rule: `set_null`, `cascade`, `restrict`. |
+| `indexed` | `boolean` | `false` | Creates a database index for this column. Reference fields are indexed regardless of this setting. |
+| `references` | `string` | `null` | Target table name for an immediately enforced foreign key to that table's `id`. Stored as `BLOB(16)` internally. |
+| `onDelete` | `string` | `"restrict"` | Enforced delete rule: `set_null`, `cascade`, or `restrict`. `set_null` is invalid for required fields. |
 | `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). |
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
 | `metadata` | `object` | `null` | Preserved field metadata for tooling and generated clients. |
@@ -167,6 +167,8 @@ At boot, the server flattens presence definitions to index arrays sent to client
 `metadata` objects are preserved at schema, table, and field boundaries for generated clients and operator tooling.
 
 The parser accepts validation-key names (`enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`) so schema files can reserve future constraints without tripping unknown-key rejection. The current runtime write path enforces structural type compatibility, required fields, references, arrays, and system-column rules; it does not enforce these validation keywords.
+
+Reference values may be `null` when the field is optional. Non-null values must identify an existing row in the referenced table; failed writes and restricted deletes use the public `SCHEMA_VALIDATION_FAILED` error contract. References are ID-based and may cross namespaces because document IDs are table-wide primary keys. Foreign keys are immediate, so a batch must create a parent before a child that references it. `ON UPDATE` actions and deferred constraints are not supported.
 
 ---
 

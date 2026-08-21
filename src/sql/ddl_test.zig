@@ -62,6 +62,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"user_id\") REFERENCES \"users\"(\"id\") ON DELETE CASCADE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX IF NOT EXISTS \"idx_posts_user_id\" ON \"posts\"(\"user_id\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"id\" BLOB NOT NULL CHECK(length(\"id\") = 16),") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"user_id\" BLOB NOT NULL CHECK(length(\"user_id\") = 16)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (\"id\")") != null);
@@ -69,6 +70,19 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"owner_id\" BLOB NOT NULL CHECK(length(\"owner_id\") = 16)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"created_at\" INTEGER NOT NULL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"updated_at\" INTEGER NOT NULL") != null);
+}
+
+test "ddl_generator: foreign keys default to restrict and are indexed" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var author_id = schema_helpers.makeField("author_id", .doc_id);
+    author_id.references = "users";
+    const ddl = try gen.generateDDL(schema_helpers.makeTable("posts", &.{author_id}));
+    defer allocator.free(ddl);
+
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"author_id\") REFERENCES \"users\"(\"id\") ON DELETE RESTRICT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX IF NOT EXISTS \"idx_posts_author_id\" ON \"posts\"(\"author_id\")") != null);
 }
 
 test "ddl_generator: array field uses BLOB column type" {

@@ -6,6 +6,7 @@ const migration_detector = @import("migration_detector.zig");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const ddl_generator = @import("sql/ddl.zig");
+const connection = @import("storage_engine/connection.zig");
 
 pub const AutoMigrateMode = enum { full, additive_only, disabled };
 
@@ -30,6 +31,18 @@ fn parseVersion(s: []const u8) !Version {
     const minor = std.fmt.parseInt(u32, minor_str, 10) catch return error.InvalidVersion;
     const patch = std.fmt.parseInt(u32, patch_str, 10) catch return error.InvalidVersion;
     return Version{ .major = major, .minor = minor, .patch = patch };
+}
+
+fn foreignKeysEnabled(db: *sqlite.Db) !bool {
+    return (try db.pragma(i64, .{}, "foreign_keys", null) orelse return error.MissingForeignKeysPragma) != 0;
+}
+
+fn setForeignKeys(db: *sqlite.Db, enabled: bool) !void {
+    if (enabled) {
+        _ = try db.pragma(void, .{}, "foreign_keys", "on");
+    } else {
+        _ = try db.pragma(void, .{}, "foreign_keys", "off");
+    }
 }
 
 pub const MigrationExecutor = struct {
@@ -79,6 +92,15 @@ pub const MigrationExecutor = struct {
             }
         }
 
+        const foreign_keys_enabled = try foreignKeysEnabled(self.db);
+        if (foreign_keys_enabled) try setForeignKeys(self.db, false);
+        var foreign_keys_restored = false;
+        errdefer if (foreign_keys_enabled and !foreign_keys_restored) {
+            setForeignKeys(self.db, true) catch |err| {
+                std.log.err("Failed to restore SQLite foreign-key enforcement after migration error: {}", .{err});
+            };
+        };
+
         // Begin transaction
         try self.db.exec("BEGIN", .{}, .{});
 
@@ -90,11 +112,21 @@ pub const MigrationExecutor = struct {
             };
         }
 
+        connection.verifyForeignKeys(self.db) catch |err| {
+            self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
+            return err;
+        };
+
         // Commit
         self.db.exec("COMMIT", .{}, .{}) catch |err| {
             self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
             return err;
         };
+
+        if (foreign_keys_enabled) {
+            try setForeignKeys(self.db, true);
+            foreign_keys_restored = true;
+        }
 
         // Persist version after successful commit
         try self.persistVersion(target_version);
@@ -121,10 +153,25 @@ pub const MigrationExecutor = struct {
                 defer self.allocator.free(sql);
                 try self.db.execDynamic(sql, .{}, .{});
             },
-            .change_type, .remove_column => {
-                // Only reached when allow_destructive = true
+            .change_foreign_key_indexes => try self.recreateForeignKeyIndexes(change.table.*),
+            .change_type, .remove_column, .change_foreign_keys => {
                 try self.recreateTable(change.table.*);
             },
+        }
+    }
+
+    fn recreateForeignKeyIndexes(self: *MigrationExecutor, table: schema_types.Table) !void {
+        for (table.userFields()) |field| {
+            if (field.references == null) continue;
+            const sql = try std.fmt.allocPrint(
+                self.allocator,
+                "DROP INDEX IF EXISTS \"idx_{s}_{s}\"; CREATE INDEX \"idx_{s}_{s}\" ON {s}({s})",
+                .{ table.name, field.name, table.name, field.name, table.name_quoted, field.name_quoted },
+            );
+            defer self.allocator.free(sql);
+            const sql_z = try self.allocator.dupeZ(u8, sql);
+            defer self.allocator.free(sql_z);
+            try self.db.execMulti(sql_z, .{});
         }
     }
 

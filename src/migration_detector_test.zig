@@ -3,6 +3,7 @@ const std = @import("std");
 const sqlite = @import("sqlite");
 
 const migration_detector = @import("migration_detector.zig");
+const schema_parse = @import("schema/parse.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const ddl_generator = @import("sql/ddl.zig");
@@ -15,6 +16,76 @@ fn openMemDb() !sqlite.Db {
         .mode = .Memory,
         .open_flags = .{ .write = true, .create = true },
     });
+}
+
+test "foreign key migration detector finds missing constraints and action drift" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var target = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.1","store":{"parents":{"fields":{}},"children":{"fields":{"parent_id":{"type":"string","references":"parents","onDelete":"cascade"}}}}}
+    );
+    defer target.deinit();
+
+    for (target.tables) |table| {
+        if (!std.mem.eql(u8, table.name, "children")) try execTableDDL(&db, allocator, &gen, table);
+    }
+    try db.exec(
+        "CREATE TABLE children (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, owner_id BLOB NOT NULL, parent_id BLOB, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(id))",
+        .{},
+        .{},
+    );
+
+    var detector = MigrationDetector.init(allocator, &db, &target);
+    const missing_plan = try detector.detectChanges(&target);
+    defer detector.deinit(missing_plan);
+    try std.testing.expectEqual(@as(usize, 1), missing_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_keys, missing_plan.changes[0].kind);
+    try std.testing.expect(missing_plan.is_destructive);
+
+    const child = target.table("children") orelse return error.TestExpectedValue;
+    const child_ddl = try gen.generateDDL(child.*);
+    defer allocator.free(child_ddl);
+    try db.exec("DROP TABLE children", .{}, .{});
+    try execDDL(&db, allocator, child_ddl);
+
+    const matching_plan = try detector.detectChanges(&target);
+    defer detector.deinit(matching_plan);
+    try std.testing.expectEqual(@as(usize, 0), matching_plan.changes.len);
+
+    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    const missing_index_plan = try detector.detectChanges(&target);
+    defer detector.deinit(missing_index_plan);
+    try std.testing.expectEqual(@as(usize, 1), missing_index_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, missing_index_plan.changes[0].kind);
+    try std.testing.expect(!missing_index_plan.is_destructive);
+
+    try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
+    const partial_index_plan = try detector.detectChanges(&target);
+    defer detector.deinit(partial_index_plan);
+    try std.testing.expectEqual(@as(usize, 1), partial_index_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, partial_index_plan.changes[0].kind);
+
+    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    try db.exec("CREATE UNIQUE INDEX idx_children_parent_id ON children(parent_id)", .{}, .{});
+    const unique_index_plan = try detector.detectChanges(&target);
+    defer detector.deinit(unique_index_plan);
+    try std.testing.expectEqual(@as(usize, 1), unique_index_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, unique_index_plan.changes[0].kind);
+
+    try db.exec("DROP TABLE children", .{}, .{});
+    try db.exec(
+        "CREATE TABLE children (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, owner_id BLOB NOT NULL, parent_id BLOB, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(id), FOREIGN KEY(parent_id) REFERENCES parents(id) ON DELETE RESTRICT)",
+        .{},
+        .{},
+    );
+    const action_plan = try detector.detectChanges(&target);
+    defer detector.deinit(action_plan);
+    try std.testing.expectEqual(@as(usize, 1), action_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_keys, action_plan.changes[0].kind);
+    try std.testing.expect(action_plan.is_destructive);
 }
 
 fn execDDL(db: *sqlite.Db, allocator: std.mem.Allocator, ddl: []const u8) !void {

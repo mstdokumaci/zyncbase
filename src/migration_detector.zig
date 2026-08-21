@@ -5,7 +5,7 @@ const sqlite = @import("sqlite");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 
-pub const ChangeKind = enum { create_table, add_column, change_type, remove_column };
+pub const ChangeKind = enum { create_table, add_column, change_type, remove_column, change_foreign_keys, change_foreign_key_indexes };
 
 pub const Change = struct {
     kind: ChangeKind,
@@ -67,11 +67,24 @@ pub const MigrationDetector = struct {
 
             try self.detectColumnChanges(&changes, table, &col_result.columns);
             try self.detectRemovedColumns(&changes, table, &col_result.columns);
+            if (!try self.foreignKeysMatch(table)) {
+                try changes.append(self.allocator, .{
+                    .kind = .change_foreign_keys,
+                    .table = table,
+                    .field = null,
+                });
+            } else if (!try self.foreignKeyIndexesMatch(table)) {
+                try changes.append(self.allocator, .{
+                    .kind = .change_foreign_key_indexes,
+                    .table = table,
+                    .field = null,
+                });
+            }
         }
 
         var is_destructive = false;
         for (changes.items) |c| {
-            if (c.kind == .change_type or c.kind == .remove_column) {
+            if (c.kind == .change_type or c.kind == .remove_column or c.kind == .change_foreign_keys) {
                 is_destructive = true;
                 break;
             }
@@ -210,6 +223,146 @@ pub const MigrationDetector = struct {
         }
     }
 
+    fn foreignKeysMatch(self: *MigrationDetector, table: *const schema_types.Table) !bool {
+        const fields = table.userFields();
+        const seen = try self.allocator.alloc(bool, fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        var expected_count: usize = 0;
+        for (fields) |field| {
+            if (field.references != null) expected_count += 1;
+        }
+
+        const pragma_sql = try std.fmt.allocPrint(self.allocator, "PRAGMA foreign_key_list({s})", .{table.name_quoted});
+        defer self.allocator.free(pragma_sql);
+        var stmt = try self.db.prepareDynamic(pragma_sql);
+        defer stmt.deinit();
+
+        const ForeignKeyRow = struct {
+            id: i64,
+            seq: i64,
+            table: []const u8,
+            from: []const u8,
+            to: ?[]const u8,
+            on_update: []const u8,
+            on_delete: []const u8,
+            match: []const u8,
+        };
+
+        var actual_count: usize = 0;
+        var valid = true;
+        var iter = try stmt.iteratorAlloc(ForeignKeyRow, self.allocator, .{});
+        while (try iter.nextAlloc(self.allocator, .{})) |row| {
+            defer {
+                self.allocator.free(row.table);
+                self.allocator.free(row.from);
+                if (row.to) |to| self.allocator.free(to);
+                self.allocator.free(row.on_update);
+                self.allocator.free(row.on_delete);
+                self.allocator.free(row.match);
+            }
+            actual_count += 1;
+
+            var matched = false;
+            for (fields, 0..) |field, field_idx| {
+                const reference = field.references orelse continue;
+                const expected_action = switch (field.on_delete orelse .restrict) {
+                    .cascade => "CASCADE",
+                    .restrict => "RESTRICT",
+                    .set_null => "SET NULL",
+                };
+                if (std.mem.eql(u8, field.name, row.from) and
+                    std.mem.eql(u8, reference, row.table) and
+                    row.to != null and std.mem.eql(u8, "id", row.to.?) and
+                    row.seq == 0 and
+                    std.mem.eql(u8, "NO ACTION", row.on_update) and
+                    std.mem.eql(u8, expected_action, row.on_delete) and
+                    std.mem.eql(u8, "NONE", row.match) and
+                    !seen[field_idx])
+                {
+                    seen[field_idx] = true;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) valid = false;
+        }
+
+        if (!valid or actual_count != expected_count) return false;
+        for (fields, 0..) |field, field_idx| {
+            if (field.references != null and !seen[field_idx]) return false;
+        }
+        return true;
+    }
+
+    fn foreignKeyIndexesMatch(self: *MigrationDetector, table: *const schema_types.Table) !bool {
+        const fields = table.userFields();
+        const seen = try self.allocator.alloc(bool, fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        const pragma_sql = try std.fmt.allocPrint(self.allocator, "PRAGMA index_list({s})", .{table.name_quoted});
+        defer self.allocator.free(pragma_sql);
+        var stmt = try self.db.prepareDynamic(pragma_sql);
+        defer stmt.deinit();
+
+        const IndexListRow = struct {
+            seq: i64,
+            name: []const u8,
+            unique: i64,
+            origin: []const u8,
+            partial: i64,
+        };
+
+        var iter = try stmt.iteratorAlloc(IndexListRow, self.allocator, .{});
+        while (try iter.nextAlloc(self.allocator, .{})) |row| {
+            defer {
+                self.allocator.free(row.name);
+                self.allocator.free(row.origin);
+            }
+            if (row.partial != 0) continue;
+            if (row.unique != 0) continue;
+            for (fields, 0..) |field, field_idx| {
+                if (field.references == null or seen[field_idx]) continue;
+                if (isExpectedIndexName(row.name, table.name, field.name) and
+                    try self.indexMatchesField(row.name, field.name))
+                {
+                    seen[field_idx] = true;
+                    break;
+                }
+            }
+        }
+
+        for (fields, 0..) |field, field_idx| {
+            if (field.references != null and !seen[field_idx]) return false;
+        }
+        return true;
+    }
+
+    fn indexMatchesField(self: *MigrationDetector, index_name: []const u8, field_name: []const u8) !bool {
+        const pragma_sql = try std.fmt.allocPrint(self.allocator, "PRAGMA index_info(\"{s}\")", .{index_name});
+        defer self.allocator.free(pragma_sql);
+        var stmt = try self.db.prepareDynamic(pragma_sql);
+        defer stmt.deinit();
+
+        const IndexInfoRow = struct {
+            seqno: i64,
+            cid: i64,
+            name: ?[]const u8,
+        };
+
+        var count: usize = 0;
+        var valid = true;
+        var iter = try stmt.iteratorAlloc(IndexInfoRow, self.allocator, .{});
+        while (try iter.nextAlloc(self.allocator, .{})) |row| {
+            defer if (row.name) |name| self.allocator.free(name);
+            count += 1;
+            if (row.seqno != 0 or row.name == null or !std.mem.eql(u8, field_name, row.name.?)) valid = false;
+        }
+        return valid and count == 1;
+    }
+
     pub fn deinit(self: *MigrationDetector, plan: MigrationPlan) void {
         for (plan.changes) |c| self.freeChange(c);
         self.allocator.free(plan.changes);
@@ -219,3 +372,13 @@ pub const MigrationDetector = struct {
         if (c.field) |f| f.deinit(self.allocator);
     }
 };
+
+fn isExpectedIndexName(index_name: []const u8, table_name: []const u8, field_name: []const u8) bool {
+    const prefix = "idx_";
+    const field_start = prefix.len + table_name.len + 1;
+    return index_name.len == field_start + field_name.len and
+        std.mem.startsWith(u8, index_name, prefix) and
+        std.mem.eql(u8, table_name, index_name[prefix.len .. field_start - 1]) and
+        index_name[field_start - 1] == '_' and
+        std.mem.eql(u8, field_name, index_name[field_start..]);
+}

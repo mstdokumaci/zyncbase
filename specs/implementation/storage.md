@@ -49,6 +49,9 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 - Store record values are encoded/decoded through typed value helpers; docs should not duplicate codec internals.
 - Schema changes must go through migration detection/execution rather than ad hoc DDL.
 - SQLite error details remain internal unless they map to a public code in [Error Taxonomy](./error-taxonomy.md).
+- Every writer and reader connection enables `PRAGMA foreign_keys`. `StorageEngine.start()` runs `foreign_key_check` after DDL/migrations and rejects startup when legacy orphaned rows exist.
+- Reference fields target the referenced table's `id`, use immediate constraints, and always receive a child-key index.
+- Foreign-key migrations compare `PRAGMA foreign_key_list` with the target schema. Table rebuilds disable enforcement before the migration transaction, restore it after commit/rollback, and rely on the startup integrity check rather than silently repairing orphaned data.
 
 ## Read Path
 
@@ -63,9 +66,11 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 1. Store service validates payload shape and authorization.
 2. Mutation is enqueued through the single-writer path (SPSC write queue).
 3. `WriteWorker` applies schema validation, ownership checks, and conflict semantics.
-4. Commit produces `ChangeJob` entries pushed to `ChangeQueue` for subscription workers.
-5. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
-6. Immediate and committed acknowledgements follow ADR-018 semantics.
+4. SQLite enforces referenced-row existence and `restrict`, `cascade`, or `set_null` actions. Cascades are database integrity operations and do not run child authorization checks.
+5. Before a parent delete, `WriteWorker` snapshots rows reachable through cascade/set-null edges. After SQLite applies the actions, those rows flow through the normal pending cache, primary-key-set, and `ChangeJob` bookkeeping; all effects remain invisible until commit. SQLite-driven `set_null` does not modify `updated_at`.
+6. Commit produces `ChangeJob` entries pushed to `ChangeQueue` for subscription workers.
+7. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
+8. Immediate and committed acknowledgements follow ADR-018 semantics.
 
 ## Invariants
 
@@ -73,6 +78,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 - Same-row authorization guards should be expressed in the write SQL path when possible.
 - Reader statements/results are owned by their reader connection and allocator.
 - Batch writes are atomic at the storage boundary: either the accepted batch commits consistently or returns a failure.
+- Immediate foreign keys require parent-before-child ordering inside a batch. Optional references accept `null`; non-null values must resolve by table-wide document ID, including across namespace boundaries.
 - Checkpoint/reconnect behavior must not reorder committed write outcomes.
 
 ## Performance Contract

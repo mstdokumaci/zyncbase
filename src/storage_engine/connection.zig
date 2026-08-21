@@ -40,12 +40,64 @@ fn pragmaChecked(db: *sqlite.Db, comptime name: []const u8, comptime value: []co
     };
 }
 
+fn setForeignKeys(db: *sqlite.Db, enabled: bool) !void {
+    if (enabled) {
+        try pragmaChecked(db, "foreign_keys", "on");
+    } else {
+        try pragmaChecked(db, "foreign_keys", "off");
+    }
+}
+
+pub fn verifyForeignKeys(db: *sqlite.Db) !void {
+    const has_violation = db.one(
+        i64,
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+        .{},
+        .{},
+    ) catch |err| {
+        return classifyForeignKeyCheckError(err);
+    } orelse return error.MissingForeignKeyCheckResult;
+    if (has_violation == 0) return;
+
+    var stmt = db.prepare(
+        "SELECT \"table\", rowid, parent FROM pragma_foreign_key_check LIMIT 5",
+    ) catch |err| return classifyForeignKeyCheckError(err);
+    defer stmt.deinit();
+
+    const ViolationRow = struct {
+        table: []const u8,
+        rowid: ?i64,
+        parent: []const u8,
+    };
+    const allocator = std.heap.smp_allocator;
+    var iter = stmt.iteratorAlloc(ViolationRow, allocator, .{}) catch |err| return classifyForeignKeyCheckError(err);
+    while (iter.nextAlloc(allocator, .{}) catch |err| return classifyForeignKeyCheckError(err)) |row| {
+        defer {
+            allocator.free(row.table);
+            allocator.free(row.parent);
+        }
+        if (row.rowid) |rowid| {
+            std.log.warn("Foreign key violation: table={s}, rowid={}, parent={s}", .{ row.table, rowid, row.parent });
+        } else {
+            std.log.warn("Foreign key violation: table={s}, rowid=null, parent={s}", .{ row.table, row.parent });
+        }
+    }
+    return error.ForeignKeyViolation;
+}
+
+fn classifyForeignKeyCheckError(err: anyerror) anyerror {
+    const classified_err = errors.classifyError(err);
+    errors.logDatabaseError("verifyForeignKeys", classified_err, "");
+    return classified_err;
+}
+
 pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     if (is_writer) {
         try pragmaChecked(db, "journal_mode", "wal");
         try pragmaChecked(db, "wal_autocheckpoint", "1000");
     }
 
+    try setForeignKeys(db, true);
     try pragmaChecked(db, "busy_timeout", "5000");
     try pragmaChecked(db, "read_uncommitted", "true");
     try pragmaChecked(db, "synchronous", "normal");

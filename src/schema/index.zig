@@ -23,5 +23,14 @@ pub fn buildTableIndex(allocator: std.mem.Allocator, schema: *types.Schema) !voi
         try map.put(allocator, table.name, idx);
     }
 
+    for (schema.tables) |table| {
+        for (table.userFields()) |field| {
+            const target = field.references orelse continue;
+            if ((field.on_delete orelse .restrict) == .restrict) continue;
+            const target_index = map.get(target) orelse continue;
+            schema.tables[target_index].has_incoming_cascade_or_set_null = true;
+        }
+    }
+
     schema.table_index_map = map;
 }

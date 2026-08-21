@@ -16,6 +16,7 @@ pub const quoted_created_at = "\"created_at\"";
 pub const quoted_updated_at = "\"updated_at\"";
 
 pub const id_field_index: usize = 0;
+pub const namespace_id_field_index: usize = 1;
 pub const owner_id_field_index: usize = 2;
 pub const first_user_field_index: usize = 3;
 pub const leading_system_field_count: usize = 3;

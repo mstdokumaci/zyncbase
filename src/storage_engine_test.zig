@@ -1,9 +1,11 @@
 const std = @import("std");
 
+const app_test_helpers = @import("app_test_helpers.zig");
 const send_queue_mod = @import("connection/send_queue.zig");
 const fail_alloc = @import("failing_allocator_test_helper.zig");
 const query_ast = @import("query/ast.zig");
 const qth = @import("query/test_helpers.zig");
+const schema_parse = @import("schema/parse.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 const cache_mod = @import("storage_engine/cache.zig");
@@ -1592,4 +1594,226 @@ test "storage: random operations fuzzing" {
         }
     }
     try engine.flushPendingWrites();
+}
+
+fn fkDocId(id: u128) typed.Value {
+    return .{ .scalar = .{ .doc_id = id } };
+}
+
+fn drainForeignKeyChanges(app: *app_test_helpers.AppTestContext) usize {
+    const queue = &app.test_context.change_queue.?;
+    var change_count: usize = 0;
+    while (queue.shards[0].popTimed(0)) |job| {
+        change_count += 1;
+        var owned = job;
+        owned.deinit(app.storage_engine.allocator);
+    }
+    return change_count;
+}
+
+fn expectNoForeignKeyChanges(app: *app_test_helpers.AppTestContext) !void {
+    try testing.expectEqual(@as(usize, 0), drainForeignKeyChanges(app));
+}
+
+fn expectForeignKeyCacheMiss(app: *app_test_helpers.AppTestContext, table_name: []const u8, namespace_id: i64, id: u128) !void {
+    const table = try app.tableMetadata(table_name);
+    const key = cache_mod.getCacheKey(table, namespace_id, id);
+    switch (cache_mod.getCachedRecord(&app.storage_engine.document_cache, key)) {
+        .miss => {},
+        .hit => |hit| {
+            defer hit.handle.release();
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
+fn expectForeignKeyCacheNull(app: *app_test_helpers.AppTestContext, table_name: []const u8, field_name: []const u8, namespace_id: i64, id: u128) !void {
+    const table = try app.tableMetadata(table_name);
+    const field_index = table.fieldIndex(field_name) orelse return error.TestExpectedValue;
+    const key = cache_mod.getCacheKey(table, namespace_id, id);
+    switch (cache_mod.getCachedRecord(&app.storage_engine.document_cache, key)) {
+        .miss => return error.TestUnexpectedResult,
+        .hit => |hit| {
+            defer hit.handle.release();
+            try testing.expect(hit.record.values[field_index] == .nil);
+        },
+    }
+}
+
+test "foreign key writes enforce restrict cascade set null and reconcile runtime state" {
+    const allocator = testing.allocator;
+    const schema_json =
+        \\{"version":"1.0.0","store":{
+        \\  "parents":{"fields":{}},
+        \\  "restrict_children":{"fields":{"parent_id":{"type":"string","references":"parents"}}},
+        \\  "cascade_children":{"fields":{"parent_id":{"type":"string","references":"parents","onDelete":"cascade"}}},
+        \\  "grandchildren":{"fields":{"child_id":{"type":"string","references":"cascade_children","onDelete":"cascade"}}},
+        \\  "nullable_children":{"fields":{"parent_id":{"type":"string","references":"parents","onDelete":"set_null"}}}
+        \\}}
+    ;
+
+    var app: app_test_helpers.AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "foreign-key-actions", schema_json);
+    defer app.deinit();
+
+    const parents = try app.table("parents");
+    const restricted = try app.table("restrict_children");
+    const cascaded = try app.table("cascade_children");
+    const grandchildren = try app.table("grandchildren");
+    const nullable = try app.table("nullable_children");
+
+    try restricted.insertNamed(99, 1, .{sth.named("parent_id", fkDocId(999))});
+    try restricted.flush();
+    try expectNoForeignKeyChanges(&app);
+    try testing.expect((try restricted.readDoc(allocator, 99, 1)) == null);
+    try testing.expect(app.storage_engine.isHealthy());
+
+    try parents.insertNamed(1, 1, .{});
+    try restricted.insertNamed(11, 1, .{sth.named("parent_id", fkDocId(1))});
+    try restricted.flush();
+    _ = drainForeignKeyChanges(&app);
+    try parents.deleteDocument(1, 1);
+    try parents.flush();
+    try expectNoForeignKeyChanges(&app);
+    var retained_parent = try parents.getOne(allocator, 1, 1);
+    retained_parent.deinit();
+    var retained_child = try restricted.getOne(allocator, 11, 1);
+    retained_child.deinit();
+
+    try parents.insertNamed(2, 1, .{});
+    try cascaded.insertNamed(22, 2, .{sth.named("parent_id", fkDocId(2))});
+    try grandchildren.insertNamed(33, 3, .{sth.named("child_id", fkDocId(22))});
+    try nullable.insertNamed(44, 4, .{sth.named("parent_id", fkDocId(2))});
+    try nullable.flush();
+    _ = drainForeignKeyChanges(&app);
+
+    var nullable_before = try nullable.getOne(allocator, 44, 4);
+    const updated_at_before = try nullable_before.getFieldInt("updated_at");
+    nullable_before.deinit();
+
+    try parents.deleteDocument(2, 1);
+    try parents.flush();
+
+    try testing.expect((try parents.readDoc(allocator, 2, 1)) == null);
+    try testing.expect((try cascaded.readDoc(allocator, 22, 2)) == null);
+    try testing.expect((try grandchildren.readDoc(allocator, 33, 3)) == null);
+    var nullable_after = try nullable.getOne(allocator, 44, 4);
+    defer nullable_after.deinit();
+    try testing.expect(nullable_after.getFieldDocIdOrNull("parent_id") == null);
+    try testing.expectEqual(updated_at_before, try nullable_after.getFieldInt("updated_at"));
+
+    try testing.expect(!app.storage_engine.documentExists(cascaded.metadata.index, 22));
+    try testing.expect(!app.storage_engine.documentExists(grandchildren.metadata.index, 33));
+    try testing.expect(app.storage_engine.documentExists(nullable.metadata.index, 44));
+    try expectForeignKeyCacheMiss(&app, "cascade_children", 2, 22);
+    try expectForeignKeyCacheMiss(&app, "grandchildren", 3, 33);
+    try expectForeignKeyCacheNull(&app, "nullable_children", "parent_id", 4, 44);
+
+    var delete_count: usize = 0;
+    var update_count: usize = 0;
+    const queue = &app.test_context.change_queue.?;
+    while (queue.shards[0].popTimed(0)) |job| {
+        var owned = job;
+        defer owned.deinit(app.storage_engine.allocator);
+        switch (owned.change.operation) {
+            .delete => delete_count += 1,
+            .update => {
+                update_count += 1;
+                try testing.expectEqual(nullable.metadata.index, owned.change.table_index);
+                const parent_field_index = nullable.metadata.fieldIndex("parent_id") orelse return error.TestExpectedValue;
+                try testing.expectEqual(@as(u128, 2), owned.change.old_record.?.values[parent_field_index].scalar.doc_id);
+                try testing.expect(owned.change.new_record.?.values[parent_field_index] == .nil);
+            },
+            .insert => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expectEqual(@as(usize, 3), delete_count);
+    try testing.expectEqual(@as(usize, 1), update_count);
+
+    try parents.insertNamed(3, 1, .{});
+    try cascaded.insertNamed(55, 2, .{sth.named("parent_id", fkDocId(3))});
+    try nullable.insertNamed(66, 4, .{sth.named("parent_id", fkDocId(3))});
+    try parents.deleteDocument(3, 1);
+    try parents.flush();
+
+    try testing.expect((try cascaded.readDoc(allocator, 55, 2)) == null);
+    var batch_nullable = try nullable.getOne(allocator, 66, 4);
+    defer batch_nullable.deinit();
+    try testing.expect(batch_nullable.getFieldDocIdOrNull("parent_id") == null);
+
+    var cascade_delete_published = false;
+    var set_null_update_published = false;
+    while (queue.shards[0].popTimed(0)) |job| {
+        var owned = job;
+        defer owned.deinit(app.storage_engine.allocator);
+        switch (owned.change.operation) {
+            .delete => {
+                if (owned.change.table_index == cascaded.metadata.index and owned.change.doc_id == 55) {
+                    cascade_delete_published = true;
+                }
+            },
+            .update => {
+                if (owned.change.table_index == nullable.metadata.index and owned.change.doc_id == 66) {
+                    const parent_field_index = nullable.metadata.fieldIndex("parent_id") orelse return error.TestExpectedValue;
+                    try testing.expectEqual(@as(u128, 3), owned.change.old_record.?.values[parent_field_index].scalar.doc_id);
+                    try testing.expect(owned.change.new_record.?.values[parent_field_index] == .nil);
+                    set_null_update_published = true;
+                }
+            },
+            .insert => {},
+        }
+    }
+    try testing.expect(cascade_delete_published);
+    try testing.expect(set_null_update_published);
+}
+
+test "foreign key startup rejects legacy orphaned rows" {
+    const allocator = testing.allocator;
+    var test_context = try sth.TestContext.initInMemory(allocator);
+    defer test_context.deinit();
+    var memory_strategy: sth.MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+    var schema = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"parents":{"fields":{}},"children":{"fields":{"parent_id":{"type":"string","references":"parents"}}}}}
+    );
+    defer schema.deinit();
+
+    var engine: storage_mod.StorageEngine = undefined;
+    try engine.init(
+        testing.io,
+        allocator,
+        &memory_strategy,
+        test_context.test_dir,
+        &schema,
+        .{},
+        .{ .in_memory = true, .reader_pool_size = 1 },
+        null,
+        null,
+    );
+    defer engine.deinit();
+
+    var gen = DDLGenerator.init(allocator);
+    for (schema.tables) |table| {
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+        const ddl_z = try allocator.dupeZ(u8, ddl);
+        defer allocator.free(ddl_z);
+        try engine.execSetupSQL(ddl_z);
+    }
+
+    const setup_conn = try engine.getSetupConn();
+    _ = try setup_conn.pragma(void, .{}, "foreign_keys", "off");
+    try setup_conn.exec(
+        "INSERT INTO children (id, namespace_id, owner_id, parent_id, created_at, updated_at) VALUES (randomblob(16), 1, zeroblob(16), zeroblob(16), 0, 0)",
+        .{},
+        .{},
+    );
+    _ = try setup_conn.pragma(void, .{}, "foreign_keys", "on");
+
+    var send_node_pool: sth.MemoryStrategy.IndexPool(send_queue_mod.send_queue.Node) = undefined;
+    try send_node_pool.init(allocator, 1, null, null);
+    test_context.send_node_pool = send_node_pool;
+    test_context.send_queue = try send_queue_mod.send_queue.init(&test_context.send_node_pool.?);
+    try testing.expectError(error.ForeignKeyViolation, engine.start(&test_context.send_queue.?, null, null));
 }
