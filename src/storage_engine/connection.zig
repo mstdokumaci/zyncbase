@@ -40,12 +40,35 @@ fn pragmaChecked(db: *sqlite.Db, comptime name: []const u8, comptime value: []co
     };
 }
 
+fn setForeignKeys(db: *sqlite.Db, enabled: bool) !void {
+    if (enabled) {
+        try pragmaChecked(db, "foreign_keys", "on");
+    } else {
+        try pragmaChecked(db, "foreign_keys", "off");
+    }
+}
+
+pub fn verifyForeignKeys(db: *sqlite.Db) !void {
+    const has_violation = db.one(
+        i64,
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+        .{},
+        .{},
+    ) catch |err| {
+        const classified_err = errors.classifyError(err);
+        errors.logDatabaseError("verifyForeignKeys", classified_err, "");
+        return classified_err;
+    } orelse return error.MissingForeignKeyCheckResult;
+    if (has_violation != 0) return error.ForeignKeyViolation;
+}
+
 pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     if (is_writer) {
         try pragmaChecked(db, "journal_mode", "wal");
         try pragmaChecked(db, "wal_autocheckpoint", "1000");
     }
 
+    try setForeignKeys(db, true);
     try pragmaChecked(db, "busy_timeout", "5000");
     try pragmaChecked(db, "read_uncommitted", "true");
     try pragmaChecked(db, "synchronous", "normal");

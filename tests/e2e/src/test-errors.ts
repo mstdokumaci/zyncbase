@@ -14,6 +14,7 @@ export async function run(port: number = 3000) {
 		await testFieldNotFound(client, namespace);
 		await testSchemaValidationFailed(client, namespace);
 		await testInvalidArrayElement(client, namespace);
+		await testForeignKeys(client, namespace);
 
 		console.log("All error reporting tests passed!");
 	} catch (err) {
@@ -22,6 +23,74 @@ export async function run(port: number = 3000) {
 	} finally {
 		client.close();
 	}
+}
+
+async function testForeignKeys(client: ZyncBaseClient, ns: string) {
+	console.log("Testing foreign-key enforcement and delete actions...");
+	await client.setNamespace(ns);
+	const committed = { confirm: "committed" } as const;
+
+	try {
+		await client.store.set(
+			["fk_restrict_children", "orphan"],
+			{ parent_id: "missing" },
+			committed,
+		);
+		throw new Error("Expected orphan write to fail");
+	} catch (err: unknown) {
+		const error = err as { code: string };
+		if (error.code !== "SCHEMA_VALIDATION_FAILED") {
+			throw new Error(
+				`Expected SCHEMA_VALIDATION_FAILED but got ${error.code}`,
+			);
+		}
+	}
+
+	await client.store.set(["fk_parents", "restricted"], {}, committed);
+	await client.store.set(
+		["fk_restrict_children", "restricted-child"],
+		{ parent_id: "restricted" },
+		committed,
+	);
+	try {
+		await client.store.remove(["fk_parents", "restricted"], committed);
+		throw new Error("Expected restricted parent delete to fail");
+	} catch (err: unknown) {
+		const error = err as { code: string };
+		if (error.code !== "SCHEMA_VALIDATION_FAILED") {
+			throw new Error(
+				`Expected SCHEMA_VALIDATION_FAILED but got ${error.code}`,
+			);
+		}
+	}
+
+	await client.store.set(["fk_parents", "actions"], {}, committed);
+	await client.store.set(
+		["fk_cascade_children", "cascade-child"],
+		{ parent_id: "actions" },
+		committed,
+	);
+	await client.store.set(
+		["fk_nullable_children", "nullable-child"],
+		{ parent_id: "actions" },
+		committed,
+	);
+	await client.store.remove(["fk_parents", "actions"], committed);
+
+	const cascaded = await client.store.get([
+		"fk_cascade_children",
+		"cascade-child",
+	]);
+	if (cascaded != null) throw new Error("Cascade child still exists");
+	const nullable = (await client.store.get([
+		"fk_nullable_children",
+		"nullable-child",
+	])) as { parent_id?: string | null } | null | undefined;
+	if (nullable?.parent_id != null) {
+		throw new Error(`Expected parent_id=null, got ${nullable.parent_id}`);
+	}
+
+	console.log("Foreign-key enforcement verified.");
 }
 
 async function testCollectionNotFound(client: ZyncBaseClient, ns: string) {

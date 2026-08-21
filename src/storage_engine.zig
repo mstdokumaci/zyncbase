@@ -411,6 +411,10 @@ pub const StorageEngine = struct {
             return error.InvalidState;
         }
 
+        // DDL and migrations are complete before start(); reject legacy
+        // orphaned rows before building runtime indexes or spawning threads.
+        try connection.verifyForeignKeys(&self.write_worker.conn);
+
         // ─── Bootstrap pk_sets from existing rows ───────────────────────────
         // Reset any pk_sets populated by a previous (failed) bootstrap attempt
         // so stale IDs cannot survive into documentExists/write-path checks.

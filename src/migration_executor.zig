@@ -32,6 +32,18 @@ fn parseVersion(s: []const u8) !Version {
     return Version{ .major = major, .minor = minor, .patch = patch };
 }
 
+fn foreignKeysEnabled(db: *sqlite.Db) !bool {
+    return (try db.pragma(i64, .{}, "foreign_keys", null) orelse return error.MissingForeignKeysPragma) != 0;
+}
+
+fn setForeignKeys(db: *sqlite.Db, enabled: bool) !void {
+    if (enabled) {
+        _ = try db.pragma(void, .{}, "foreign_keys", "on");
+    } else {
+        _ = try db.pragma(void, .{}, "foreign_keys", "off");
+    }
+}
+
 pub const MigrationExecutor = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -79,6 +91,15 @@ pub const MigrationExecutor = struct {
             }
         }
 
+        const foreign_keys_enabled = try foreignKeysEnabled(self.db);
+        if (foreign_keys_enabled) try setForeignKeys(self.db, false);
+        var foreign_keys_restored = false;
+        errdefer if (foreign_keys_enabled and !foreign_keys_restored) {
+            setForeignKeys(self.db, true) catch |err| {
+                std.log.err("Failed to restore SQLite foreign-key enforcement after migration error: {}", .{err});
+            };
+        };
+
         // Begin transaction
         try self.db.exec("BEGIN", .{}, .{});
 
@@ -95,6 +116,11 @@ pub const MigrationExecutor = struct {
             self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
             return err;
         };
+
+        if (foreign_keys_enabled) {
+            try setForeignKeys(self.db, true);
+            foreign_keys_restored = true;
+        }
 
         // Persist version after successful commit
         try self.persistVersion(target_version);
@@ -121,7 +147,7 @@ pub const MigrationExecutor = struct {
                 defer self.allocator.free(sql);
                 try self.db.execDynamic(sql, .{}, .{});
             },
-            .change_type, .remove_column => {
+            .change_type, .remove_column, .change_foreign_keys => {
                 // Only reached when allow_destructive = true
                 try self.recreateTable(change.table.*);
             },

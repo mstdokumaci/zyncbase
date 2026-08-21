@@ -585,6 +585,148 @@ pub const WriteWorker = struct {
         return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
     }
 
+    fn recordIdentity(record: Record) !struct { id: DocId, namespace_id: i64 } {
+        if (record.values.len < schema_system.leading_system_field_count) return StorageError.ColumnCountMismatch;
+        const id = switch (record.values[schema_system.id_field_index]) {
+            .scalar => |value| switch (value) {
+                .doc_id => |doc_id| doc_id,
+                else => return StorageError.TypeMismatch,
+            },
+            else => return StorageError.TypeMismatch,
+        };
+        const namespace_id = switch (record.values[1]) {
+            .scalar => |value| switch (value) {
+                .integer => |ns| ns,
+                else => return StorageError.TypeMismatch,
+            },
+            else => return StorageError.TypeMismatch,
+        };
+        return .{ .id = id, .namespace_id = namespace_id };
+    }
+
+    fn deinitReferentialChanges(allocator: Allocator, changes: *std.ArrayListUnmanaged(ReferentialChange)) void {
+        for (changes.items) |*change| {
+            if (change.old_record) |record| record.deinit(allocator);
+            change.old_record = null;
+        }
+        changes.deinit(allocator);
+    }
+
+    fn captureReferentialChanges(
+        self: *WriteWorker,
+        parent_table: *const schema_types.Table,
+        parent_id: DocId,
+    ) !std.ArrayListUnmanaged(ReferentialChange) {
+        var changes = std.ArrayListUnmanaged(ReferentialChange).empty;
+        errdefer deinitReferentialChanges(self.allocator, &changes);
+
+        var affected_index = std.AutoHashMap(ReferentialKey, usize).init(self.allocator);
+        defer affected_index.deinit();
+        var cascade_seen = std.AutoHashMap(ReferentialKey, void).init(self.allocator);
+        defer cascade_seen.deinit();
+        var queue = std.ArrayListUnmanaged(ReferentialKey).empty;
+        defer queue.deinit(self.allocator);
+
+        const root = ReferentialKey{ .table_index = parent_table.index, .id = parent_id };
+        try affected_index.put(root, std.math.maxInt(usize));
+        try cascade_seen.put(root, {});
+        try queue.append(self.allocator, root);
+
+        var queue_index: usize = 0;
+        while (queue_index < queue.items.len) : (queue_index += 1) {
+            const parent = queue.items[queue_index];
+            const parent_metadata = self.schema.tableByIndex(parent.table_index) orelse return StorageError.UnknownTable;
+
+            for (self.schema.tables) |*child_table| {
+                for (child_table.userFields()) |field| {
+                    const reference = field.references orelse continue;
+                    if (!std.mem.eql(u8, reference, parent_metadata.name)) continue;
+                    const action: ReferentialAction = switch (field.on_delete orelse .restrict) {
+                        .restrict => continue,
+                        .cascade => .delete,
+                        .set_null => .set_null,
+                    };
+
+                    const query = try std.fmt.allocPrint(
+                        self.allocator,
+                        "{s} WHERE {s}=? ORDER BY {s}",
+                        .{ child_table.select_from_sql, field.name_quoted, schema_system.quoted_id },
+                    );
+                    defer self.allocator.free(query);
+                    var stmt = try self.conn.prepareDynamic(query);
+                    defer stmt.deinit();
+                    const parent_id_bytes = typed_doc_id.toBytes(parent.id);
+                    if (sql.bindBlobTransient(stmt.stmt, 1, &parent_id_bytes) != sqlite.c.SQLITE_OK) {
+                        return errors.classifyStepError(&self.conn);
+                    }
+
+                    while (try sql.fetchRecord(self.allocator, &self.conn, stmt.stmt, child_table)) |record| {
+                        var keep_record = false;
+                        defer if (!keep_record) record.deinit(self.allocator);
+                        const identity = try recordIdentity(record);
+                        const key = ReferentialKey{ .table_index = child_table.index, .id = identity.id };
+
+                        if (affected_index.get(key)) |change_index| {
+                            if (change_index != std.math.maxInt(usize) and action == .delete) {
+                                changes.items[change_index].action = .delete;
+                            }
+                        } else {
+                            try changes.append(self.allocator, .{
+                                .table_index = child_table.index,
+                                .namespace_id = identity.namespace_id,
+                                .id = identity.id,
+                                .action = action,
+                                .old_record = record,
+                            });
+                            keep_record = true;
+                            try affected_index.put(key, changes.items.len - 1);
+                        }
+
+                        if (action == .delete and !cascade_seen.contains(key)) {
+                            try cascade_seen.put(key, {});
+                            try queue.append(self.allocator, key);
+                        }
+                    }
+                }
+            }
+        }
+
+        return changes;
+    }
+
+    fn applyReferentialChanges(
+        self: *WriteWorker,
+        ctx: *BatchCtx,
+        changes: *std.ArrayListUnmanaged(ReferentialChange),
+    ) !void {
+        for (changes.items) |*change| {
+            const table_metadata = self.schema.tableByIndex(change.table_index) orelse return StorageError.UnknownTable;
+            const new_record = try self.getDocumentHelper(change.table_index, change.namespace_id, change.id);
+            switch (change.action) {
+                .delete => if (new_record) |record| {
+                    record.deinit(self.allocator);
+                    return error.ForeignKeyReconciliationFailed;
+                },
+                .set_null => if (new_record == null) return error.ForeignKeyReconciliationFailed,
+            }
+
+            const old_record = change.old_record;
+            change.old_record = null;
+            _ = try applyWriteResult(
+                self,
+                ctx,
+                table_metadata,
+                change.namespace_id,
+                change.id,
+                false,
+                false,
+                change.action == .delete,
+                old_record,
+                new_record,
+            );
+        }
+    }
+
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
     fn executeDeleteEntry(
         ctx: *BatchCtx,
@@ -593,6 +735,9 @@ pub const WriteWorker = struct {
         table_metadata: *const schema_types.Table,
     ) !bool {
         const self = ctx.self;
+
+        var referential_changes = try self.captureReferentialChanges(table_metadata, entry.id);
+        defer deinitReferentialChanges(self.allocator, &referential_changes);
 
         // executeDelete returns the old row via RETURNING (or null if nothing
         // matched), so no pre-fetch is needed here.
@@ -607,7 +752,10 @@ pub const WriteWorker = struct {
             return true;
         }
 
-        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
+        const deleted = maybe_old_record != null;
+        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
+        if (deleted) try applyReferentialChanges(self, ctx, &referential_changes);
+        return applied;
     }
 
     pub fn flushBatch(
@@ -765,6 +913,16 @@ pub const WriteWorker = struct {
     }
 
     const PkTracking = struct { table_index: usize, id: DocId };
+
+    const ReferentialAction = enum { delete, set_null };
+    const ReferentialKey = struct { table_index: usize, id: DocId };
+    const ReferentialChange = struct {
+        table_index: usize,
+        namespace_id: i64,
+        id: DocId,
+        action: ReferentialAction,
+        old_record: ?Record,
+    };
 
     const CacheOp = struct {
         key: DocumentCacheKey,
