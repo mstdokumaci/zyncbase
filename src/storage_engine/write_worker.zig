@@ -594,7 +594,7 @@ pub const WriteWorker = struct {
             },
             else => return StorageError.TypeMismatch,
         };
-        const namespace_id = switch (record.values[1]) {
+        const namespace_id = switch (record.values[schema_system.namespace_id_field_index]) {
             .scalar => |value| switch (value) {
                 .integer => |ns| ns,
                 else => return StorageError.TypeMismatch,
@@ -612,11 +612,47 @@ pub const WriteWorker = struct {
         changes.deinit(allocator);
     }
 
+    fn referentialLookups(ctx: *BatchCtx) ![]const ReferentialLookup {
+        if (ctx.referential_lookups) |lookups| return lookups;
+
+        const self = ctx.self;
+        const arena_allocator = self.batch_arena.allocator();
+        var lookups = std.ArrayListUnmanaged(ReferentialLookup).empty;
+        for (self.schema.tables) |*child_table| {
+            for (child_table.userFields()) |field| {
+                const reference = field.references orelse continue;
+                const action: ReferentialAction = switch (field.on_delete orelse .restrict) {
+                    .restrict => continue,
+                    .cascade => .delete,
+                    .set_null => .set_null,
+                };
+                const parent_table = self.schema.table(reference) orelse return StorageError.UnknownTable;
+                const query = try std.fmt.allocPrint(
+                    arena_allocator,
+                    "{s} WHERE {s}=? ORDER BY {s}",
+                    .{ child_table.select_from_sql, field.name_quoted, schema_system.quoted_id },
+                );
+                try lookups.append(arena_allocator, .{
+                    .parent_table_index = parent_table.index,
+                    .child_table_index = child_table.index,
+                    .action = action,
+                    .sql = query,
+                    .cache_key = std.hash.Wyhash.hash(0, query),
+                });
+            }
+        }
+
+        ctx.referential_lookups = try lookups.toOwnedSlice(arena_allocator);
+        return ctx.referential_lookups.?;
+    }
+
     fn captureReferentialChanges(
-        self: *WriteWorker,
+        ctx: *BatchCtx,
         parent_table: *const schema_types.Table,
         parent_id: DocId,
     ) !std.ArrayListUnmanaged(ReferentialChange) {
+        const self = ctx.self;
+        const lookups = try referentialLookups(ctx);
         var changes = std.ArrayListUnmanaged(ReferentialChange).empty;
         errdefer deinitReferentialChanges(self.allocator, &changes);
 
@@ -637,55 +673,44 @@ pub const WriteWorker = struct {
             const parent = queue.items[queue_index];
             const parent_metadata = self.schema.tableByIndex(parent.table_index) orelse return StorageError.UnknownTable;
 
-            for (self.schema.tables) |*child_table| {
-                for (child_table.userFields()) |field| {
-                    const reference = field.references orelse continue;
-                    if (!std.mem.eql(u8, reference, parent_metadata.name)) continue;
-                    const action: ReferentialAction = switch (field.on_delete orelse .restrict) {
-                        .restrict => continue,
-                        .cascade => .delete,
-                        .set_null => .set_null,
-                    };
+            for (lookups) |lookup| {
+                if (lookup.parent_table_index != parent_metadata.index) continue;
+                const child_table = self.schema.tableByIndex(lookup.child_table_index) orelse return StorageError.UnknownTable;
+                const action = lookup.action;
 
-                    const query = try std.fmt.allocPrint(
-                        self.allocator,
-                        "{s} WHERE {s}=? ORDER BY {s}",
-                        .{ child_table.select_from_sql, field.name_quoted, schema_system.quoted_id },
-                    );
-                    defer self.allocator.free(query);
-                    var stmt = try self.conn.prepareDynamic(query);
-                    defer stmt.deinit();
-                    const parent_id_bytes = typed_doc_id.toBytes(parent.id);
-                    if (sql.bindBlobTransient(stmt.stmt, 1, &parent_id_bytes) != sqlite.c.SQLITE_OK) {
-                        return errors.classifyStepError(&self.conn);
+                var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, lookup.cache_key, lookup.sql);
+                defer mstmt.release();
+                const stmt = mstmt.stmt;
+                const parent_id_bytes = typed_doc_id.toBytes(parent.id);
+                if (sql.bindBlobTransient(stmt, 1, &parent_id_bytes) != sqlite.c.SQLITE_OK) {
+                    return errors.classifyStepError(&self.conn);
+                }
+
+                while (try sql.fetchRecord(self.allocator, &self.conn, stmt, child_table)) |record| {
+                    var keep_record = false;
+                    defer if (!keep_record) record.deinit(self.allocator);
+                    const identity = try recordIdentity(record);
+                    const key = ReferentialKey{ .table_index = child_table.index, .id = identity.id };
+
+                    if (affected_index.get(key)) |change_index| {
+                        if (change_index != std.math.maxInt(usize) and action == .delete) {
+                            changes.items[change_index].action = .delete;
+                        }
+                    } else {
+                        try changes.append(self.allocator, .{
+                            .table_index = child_table.index,
+                            .namespace_id = identity.namespace_id,
+                            .id = identity.id,
+                            .action = action,
+                            .old_record = record,
+                        });
+                        keep_record = true;
+                        try affected_index.put(key, changes.items.len - 1);
                     }
 
-                    while (try sql.fetchRecord(self.allocator, &self.conn, stmt.stmt, child_table)) |record| {
-                        var keep_record = false;
-                        defer if (!keep_record) record.deinit(self.allocator);
-                        const identity = try recordIdentity(record);
-                        const key = ReferentialKey{ .table_index = child_table.index, .id = identity.id };
-
-                        if (affected_index.get(key)) |change_index| {
-                            if (change_index != std.math.maxInt(usize) and action == .delete) {
-                                changes.items[change_index].action = .delete;
-                            }
-                        } else {
-                            try changes.append(self.allocator, .{
-                                .table_index = child_table.index,
-                                .namespace_id = identity.namespace_id,
-                                .id = identity.id,
-                                .action = action,
-                                .old_record = record,
-                            });
-                            keep_record = true;
-                            try affected_index.put(key, changes.items.len - 1);
-                        }
-
-                        if (action == .delete and !cascade_seen.contains(key)) {
-                            try cascade_seen.put(key, {});
-                            try queue.append(self.allocator, key);
-                        }
+                    if (action == .delete and !cascade_seen.contains(key)) {
+                        try cascade_seen.put(key, {});
+                        try queue.append(self.allocator, key);
                     }
                 }
             }
@@ -736,8 +761,13 @@ pub const WriteWorker = struct {
     ) !bool {
         const self = ctx.self;
 
-        var referential_changes = try self.captureReferentialChanges(table_metadata, entry.id);
-        defer deinitReferentialChanges(self.allocator, &referential_changes);
+        const traverse_references = table_metadata.has_incoming_cascade_or_set_null and
+            self.pk_sets[entry.table_index].contains(entry.id);
+        var referential_changes = if (traverse_references)
+            try captureReferentialChanges(ctx, table_metadata, entry.id)
+        else
+            std.ArrayListUnmanaged(ReferentialChange).empty;
+        defer if (traverse_references) deinitReferentialChanges(self.allocator, &referential_changes);
 
         // executeDelete returns the old row via RETURNING (or null if nothing
         // matched), so no pre-fetch is needed here.
@@ -754,7 +784,7 @@ pub const WriteWorker = struct {
 
         const deleted = maybe_old_record != null;
         const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
-        if (deleted) try applyReferentialChanges(self, ctx, &referential_changes);
+        if (deleted and traverse_references) try applyReferentialChanges(self, ctx, &referential_changes);
         return applied;
     }
 
@@ -923,6 +953,13 @@ pub const WriteWorker = struct {
         action: ReferentialAction,
         old_record: ?Record,
     };
+    const ReferentialLookup = struct {
+        parent_table_index: usize,
+        child_table_index: usize,
+        action: ReferentialAction,
+        sql: []const u8,
+        cache_key: u64,
+    };
 
     const CacheOp = struct {
         key: DocumentCacheKey,
@@ -936,6 +973,7 @@ pub const WriteWorker = struct {
         pk_inserts: *std.ArrayListUnmanaged(PkTracking),
         pk_deletes: *std.ArrayListUnmanaged(PkTracking),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
+        referential_lookups: ?[]const ReferentialLookup = null,
     };
 
     fn bindValueSlice(

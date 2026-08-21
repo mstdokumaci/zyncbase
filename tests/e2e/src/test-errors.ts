@@ -86,7 +86,10 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 		"fk_nullable_children",
 		"nullable-child",
 	])) as { parent_id?: string | null } | null | undefined;
-	if (nullable?.parent_id != null) {
+	if (nullable == null) {
+		throw new Error("Nullable child was deleted instead of set to null");
+	}
+	if (nullable.parent_id != null) {
 		throw new Error(`Expected parent_id=null, got ${nullable.parent_id}`);
 	}
 

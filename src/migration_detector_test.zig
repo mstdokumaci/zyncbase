@@ -55,6 +55,12 @@ test "foreign key migration detector finds missing constraints and action drift"
     defer detector.deinit(matching_plan);
     try std.testing.expectEqual(@as(usize, 0), matching_plan.changes.len);
 
+    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    const missing_index_plan = try detector.detectChanges(&target);
+    defer detector.deinit(missing_index_plan);
+    try std.testing.expectEqual(@as(usize, 1), missing_index_plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_foreign_keys, missing_index_plan.changes[0].kind);
+
     try db.exec("DROP TABLE children", .{}, .{});
     try db.exec(
         "CREATE TABLE children (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, owner_id BLOB NOT NULL, parent_id BLOB, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(id), FOREIGN KEY(parent_id) REFERENCES parents(id) ON DELETE RESTRICT)",

@@ -413,7 +413,13 @@ pub const StorageEngine = struct {
 
         // DDL and migrations are complete before start(); reject legacy
         // orphaned rows before building runtime indexes or spawning threads.
-        try connection.verifyForeignKeys(&self.write_worker.conn);
+        {
+            const started_ns = std.Io.Clock.awake.now(self.io).toNanoseconds();
+            defer std.log.info("Foreign key integrity check completed: duration={}ms", .{
+                @divTrunc(std.Io.Clock.awake.now(self.io).toNanoseconds() - started_ns, std.time.ns_per_ms),
+            });
+            try connection.verifyForeignKeys(&self.write_worker.conn);
+        }
 
         // ─── Bootstrap pk_sets from existing rows ───────────────────────────
         // Reset any pk_sets populated by a previous (failed) bootstrap attempt

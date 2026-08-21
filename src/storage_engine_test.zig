@@ -1761,12 +1761,15 @@ test "foreign key startup rejects legacy orphaned rows" {
     const setup_conn = try engine.getSetupConn();
     _ = try setup_conn.pragma(void, .{}, "foreign_keys", "off");
     try setup_conn.exec(
-        "INSERT INTO children VALUES (randomblob(16), 1, zeroblob(16), zeroblob(16), 0, 0)",
+        "INSERT INTO children (id, namespace_id, owner_id, parent_id, created_at, updated_at) VALUES (randomblob(16), 1, zeroblob(16), zeroblob(16), 0, 0)",
         .{},
         .{},
     );
     _ = try setup_conn.pragma(void, .{}, "foreign_keys", "on");
 
-    var unused_send_queue: send_queue_mod.send_queue = undefined;
-    try testing.expectError(error.ForeignKeyViolation, engine.start(&unused_send_queue, null, null));
+    var send_node_pool: sth.MemoryStrategy.IndexPool(send_queue_mod.send_queue.Node) = undefined;
+    try send_node_pool.init(allocator, 1, null, null);
+    test_context.send_node_pool = send_node_pool;
+    test_context.send_queue = try send_queue_mod.send_queue.init(&test_context.send_node_pool.?);
+    try testing.expectError(error.ForeignKeyViolation, engine.start(&test_context.send_queue.?, null, null));
 }

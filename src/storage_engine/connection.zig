@@ -55,11 +55,40 @@ pub fn verifyForeignKeys(db: *sqlite.Db) !void {
         .{},
         .{},
     ) catch |err| {
-        const classified_err = errors.classifyError(err);
-        errors.logDatabaseError("verifyForeignKeys", classified_err, "");
-        return classified_err;
+        return classifyForeignKeyCheckError(err);
     } orelse return error.MissingForeignKeyCheckResult;
-    if (has_violation != 0) return error.ForeignKeyViolation;
+    if (has_violation == 0) return;
+
+    var stmt = db.prepare(
+        "SELECT \"table\", rowid, parent FROM pragma_foreign_key_check LIMIT 5",
+    ) catch |err| return classifyForeignKeyCheckError(err);
+    defer stmt.deinit();
+
+    const ViolationRow = struct {
+        table: []const u8,
+        rowid: ?i64,
+        parent: []const u8,
+    };
+    const allocator = std.heap.smp_allocator;
+    var iter = stmt.iteratorAlloc(ViolationRow, allocator, .{}) catch |err| return classifyForeignKeyCheckError(err);
+    while (iter.nextAlloc(allocator, .{}) catch |err| return classifyForeignKeyCheckError(err)) |row| {
+        defer {
+            allocator.free(row.table);
+            allocator.free(row.parent);
+        }
+        if (row.rowid) |rowid| {
+            std.log.warn("Foreign key violation: table={s}, rowid={}, parent={s}", .{ row.table, rowid, row.parent });
+        } else {
+            std.log.warn("Foreign key violation: table={s}, rowid=null, parent={s}", .{ row.table, row.parent });
+        }
+    }
+    return error.ForeignKeyViolation;
+}
+
+fn classifyForeignKeyCheckError(err: anyerror) anyerror {
+    const classified_err = errors.classifyError(err);
+    errors.logDatabaseError("verifyForeignKeys", classified_err, "");
+    return classified_err;
 }
 
 pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
