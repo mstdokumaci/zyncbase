@@ -762,7 +762,9 @@ pub const WriteWorker = struct {
         const self = ctx.self;
 
         const traverse_references = table_metadata.has_incoming_cascade_or_set_null and
-            self.pk_sets[entry.table_index].contains(entry.id);
+            (self.pk_sets[entry.table_index].contains(entry.id) or for (ctx.pk_inserts.items) |insert| {
+                if (insert.table_index == entry.table_index and insert.id == entry.id) break true;
+            } else false);
         var referential_changes = if (traverse_references)
             try captureReferentialChanges(ctx, table_metadata, entry.id)
         else

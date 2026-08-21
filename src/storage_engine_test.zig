@@ -1721,6 +1721,42 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
     }
     try testing.expectEqual(@as(usize, 3), delete_count);
     try testing.expectEqual(@as(usize, 1), update_count);
+
+    try parents.insertNamed(3, 1, .{});
+    try cascaded.insertNamed(55, 2, .{sth.named("parent_id", fkDocId(3))});
+    try nullable.insertNamed(66, 4, .{sth.named("parent_id", fkDocId(3))});
+    try parents.deleteDocument(3, 1);
+    try parents.flush();
+
+    try testing.expect((try cascaded.readDoc(allocator, 55, 2)) == null);
+    var batch_nullable = try nullable.getOne(allocator, 66, 4);
+    defer batch_nullable.deinit();
+    try testing.expect(batch_nullable.getFieldDocIdOrNull("parent_id") == null);
+
+    var cascade_delete_published = false;
+    var set_null_update_published = false;
+    while (queue.shards[0].popTimed(0)) |job| {
+        var owned = job;
+        defer owned.deinit(app.storage_engine.allocator);
+        switch (owned.change.operation) {
+            .delete => {
+                if (owned.change.table_index == cascaded.metadata.index and owned.change.doc_id == 55) {
+                    cascade_delete_published = true;
+                }
+            },
+            .update => {
+                if (owned.change.table_index == nullable.metadata.index and owned.change.doc_id == 66) {
+                    const parent_field_index = nullable.metadata.fieldIndex("parent_id") orelse return error.TestExpectedValue;
+                    try testing.expectEqual(@as(u128, 3), owned.change.old_record.?.values[parent_field_index].scalar.doc_id);
+                    try testing.expect(owned.change.new_record.?.values[parent_field_index] == .nil);
+                    set_null_update_published = true;
+                }
+            },
+            .insert => {},
+        }
+    }
+    try testing.expect(cascade_delete_published);
+    try testing.expect(set_null_update_published);
 }
 
 test "foreign key startup rejects legacy orphaned rows" {
