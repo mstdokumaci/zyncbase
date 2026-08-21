@@ -1600,12 +1600,19 @@ fn fkDocId(id: u128) typed.Value {
     return .{ .scalar = .{ .doc_id = id } };
 }
 
-fn drainForeignKeyChanges(app: *app_test_helpers.AppTestContext) void {
+fn drainForeignKeyChanges(app: *app_test_helpers.AppTestContext) usize {
     const queue = &app.test_context.change_queue.?;
+    var change_count: usize = 0;
     while (queue.shards[0].popTimed(0)) |job| {
+        change_count += 1;
         var owned = job;
         owned.deinit(app.storage_engine.allocator);
     }
+    return change_count;
+}
+
+fn expectNoForeignKeyChanges(app: *app_test_helpers.AppTestContext) !void {
+    try testing.expectEqual(@as(usize, 0), drainForeignKeyChanges(app));
 }
 
 fn expectForeignKeyCacheMiss(app: *app_test_helpers.AppTestContext, table_name: []const u8, namespace_id: i64, id: u128) !void {
@@ -1657,27 +1664,28 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
 
     try restricted.insertNamed(99, 1, .{sth.named("parent_id", fkDocId(999))});
     try restricted.flush();
+    try expectNoForeignKeyChanges(&app);
     try testing.expect((try restricted.readDoc(allocator, 99, 1)) == null);
     try testing.expect(app.storage_engine.isHealthy());
 
     try parents.insertNamed(1, 1, .{});
     try restricted.insertNamed(11, 1, .{sth.named("parent_id", fkDocId(1))});
     try restricted.flush();
-    drainForeignKeyChanges(&app);
+    _ = drainForeignKeyChanges(&app);
     try parents.deleteDocument(1, 1);
     try parents.flush();
+    try expectNoForeignKeyChanges(&app);
     var retained_parent = try parents.getOne(allocator, 1, 1);
     retained_parent.deinit();
     var retained_child = try restricted.getOne(allocator, 11, 1);
     retained_child.deinit();
-    drainForeignKeyChanges(&app);
 
     try parents.insertNamed(2, 1, .{});
     try cascaded.insertNamed(22, 2, .{sth.named("parent_id", fkDocId(2))});
     try grandchildren.insertNamed(33, 3, .{sth.named("child_id", fkDocId(22))});
     try nullable.insertNamed(44, 4, .{sth.named("parent_id", fkDocId(2))});
     try nullable.flush();
-    drainForeignKeyChanges(&app);
+    _ = drainForeignKeyChanges(&app);
 
     var nullable_before = try nullable.getOne(allocator, 44, 4);
     const updated_at_before = try nullable_before.getFieldInt("updated_at");
