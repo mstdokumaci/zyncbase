@@ -26,9 +26,9 @@ Transport Encoding| Property | Contract |
 | Transport | WebSocket. |
 | Frame type | Binary MessagePack frames. |
 | Compression | Disabled. |
-| Request envelope | MessagePack map with `type: string` and `id: u64`. |
-| Response envelope | MessagePack map with `type: "ok"` or `type: "error"` and matching `id`. |
-| Push envelope | MessagePack map with a push `type`; no request `id`. |
+| Request envelope | MessagePack map with `type: u8` (numeric message type ID, one-byte positive fixint) and `id: u64`. |
+| Response envelope | MessagePack map with `type: 0x00` (`ok`) or `type: 0x01` (`error`) and matching `id`. |
+| Push envelope | MessagePack map with a numeric push `type` ID; no request `id`. |
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
@@ -45,7 +45,36 @@ Value Encoding values integer-keyed field maps data query result encoded as wire
 | `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
 | `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
 | `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
-Duplicate field index pair-array processed last-wins Ordering pairs unordered assume sorted-by-index Empty `[]` valid no fields Client Messages include `type `id fields message-specific| Message | Fields | Scope/session rule | Responsibility |
+Duplicate field index pair-array processed order last-wins pairs unordered assume sorted-by-index Empty `[]` valid no fields Message Type Registry top-level message fixed numeric ID registry single source truth Zig enum_type SDK registry_wire spec IDs `0x7f` MessagePack encodes one-byte positive fixint reuse renumber assigned ID| ID | Name | Direction | Purpose |
+|----|------|-----------|---------|
+| `0x00` | `ok` | S→C | Successful correlated response. |
+| `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
+| `0x02` | `Connected` | S→C | Connection/session bootstrap. |
+| `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
+| `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
+| `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
+| `0x10` | `StoreSetNamespace` | C→S | Establish store scope. |
+| `0x11` | `StoreSet` | C→S | Set a document or field. |
+| `0x12` | `StoreRemove` | C→S | Remove a document or field. |
+| `0x13` | `StoreBatch` | C→S | Apply a write batch. |
+| `0x14` | `StoreQuery` | C→S | Execute a one-shot query. |
+| `0x15` | `StoreSubscribe` | C→S | Start a live query. |
+| `0x16` | `StoreUnsubscribe` | C→S | Stop a live query. |
+| `0x17` | `StoreLoadMore` | C→S | Page an active query. |
+| `0x18` | `StoreDelta` | S→C | Push committed subscription changes. |
+| `0x19` | `WriteCommitted` | S→C | Confirm a tracked write. |
+| `0x1a` | `WriteError` | S→C | Fail a tracked write. |
+| `0x20` | `PresenceSetNamespace` | C→S | Establish presence scope. |
+| `0x21` | `PresenceSet` | C→S | Update user presence. |
+| `0x22` | `PresenceSetShared` | C→S | Update shared presence state. |
+| `0x23` | `PresenceSubscribe` | C→S | Subscribe to user presence. |
+| `0x24` | `PresenceUnsubscribe` | C→S | Unsubscribe from user presence. |
+| `0x25` | `PresenceSubscribeShared` | C→S | Subscribe to shared state. |
+| `0x26` | `PresenceUnsubscribeShared` | C→S | Unsubscribe from shared state. |
+| `0x27` | `PresenceRemove` | C→S | Remove user presence. |
+| `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
+| `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
+rules server-only IDs`0x00`0x03`0x1a`0x29 client requests `INVALID_MESSAGE_TYPE` `0x04``AuthRefresh client request unknown unassigned IDs Legacy string `type` values fail decoding_MESSAGE_FORMAT` map key `"type value numeric Client Messages include `type` `id` fields additional message-specific fields| Message | Fields | Scope/session rule | Responsibility |
 |---------|--------|--------------------|----------------|
 | `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
 | `StoreSet` | `path`, `value`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path. |
@@ -89,4 +118,4 @@ error codes retry categories owned Taxonomy Server Pushes| Push | Fields | Meani
 | `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
 | `PresenceBroadcast` | `subId`, `users` | User presence join/update/leave events. |
 | `SharedStateBroadcast` | `subId`, `data` | Shared presence patch or batch of patches. |
-Push Payload Notes `StoreDelta.ops contains record `set `remove operations `set carries full record `remove path/id `PresenceBroadcast.users entries include `userId `event `join includes `leave neither `SharedStateBroadcast.data patch single update array patches `SchemaSync dictionaries source table/field integer ids repeat generated dictionary contents Scoped Session Rules `StoreSetNamespace `PresenceSetNamespace establish independent scoped sessions Store operations before readiness return `SESSION_NOT_READY Presence before return_NOT_READY superseded namespace resolution activate older.namespaced forbids cross-namespace switching returns `NAMESPACE_SWITCH_REJECTED` Extensibility Additive fields allowed older decoders ignore New message types `MessageHandler.classifyMsgType/wire/decode.zig SDK code file New public errors added to/wire/errors.zig/src/errors.ts [Error Taxonomy Breaking wire changes acceptable green-field stage docs SDK same commit Related Specifications [Message Handler [Query Grammar/query-grammar.md [Schema Grammar [Presence Internals [TypeScript SDK-sdk
+Push Payload Notes `StoreDelta.ops contains record `set `remove operations `set carries full record `remove carries path/id `PresenceBroadcast.users entries include `userId `event `join includes `update `leave neither `SharedStateBroadcast.data patch single update array patches updates `SchemaSync dictionaries source table/field integer ids repeat generated dictionary contents Scoped Session Rules `StoreSetNamespace `PresenceSetNamespace establish independent scoped sessions Store operations before readiness return `SESSION_NOT_READY` Presence operations before readiness return `SESSION_NOT_READY superseded namespace resolution activate older.namespaced forbids cross-namespace switching server returns `NAMESPACE_SWITCH_REJECTED` Extensibility Additive fields allowed older decoders ignore New message types added to `MessageType routing switch SDK registry [Message Type Registry New public errors added to/errors.zig TaxonomyBreaking wire changes acceptable green-field stage docs SDK move same commit Related Specifications [Message Handler-handler.md [Query Grammar-grammar [Schema Grammar-grammar [Presence Internals.md [TypeScript SDK-sdk

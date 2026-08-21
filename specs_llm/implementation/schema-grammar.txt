@@ -35,9 +35,9 @@ Root Schema configuration rooted not table map| Key | Type | Required | Descript
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `array`, `object`. |
-| `indexed` | `boolean` | `false` | Creates a database index for this column. |
-| `references` | `string` | `null` | Target table name for foreign key reference. Stored as `BLOB(16)` internally. |
-| `onDelete` | `string` | `"restrict"` | Foreign key delete rule: `set_null`, `cascade`, `restrict`. |
+| `indexed` | `boolean` | `false` | Creates a database index for this column. Reference fields are indexed regardless of this setting. |
+| `references` | `string` | `null` | Target table name for an immediately enforced foreign key to that table's `id`. Stored as `BLOB(16)` internally. |
+| `onDelete` | `string` | `"restrict"` | Enforced delete rule: `set_null`, `cascade`, or `restrict`. `set_null` is invalid for required fields. |
 | `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). |
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
 | `metadata` | `object` | `null` | Preserved field metadata for tooling and generated clients. |
@@ -77,4 +77,4 @@ Implicit Presence Schema Layout omitted.json server synthesizes layout```json
 |:---|:---|:---|:---|
 | **Phase 1** | `presence.user` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceUserFields[]`. (Position = Wire Index). |
 | **Phase 2** | `presence.shared` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceSharedFields[]`. (Position = Wire Index). |
-Metadata Reserved Validation Keywords objects preserved schema table field boundaries clients operator tooling parser accepts validation-key names schema files reserve future constraints without unknown-key runtime write path enforces structural type compatibility required fields references arrays system-column rules enforce validation keywords Related Specifications [Error Taxonomy [Storage [Query Grammar
+Metadata Reserved Validation objects preserved at schema table field boundaries clients operator tooling parser accepts validation-key names reserve future constraints without unknown-key rejection runtime write path enforces structural type compatibility fields references arrays system-column rules enforce validation keywords Reference values `null field optional Non-null values identify existing table failed writes restricted deletes use `SCHEMA_VALIDATION_FAILED error contract References ID-based cross namespaces IDs table-wide primary keys Foreign keys immediate batch create parent before child UPDATE actions deferred constraints supported Related Specifications [Error Taxonomy Grammar
