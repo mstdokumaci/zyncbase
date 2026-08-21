@@ -12,9 +12,11 @@ const wire_encode = @import("encode.zig");
 const wire_errors = @import("errors.zig");
 const msgpack_skip = @import("msgpack_skip.zig");
 const helpers = @import("test_helpers.zig");
+const PendingSharedUpdate = @import("../presence/manager.zig").PresenceManager.PendingSharedUpdate;
 const PendingUserUpdate = @import("../presence/manager.zig").PresenceManager.PendingUserUpdate;
 const MessageType = @import("message_type.zig").MessageType;
 
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const makeDeltaTestRecord = helpers.makeDeltaTestRecord;
 
@@ -311,6 +313,30 @@ test "encodeDeleteDeltaSuffix: with string id" {
     try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
 }
 
+/// Test-only assembly of a full broadcast message from the production
+/// comptime header, a per-recipient subId, and a production suffix.
+fn assembleBroadcast(
+    allocator: Allocator,
+    comptime header: []const u8,
+    sub_id: u64,
+    suffix: []const u8,
+) ![]u8 {
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
+    try writer.writeAll(header);
+    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
+    try writer.writeAll(suffix);
+    return buf.toOwnedSlice();
+}
+
+fn expectTopLevelFieldCount(parsed: msgpack.Payload, expected: usize) !void {
+    var key_count: usize = 0;
+    var it = parsed.map.iterator();
+    while (it.next()) |_| key_count += 1;
+    try testing.expectEqual(expected, key_count);
+}
+
 test "encodePresenceBroadcast - update event round-trips with correct map size" {
     const allocator = std.heap.smp_allocator;
 
@@ -330,7 +356,9 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
         .is_leave = false,
     };
 
-    const bytes = try wire_encode.encodePresenceBroadcast(allocator, 42, &.{update});
+    const suffix = try wire_encode.encodePresenceBroadcastSuffix(allocator, &.{update});
+    defer allocator.free(suffix);
+    const bytes = try assembleBroadcast(allocator, &wire_encode.presence_broadcast_header, 42, suffix);
     defer allocator.free(bytes);
 
     var reader: std.Io.Reader = .fixed(bytes);
@@ -339,6 +367,7 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
 
     try testing.expect(decoded == .map);
     try expectType(bytes, decoded, .presence_broadcast);
+    try expectTopLevelFieldCount(decoded, 3);
     const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
     const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
@@ -371,7 +400,9 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
         .is_leave = true,
     };
 
-    const bytes = try wire_encode.encodePresenceBroadcast(allocator, 7, &.{update});
+    const suffix = try wire_encode.encodePresenceBroadcastSuffix(allocator, &.{update});
+    defer allocator.free(suffix);
+    const bytes = try assembleBroadcast(allocator, &wire_encode.presence_broadcast_header, 7, suffix);
     defer allocator.free(bytes);
 
     var reader: std.Io.Reader = .fixed(bytes);
@@ -379,6 +410,10 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
     defer decoded.free(allocator);
 
     try testing.expect(decoded == .map);
+    try expectType(bytes, decoded, .presence_broadcast);
+    try expectTopLevelFieldCount(decoded, 3);
+    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
+    try testing.expectEqual(@as(u64, 7), sub_id_val.uint);
     const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
     const user_entry = users_val.arr[0];
 
@@ -390,6 +425,48 @@ test "encodePresenceBroadcast - leave event round-trips with correct map size" {
     const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
     try testing.expectEqualStrings("leave", event_val.str.value());
     try testing.expect((try user_entry.mapGet("data")) == null);
+}
+
+test "encodeSharedStateBroadcast - patches round-trip with correct map size" {
+    const allocator = std.heap.smp_allocator;
+
+    var patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer patch.free(allocator);
+    var pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = msgpack.Payload{ .float = 7.25 };
+    patch.arr[0] = .{ .arr = pair };
+
+    const update = PendingSharedUpdate{
+        .namespace_id = 1,
+        .patch = patch,
+        .source_conn = 999,
+    };
+
+    const suffix = try wire_encode.encodeSharedStateBroadcastSuffix(allocator, &.{update});
+    defer allocator.free(suffix);
+    const bytes = try assembleBroadcast(allocator, &wire_encode.shared_state_broadcast_header, 13, suffix);
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const decoded = try msgpack.decode(allocator, &reader);
+    defer decoded.free(allocator);
+
+    try testing.expect(decoded == .map);
+    try expectType(bytes, decoded, .shared_state_broadcast);
+    try expectTopLevelFieldCount(decoded, 3);
+    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
+    try testing.expectEqual(@as(u64, 13), sub_id_val.uint);
+    const data_val = (try decoded.mapGet("data")) orelse return error.MissingData;
+    try testing.expect(data_val == .arr);
+    try testing.expectEqual(@as(usize, 1), data_val.arr.len);
+    const entry_patch = data_val.arr[0];
+    try testing.expect(entry_patch == .arr);
+    try testing.expectEqual(@as(usize, 1), entry_patch.arr.len);
+    const decoded_pair = entry_patch.arr[0];
+    try testing.expect(decoded_pair == .arr);
+    try testing.expectEqual(@as(u64, 0), decoded_pair.arr[0].uint);
+    try testing.expectEqual(@as(f64, 7.25), decoded_pair.arr[1].float);
 }
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {

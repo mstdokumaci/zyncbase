@@ -288,8 +288,18 @@ pub const PresenceWorker = struct {
 
         if (user_batches.items.len == 0 and shared_batches.items.len == 0) return;
 
-        const pushed_user = self.dispatchBatches(user_batches.items, wire_encode.encodePresenceBroadcast, "user");
-        const pushed_shared = self.dispatchBatches(shared_batches.items, wire_encode.encodeSharedStateBroadcast, "shared");
+        const pushed_user = self.dispatchBatches(
+            user_batches.items,
+            &wire_encode.presence_broadcast_header,
+            wire_encode.encodePresenceBroadcastSuffix,
+            "user",
+        );
+        const pushed_shared = self.dispatchBatches(
+            shared_batches.items,
+            &wire_encode.shared_state_broadcast_header,
+            wire_encode.encodeSharedStateBroadcastSuffix,
+            "shared",
+        );
 
         if (pushed_user or pushed_shared) {
             self.notifier.notify();
@@ -308,7 +318,8 @@ pub const PresenceWorker = struct {
     pub fn dispatchBatches(
         self: *PresenceWorker,
         batches: anytype,
-        comptime encode_fn: anytype,
+        comptime header: []const u8,
+        comptime encode_suffix_fn: anytype,
         comptime log_label: []const u8,
     ) bool {
         var pushed_any = false;
@@ -319,15 +330,51 @@ pub const PresenceWorker = struct {
         };
         defer handle.release();
 
+        const alloc = handle.allocator();
+        var out = std.Io.Writer.Allocating.init(alloc);
+        defer out.deinit();
+
         for (batches) |batch| {
             if (batch.subscribers.items.len == 0) continue;
+
+            // The suffix is identical for every recipient of this batch, so a
+            // failure here is batch-wide: retrying per subscriber cannot recover
+            // identical data.
+            const suffix = encode_suffix_fn(alloc, batch.updates.items) catch |err| {
+                std.log.err("PresenceWorker encode {s} broadcast suffix failed: {}", .{ log_label, err });
+                continue;
+            };
+
             for (batch.subscribers.items) |subscriber| {
-                const msg = encode_fn(handle.allocator(), subscriber.sub_id, batch.updates.items) catch |err| {
-                    std.log.err("PresenceWorker encode {s} broadcast failed: {}", .{ log_label, err });
+                out.clearRetainingCapacity();
+                const writer = &out.writer;
+
+                writer.writeAll(header) catch |err| {
+                    std.log.err("PresenceWorker write {s} broadcast header failed: {}", .{ log_label, err });
                     continue;
                 };
+
+                msgpack.encode(msgpack.Payload.uintToPayload(subscriber.sub_id), writer) catch |err| {
+                    std.log.err("PresenceWorker encode {s} broadcast subId {} failed: {}", .{ log_label, subscriber.sub_id, err });
+                    continue;
+                };
+
+                writer.writeAll(suffix) catch |err| {
+                    std.log.err("PresenceWorker append {s} broadcast suffix failed: {}", .{ log_label, err });
+                    continue;
+                };
+
+                // Duplicate before reusing the scratch writer; queueing the
+                // scratch slice directly would alias later recipients.
+                const owned_msg = alloc.dupe(u8, out.written()) catch |err| {
+                    std.log.err("PresenceWorker dupe {s} broadcast failed: {}", .{ log_label, err });
+                    continue;
+                };
+
+                // Reserve a ref for this entry BEFORE pushing so the consumer can never
+                // observe the refcount dropping to zero before the entry is visible.
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = msg, .arena = handle }) catch |err| {
+                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = owned_msg, .arena = handle }) catch |err| {
                     std.log.err("PresenceWorker push {s} broadcast failed: {}", .{ log_label, err });
                     handle.release();
                     continue;
