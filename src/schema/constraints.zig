@@ -1,45 +1,36 @@
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("regex.h");
-});
-
 const msgpack = @import("../msgpack_utils.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn compilePattern(allocator: Allocator, pattern: []const u8) !*anyopaque {
-    const preg = try allocator.create(c.regex_t);
-    errdefer allocator.destroy(preg);
+extern fn zync_regex_compile(pattern: [*c]const u8) ?*anyopaque;
+extern fn zync_regex_match(handle: *anyopaque, str: [*c]const u8) c_int;
+extern fn zync_regex_free(handle: *anyopaque) void;
 
+pub fn compilePattern(allocator: Allocator, pattern: []const u8) !*anyopaque {
     const pattern_z = try allocator.dupeZ(u8, pattern);
     defer allocator.free(pattern_z);
 
-    const rc = c.regcomp(preg, pattern_z.ptr, c.REG_EXTENDED | c.REG_NOSUB);
-    if (rc != 0) {
-        return error.InvalidRegex;
-    }
-    return @ptrCast(preg);
+    const handle = zync_regex_compile(pattern_z.ptr) orelse return error.InvalidRegex;
+    return handle;
 }
 
-pub fn freePattern(allocator: Allocator, handle: *anyopaque) void {
-    const preg: *c.regex_t = @ptrCast(@alignCast(handle));
-    c.regfree(preg);
-    allocator.destroy(preg);
+pub fn freePattern(_: Allocator, handle: *anyopaque) void {
+    zync_regex_free(handle);
 }
 
 pub fn matchPattern(handle: *anyopaque, allocator: Allocator, str: []const u8) !bool {
-    const preg: *c.regex_t = @ptrCast(@alignCast(handle));
     if (str.len < 256) {
         var buf: [256]u8 = undefined;
         @memcpy(buf[0..str.len], str);
         buf[str.len] = 0;
-        return c.regexec(preg, &buf, 0, null, 0) == 0;
+        return zync_regex_match(handle, &buf) == 1;
     } else {
         const str_z = try allocator.dupeZ(u8, str);
         defer allocator.free(str_z);
-        return c.regexec(preg, str_z.ptr, 0, null, 0) == 0;
+        return zync_regex_match(handle, str_z.ptr) == 1;
     }
 }
 
