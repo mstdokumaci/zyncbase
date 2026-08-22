@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
+const schema_types = @import("../schema/types.zig");
 const th = @import("test_helpers.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
 
@@ -119,4 +120,47 @@ test "PresenceRecord - mergeFromPayload overwrites existing value" {
     try record.mergeFromPayload(allocator, fields, patch2);
 
     try testing.expectEqualStrings("active", record.values[2].?.scalar.text);
+}
+
+test "PresenceRecord - mergeFromPayload enforces constraints" {
+    const allocator = std.testing.allocator;
+
+    const fields = try allocator.alloc(schema_types.PresenceField, 1);
+    defer {
+        for (fields) |f| f.deinit(allocator);
+        allocator.free(fields);
+    }
+    const name = try allocator.dupe(u8, "status");
+    const enum_vals = try allocator.alloc(schema_types.Constraints.EnumValue, 2);
+    enum_vals[0] = .{ .text = try allocator.dupe(u8, "active") };
+    enum_vals[1] = .{ .text = try allocator.dupe(u8, "idle") };
+    fields[0] = .{
+        .name = name,
+        .declared_type = .text,
+        .constraints = .{
+            .enum_values = enum_vals,
+        },
+    };
+
+    var record = try PresenceRecord.init(allocator, 1);
+    defer record.deinit(allocator);
+
+    // Valid enum value passes
+    {
+        var valid_patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = try msgpack.Payload.strToPayload("active", allocator) },
+        });
+        defer valid_patch.free(allocator);
+        try record.mergeFromPayload(allocator, fields, valid_patch);
+        try testing.expectEqualStrings("active", record.values[0].?.scalar.text);
+    }
+
+    // Invalid enum value rejected
+    {
+        var invalid_patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = try msgpack.Payload.strToPayload("banned", allocator) },
+        });
+        defer invalid_patch.free(allocator);
+        try testing.expectError(error.SchemaValidationFailed, record.mergeFromPayload(allocator, fields, invalid_patch));
+    }
 }

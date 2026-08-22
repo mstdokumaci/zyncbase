@@ -99,4 +99,43 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
     if (field.metadata) |metadata| {
         try w.rawField("metadata", metadata.json);
     }
+    if (field.constraints) |c| {
+        if (c.enum_values) |enums| {
+            try w.beginArrayField("enum");
+            for (enums) |e| {
+                switch (e) {
+                    .text => |t| try w.stringValue(t),
+                    .integer => |i| try w.intValue(i),
+                    .real => |r| try w.floatValue(r),
+                }
+            }
+            try w.endArray();
+        }
+        if (c.pattern_source) |pat| {
+            try w.field("pattern", pat);
+        }
+        if (c.format) |fmt| {
+            try w.field("format", fmt.schemaName());
+        }
+        if (c.min_length) |min_l| {
+            try w.intField("minLength", min_l);
+        }
+        if (c.max_length) |max_l| {
+            try w.intField("maxLength", max_l);
+        }
+        if (c.minimum) |min_val| {
+            if (field.declared_type == .integer and min_val == @trunc(min_val)) {
+                try w.intField("minimum", @as(i64, @intFromFloat(min_val)));
+            } else {
+                try w.floatField("minimum", min_val);
+            }
+        }
+        if (c.maximum) |max_val| {
+            if (field.declared_type == .integer and max_val == @trunc(max_val)) {
+                try w.intField("maximum", @as(i64, @intFromFloat(max_val)));
+            } else {
+                try w.floatField("maximum", max_val);
+            }
+        }
+    }
 }

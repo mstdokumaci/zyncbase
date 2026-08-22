@@ -96,6 +96,20 @@ pub const Writer = struct {
         try self.buf.print(self.allocator, "{d}", .{value});
     }
 
+    pub fn floatField(self: *Writer, key: []const u8, value: anytype) !void {
+        try self.separator();
+        try self.writeEscapedString(key);
+        try self.buf.append(self.allocator, ':');
+        var buf: [64]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return error.WriteFailed;
+        if (std.mem.indexOfAny(u8, s, ".eE") == null) {
+            try self.buf.appendSlice(self.allocator, s);
+            try self.buf.appendSlice(self.allocator, ".0");
+        } else {
+            try self.buf.appendSlice(self.allocator, s);
+        }
+    }
+
     pub fn rawField(self: *Writer, key: []const u8, json_bytes: []const u8) !void {
         try self.separator();
         try self.writeEscapedString(key);

@@ -608,15 +608,15 @@ test "StoreService: validateFieldWrite tests" {
     {
         const val = try msgpack.Payload.strToPayload("oops", allocator);
         defer val.free(allocator);
-        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("id") orelse unreachable, val));
-        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("created_at") orelse unreachable, val));
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("id") orelse unreachable, val));
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("created_at") orelse unreachable, val));
     }
 
     // 2. Unknown field
     {
         const val = try msgpack.Payload.strToPayload("oops", allocator);
         defer val.free(allocator);
-        try testing.expectError(StorageError.UnknownField, store_service.validateFieldWrite(tbl_md, 999, val));
+        try testing.expectError(StorageError.UnknownField, store_service.validateFieldWrite(allocator, tbl_md, 999, val));
     }
 
     // 3. Type mismatch
@@ -624,15 +624,103 @@ test "StoreService: validateFieldWrite tests" {
         // Expected integer, got string
         const val = try msgpack.Payload.strToPayload("not-an-int", allocator);
         defer val.free(allocator);
-        try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val));
+        try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val));
     }
 
     // 4. Success case
     {
         const val = msgpack.Payload.intToPayload(25);
-        const field = try store_service.validateFieldWrite(tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val);
+        const field = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("age") orelse unreachable, val);
         try testing.expectEqualStrings("age", field.name);
         try testing.expectEqual(schema_types.FieldType.integer, field.storage_type);
+    }
+}
+
+test "StoreService: validateFieldWrite with constraints" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+
+    const schema_json =
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{
+        \\    "users":{
+        \\      "fields":{
+        \\        "status":{"type":"string","enum":["active","idle","away"]},
+        \\        "code":{"type":"string","pattern":"^[A-Z]{3}-[0-9]{3}$"},
+        \\        "email":{"type":"string","format":"email"},
+        \\        "username":{"type":"string","minLength":3,"maxLength":10},
+        \\        "age":{"type":"integer","minimum":18,"maximum":120}
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    try app.initWithSchemaJSON(allocator, "store-validate-constraints", schema_json);
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const tbl_md = service.schema.table("users") orelse return error.TestExpectedValue;
+
+    // Status: enum check
+    {
+        const valid_val = try msgpack.Payload.strToPayload("active", allocator);
+        defer valid_val.free(allocator);
+        _ = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("status") orelse unreachable, valid_val);
+
+        const invalid_val = try msgpack.Payload.strToPayload("banned", allocator);
+        defer invalid_val.free(allocator);
+        try testing.expectError(error.EnumViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("status") orelse unreachable, invalid_val));
+    }
+
+    // Code: pattern check
+    {
+        const valid_val = try msgpack.Payload.strToPayload("ABC-123", allocator);
+        defer valid_val.free(allocator);
+        _ = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("code") orelse unreachable, valid_val);
+
+        const invalid_val = try msgpack.Payload.strToPayload("abc-123", allocator);
+        defer invalid_val.free(allocator);
+        try testing.expectError(error.PatternViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("code") orelse unreachable, invalid_val));
+    }
+
+    // Email: format check
+    {
+        const valid_val = try msgpack.Payload.strToPayload("alice@example.com", allocator);
+        defer valid_val.free(allocator);
+        _ = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("email") orelse unreachable, valid_val);
+
+        const invalid_val = try msgpack.Payload.strToPayload("not-an-email", allocator);
+        defer invalid_val.free(allocator);
+        try testing.expectError(error.FormatViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("email") orelse unreachable, invalid_val));
+    }
+
+    // Username: minLength & maxLength check
+    {
+        const too_short = try msgpack.Payload.strToPayload("ab", allocator);
+        defer too_short.free(allocator);
+        try testing.expectError(error.LengthViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("username") orelse unreachable, too_short));
+
+        const valid_val = try msgpack.Payload.strToPayload("alice", allocator);
+        defer valid_val.free(allocator);
+        _ = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("username") orelse unreachable, valid_val);
+
+        const too_long = try msgpack.Payload.strToPayload("this_is_too_long_username", allocator);
+        defer too_long.free(allocator);
+        try testing.expectError(error.LengthViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("username") orelse unreachable, too_long));
+    }
+
+    // Age: minimum & maximum check
+    {
+        const too_young = msgpack.Payload.intToPayload(17);
+        try testing.expectError(error.RangeViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("age") orelse unreachable, too_young));
+
+        const valid_val = msgpack.Payload.intToPayload(25);
+        _ = try store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("age") orelse unreachable, valid_val);
+
+        const too_old = msgpack.Payload.intToPayload(121);
+        try testing.expectError(error.RangeViolation, store_service.validateFieldWrite(allocator, tbl_md, tbl_md.fieldIndex("age") orelse unreachable, too_old));
     }
 }
 
