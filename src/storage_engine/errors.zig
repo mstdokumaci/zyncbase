@@ -46,6 +46,16 @@ pub const StorageError = error{
     EngineUnhealthy,
     /// Required field missing during document creation
     MissingRequiredField,
+    /// Value is not in the allowed enum values
+    EnumViolation,
+    /// String value does not match the required pattern
+    PatternViolation,
+    /// String value does not match the required format
+    FormatViolation,
+    /// String length is outside the allowed range
+    LengthViolation,
+    /// Numeric value is outside the allowed range
+    RangeViolation,
 };
 
 pub fn classifyError(err: anyerror) anyerror {

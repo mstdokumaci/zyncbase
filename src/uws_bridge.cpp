@@ -11,6 +11,7 @@
 #include <openssl/err.h>
 #include <openssl/param_build.h>
 #include <openssl/core_names.h>
+#include <regex.h>
 
 
 #define uws_res_r uws_res_t*
@@ -615,5 +616,30 @@ extern "C"
         EVP_MD_CTX_free(ctx);
         OPENSSL_free(der_sig);
         return ret == 1 ? 1 : 0;
+    }
+
+    void *zync_regex_compile(const char *pattern) {
+        if (!pattern) return nullptr;
+        regex_t *preg = (regex_t *)malloc(sizeof(regex_t));
+        if (!preg) return nullptr;
+        int rc = regcomp(preg, pattern, REG_EXTENDED | REG_NOSUB);
+        if (rc != 0) {
+            free(preg);
+            return nullptr;
+        }
+        return (void *)preg;
+    }
+
+    int zync_regex_match(void *handle, const char *str) {
+        if (!handle || !str) return 0;
+        regex_t *preg = (regex_t *)handle;
+        return regexec(preg, str, 0, nullptr, 0) == 0 ? 1 : 0;
+    }
+
+    void zync_regex_free(void *handle) {
+        if (!handle) return;
+        regex_t *preg = (regex_t *)handle;
+        regfree(preg);
+        free(preg);
     }
 }

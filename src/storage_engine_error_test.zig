@@ -35,7 +35,7 @@ test "storage: error handling invalid database path" {
         return error.ExpectedError;
     } else |err| {
         switch (err) {
-            error.FileNotFound, error.ReadOnlyFileSystem, error.AccessDenied, error.InvalidDataDir => {},
+            error.FileNotFound, error.ReadOnlyFileSystem, error.AccessDenied, error.PermissionDenied, error.InvalidDataDir => {},
             else => return err,
         }
     }

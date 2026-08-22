@@ -6,6 +6,7 @@ const msgpack = @import("msgpack_utils.zig");
 const query_ast = @import("query/ast.zig");
 const query_hasher = @import("query/hasher.zig");
 const query_parser = @import("query/parser.zig");
+const schema_constraints = @import("schema/constraints.zig");
 const schema_parse = @import("schema/parse.zig");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
@@ -45,7 +46,7 @@ fn decodeColumnsFromPairs(
             seen.set(f_idx);
         }
 
-        const field = try validateFieldWrite(table, f_idx, pair_payload.arr[1]);
+        const field = try validateFieldWrite(allocator, table, f_idx, pair_payload.arr[1]);
         const typed_value = try typed_codec.fromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
 
         columns.append(allocator, .{
@@ -63,6 +64,7 @@ fn decodeColumnsFromPairs(
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
+    allocator: Allocator,
     tbl_md: *const schema_types.Table,
     field_index: usize,
     value: msgpack.Payload,
@@ -88,6 +90,10 @@ pub fn validateFieldWrite(
                     };
                 }
             }
+        }
+
+        if (field.constraints) |constraints| {
+            try schema_constraints.validate(constraints, field.declared_type, value, allocator);
         }
     }
 

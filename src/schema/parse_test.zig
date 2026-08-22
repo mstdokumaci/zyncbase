@@ -86,7 +86,7 @@ test "schema_parse: rejects unknown keys outside extension points" {
     ));
 }
 
-test "schema_parse: accepts planned constraint keys without enforcement" {
+test "schema_parse: parses and stores constraint keywords" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -101,10 +101,21 @@ test "schema_parse: accepts planned constraint keys without enforcement" {
         \\          "pattern":"^[a-z]+$",
         \\          "format":"email",
         \\          "minLength":1,
-        \\          "maxLength":30,
+        \\          "maxLength":30
+        \\        },
+        \\        "score":{
+        \\          "type":"integer",
         \\          "minimum":0,
         \\          "maximum":100
         \\        }
+        \\      }
+        \\    }
+        \\  },
+        \\  "presence":{
+        \\    "user":{
+        \\      "status":{
+        \\        "type":"string",
+        \\        "enum":["active","idle","away"]
         \\      }
         \\    }
         \\  }
@@ -113,7 +124,68 @@ test "schema_parse: accepts planned constraint keys without enforcement" {
     defer parsed.deinit();
 
     const posts = parsed.table("posts") orelse return error.TestExpectedValue;
-    try std.testing.expect(posts.field("title") != null);
+    const title = posts.field("title") orelse return error.TestExpectedValue;
+    try std.testing.expect(title.constraints != null);
+    const tc = title.constraints.?;
+    try std.testing.expect(tc.enum_values != null);
+    try std.testing.expectEqual(@as(usize, 2), tc.enum_values.?.len);
+    try std.testing.expectEqualStrings("a", tc.enum_values.?[0].text);
+    try std.testing.expectEqualStrings("b", tc.enum_values.?[1].text);
+    try std.testing.expectEqualStrings("^[a-z]+$", tc.pattern_source.?);
+    try std.testing.expect(tc.compiled_regex != null);
+    try std.testing.expectEqual(schema_types.Constraints.Format.email, tc.format.?);
+    try std.testing.expectEqual(@as(?u64, 1), tc.min_length);
+    try std.testing.expectEqual(@as(?u64, 30), tc.max_length);
+
+    const score = posts.field("score") orelse return error.TestExpectedValue;
+    try std.testing.expect(score.constraints != null);
+    const sc = score.constraints.?;
+    try std.testing.expectEqual(@as(?f64, 0.0), sc.minimum);
+    try std.testing.expectEqual(@as(?f64, 100.0), sc.maximum);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.presence_user_fields.len);
+    const p_status = parsed.presence_user_fields[0];
+    try std.testing.expect(p_status.constraints != null);
+    try std.testing.expectEqual(@as(usize, 3), p_status.constraints.?.enum_values.?.len);
+}
+
+test "schema_parse: rejects invalid constraint combinations" {
+    const allocator = std.testing.allocator;
+
+    // minimum on string
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","minimum":0}}}}}
+    ));
+
+    // pattern on integer
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"age":{"type":"integer","pattern":"^[0-9]+$"}}}}}
+    ));
+
+    // minLength > maxLength
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","minLength":10,"maxLength":5}}}}}
+    ));
+
+    // minimum > maximum
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"age":{"type":"integer","minimum":100,"maximum":50}}}}}
+    ));
+
+    // unknown format
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"email":{"type":"string","format":"unknown_format"}}}}}
+    ));
+
+    // constraints on array
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"string","minLength":2}}}}}
+    ));
+
+    // constraints on boolean
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"active":{"type":"boolean","enum":[true,false]}}}}}
+    ));
 }
 
 test "schema_parse: implicit users is canonical first table" {

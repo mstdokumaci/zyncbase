@@ -27,6 +27,7 @@ fn initField(
     items_type: ?schema_types.FieldType,
     required: bool,
     indexed: bool,
+    constraints: ?schema_types.Constraints,
 ) schema_types.Field {
     return .{
         .name = name,
@@ -38,23 +39,24 @@ fn initField(
         .indexed = indexed,
         .references = null,
         .on_delete = null,
+        .constraints = constraints,
     };
 }
 
 /// Comptime field builder — auto-computes name_quoted at compile time.
 /// For runtime names, use makeFieldAlloc.
 pub fn makeField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
-    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, false);
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, false, null);
 }
 
 /// Comptime indexed field builder.
 pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
-    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, true);
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, false, true, null);
 }
 
 /// Comptime required field builder.
 pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_types.FieldType) schema_types.Field {
-    return initField(name, "\"" ++ name ++ "\"", sql_type, null, true, false);
+    return initField(name, "\"" ++ name ++ "\"", sql_type, null, true, false, null);
 }
 
 /// Comptime table builder — auto-computes name_quoted at compile time.
@@ -83,6 +85,7 @@ pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: 
         null,
         false,
         false,
+        null,
     );
 }
 
@@ -102,6 +105,7 @@ pub const TestFieldDef = struct {
     name: []const u8,
     field_type: schema_types.FieldType,
     items_type: ?schema_types.FieldType = null,
+    constraints: ?schema_types.Constraints = null,
 };
 
 pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef, table_index: usize) schema_types.Table {
@@ -114,6 +118,7 @@ pub fn makeRuntimeTable(allocator: std.mem.Allocator, name: []const u8, fields: 
             field_def.items_type,
             false,
             false,
+            if (field_def.constraints) |c| c.clone(allocator) catch @panic("oom") else null,
         );
     }
 
