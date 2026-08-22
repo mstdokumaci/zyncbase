@@ -93,7 +93,7 @@ pub fn validateFieldWrite(
         }
 
         if (field.constraints) |constraints| {
-            try schema_constraints.validate(constraints, field.storage_type, value, allocator);
+            try schema_constraints.validate(constraints, field.declared_type, value, allocator);
         }
     }
 

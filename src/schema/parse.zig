@@ -300,6 +300,12 @@ fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_
             .integer => |i| @floatFromInt(i),
             else => return error.InvalidConstraint,
         };
+        if (std.math.isNan(val)) return error.InvalidConstraint;
+        if (declared_type == .integer) {
+            if (val < @as(f64, @floatFromInt(std.math.minInt(i64))) or val > @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
+                return error.InvalidConstraint;
+            }
+        }
         minimum = val;
     }
 
@@ -309,6 +315,12 @@ fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_
             .integer => |i| @floatFromInt(i),
             else => return error.InvalidConstraint,
         };
+        if (std.math.isNan(val)) return error.InvalidConstraint;
+        if (declared_type == .integer) {
+            if (val < @as(f64, @floatFromInt(std.math.minInt(i64))) or val > @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
+                return error.InvalidConstraint;
+            }
+        }
         maximum = val;
     }
 

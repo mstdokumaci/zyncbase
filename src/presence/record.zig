@@ -77,10 +77,7 @@ pub const PresenceRecord = struct {
 
             const field = fields[f_idx];
             if (field.constraints) |constraints| {
-                schema_constraints.validate(constraints, field.declared_type, pair_payload.arr[1], allocator) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.SchemaValidationFailed,
-                };
+                try schema_constraints.validate(constraints, field.declared_type, pair_payload.arr[1], allocator);
             }
 
             const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {

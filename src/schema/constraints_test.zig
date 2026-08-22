@@ -163,4 +163,56 @@ test "constraints: enum validation" {
         try constraints.validate(c, .integer, msgpack.Payload.intToPayload(100), allocator);
         try std.testing.expectError(error.EnumViolation, constraints.validate(c, .integer, msgpack.Payload.intToPayload(300), allocator));
     }
+
+    // Real enum
+    {
+        const c = types.Constraints{
+            .enum_values = &.{
+                .{ .real = 1.5 },
+                .{ .real = 2.5 },
+            },
+        };
+        try constraints.validate(c, .real, msgpack.Payload{ .float = 1.5 }, allocator);
+        try std.testing.expectError(error.EnumViolation, constraints.validate(c, .real, msgpack.Payload{ .float = 3.5 }, allocator));
+    }
+}
+
+test "constraints: format validation via validate" {
+    const allocator = std.testing.allocator;
+
+    const email_c = types.Constraints{ .format = .email };
+    {
+        const valid_email = try msgpack.Payload.strToPayload("user@example.com", allocator);
+        defer valid_email.free(allocator);
+        try constraints.validate(email_c, .text, valid_email, allocator);
+
+        const invalid_email = try msgpack.Payload.strToPayload("not-an-email", allocator);
+        defer invalid_email.free(allocator);
+        try std.testing.expectError(error.FormatViolation, constraints.validate(email_c, .text, invalid_email, allocator));
+    }
+
+    const uuid_c = types.Constraints{ .format = .uuid };
+    {
+        const valid_uuid = try msgpack.Payload.strToPayload("123e4567-e89b-12d3-a456-426614174000", allocator);
+        defer valid_uuid.free(allocator);
+        try constraints.validate(uuid_c, .text, valid_uuid, allocator);
+
+        const invalid_uuid = try msgpack.Payload.strToPayload("invalid-uuid", allocator);
+        defer invalid_uuid.free(allocator);
+        try std.testing.expectError(error.FormatViolation, constraints.validate(uuid_c, .text, invalid_uuid, allocator));
+    }
+}
+
+test "constraints: pattern rejects embedded NUL bytes" {
+    const allocator = std.testing.allocator;
+
+    const regex = try constraints.compilePattern(allocator, "^[a-z]+$");
+    defer constraints.freePattern(allocator, regex);
+
+    // Normal matching
+    try std.testing.expect(try constraints.matchPattern(regex, allocator, "abc"));
+
+    // Embedded NUL byte is rejected safely
+    const with_nul = "abc\x00extra";
+    try std.testing.expect(!try constraints.matchPattern(regex, allocator, with_nul));
 }

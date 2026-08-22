@@ -22,6 +22,7 @@ pub fn freePattern(_: Allocator, handle: *anyopaque) void {
 }
 
 pub fn matchPattern(handle: *anyopaque, allocator: Allocator, str: []const u8) !bool {
+    if (std.mem.indexOfScalar(u8, str, 0) != null) return false;
     if (str.len < 256) {
         var buf: [256]u8 = undefined;
         @memcpy(buf[0..str.len], str);
@@ -82,6 +83,10 @@ pub fn validateUuid(str: []const u8) bool {
 pub fn validateUri(str: []const u8) bool {
     if (str.len < 3) return false;
 
+    for (str) |ch| {
+        if (ch <= 32 or ch >= 127) return false;
+    }
+
     // Scheme must start with a letter
     if (!std.ascii.isAlphabetic(str[0])) return false;
 
@@ -92,13 +97,7 @@ pub fn validateUri(str: []const u8) bool {
     }
 
     const rest = str[colon_idx + 1 ..];
-    if (rest.len == 0) return false;
-
-    for (str) |ch| {
-        if (ch <= 32 or ch >= 127) return false;
-    }
-
-    return true;
+    return rest.len > 0;
 }
 
 pub fn validate(
@@ -115,7 +114,8 @@ pub fn validate(
     }
 
     // 2. String constraints
-    if (ft == .text and value == .str) {
+    if (ft == .text) {
+        if (value != .str) return error.TypeMismatch;
         const str = value.str.value();
 
         if (constraints.min_length != null or constraints.max_length != null) {

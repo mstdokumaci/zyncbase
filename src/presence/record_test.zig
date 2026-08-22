@@ -126,10 +126,8 @@ test "PresenceRecord - mergeFromPayload enforces constraints" {
     const allocator = std.testing.allocator;
 
     const fields = try allocator.alloc(schema_types.PresenceField, 1);
-    defer {
-        for (fields) |f| f.deinit(allocator);
-        allocator.free(fields);
-    }
+    errdefer allocator.free(fields);
+
     const name = try allocator.dupe(u8, "status");
     const enum_vals = try allocator.alloc(schema_types.Constraints.EnumValue, 2);
     enum_vals[0] = .{ .text = try allocator.dupe(u8, "active") };
@@ -141,6 +139,10 @@ test "PresenceRecord - mergeFromPayload enforces constraints" {
             .enum_values = enum_vals,
         },
     };
+    defer {
+        for (fields) |f| f.deinit(allocator);
+        allocator.free(fields);
+    }
 
     var record = try PresenceRecord.init(allocator, 1);
     defer record.deinit(allocator);
@@ -161,6 +163,6 @@ test "PresenceRecord - mergeFromPayload enforces constraints" {
             .{ .idx = 0, .value = try msgpack.Payload.strToPayload("banned", allocator) },
         });
         defer invalid_patch.free(allocator);
-        try testing.expectError(error.SchemaValidationFailed, record.mergeFromPayload(allocator, fields, invalid_patch));
+        try testing.expectError(error.EnumViolation, record.mergeFromPayload(allocator, fields, invalid_patch));
     }
 }
