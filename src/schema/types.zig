@@ -152,15 +152,15 @@ pub const Constraints = struct {
 
         var cloned_pattern: ?[]const u8 = null;
         var cloned_regex: ?*anyopaque = null;
+        errdefer {
+            if (cloned_pattern) |p| allocator.free(p);
+            if (cloned_regex) |r| schema_constraints.freePattern(allocator, r);
+        }
         if (self.pattern_source) |src| {
             cloned_pattern = try allocator.dupe(u8, src);
             if (self.compiled_regex != null) {
                 cloned_regex = try schema_constraints.compilePattern(allocator, src);
             }
-        }
-        errdefer {
-            if (cloned_pattern) |p| allocator.free(p);
-            if (cloned_regex) |r| schema_constraints.freePattern(allocator, r);
         }
 
         return .{
