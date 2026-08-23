@@ -70,8 +70,13 @@ pub const Constraints = struct {
     format: ?Format = null,
     min_length: ?u64 = null,
     max_length: ?u64 = null,
-    minimum: ?f64 = null,
-    maximum: ?f64 = null,
+    minimum: ?Bound = null,
+    maximum: ?Bound = null,
+
+    pub const Bound = union(enum) {
+        integer: i64,
+        real: f64,
+    };
 
     pub const EnumValue = union(enum) {
         text: []const u8,

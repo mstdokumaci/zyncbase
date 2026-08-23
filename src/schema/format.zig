@@ -124,17 +124,15 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
             try w.intField("maxLength", max_l);
         }
         if (c.minimum) |min_val| {
-            if (field.declared_type == .integer and min_val >= @as(f64, @floatFromInt(std.math.minInt(i64))) and min_val < @as(f64, @floatFromInt(std.math.maxInt(i64))) and min_val == @trunc(min_val)) {
-                try w.intField("minimum", @as(i64, @intFromFloat(min_val)));
-            } else {
-                try w.floatField("minimum", min_val);
+            switch (min_val) {
+                .integer => |i| try w.intField("minimum", i),
+                .real => |r| try w.floatField("minimum", r),
             }
         }
         if (c.maximum) |max_val| {
-            if (field.declared_type == .integer and max_val >= @as(f64, @floatFromInt(std.math.minInt(i64))) and max_val < @as(f64, @floatFromInt(std.math.maxInt(i64))) and max_val == @trunc(max_val)) {
-                try w.intField("maximum", @as(i64, @intFromFloat(max_val)));
-            } else {
-                try w.floatField("maximum", max_val);
+            switch (max_val) {
+                .integer => |i| try w.intField("maximum", i),
+                .real => |r| try w.floatField("maximum", r),
             }
         }
     }

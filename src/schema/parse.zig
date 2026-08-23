@@ -154,6 +154,16 @@ fn parsePresenceTier(
     try parseObjectFields(allocator, tier_val.object, "", PresenceFieldContext, &ctx);
 }
 
+fn hasConstraintKeys(field_obj: std.json.ObjectMap) bool {
+    return field_obj.contains("enum") or
+        field_obj.contains("pattern") or
+        field_obj.contains("format") or
+        field_obj.contains("minLength") or
+        field_obj.contains("maxLength") or
+        field_obj.contains("minimum") or
+        field_obj.contains("maximum");
+}
+
 /// Shared recursive object-field parser. Flattens nested objects using `__` prefix.
 /// Parameterized via comptime Ctx for store vs presence field logic.
 fn parseObjectFields(
@@ -178,6 +188,9 @@ fn parseObjectFields(
         errdefer allocator.free(full_name);
 
         if (std.mem.eql(u8, type_value, "object")) {
+            if (hasConstraintKeys(field_def.object)) {
+                return error.InvalidConstraint;
+            }
             try ctx.preObjectValidate(full_name);
             const nested_fields = (json_read.getObject(field_def.object, "fields") catch return error.InvalidSchema) orelse return error.MissingFields;
             try parseObjectFields(allocator, nested_fields, full_name, Ctx, ctx);
@@ -190,17 +203,16 @@ fn parseObjectFields(
 }
 
 fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_obj: std.json.ObjectMap) !?types.Constraints {
-    const has_enum = field_obj.contains("enum");
+    if (!hasConstraintKeys(field_obj)) {
+        return null;
+    }
+
     const has_pattern = field_obj.contains("pattern");
     const has_format = field_obj.contains("format");
     const has_min_length = field_obj.contains("minLength");
     const has_max_length = field_obj.contains("maxLength");
     const has_min = field_obj.contains("minimum");
     const has_max = field_obj.contains("maximum");
-
-    if (!has_enum and !has_pattern and !has_format and !has_min_length and !has_max_length and !has_min and !has_max) {
-        return null;
-    }
 
     // Type compatibility checks
     if (declared_type == .array or declared_type == .boolean or declared_type == .doc_id) {
@@ -219,8 +231,8 @@ fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_
     var format: ?types.Constraints.Format = null;
     var min_length: ?u64 = null;
     var max_length: ?u64 = null;
-    var minimum: ?f64 = null;
-    var maximum: ?f64 = null;
+    var minimum: ?types.Constraints.Bound = null;
+    var maximum: ?types.Constraints.Bound = null;
 
     errdefer {
         if (enum_values) |enums| {
@@ -269,7 +281,7 @@ fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_
     }
 
     if (field_obj.get("pattern")) |pattern_val| {
-        if (pattern_val != .string or pattern_val.string.len == 0) return error.InvalidConstraint;
+        if (pattern_val != .string or pattern_val.string.len == 0 or std.mem.indexOfScalar(u8, pattern_val.string, 0) != null) return error.InvalidConstraint;
         const reg = schema_constraints.compilePattern(allocator, pattern_val.string) catch return error.InvalidConstraint;
         compiled_regex = reg;
         pattern_source = try allocator.dupe(u8, pattern_val.string);
@@ -295,37 +307,71 @@ fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_
     }
 
     if (field_obj.get("minimum")) |min_val| {
-        const val: f64 = switch (min_val) {
-            .float => |f| f,
-            .integer => |i| @floatFromInt(i),
+        switch (declared_type) {
+            .integer => {
+                const val: i64 = switch (min_val) {
+                    .integer => |i| i,
+                    .float => |f| blk: {
+                        if (std.math.isNan(f) or std.math.isInf(f)) return error.InvalidConstraint;
+                        if (f != @trunc(f)) return error.InvalidConstraint;
+                        if (f < -9007199254740992.0 or f > 9007199254740992.0) return error.InvalidConstraint;
+                        break :blk @intFromFloat(f);
+                    },
+                    else => return error.InvalidConstraint,
+                };
+                minimum = .{ .integer = val };
+            },
+            .real => {
+                const val: f64 = switch (min_val) {
+                    .float => |f| f,
+                    .integer => |i| @floatFromInt(i),
+                    else => return error.InvalidConstraint,
+                };
+                if (std.math.isNan(val) or std.math.isInf(val)) return error.InvalidConstraint;
+                minimum = .{ .real = val };
+            },
             else => return error.InvalidConstraint,
-        };
-        if (std.math.isNan(val)) return error.InvalidConstraint;
-        if (declared_type == .integer) {
-            if (val < @as(f64, @floatFromInt(std.math.minInt(i64))) or val >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                return error.InvalidConstraint;
-            }
         }
-        minimum = val;
     }
 
     if (field_obj.get("maximum")) |max_val| {
-        const val: f64 = switch (max_val) {
-            .float => |f| f,
-            .integer => |i| @floatFromInt(i),
+        switch (declared_type) {
+            .integer => {
+                const val: i64 = switch (max_val) {
+                    .integer => |i| i,
+                    .float => |f| blk: {
+                        if (std.math.isNan(f) or std.math.isInf(f)) return error.InvalidConstraint;
+                        if (f != @trunc(f)) return error.InvalidConstraint;
+                        if (f < -9007199254740992.0 or f > 9007199254740992.0) return error.InvalidConstraint;
+                        break :blk @intFromFloat(f);
+                    },
+                    else => return error.InvalidConstraint,
+                };
+                maximum = .{ .integer = val };
+            },
+            .real => {
+                const val: f64 = switch (max_val) {
+                    .float => |f| f,
+                    .integer => |i| @floatFromInt(i),
+                    else => return error.InvalidConstraint,
+                };
+                if (std.math.isNan(val) or std.math.isInf(val)) return error.InvalidConstraint;
+                maximum = .{ .real = val };
+            },
             else => return error.InvalidConstraint,
-        };
-        if (std.math.isNan(val)) return error.InvalidConstraint;
-        if (declared_type == .integer) {
-            if (val < @as(f64, @floatFromInt(std.math.minInt(i64))) or val >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                return error.InvalidConstraint;
-            }
         }
-        maximum = val;
     }
 
     if (minimum != null and maximum != null) {
-        if (minimum.? > maximum.?) return error.InvalidConstraint;
+        switch (declared_type) {
+            .integer => {
+                if (minimum.?.integer > maximum.?.integer) return error.InvalidConstraint;
+            },
+            .real => {
+                if (minimum.?.real > maximum.?.real) return error.InvalidConstraint;
+            },
+            else => return error.InvalidConstraint,
+        }
     }
 
     return .{

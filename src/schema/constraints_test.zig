@@ -111,24 +111,38 @@ test "constraints: string length and UTF-8 codepoints" {
 test "constraints: numeric range validation" {
     const allocator = std.testing.allocator;
 
-    const c = types.Constraints{
-        .minimum = 10.0,
-        .maximum = 20.0,
+    const c_real = types.Constraints{
+        .minimum = .{ .real = 10.0 },
+        .maximum = .{ .real = 20.0 },
     };
 
-    // Integer payload
-    try constraints.validate(c, .integer, msgpack.Payload.intToPayload(10), allocator);
-    try constraints.validate(c, .integer, msgpack.Payload.intToPayload(20), allocator);
-    try constraints.validate(c, .integer, msgpack.Payload.intToPayload(15), allocator);
-    try std.testing.expectError(error.RangeViolation, constraints.validate(c, .integer, msgpack.Payload.intToPayload(9), allocator));
-    try std.testing.expectError(error.RangeViolation, constraints.validate(c, .integer, msgpack.Payload.intToPayload(21), allocator));
-
     // Real payload
-    try constraints.validate(c, .real, msgpack.Payload{ .float = 10.0 }, allocator);
-    try constraints.validate(c, .real, msgpack.Payload{ .float = 20.0 }, allocator);
-    try constraints.validate(c, .real, msgpack.Payload{ .float = 15.5 }, allocator);
-    try std.testing.expectError(error.RangeViolation, constraints.validate(c, .real, msgpack.Payload{ .float = 9.99 }, allocator));
-    try std.testing.expectError(error.RangeViolation, constraints.validate(c, .real, msgpack.Payload{ .float = 20.01 }, allocator));
+    try constraints.validate(c_real, .real, msgpack.Payload{ .float = 10.0 }, allocator);
+    try constraints.validate(c_real, .real, msgpack.Payload{ .float = 20.0 }, allocator);
+    try constraints.validate(c_real, .real, msgpack.Payload{ .float = 15.5 }, allocator);
+    try std.testing.expectError(error.RangeViolation, constraints.validate(c_real, .real, msgpack.Payload{ .float = 9.99 }, allocator));
+    try std.testing.expectError(error.RangeViolation, constraints.validate(c_real, .real, msgpack.Payload{ .float = 20.01 }, allocator));
+
+    // Integer bounds with exact i64 precision
+    const c_integer = types.Constraints{
+        .minimum = .{ .integer = 10 },
+        .maximum = .{ .integer = 20 },
+    };
+
+    try constraints.validate(c_integer, .integer, msgpack.Payload.intToPayload(10), allocator);
+    try constraints.validate(c_integer, .integer, msgpack.Payload.intToPayload(20), allocator);
+    try constraints.validate(c_integer, .integer, msgpack.Payload.intToPayload(15), allocator);
+    try std.testing.expectError(error.RangeViolation, constraints.validate(c_integer, .integer, msgpack.Payload.intToPayload(9), allocator));
+    try std.testing.expectError(error.RangeViolation, constraints.validate(c_integer, .integer, msgpack.Payload.intToPayload(21), allocator));
+
+    // Large 64-bit integer bounds beyond 2^53
+    const c_big = types.Constraints{
+        .minimum = .{ .integer = 9007199254740993 },
+        .maximum = .{ .integer = 9223372036854775806 },
+    };
+    try constraints.validate(c_big, .integer, msgpack.Payload.intToPayload(9007199254740993), allocator);
+    try constraints.validate(c_big, .integer, msgpack.Payload.intToPayload(9223372036854775806), allocator);
+    try std.testing.expectError(error.RangeViolation, constraints.validate(c_big, .integer, msgpack.Payload.intToPayload(9007199254740992), allocator));
 }
 
 test "constraints: enum validation" {
@@ -205,6 +219,9 @@ test "constraints: format validation via validate" {
 
 test "constraints: pattern rejects embedded NUL bytes" {
     const allocator = std.testing.allocator;
+
+    // Pattern with embedded NUL byte is rejected at compile time
+    try std.testing.expectError(error.InvalidRegex, constraints.compilePattern(allocator, "^[a-z]+\x00extra$"));
 
     const regex = try constraints.compilePattern(allocator, "^[a-z]+$");
     defer constraints.freePattern(allocator, regex);

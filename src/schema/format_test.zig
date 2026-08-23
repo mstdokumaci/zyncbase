@@ -58,6 +58,6 @@ test "schema_property: format round trip preserves constraints" {
     try std.testing.expectEqual(@as(?u64, 10), username.constraints.?.max_length);
 
     const age = users.field("age") orelse return error.TestExpectedValue;
-    try std.testing.expectEqual(@as(?f64, 18.0), age.constraints.?.minimum);
-    try std.testing.expectEqual(@as(?f64, 120.0), age.constraints.?.maximum);
+    try std.testing.expectEqual(@as(?types.Constraints.Bound, .{ .integer = 18 }), age.constraints.?.minimum);
+    try std.testing.expectEqual(@as(?types.Constraints.Bound, .{ .integer = 120 }), age.constraints.?.maximum);
 }

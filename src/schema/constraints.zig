@@ -10,6 +10,7 @@ extern fn zync_regex_match(handle: *anyopaque, str: [*c]const u8) c_int;
 extern fn zync_regex_free(handle: *anyopaque) void;
 
 pub fn compilePattern(allocator: Allocator, pattern: []const u8) !*anyopaque {
+    if (std.mem.indexOfScalar(u8, pattern, 0) != null) return error.InvalidRegex;
     const pattern_z = try allocator.dupeZ(u8, pattern);
     defer allocator.free(pattern_z);
 
@@ -144,22 +145,41 @@ pub fn validate(
     }
 
     // 3. Numeric range constraints
-    if (ft == .integer or ft == .real) {
+    if (ft == .integer) {
         if (constraints.minimum != null or constraints.maximum != null) {
-            const num_val: f64 = switch (value) {
-                .int => |i| @floatFromInt(i),
-                .uint => |u| @floatFromInt(u),
-                .float => |f| f,
-                else => return error.TypeMismatch,
-            };
-
-            if (std.math.isNan(num_val)) return error.RangeViolation;
+            const int_val = msgpack.payloadToInt(value) catch return error.TypeMismatch;
 
             if (constraints.minimum) |min_val| {
-                if (num_val < min_val) return error.RangeViolation;
+                switch (min_val) {
+                    .integer => |min_i| if (int_val < min_i) return error.RangeViolation,
+                    .real => |min_r| if (@as(f64, @floatFromInt(int_val)) < min_r) return error.RangeViolation,
+                }
             }
             if (constraints.maximum) |max_val| {
-                if (num_val > max_val) return error.RangeViolation;
+                switch (max_val) {
+                    .integer => |max_i| if (int_val > max_i) return error.RangeViolation,
+                    .real => |max_r| if (@as(f64, @floatFromInt(int_val)) > max_r) return error.RangeViolation,
+                }
+            }
+        }
+    } else if (ft == .real) {
+        if (constraints.minimum != null or constraints.maximum != null) {
+            const float_val = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
+            if (std.math.isNan(float_val)) return error.RangeViolation;
+
+            if (constraints.minimum) |min_val| {
+                const min_r = switch (min_val) {
+                    .real => |r| r,
+                    .integer => |i| @as(f64, @floatFromInt(i)),
+                };
+                if (float_val < min_r) return error.RangeViolation;
+            }
+            if (constraints.maximum) |max_val| {
+                const max_r = switch (max_val) {
+                    .real => |r| r,
+                    .integer => |i| @as(f64, @floatFromInt(i)),
+                };
+                if (float_val > max_r) return error.RangeViolation;
             }
         }
     }
