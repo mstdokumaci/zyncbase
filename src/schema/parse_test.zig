@@ -186,6 +186,24 @@ test "schema_parse: rejects invalid constraint combinations" {
     try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"active":{"type":"boolean","enum":[true,false]}}}}}
     ));
+
+    // integer minimum >= 2^63 (9223372036854775808.0) out of i64 range
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"count":{"type":"integer","minimum":9223372036854775808.0}}}}}
+    ));
+
+    // integer maximum >= 2^63 (9223372036854775808.0) out of i64 range
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"count":{"type":"integer","maximum":9223372036854775808.0}}}}}
+    ));
+
+    // number (float) allows 9223372036854775808.0
+    {
+        var schema = try schema_parse.initFromJson(allocator,
+            \\{"version":"1.0.0","store":{"posts":{"fields":{"val":{"type":"number","minimum":9223372036854775808.0}}}}}
+        );
+        schema.deinit();
+    }
 }
 
 test "schema_parse: implicit users is canonical first table" {
