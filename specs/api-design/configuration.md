@@ -528,13 +528,13 @@ Tables may declare uniqueness over one field (single-field constraint) or an ord
 This generates namespace-scoped SQLite unique indexes (`namespace_id` is always the first indexed column):
 
 ```sql
-CREATE UNIQUE INDEX "uidx_projects_0"
+CREATE UNIQUE INDEX "uidx__projects__constraint__0"
 ON "projects"("namespace_id", "slug");
 
-CREATE UNIQUE INDEX "uidx_projects_1"
+CREATE UNIQUE INDEX "uidx__projects__constraint__1"
 ON "projects"("namespace_id", "provider", "externalId");
 
-CREATE UNIQUE INDEX "uidx_projects_2"
+CREATE UNIQUE INDEX "uidx__projects__constraint__2"
 ON "projects"("namespace_id", "profile__handle");
 ```
 
@@ -606,7 +606,7 @@ CREATE TABLE users (
     PRIMARY KEY (id)
 );
 
-CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
+CREATE UNIQUE INDEX uidx__users__identity ON users(namespace_id, external_id);
 ```
 
 `id` is the primary key by itself. It is expected to be unique across the whole collection/table; `namespace_id` scopes visibility and identity-provider lookup, but it does not permit duplicate document IDs in different namespaces.
@@ -930,8 +930,8 @@ CREATE TABLE tasks (
     PRIMARY KEY (id)
 );
 
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
+CREATE INDEX idx__tasks__field__status ON tasks(status);
+CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
 ```
 
 The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables still require collection-wide unique document IDs; this keeps references, cursors, caches, and SDK addressing single-key.

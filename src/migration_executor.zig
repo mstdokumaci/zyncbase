@@ -75,18 +75,12 @@ pub const MigrationExecutor = struct {
         plan: migration_detector.MigrationPlan,
         target_version: []const u8,
     ) !void {
-        // Nothing to do
-        if (plan.changes.len == 0) {
-            try self.persistVersion(target_version);
-            return;
-        }
-
         // Refuse destructive migrations when not allowed
         if (plan.is_destructive and !self.config.allow_destructive) {
             return error.DestructiveMigrationNotAllowed;
         }
 
-        // Check major version bump - parse target version first (may return InvalidVersion)
+        // Validate every version transition, including schema-identical plans.
         const target_ver = try parseVersion(target_version);
         if (try self.getPersistedVersion()) |persisted_ver| {
             if (target_ver.major > persisted_ver.major) {
@@ -94,7 +88,8 @@ pub const MigrationExecutor = struct {
             }
         }
 
-        const foreign_keys_enabled = try foreignKeysEnabled(self.db);
+        const has_changes = plan.changes.len > 0;
+        const foreign_keys_enabled = has_changes and try foreignKeysEnabled(self.db);
         if (foreign_keys_enabled) try setForeignKeys(self.db, false);
         var foreign_keys_restored = false;
         errdefer if (foreign_keys_enabled and !foreign_keys_restored) {
@@ -103,35 +98,27 @@ pub const MigrationExecutor = struct {
             };
         };
 
-        // Begin transaction
         try self.db.exec("BEGIN", .{}, .{});
+        var transaction_open = true;
+        errdefer if (transaction_open) {
+            self.db.exec("ROLLBACK", .{}, .{}) catch |err| std.log.err("ROLLBACK failed: {}", .{err});
+        };
 
-        // Apply each change
         for (plan.changes) |change| {
-            self.applyChange(change) catch |err| {
-                self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
-                return err;
-            };
+            try self.applyChange(change);
         }
 
-        connection.verifyForeignKeys(self.db) catch |err| {
-            self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
-            return err;
-        };
+        if (has_changes) try connection.verifyForeignKeys(self.db);
 
-        // Commit
-        self.db.exec("COMMIT", .{}, .{}) catch |err| {
-            self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
-            return err;
-        };
+        // The schema and its recorded version commit or roll back together.
+        try self.persistVersion(target_version);
+        try self.db.exec("COMMIT", .{}, .{});
+        transaction_open = false;
 
         if (foreign_keys_enabled) {
             try setForeignKeys(self.db, true);
             foreign_keys_restored = true;
         }
-
-        // Persist version after successful commit
-        try self.persistVersion(target_version);
     }
 
     fn applyChange(self: *MigrationExecutor, change: migration_detector.Change) !void {
@@ -215,20 +202,16 @@ pub const MigrationExecutor = struct {
             defer self.allocator.free(ddl);
 
             self.execSingleStatement(ddl) catch |err| {
-                if (managed_index == .unique) {
+                if (managed_index == .unique and err == error.UniqueConstraintViolation) {
                     self.logUniqueConstraintFailure(&table, managed_index.unique);
-                    // Classify through extended result codes so duplicate data
-                    // surfaces as UniqueConstraintViolation, not a generic error.
-                    return storage_errors.classifyStepError(self.db);
                 }
                 return err;
             };
         }
     }
 
-    /// Execute one DDL statement through the raw C API: quiet on expected
-    /// failures (no wrapper finalize logging) and leaves the extended result
-    /// code readable immediately after the failed step.
+    /// Execute one DDL statement through the raw C API and classify failures
+    /// before statement finalization can change connection error state.
     fn execSingleStatement(self: *MigrationExecutor, sql: []const u8) !void {
         var stmt: ?*sqlite.c.sqlite3_stmt = null;
         const prep_rc = sqlite.c.sqlite3_prepare_v2(self.db.db, sql.ptr, @intCast(sql.len), &stmt, null);
@@ -355,12 +338,10 @@ pub const MigrationExecutor = struct {
     }
 
     fn persistVersion(self: *MigrationExecutor, version: []const u8) !void {
-        try self.db.exec(
+        try self.execSingleStatement(
             "CREATE TABLE IF NOT EXISTS schema_meta (version TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-            .{},
-            .{},
         );
-        try self.db.exec("DELETE FROM schema_meta", .{}, .{});
+        try self.execSingleStatement("DELETE FROM schema_meta");
 
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         const insert_sql = try std.fmt.allocPrint(
@@ -369,7 +350,7 @@ pub const MigrationExecutor = struct {
             .{ version, now },
         );
         defer self.allocator.free(insert_sql);
-        try self.db.execDynamic(insert_sql, .{}, .{});
+        try self.execSingleStatement(insert_sql);
     }
 
     fn getPersistedVersion(self: *MigrationExecutor) !?Version {

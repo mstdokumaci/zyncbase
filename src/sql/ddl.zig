@@ -29,11 +29,15 @@ pub const ManagedIndex = union(enum) {
     /// Appends the deterministic quoted index name.
     pub fn appendName(self: ManagedIndex, allocator: std.mem.Allocator, buf: *SqlBuf, table: *const schema_types.Table) !void {
         switch (self) {
-            .namespace => try buf.appendIndexName(allocator, table.name, "namespace_id"),
-            .owner => try buf.appendIndexName(allocator, table.name, "owner_id"),
-            .users_identity => try buf.appendIndexName(allocator, table.name, "namespace_external_id"),
-            .field => |fi| try buf.appendIndexName(allocator, table.name, table.userFields()[fi].name),
-            .unique => |ui| try buf.appendUniqueIndexName(allocator, table.name, ui),
+            .namespace => try buf.appendManagedIndexName(allocator, false, table.name, "namespace", null),
+            .owner => try buf.appendManagedIndexName(allocator, false, table.name, "owner", null),
+            .users_identity => try buf.appendManagedIndexName(allocator, true, table.name, "identity", null),
+            .field => |fi| try buf.appendManagedIndexName(allocator, false, table.name, "field", table.userFields()[fi].name),
+            .unique => |ui| {
+                var ordinal_buf: [20]u8 = undefined;
+                const ordinal = std.fmt.bufPrint(&ordinal_buf, "{d}", .{ui}) catch @panic("usize ordinal exceeds 20 digits");
+                try buf.appendManagedIndexName(allocator, true, table.name, "constraint", ordinal);
+            },
         }
     }
 
@@ -133,7 +137,7 @@ pub const DDLGenerator = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Generate DDL for a table: CREATE TABLE IF NOT EXISTS + all managed indexes.
+    /// Generate strict DDL for a table and all managed indexes.
     /// Returns a single string with all statements separated by ";\n".
     /// Caller owns the returned slice.
     pub fn generateDDL(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
@@ -185,7 +189,7 @@ pub const DDLGenerator = struct {
 };
 
 fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
-    try buf.appendSlice(allocator, "CREATE TABLE IF NOT EXISTS ");
+    try buf.appendSlice(allocator, "CREATE TABLE ");
     try buf.appendSlice(allocator, table.name_quoted);
     try buf.appendSlice(allocator, " (\n");
 
@@ -273,9 +277,9 @@ fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema_types.OnD
 /// Emit one managed-index statement: `CREATE [UNIQUE] INDEX IF NOT EXISTS ...`
 fn emitManagedIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: *const schema_types.Table, managed_index: ManagedIndex) !void {
     if (managed_index.isUnique()) {
-        try buf.appendSlice(allocator, "CREATE UNIQUE INDEX IF NOT EXISTS ");
+        try buf.appendSlice(allocator, "CREATE UNIQUE INDEX ");
     } else {
-        try buf.appendSlice(allocator, "CREATE INDEX IF NOT EXISTS ");
+        try buf.appendSlice(allocator, "CREATE INDEX ");
     }
     try managed_index.appendName(allocator, buf, table);
     try buf.appendSlice(allocator, " ON ");

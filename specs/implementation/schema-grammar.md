@@ -135,7 +135,7 @@ The `users` collection is a special, hybrid system table:
 - **Reserved Prefixes**: Namespaces starting with `_zync_` are reserved for internal database systems. Identifier keys must not contain `__`.
 - **Built-in Columns**: Every table implicitly includes `id` (`BLOB(16)`), `namespace_id` (`INTEGER`), `owner_id` (`BLOB(16)`), `created_at` (`INTEGER`), and `updated_at` (`INTEGER`).
 - **Field Limit**: Each table supports a maximum of 1024 fields (including flattened nested fields, excluding system columns).
-- **Reserved Index Name Prefixes**: ZyncBase-managed indexes are named `idx_<table>_...` and `uidx_<table>_...`. These prefixes are reserved per table; migration reconciliation may drop and recreate any index whose name matches them. Unrelated manual index names are left untouched.
+- **Reserved Index Name Prefixes**: ZyncBase-managed indexes are named `idx__<table>__...` and `uidx__<table>__...`. The double-underscore table boundary is unambiguous because declared identifiers cannot contain `__`. These prefixes are reserved per table; migration reconciliation may drop and recreate any matching index. Unrelated manual index names are left untouched.
 
 ---
 

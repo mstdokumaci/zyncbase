@@ -21,23 +21,16 @@ test "appendQuoted wraps identifier in double quotes" {
     try std.testing.expectEqualStrings("\"users\"", b.items());
 }
 
-test "appendIndexName builds idx_table_field form" {
+test "appendManagedIndexName builds structured global names" {
     var b = SqlBuf.init();
     defer b.deinit(std.testing.allocator);
-    try b.appendIndexName(std.testing.allocator, "users", "email");
-    try std.testing.expectEqualStrings("\"idx_users_email\"", b.items());
-}
-
-test "appendUniqueIndexName builds uidx_table_ordinal form" {
-    var b = SqlBuf.init();
-    defer b.deinit(std.testing.allocator);
-    try b.appendUniqueIndexName(std.testing.allocator, "projects", 0);
-    try std.testing.expectEqualStrings("\"uidx_projects_0\"", b.items());
+    try b.appendManagedIndexName(std.testing.allocator, false, "users_namespace", "field", "external_id");
+    try std.testing.expectEqualStrings("\"idx__users_namespace__field__external_id\"", b.items());
 
     var c = SqlBuf.init();
     defer c.deinit(std.testing.allocator);
-    try c.appendUniqueIndexName(std.testing.allocator, "projects", 11);
-    try std.testing.expectEqualStrings("\"uidx_projects_11\"", c.items());
+    try c.appendManagedIndexName(std.testing.allocator, true, "users", "identity", null);
+    try std.testing.expectEqualStrings("\"uidx__users__identity\"", c.items());
 }
 
 test "SqlList emits separator between items, not before first" {

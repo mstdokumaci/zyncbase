@@ -200,7 +200,7 @@ test "storage: extended errcode classifies real unique collision as UniqueConstr
 
     try db.execMulti(
         "CREATE TABLE projects (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, slug TEXT, PRIMARY KEY(id));" ++
-            "CREATE UNIQUE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\")",
+            "CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")",
         .{},
     );
 

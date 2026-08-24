@@ -118,7 +118,7 @@ test "server: fresh startup creates schema through migration execution and persi
         var found_uidx = false;
         while (try iter.nextAlloc(allocator, .{})) |row| {
             defer allocator.free(row.name);
-            if (std.mem.startsWith(u8, row.name, "uidx_projects_")) {
+            if (std.mem.startsWith(u8, row.name, "uidx__projects__constraint__")) {
                 found_uidx = true;
                 const info_sql = try std.fmt.allocPrint(allocator, "SELECT name FROM pragma_index_info('{s}') ORDER BY seqno LIMIT 1", .{row.name});
                 defer allocator.free(info_sql);

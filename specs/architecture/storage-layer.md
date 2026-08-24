@@ -152,9 +152,9 @@ CREATE TABLE tasks (
     FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_projectId ON tasks(projectId);
+CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
+CREATE INDEX idx__tasks__field__status ON tasks(status);
+CREATE INDEX idx__tasks__field__projectId ON tasks(projectId);
 ```
 
 Public SDKs still expose IDs and references as strings, but the core system stores and transports them as packed 16-byte values. `id` is collection-wide unique and remains the sole primary key; `namespace_id` is an integer routing/filtering column, not part of a composite document key.

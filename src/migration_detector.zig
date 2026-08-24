@@ -436,7 +436,7 @@ pub const MigrationDetector = struct {
     }
 };
 
-/// Compare an expected quoted index name (`"idx_t_f"`) with the unquoted name
+/// Compare an expected quoted index name (`"idx__t__field__f"`) with the unquoted name
 /// reported by `PRAGMA index_list`.
 fn indexNameEql(expected_quoted: []const u8, actual_unquoted: []const u8) bool {
     if (expected_quoted.len < 2 or expected_quoted[0] != '"') return false;
@@ -444,15 +444,15 @@ fn indexNameEql(expected_quoted: []const u8, actual_unquoted: []const u8) bool {
 }
 
 /// True when `index_name` falls inside ZyncBase's reserved managed namespaces
-/// for this table (`idx_<table>_...` / `uidx_<table>_...`).
+/// for this table (`idx__<table>__...` / `uidx__<table>__...`).
 pub fn isReservedManagedIndexName(index_name: []const u8, table_name: []const u8) bool {
-    return hasManagedPrefix(index_name, table_name, "idx_") or
-        hasManagedPrefix(index_name, table_name, "uidx_");
+    return hasManagedPrefix(index_name, table_name, "idx__") or
+        hasManagedPrefix(index_name, table_name, "uidx__");
 }
 
 fn hasManagedPrefix(index_name: []const u8, table_name: []const u8, prefix: []const u8) bool {
     if (!std.mem.startsWith(u8, index_name, prefix)) return false;
     const rest = index_name[prefix.len..];
     if (!std.mem.startsWith(u8, rest, table_name)) return false;
-    return rest.len > table_name.len and rest[table_name.len] == '_';
+    return rest.len > table_name.len + 2 and std.mem.eql(u8, rest[table_name.len .. table_name.len + 2], "__");
 }

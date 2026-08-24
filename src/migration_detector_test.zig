@@ -55,21 +55,21 @@ test "foreign key migration detector finds missing constraints and action drift"
     defer detector.deinit(matching_plan);
     try std.testing.expectEqual(@as(usize, 0), matching_plan.changes.len);
 
-    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
+    try db.exec("DROP INDEX idx__children__field__parent_id", .{}, .{});
     const missing_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(missing_index_plan);
     try std.testing.expectEqual(@as(usize, 1), missing_index_plan.changes.len);
     try std.testing.expectEqual(ChangeKind.change_indexes, missing_index_plan.changes[0].kind);
     try std.testing.expect(!missing_index_plan.is_destructive);
 
-    try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
+    try db.exec("CREATE INDEX idx__children__field__parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
     const partial_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(partial_index_plan);
     try std.testing.expectEqual(@as(usize, 1), partial_index_plan.changes.len);
     try std.testing.expectEqual(ChangeKind.change_indexes, partial_index_plan.changes[0].kind);
 
-    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
-    try db.exec("CREATE UNIQUE INDEX idx_children_parent_id ON children(parent_id)", .{}, .{});
+    try db.exec("DROP INDEX idx__children__field__parent_id", .{}, .{});
+    try db.exec("CREATE UNIQUE INDEX idx__children__field__parent_id ON children(parent_id)", .{}, .{});
     const unique_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(unique_index_plan);
     try std.testing.expectEqual(@as(usize, 1), unique_index_plan.changes.len);
@@ -407,7 +407,7 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
+        try db.exec("DROP INDEX \"uidx__projects__constraint__0\"", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -418,8 +418,8 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
-        try db.exec("CREATE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\")", .{}, .{});
+        try db.exec("DROP INDEX \"uidx__projects__constraint__0\"", .{}, .{});
+        try db.exec("CREATE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -430,8 +430,8 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
-        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\") WHERE slug IS NOT NULL", .{}, .{});
+        try db.exec("DROP INDEX \"uidx__projects__constraint__0\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\") WHERE slug IS NOT NULL", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -442,8 +442,8 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("DROP INDEX \"uidx_projects_1\"", .{}, .{});
-        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_1\" ON \"projects\"(\"namespace_id\", \"externalId\", \"provider\")", .{}, .{});
+        try db.exec("DROP INDEX \"uidx__projects__constraint__1\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx__projects__constraint__1\" ON \"projects\"(\"namespace_id\", \"externalId\", \"provider\")", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -454,8 +454,8 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("DROP INDEX \"uidx_projects_1\"", .{}, .{});
-        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_1\" ON \"projects\"(\"provider\")", .{}, .{});
+        try db.exec("DROP INDEX \"uidx__projects__constraint__1\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx__projects__constraint__1\" ON \"projects\"(\"provider\")", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -466,7 +466,7 @@ test "migration_detector: missing wrong and obsolete user unique indexes are det
         var target = try schema_parse.initFromJson(allocator, unique_schema_json);
         defer target.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target);
-        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_2\" ON \"projects\"(\"namespace_id\", \"slug\", \"provider\")", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx__projects__constraint__2\" ON \"projects\"(\"namespace_id\", \"slug\", \"provider\")", .{}, .{});
         try expectSingleIndexChange(allocator, &db, &target);
     }
 
@@ -497,10 +497,10 @@ test "migration_detector: missing system field reference and identity indexes ar
     try execSchemaDDL(&db, allocator, &gen, &target);
 
     // Drop one of each managed index class; all must be reported for repair.
-    try db.exec("DROP INDEX \"idx_children_namespace_id\"", .{}, .{});
-    try db.exec("DROP INDEX \"idx_children_owner_id\"", .{}, .{});
-    try db.exec("DROP INDEX \"idx_children_parent_id\"", .{}, .{});
-    try db.exec("DROP INDEX \"idx_users_namespace_external_id\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx__children__namespace\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx__children__owner\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx__children__field__parent_id\"", .{}, .{});
+    try db.exec("DROP INDEX \"uidx__users__identity\"", .{}, .{});
 
     const plan = try testDetectChanges(allocator, &db, &target);
     defer detectorDeinit(&plan, allocator);

@@ -132,8 +132,8 @@ test "foreign key index migration replaces partial indexes in place" {
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
     }
-    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
-    try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
+    try db.exec("DROP INDEX idx__children__field__parent_id", .{}, .{});
+    try db.exec("CREATE INDEX idx__children__field__parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
 
     const children = target.table("children") orelse return error.TestExpectedValue;
     const changes = [_]migration_detector.Change{.{
@@ -144,14 +144,14 @@ test "foreign key index migration replaces partial indexes in place" {
     var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
     try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = false }, target.version);
 
-    const partial = try db.one(i64, "SELECT partial FROM pragma_index_list('children') WHERE name = 'idx_children_parent_id'", .{}, .{});
+    const partial = try db.one(i64, "SELECT partial FROM pragma_index_list('children') WHERE name = 'idx__children__field__parent_id'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), partial);
 
-    try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
-    try db.exec("CREATE UNIQUE INDEX idx_children_parent_id ON children(parent_id)", .{}, .{});
+    try db.exec("DROP INDEX idx__children__field__parent_id", .{}, .{});
+    try db.exec("CREATE UNIQUE INDEX idx__children__field__parent_id ON children(parent_id)", .{}, .{});
     try executor.execute(.{ .changes = @constCast(&changes), .is_destructive = false }, target.version);
 
-    const unique = try db.one(i64, "SELECT \"unique\" FROM pragma_index_list('children') WHERE name = 'idx_children_parent_id'", .{}, .{});
+    const unique = try db.one(i64, "SELECT \"unique\" FROM pragma_index_list('children') WHERE name = 'idx__children__field__parent_id'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), unique);
 }
 
@@ -342,6 +342,86 @@ fn insertSchemaMetaVersion(db: *sqlite.Db, allocator: std.mem.Allocator, version
     const sql = try std.fmt.allocPrint(allocator, "INSERT INTO schema_meta (version, applied_at) VALUES ('{s}', 0)", .{version});
     defer allocator.free(sql);
     try execSql(db, allocator, sql);
+}
+
+test "migration_executor: empty plans validate versions before persisting" {
+    const allocator = std.testing.allocator;
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+    var no_changes = [_]migration_detector.Change{};
+    const plan = migration_detector.MigrationPlan{ .changes = &no_changes, .is_destructive = false };
+
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        try insertSchemaMetaVersion(&db, allocator, "1.0.0");
+        var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
+        try std.testing.expectError(error.MajorVersionBumpNotAllowed, executor.execute(plan, "2.0.0"));
+        const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+        defer if (version) |value| allocator.free(value);
+        try std.testing.expectEqualStrings("1.0.0", version orelse return error.TestExpectedValue);
+    }
+
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        try insertSchemaMetaVersion(&db, allocator, "not-a-version");
+        var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
+        try std.testing.expectError(error.InvalidVersion, executor.execute(plan, "1.1.0"));
+        const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+        defer if (version) |value| allocator.free(value);
+        try std.testing.expectEqualStrings("not-a-version", version orelse return error.TestExpectedValue);
+    }
+
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        try insertSchemaMetaVersion(&db, allocator, "1.0.0");
+        var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
+        try executor.execute(plan, "1.1.0");
+        const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+        defer if (version) |value| allocator.free(value);
+        try std.testing.expectEqualStrings("1.1.0", version orelse return error.TestExpectedValue);
+    }
+}
+
+test "migration_executor: version persistence failure rolls back schema changes" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    const fields = [_]schema_types.Field{schema_helpers.makeField("data", .text)};
+    const table = schema_helpers.makeTable("docs", &fields);
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+    try execMultiSql(&db, allocator, ddl);
+    try insertSchemaMetaVersion(&db, allocator, "1.0.0");
+    try db.exec(
+        "CREATE TRIGGER reject_schema_version BEFORE DELETE ON schema_meta BEGIN SELECT RAISE(ABORT, 'reject version'); END",
+        .{},
+        .{},
+    );
+
+    const target_fields = [_]schema_types.Field{
+        schema_helpers.makeField("data", .text),
+        schema_helpers.makeField("extra", .text),
+    };
+    const target_table = schema_helpers.makeTable("docs", &target_fields);
+    var changes = [_]migration_detector.Change{.{
+        .kind = .add_column,
+        .table = &target_table,
+        .field = schema_helpers.makeField("extra", .text),
+    }};
+    const plan = migration_detector.MigrationPlan{ .changes = &changes, .is_destructive = false };
+    var executor = MigrationExecutor.init(std.testing.io, allocator, &db, &gen, .{});
+
+    try std.testing.expectError(error.ConstraintViolation, executor.execute(plan, "1.1.0"));
+    const extra_type = try columnType(&db, allocator, "docs", "extra");
+    defer if (extra_type) |value| allocator.free(value);
+    try std.testing.expect(extra_type == null);
+    const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+    defer if (version) |value| allocator.free(value);
+    try std.testing.expectEqualStrings("1.0.0", version orelse return error.TestExpectedValue);
 }
 
 /// Returns the declared type of `column_name` in `table_name` via PRAGMA table_info,
@@ -743,7 +823,7 @@ test "migration_executor: adding unique constraint over clean data succeeds and 
     defer if (version) |value| allocator.free(value);
     try std.testing.expectEqualStrings("1.1.0", version orelse return error.TestExpectedValue);
 
-    const unique_count = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name = 'uidx_projects_0' AND \"unique\" = 1 AND partial = 0", .{}, .{});
+    const unique_count = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name = 'uidx__projects__constraint__0' AND \"unique\" = 1 AND partial = 0", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 1), unique_count);
 }
 
@@ -776,7 +856,7 @@ test "migration_executor: adding unique constraint over duplicates fails rolls b
     // Rows untouched, previous index set restored, prior version unchanged.
     try std.testing.expectEqual(@as(?i64, 2), try db.one(i64, "SELECT count(*) FROM projects", .{}, .{}));
     try std.testing.expectEqual(indexes_before, try countIndexes(&db, allocator, "projects"));
-    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx_%'", .{}, .{});
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx__%'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
     const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
     defer if (version) |value| allocator.free(value);
@@ -801,7 +881,7 @@ test "migration_executor: removing unique constraint drops its index without reb
     // Constraint removal is non-destructive even without allow_destructive.
     try runMigration(allocator, &db, &gen, &removed_schema);
 
-    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx_%'", .{}, .{});
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx__%'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
     // Table was not rebuilt: rows survive.
     try db.exec("INSERT INTO projects VALUES (randomblob(16), 3, zeroblob(16), 'x', 'p', 'e9', 0, 0)", .{}, .{});
@@ -822,10 +902,10 @@ test "migration_executor: changing unique constraint replaces its index atomical
     defer changed_schema.deinit();
     try runMigration(allocator, &db, &gen, &changed_schema);
 
-    // The replacement index deterministically REUSES ordinal name uidx_projects_0.
+    // The replacement index deterministically reuses ordinal name uidx__projects__constraint__0.
     const compound_cols = try db.one(
         i64,
-        "SELECT count(*) FROM pragma_index_info('uidx_projects_0')",
+        "SELECT count(*) FROM pragma_index_info('uidx__projects__constraint__0')",
         .{},
         .{},
     );
@@ -853,7 +933,7 @@ test "migration_executor: fresh create_table installs complete managed index set
     // Managed set only: namespace + owner + compound unique. SQLite's implicit
     // sqlite_autoindex_* for the BLOB primary key is not ZyncBase-managed.
     try std.testing.expectEqual(@as(?i64, 3), try countManagedIndexes(&db, allocator, "projects"));
-    try std.testing.expectEqual(@as(?i64, 3), try db.one(i64, "SELECT count(*) FROM pragma_index_info('uidx_projects_0')", .{}, .{}));
+    try std.testing.expectEqual(@as(?i64, 3), try db.one(i64, "SELECT count(*) FROM pragma_index_info('uidx__projects__constraint__0')", .{}, .{}));
     const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
     defer if (version) |value| allocator.free(value);
     try std.testing.expectEqualStrings("1.2.0", version orelse return error.TestExpectedValue);
