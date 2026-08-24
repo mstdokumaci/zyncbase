@@ -86,7 +86,7 @@ test "schema_parse: rejects unknown keys outside extension points" {
     ));
 }
 
-test "schema_parse: accepts planned constraint keys without enforcement" {
+test "schema_parse: parses and stores constraint keywords" {
     const allocator = std.testing.allocator;
 
     var parsed = try schema_parse.initFromJson(allocator,
@@ -101,10 +101,21 @@ test "schema_parse: accepts planned constraint keys without enforcement" {
         \\          "pattern":"^[a-z]+$",
         \\          "format":"email",
         \\          "minLength":1,
-        \\          "maxLength":30,
+        \\          "maxLength":30
+        \\        },
+        \\        "score":{
+        \\          "type":"integer",
         \\          "minimum":0,
         \\          "maximum":100
         \\        }
+        \\      }
+        \\    }
+        \\  },
+        \\  "presence":{
+        \\    "user":{
+        \\      "status":{
+        \\        "type":"string",
+        \\        "enum":["active","idle","away"]
         \\      }
         \\    }
         \\  }
@@ -113,7 +124,140 @@ test "schema_parse: accepts planned constraint keys without enforcement" {
     defer parsed.deinit();
 
     const posts = parsed.table("posts") orelse return error.TestExpectedValue;
-    try std.testing.expect(posts.field("title") != null);
+    const title = posts.field("title") orelse return error.TestExpectedValue;
+    try std.testing.expect(title.constraints != null);
+    const tc = title.constraints.?;
+    try std.testing.expect(tc.enum_values != null);
+    try std.testing.expectEqual(@as(usize, 2), tc.enum_values.?.len);
+    try std.testing.expectEqualStrings("a", tc.enum_values.?[0].text);
+    try std.testing.expectEqualStrings("b", tc.enum_values.?[1].text);
+    try std.testing.expectEqualStrings("^[a-z]+$", tc.pattern_source.?);
+    try std.testing.expect(tc.compiled_regex != null);
+    try std.testing.expectEqual(schema_types.Constraints.Format.email, tc.format.?);
+    try std.testing.expectEqual(@as(?u64, 1), tc.min_length);
+    try std.testing.expectEqual(@as(?u64, 30), tc.max_length);
+
+    const score = posts.field("score") orelse return error.TestExpectedValue;
+    try std.testing.expect(score.constraints != null);
+    const sc = score.constraints.?;
+    try std.testing.expectEqual(@as(?schema_types.Constraints.Bound, .{ .integer = 0 }), sc.minimum);
+    try std.testing.expectEqual(@as(?schema_types.Constraints.Bound, .{ .integer = 100 }), sc.maximum);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.presence_user_fields.len);
+    const p_status = parsed.presence_user_fields[0];
+    try std.testing.expect(p_status.constraints != null);
+    try std.testing.expectEqual(@as(usize, 3), p_status.constraints.?.enum_values.?.len);
+}
+
+test "schema_parse: rejects invalid constraint combinations" {
+    const allocator = std.testing.allocator;
+
+    // minimum on string
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","minimum":0}}}}}
+    ));
+
+    // pattern with embedded NUL byte
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","pattern":"foo\u0000bar"}}}}}
+    ));
+
+    // pattern on integer
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"age":{"type":"integer","pattern":"^[0-9]+$"}}}}}
+    ));
+
+    // minLength > maxLength
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","minLength":10,"maxLength":5}}}}}
+    ));
+
+    // minimum > maximum
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"age":{"type":"integer","minimum":100,"maximum":50}}}}}
+    ));
+
+    // unknown format
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"email":{"type":"string","format":"unknown_format"}}}}}
+    ));
+
+    // constraints on array
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"string","minLength":2}}}}}
+    ));
+
+    // constraints on boolean
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"active":{"type":"boolean","enum":[true,false]}}}}}
+    ));
+
+    // constraints on object
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"profile":{"type":"object","minLength":5,"fields":{"name":{"type":"string"}}}}}}}
+    ));
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"profile":{"type":"object","pattern":"^[a-z]+$","fields":{"name":{"type":"string"}}}}}}}
+    ));
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"profile":{"type":"object","minimum":0,"fields":{"name":{"type":"string"}}}}}}}
+    ));
+
+    // non-integral float constraint on integer
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"count":{"type":"integer","minimum":10.5}}}}}
+    ));
+
+    // integer minimum >= 2^63 (9223372036854775808.0) out of i64 range
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"count":{"type":"integer","minimum":9223372036854775808.0}}}}}
+    ));
+
+    // integer maximum >= 2^63 (9223372036854775808.0) out of i64 range
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"count":{"type":"integer","maximum":9223372036854775808.0}}}}}
+    ));
+
+    // number (float) allows 9223372036854775808.0
+    {
+        var schema = try schema_parse.initFromJson(allocator,
+            \\{"version":"1.0.0","store":{"posts":{"fields":{"val":{"type":"number","minimum":9223372036854775808.0}}}}}
+        );
+        schema.deinit();
+    }
+}
+
+test "schema_parse: preserves exact i64 precision for integer bounds" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{
+        \\    "metrics":{
+        \\      "fields":{
+        \\        "large_int":{
+        \\          "type":"integer",
+        \\          "minimum":9007199254740993,
+        \\          "maximum":9223372036854775806
+        \\        }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    );
+    defer parsed.deinit();
+
+    const metrics = parsed.table("metrics") orelse return error.TestExpectedValue;
+    const field = metrics.field("large_int") orelse return error.TestExpectedValue;
+    try std.testing.expect(field.constraints != null);
+    try std.testing.expectEqual(@as(?schema_types.Constraints.Bound, .{ .integer = 9007199254740993 }), field.constraints.?.minimum);
+    try std.testing.expectEqual(@as(?schema_types.Constraints.Bound, .{ .integer = 9223372036854775806 }), field.constraints.?.maximum);
+
+    // Contradictory large bounds beyond 2^53
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"metrics":{"fields":{"val":{"type":"integer","minimum":9007199254740994,"maximum":9007199254740993}}}}}
+    ));
 }
 
 test "schema_parse: implicit users is canonical first table" {

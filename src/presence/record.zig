@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
+const schema_constraints = @import("../schema/constraints.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed = @import("../typed/types.zig");
@@ -75,6 +76,10 @@ pub const PresenceRecord = struct {
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
+            if (field.constraints) |constraints| {
+                try schema_constraints.validate(constraints, field.declared_type, pair_payload.arr[1], allocator);
+            }
+
             const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,

@@ -99,4 +99,41 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
     if (field.metadata) |metadata| {
         try w.rawField("metadata", metadata.json);
     }
+    if (field.constraints) |c| {
+        if (c.enum_values) |enums| {
+            try w.beginArrayField("enum");
+            for (enums) |e| {
+                switch (e) {
+                    .text => |t| try w.stringValue(t),
+                    .integer => |i| try w.intValue(i),
+                    .real => |r| try w.floatValue(r),
+                }
+            }
+            try w.endArray();
+        }
+        if (c.pattern_source) |pat| {
+            try w.field("pattern", pat);
+        }
+        if (c.format) |fmt| {
+            try w.field("format", fmt.schemaName());
+        }
+        if (c.min_length) |min_l| {
+            try w.intField("minLength", min_l);
+        }
+        if (c.max_length) |max_l| {
+            try w.intField("maxLength", max_l);
+        }
+        if (c.minimum) |min_val| {
+            switch (min_val) {
+                .integer => |i| try w.intField("minimum", i),
+                .real => |r| try w.floatField("minimum", r),
+            }
+        }
+        if (c.maximum) |max_val| {
+            switch (max_val) {
+                .integer => |i| try w.intField("maximum", i),
+                .real => |r| try w.floatField("maximum", r),
+            }
+        }
+    }
 }

@@ -80,6 +80,10 @@ typedef void (*uws_res_aborted_handler)(void *user_data);
 struct us_loop_t *uws_get_loop();
 void uws_loop_defer(struct us_loop_t *loop, void *ctx, void (*cb)(void *ctx));
 
+void *zync_regex_compile(const char *pattern);
+int zync_regex_match(void *handle, const char *str);
+void zync_regex_free(void *handle);
+
 #ifdef __cplusplus
 }
 #endif

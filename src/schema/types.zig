@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const schema_constraints = @import("constraints.zig");
+
 const Allocator = std.mem.Allocator;
 
 pub const Metadata = struct {
@@ -61,6 +63,128 @@ pub const OnDelete = enum {
     }
 };
 
+pub const Constraints = struct {
+    enum_values: ?[]const EnumValue = null,
+    pattern_source: ?[]const u8 = null,
+    compiled_regex: ?*anyopaque = null,
+    format: ?Format = null,
+    min_length: ?u64 = null,
+    max_length: ?u64 = null,
+    minimum: ?Bound = null,
+    maximum: ?Bound = null,
+
+    pub const Bound = union(enum) {
+        integer: i64,
+        real: f64,
+    };
+
+    pub const EnumValue = union(enum) {
+        text: []const u8,
+        integer: i64,
+        real: f64,
+
+        pub fn clone(self: EnumValue, allocator: Allocator) !EnumValue {
+            return switch (self) {
+                .text => |t| .{ .text = try allocator.dupe(u8, t) },
+                .integer => |i| .{ .integer = i },
+                .real => |r| .{ .real = r },
+            };
+        }
+
+        pub fn deinit(self: EnumValue, allocator: Allocator) void {
+            switch (self) {
+                .text => |t| allocator.free(t),
+                else => {},
+            }
+        }
+    };
+
+    pub const Format = enum {
+        email,
+        uuid,
+        uri,
+
+        pub fn schemaName(self: Format) []const u8 {
+            return switch (self) {
+                .email => "email",
+                .uuid => "uuid",
+                .uri => "uri",
+            };
+        }
+
+        pub fn fromString(str: []const u8) ?Format {
+            if (std.mem.eql(u8, str, "email")) return .email;
+            if (std.mem.eql(u8, str, "uuid")) return .uuid;
+            if (std.mem.eql(u8, str, "uri")) return .uri;
+            return null;
+        }
+    };
+
+    pub fn hasAny(self: Constraints) bool {
+        return self.enum_values != null or
+            self.pattern_source != null or
+            self.format != null or
+            self.min_length != null or
+            self.max_length != null or
+            self.minimum != null or
+            self.maximum != null;
+    }
+
+    pub fn clone(self: Constraints, allocator: Allocator) !Constraints {
+        var cloned_enums: ?[]const EnumValue = null;
+        if (self.enum_values) |enums| {
+            const list = try allocator.alloc(EnumValue, enums.len);
+            var built: usize = 0;
+            errdefer {
+                for (list[0..built]) |e| e.deinit(allocator);
+                allocator.free(list);
+            }
+            for (enums) |e| {
+                list[built] = try e.clone(allocator);
+                built += 1;
+            }
+            cloned_enums = list;
+        }
+        errdefer if (cloned_enums) |enums| {
+            for (enums) |e| e.deinit(allocator);
+            allocator.free(enums);
+        };
+
+        var cloned_pattern: ?[]const u8 = null;
+        var cloned_regex: ?*anyopaque = null;
+        errdefer {
+            if (cloned_pattern) |p| allocator.free(p);
+            if (cloned_regex) |r| schema_constraints.freePattern(allocator, r);
+        }
+        if (self.pattern_source) |src| {
+            cloned_pattern = try allocator.dupe(u8, src);
+            if (self.compiled_regex != null) {
+                cloned_regex = try schema_constraints.compilePattern(allocator, src);
+            }
+        }
+
+        return .{
+            .enum_values = cloned_enums,
+            .pattern_source = cloned_pattern,
+            .compiled_regex = cloned_regex,
+            .format = self.format,
+            .min_length = self.min_length,
+            .max_length = self.max_length,
+            .minimum = self.minimum,
+            .maximum = self.maximum,
+        };
+    }
+
+    pub fn deinit(self: Constraints, allocator: Allocator) void {
+        if (self.enum_values) |enums| {
+            for (enums) |e| e.deinit(allocator);
+            allocator.free(enums);
+        }
+        if (self.pattern_source) |p| allocator.free(p);
+        if (self.compiled_regex) |r| schema_constraints.freePattern(allocator, r);
+    }
+};
+
 pub const FieldKind = enum {
     system,
     user,
@@ -79,6 +203,7 @@ pub const Field = struct {
     on_delete: ?OnDelete = null,
     kind: FieldKind = .user,
     metadata: ?Metadata = null,
+    constraints: ?Constraints = null,
 
     pub fn clone(self: Field, allocator: Allocator) !Field {
         const cloned_name = try allocator.dupe(u8, self.name);
@@ -93,6 +218,9 @@ pub const Field = struct {
         const cloned_metadata = if (self.metadata) |metadata| try metadata.clone(allocator) else null;
         errdefer if (cloned_metadata) |metadata| metadata.deinit(allocator);
 
+        const cloned_constraints = if (self.constraints) |c| try c.clone(allocator) else null;
+        errdefer if (cloned_constraints) |c| c.deinit(allocator);
+
         return .{
             .name = cloned_name,
             .name_quoted = cloned_name_quoted,
@@ -105,6 +233,7 @@ pub const Field = struct {
             .on_delete = self.on_delete,
             .kind = self.kind,
             .metadata = cloned_metadata,
+            .constraints = cloned_constraints,
         };
     }
 
@@ -114,6 +243,7 @@ pub const Field = struct {
         allocator.free(self.name_quoted);
         if (self.references) |ref| allocator.free(ref);
         if (self.metadata) |metadata| metadata.deinit(allocator);
+        if (self.constraints) |c| c.deinit(allocator);
     }
 
     pub fn isSystem(self: Field) bool {
@@ -181,17 +311,25 @@ pub const Table = struct {
 pub const PresenceField = struct {
     name: []const u8,
     declared_type: FieldType,
+    constraints: ?Constraints = null,
 
     pub fn clone(self: PresenceField, allocator: Allocator) !PresenceField {
         const cloned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(cloned_name);
+
+        const cloned_constraints = if (self.constraints) |c| try c.clone(allocator) else null;
+        errdefer if (cloned_constraints) |c| c.deinit(allocator);
+
         return .{
             .name = cloned_name,
             .declared_type = self.declared_type,
+            .constraints = cloned_constraints,
         };
     }
 
     pub fn deinit(self: PresenceField, allocator: Allocator) void {
         allocator.free(self.name);
+        if (self.constraints) |c| c.deinit(allocator);
     }
 };
 
