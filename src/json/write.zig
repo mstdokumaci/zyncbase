@@ -143,6 +143,14 @@ pub const Writer = struct {
         self.is_first = true;
     }
 
+    /// Begins a nested array as an array item, emitting the item separator.
+    /// Use instead of `beginArray` for elements of an outer array.
+    pub fn beginArrayItem(self: *Writer) !void {
+        try self.separator();
+        try self.buf.append(self.allocator, '[');
+        self.is_first = true;
+    }
+
     pub fn endArray(self: *Writer) !void {
         try self.buf.append(self.allocator, ']');
         self.is_first = false;

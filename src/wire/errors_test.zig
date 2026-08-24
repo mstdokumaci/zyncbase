@@ -39,3 +39,26 @@ test "getWireError: query parser errors keep distinct human messages" {
     try check(error.UnsupportedOperatorForFieldType, "Query operator is not supported for this field type");
     try check(error.InvalidCursorSortValue, "Cursor sort value does not match the active sort field");
 }
+
+test "getWireError: unique constraint violation maps to its public code" {
+    const check = struct {
+        fn run(comptime err: anyerror, comptime expected_code: []const u8, comptime expected_message: []const u8) !void {
+            const allocator = std.heap.smp_allocator;
+            const wire_err = wire_errors.getWireError(err);
+
+            var code_reader: std.Io.Reader = .fixed(wire_err.code);
+            const decoded_code = try msgpack.decode(allocator, &code_reader);
+            defer decoded_code.free(allocator);
+            try testing.expectEqualStrings(expected_code, decoded_code.str.value());
+
+            var msg_reader: std.Io.Reader = .fixed(wire_err.message);
+            const decoded_msg = try msgpack.decode(allocator, &msg_reader);
+            defer decoded_msg.free(allocator);
+            try testing.expectEqualStrings(expected_message, decoded_msg.str.value());
+        }
+    }.run;
+
+    try check(error.UniqueConstraintViolation, "UNIQUE_CONSTRAINT_VIOLATED", "Unique constraint violated");
+    // Generic constraint violations keep the existing public code.
+    try check(error.ConstraintViolation, "SCHEMA_VALIDATION_FAILED", "Schema constraint violation");
+}

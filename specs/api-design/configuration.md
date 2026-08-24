@@ -494,6 +494,59 @@ See [Presence API Reference](./presence-api.md) for full usage details.
 }
 ```
 
+### Unique Constraints
+
+Tables may declare uniqueness over one field (single-field constraint) or an ordered set of fields (compound constraint) using the table-level `unique` array. Nested paths use dot notation, like `required`.
+
+```json
+{
+  "version": "1.1.0",
+  "store": {
+    "projects": {
+      "required": ["slug", "provider", "externalId"],
+      "fields": {
+        "slug": { "type": "string" },
+        "provider": { "type": "string" },
+        "externalId": { "type": "string" },
+        "profile": {
+          "type": "object",
+          "fields": {
+            "handle": { "type": "string" }
+          }
+        }
+      },
+      "unique": [
+        ["slug"],
+        ["provider", "externalId"],
+        ["profile.handle"]
+      ]
+    }
+  }
+}
+```
+
+This generates namespace-scoped SQLite unique indexes (`namespace_id` is always the first indexed column):
+
+```sql
+CREATE UNIQUE INDEX "uidx_projects_0"
+ON "projects"("namespace_id", "slug");
+
+CREATE UNIQUE INDEX "uidx_projects_1"
+ON "projects"("namespace_id", "provider", "externalId");
+
+CREATE UNIQUE INDEX "uidx_projects_2"
+ON "projects"("namespace_id", "profile__handle");
+```
+
+Rules and behavior:
+
+- **Namespace scoping**: Equal values may exist in different namespaces but never within the same namespace. For `"namespaced": false` tables all rows share namespace ID `0`, so uniqueness becomes global. There is no global-uniqueness override for a namespaced table.
+- **Required plus unique**: Constrained components may be `NULL`, and SQLite permits multiple such rows. A field that must be present-and-unique must also be listed in `required`.
+- **Case sensitivity**: Text equality follows the default SQLite collation — case-sensitive.
+- **Writes**: A duplicate create or update aborts the write; it never updates the other row. Confirmed failures use public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Because default writes only confirm queue admission, duplicate detection requires `confirm: "committed"` (see [Store API](./store-api.md)).
+- **Migrations**: Adding, removing, reordering, or changing constraints is an automatic non-destructive index migration inside one transaction. If a new or changed constraint encounters existing duplicate rows, startup fails before any change is applied — remove or merge duplicates first; ZyncBase does not delete rows automatically.
+- **Grammar**: `unique` entries must be non-empty arrays of existing stored user-field paths; system fields cannot be named, fields cannot repeat within one entry, and the same field set cannot be declared twice. There is no per-field `"unique": true` alias.
+
 ### Example: The Reserved `users` Collection
 
 The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps the external identity string (SDK-generated anonymous subject or authenticated JWT subject) to an internal `BLOB(16)` UUIDv7 used by `owner_id`, `$session.userId`, presence `userId`, and foreign keys. You can extend it with optional custom fields:

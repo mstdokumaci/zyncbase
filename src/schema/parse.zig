@@ -693,7 +693,7 @@ fn implicitUsersTable(allocator: Allocator) !types.Table {
 fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.json.Value, is_users_table: bool) !types.Table {
     if (!isValidTableIdentifier(table_name_raw)) return error.InvalidTableName;
     if (table_def != .object) return error.InvalidTableDefinition;
-    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "fields", "required", "namespaced", "metadata" }, table_def.object);
+    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "fields", "required", "namespaced", "metadata", "unique" }, table_def.object);
 
     const table_name = try allocator.dupe(u8, table_name_raw);
     errdefer allocator.free(table_name);
@@ -744,6 +744,12 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         if (!entry.value_ptr.*) return error.InvalidRequiredField;
     }
 
+    const unique_constraints = try parseUniqueConstraints(allocator, table_def.object, fields.items);
+    errdefer if (unique_constraints.len > 0) {
+        for (unique_constraints) |c| c.deinit(allocator);
+        allocator.free(unique_constraints);
+    };
+
     return .{
         .name = table_name,
         .name_quoted = table_name_quoted,
@@ -751,7 +757,81 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
         .namespaced = namespaced,
         .is_users_table = is_users_table,
         .metadata = table_metadata,
+        .unique_constraints = unique_constraints,
     };
+}
+
+/// Parse the table-level `unique` array into owned constraints whose field
+/// indexes are relative to `fields` (the declared user-field list, in order).
+fn parseUniqueConstraints(
+    allocator: Allocator,
+    table_obj: std.json.ObjectMap,
+    declared_fields: []const types.Field,
+) ![]const types.UniqueConstraint {
+    const unique_value = (json_read.getArray(table_obj, "unique") catch return error.InvalidUniqueConstraint) orelse return &.{};
+    if (unique_value.items.len == 0) return &.{};
+
+    const constraints = try allocator.alloc(types.UniqueConstraint, unique_value.items.len);
+    var built: usize = 0;
+    errdefer {
+        for (constraints[0..built]) |c| c.deinit(allocator);
+        allocator.free(constraints);
+    }
+
+    for (unique_value.items) |constraint_value| {
+        if (constraint_value != .array) return error.InvalidUniqueConstraint;
+        const components = constraint_value.array.items;
+        if (components.len == 0) return error.InvalidUniqueConstraint;
+
+        const indexes = try allocator.alloc(usize, components.len);
+        errdefer allocator.free(indexes);
+
+        for (components, 0..) |component, ci| {
+            if (component != .string) return error.InvalidUniqueConstraint;
+            const normalized = try field_path.normalizeDots(allocator, component.string);
+            defer allocator.free(normalized);
+
+            const field_index = blk: {
+                for (declared_fields, 0..) |field, fi| {
+                    if (std.mem.eql(u8, field.name, normalized)) break :blk fi;
+                }
+                // Missing or system field name.
+                return error.InvalidUniqueConstraint;
+            };
+
+            // ponytail: O(n²) duplicate-set scan below; schema counts are
+            // startup-bounded — hash sets only if startup profiling proves it.
+            for (indexes[0..ci]) |seen| {
+                if (seen == field_index) return error.InvalidUniqueConstraint;
+            }
+            indexes[ci] = field_index;
+        }
+
+        // Reject duplicate constraint field sets regardless of order.
+        for (constraints[0..built]) |existing| {
+            if (existing.field_indexes.len != indexes.len) continue;
+            var all_matched = true;
+            for (indexes) |idx| {
+                var found = false;
+                for (existing.field_indexes) |other| {
+                    if (other == idx) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    all_matched = false;
+                    break;
+                }
+            }
+            if (all_matched) return error.InvalidUniqueConstraint;
+        }
+
+        constraints[built] = .{ .field_indexes = indexes };
+        built += 1;
+    }
+
+    return constraints[0..built];
 }
 
 fn parseFields(
@@ -785,6 +865,27 @@ pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_inde
     const metadata = if (declared.metadata) |md| try md.clone(allocator) else null;
     var metadata_owned_by_table = false;
     errdefer if (!metadata_owned_by_table) if (metadata) |md| md.deinit(allocator);
+
+    // Constraints stay relative to `userFields()`; no system-field offset is applied.
+    var unique_constraints: []const types.UniqueConstraint = &.{};
+    var unique_owned_by_table = false;
+    errdefer if (!unique_owned_by_table) {
+        for (unique_constraints) |c| c.deinit(allocator);
+        allocator.free(unique_constraints);
+    };
+    if (declared.unique_constraints.len > 0) {
+        const cloned_constraints = try allocator.alloc(types.UniqueConstraint, declared.unique_constraints.len);
+        var built_constraints: usize = 0;
+        errdefer {
+            for (cloned_constraints[0..built_constraints]) |c| c.deinit(allocator);
+            allocator.free(cloned_constraints);
+        }
+        for (declared.unique_constraints) |c| {
+            cloned_constraints[built_constraints] = try c.clone(allocator);
+            built_constraints += 1;
+        }
+        unique_constraints = cloned_constraints;
+    }
 
     const total_fields = system.leading_system_field_count + declared.fields.len + system.trailing_system_field_count;
     var fields = try allocator.alloc(types.Field, total_fields);
@@ -824,11 +925,13 @@ pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_inde
         .user_field_start = user_field_start,
         .user_field_end = user_field_end,
         .metadata = metadata,
+        .unique_constraints = unique_constraints,
     };
     name_owned_by_table = true;
     name_quoted_owned_by_table = true;
     metadata_owned_by_table = true;
     fields_owned_by_table = true;
+    unique_owned_by_table = true;
     errdefer table.deinit(allocator);
 
     try index.buildFieldIndex(allocator, &table);

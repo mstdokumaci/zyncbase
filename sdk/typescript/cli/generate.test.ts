@@ -111,6 +111,38 @@ describe("CLI ValidPaths completeness", () => {
 	});
 });
 
+// ─── Unique constraint schema typing ─────────────────────────────────────────
+
+describe("CLI unique constraint schema typing", () => {
+	test("SchemaCollection accepts unique constraints and record types stay unchanged", () => {
+		const store = {
+			projects: {
+				required: ["slug"],
+				unique: [["slug"], ["provider", "externalId"], ["profile.handle"]],
+				fields: {
+					slug: { type: "string" as const },
+					provider: { type: "string" as const },
+					externalId: { type: "string" as const },
+					profile: {
+						type: "object" as const,
+						fields: { handle: { type: "string" as const } },
+					},
+				},
+			},
+		};
+
+		const typesOutput = generateTypesForTest(store);
+
+		// Generated record types are unaffected by constraint metadata.
+		expect(typesOutput).toContain("slug");
+		expect(typesOutput).not.toContain("unique");
+
+		// ValidPaths still contains the constrained nested path.
+		const validPaths = emitValidPathsForTest(store);
+		expect(validPaths).toContain('["projects", string, "profile", "handle"]');
+	});
+});
+
 // ─── Property 12: CLI schema-to-types round-trip compile ─────────────────────
 
 /**

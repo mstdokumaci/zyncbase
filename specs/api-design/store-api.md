@@ -86,6 +86,8 @@ await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
 
 **Error Handling**: Immediate request errors reject the promise. Confirmed write failures reject the promise with `ZyncBaseError`. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance. See [Error Handling](./error-handling.md#error-propagation).
 
+**Uniqueness**: Writes that collide with a schema-declared unique constraint (see [Configuration](./configuration.md#unique-constraints)) are rejected by storage with `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Because default accepted writes give no writer-failure guarantee, duplicate detection requires `confirm: "committed"`.
+
 **Returns**: `Promise<void>`
 
 ### `store.remove(path)`

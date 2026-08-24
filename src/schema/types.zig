@@ -191,6 +191,23 @@ pub const FieldKind = enum {
     timestamp,
 };
 
+/// One declared table-level unique constraint.
+/// Indexes are relative to `Table.userFields()`, in schema order.
+/// Every non-empty constraint owns its `field_indexes` allocation;
+/// empty constraint slices use the static `&.{}` value and are not freed.
+pub const UniqueConstraint = struct {
+    field_indexes: []const usize = &.{},
+
+    pub fn clone(self: UniqueConstraint, allocator: Allocator) !UniqueConstraint {
+        if (self.field_indexes.len == 0) return self;
+        return .{ .field_indexes = try allocator.dupe(usize, self.field_indexes) };
+    }
+
+    pub fn deinit(self: UniqueConstraint, allocator: Allocator) void {
+        if (self.field_indexes.len > 0) allocator.free(self.field_indexes);
+    }
+};
+
 pub const Field = struct {
     name: []const u8,
     name_quoted: []const u8 = "",
@@ -271,6 +288,9 @@ pub const Table = struct {
     user_field_start: usize = 0,
     user_field_end: usize = 0,
     metadata: ?Metadata = null,
+    /// Declared unique constraints; indexes are relative to `userFields()`.
+    /// Empty slices use the static `&.{}` value and are not freed.
+    unique_constraints: []const UniqueConstraint = &.{},
     /// Pre-built `SELECT <cols> FROM "<table>"`. Empty on bare Table literals.
     select_from_sql: []const u8 = "",
     /// Pre-built `SELECT <cols> FROM "<table>" WHERE "id"=? AND "namespace_id"=?`. Empty on bare literals.
@@ -282,6 +302,8 @@ pub const Table = struct {
 
     pub fn deinit(self: *Table, allocator: Allocator) void {
         self.field_index_map.deinit(allocator);
+        for (self.unique_constraints) |c| c.deinit(allocator);
+        if (self.unique_constraints.len > 0) allocator.free(self.unique_constraints);
         for (self.fields) |f| f.deinit(allocator);
         allocator.free(self.fields);
         allocator.free(self.name);

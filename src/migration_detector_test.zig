@@ -59,21 +59,21 @@ test "foreign key migration detector finds missing constraints and action drift"
     const missing_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(missing_index_plan);
     try std.testing.expectEqual(@as(usize, 1), missing_index_plan.changes.len);
-    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, missing_index_plan.changes[0].kind);
+    try std.testing.expectEqual(ChangeKind.change_indexes, missing_index_plan.changes[0].kind);
     try std.testing.expect(!missing_index_plan.is_destructive);
 
     try db.exec("CREATE INDEX idx_children_parent_id ON children(parent_id) WHERE parent_id IS NOT NULL", .{}, .{});
     const partial_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(partial_index_plan);
     try std.testing.expectEqual(@as(usize, 1), partial_index_plan.changes.len);
-    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, partial_index_plan.changes[0].kind);
+    try std.testing.expectEqual(ChangeKind.change_indexes, partial_index_plan.changes[0].kind);
 
     try db.exec("DROP INDEX idx_children_parent_id", .{}, .{});
     try db.exec("CREATE UNIQUE INDEX idx_children_parent_id ON children(parent_id)", .{}, .{});
     const unique_index_plan = try detector.detectChanges(&target);
     defer detector.deinit(unique_index_plan);
     try std.testing.expectEqual(@as(usize, 1), unique_index_plan.changes.len);
-    try std.testing.expectEqual(ChangeKind.change_foreign_key_indexes, unique_index_plan.changes[0].kind);
+    try std.testing.expectEqual(ChangeKind.change_indexes, unique_index_plan.changes[0].kind);
 
     try db.exec("DROP TABLE children", .{}, .{});
     try db.exec(
@@ -345,4 +345,202 @@ test "migration_detector: matching schema produces empty migration plan" {
             try std.testing.expect(!plan.is_destructive);
         }
     }
+}
+
+// ─── Managed-index drift detection (incl. user unique constraints) ──────────
+
+const unique_schema_json =
+    \\{"version":"1.1.0","store":{"projects":{
+    \\  "required":["slug","provider","externalId"],
+    \\  "fields":{
+    \\    "slug":{"type":"string"},
+    \\    "provider":{"type":"string"},
+    \\    "externalId":{"type":"string"}
+    \\  },
+    \\  "unique":[["slug"],["provider","externalId"]]
+    \\}}}
+;
+
+fn testDetectChanges(allocator: std.mem.Allocator, db: *sqlite.Db, target: *const schema_types.Schema) !migration_detector.MigrationPlan {
+    var detector = MigrationDetector.init(allocator, db, target);
+    return detector.detectChanges(target);
+}
+
+test "migration_detector: exact managed indexes produce no migration" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+    defer target.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &target);
+
+    const plan = try testDetectChanges(allocator, &db, &target);
+    defer detectorDeinit(&plan, allocator);
+    try std.testing.expectEqual(@as(usize, 0), plan.changes.len);
+}
+
+fn detectorDeinit(plan: *const migration_detector.MigrationPlan, allocator: std.mem.Allocator) void {
+    for (plan.changes) |c| {
+        if (c.field) |f| f.deinit(allocator);
+    }
+    allocator.free(plan.changes);
+}
+
+fn expectSingleIndexChange(allocator: std.mem.Allocator, db: *sqlite.Db, target: *const schema_types.Schema) !void {
+    const plan = try testDetectChanges(allocator, db, target);
+    defer detectorDeinit(&plan, allocator);
+    try std.testing.expectEqual(@as(usize, 1), plan.changes.len);
+    try std.testing.expectEqual(ChangeKind.change_indexes, plan.changes[0].kind);
+    try std.testing.expect(!plan.is_destructive);
+}
+
+test "migration_detector: missing wrong and obsolete user unique indexes are detected" {
+    const allocator = std.testing.allocator;
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    // Missing index
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Wrong uniqueness flag
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
+        try db.exec("CREATE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\")", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Partial flag
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("DROP INDEX \"uidx_projects_0\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\") WHERE slug IS NOT NULL", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Wrong column order
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("DROP INDEX \"uidx_projects_1\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_1\" ON \"projects\"(\"namespace_id\", \"externalId\", \"provider\")", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Wrong column set
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("DROP INDEX \"uidx_projects_1\"", .{}, .{});
+        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_1\" ON \"projects\"(\"provider\")", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Obsolete reserved-prefix index left behind by a removed constraint
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("CREATE UNIQUE INDEX \"uidx_projects_2\" ON \"projects\"(\"namespace_id\", \"slug\", \"provider\")", .{}, .{});
+        try expectSingleIndexChange(allocator, &db, &target);
+    }
+
+    // Unrelated manual indexes are ignored
+    {
+        var db = try openMemDb();
+        defer db.deinit();
+        var target = try schema_parse.initFromJson(allocator, unique_schema_json);
+        defer target.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target);
+        try db.exec("CREATE INDEX manual_operator_index ON projects(provider)", .{}, .{});
+        const plan = try testDetectChanges(allocator, &db, &target);
+        defer detectorDeinit(&plan, allocator);
+        try std.testing.expectEqual(@as(usize, 0), plan.changes.len);
+    }
+}
+
+test "migration_detector: missing system field reference and identity indexes are repaired" {
+    const allocator = std.testing.allocator;
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+    var db = try openMemDb();
+    defer db.deinit();
+
+    var target = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"parents":{"fields":{}},"children":{"fields":{"parent_id":{"type":"string","references":"users"}}}}}
+    );
+    defer target.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &target);
+
+    // Drop one of each managed index class; all must be reported for repair.
+    try db.exec("DROP INDEX \"idx_children_namespace_id\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx_children_owner_id\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx_children_parent_id\"", .{}, .{});
+    try db.exec("DROP INDEX \"idx_users_namespace_external_id\"", .{}, .{});
+
+    const plan = try testDetectChanges(allocator, &db, &target);
+    defer detectorDeinit(&plan, allocator);
+    try std.testing.expectEqual(@as(usize, 2), plan.changes.len); // children + users, at most one entry per table
+    for (plan.changes) |change| {
+        try std.testing.expectEqual(ChangeKind.change_indexes, change.kind);
+    }
+}
+
+test "migration_detector: rebuild-classified changes suppress redundant index reconciliation" {
+    const allocator = std.testing.allocator;
+
+    var target = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"tasks":{"fields":{"status":{"type":"string","indexed":true},"title":{"type":"string"}},"unique":[["title"]]}}}
+    );
+    defer target.deinit();
+
+    // Existing table lacks the status column and every managed index, and its
+    // title column has drifted from TEXT to BLOB → destructive rebuild path.
+    var db = try openMemDb();
+    defer db.deinit();
+    try db.exec(
+        "CREATE TABLE tasks (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, owner_id BLOB NOT NULL, title BLOB, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(id))",
+        .{},
+        .{},
+    );
+
+    const plan = try testDetectChanges(allocator, &db, &target);
+    defer detectorDeinit(&plan, allocator);
+    try std.testing.expect(plan.is_destructive);
+    for (plan.changes) |change| {
+        try std.testing.expect(change.kind != .change_indexes);
+    }
+
+    // The rebuild itself is still scheduled alongside the additive column.
+    var saw_change_type = false;
+    var saw_add_column = false;
+    for (plan.changes) |change| {
+        if (change.kind == .change_type) saw_change_type = true;
+        if (change.kind == .add_column) saw_add_column = true;
+    }
+    try std.testing.expect(saw_change_type and saw_add_column);
 }

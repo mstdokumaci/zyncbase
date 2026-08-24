@@ -820,3 +820,46 @@ Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presen
 - A hard limit of 500 flat fields per presence tier is enforced at server startup to guard against pathological schemas.
 
 **Principles**: P-RTF, P-TSF, P-PPF, P-SBD, P-CIB
+
+---
+
+## ADR-021: Namespace-Scoped User Unique Constraints
+
+Schema-defined uniqueness for store data must hold under concurrency. Any application-side check (preflight `SELECT`, in-memory duplicate cache) races with concurrent writers: two clients can both observe "no duplicate" and both commit. SQLite already enforces uniqueness atomically inside the write transaction through unique indexes; duplicating that authority in application code adds complexity without removing the race.
+
+**Decision**: Users declare single-field and compound unique constraints once, at table level, via an optional `unique` array of field-path arrays in `schema.json`. Every constraint is compiled to a native SQLite unique index whose first column is `namespace_id`. SQLite is the sole enforcement authority for creates and updates; ZyncBase never pre-checks or caches uniqueness.
+
+### Grammar and Semantics
+
+- `unique` is a table-level array of non-empty arrays of field-path strings (same dot notation as `required`). A one-element inner array is a single-field constraint; multiple elements form one compound constraint.
+- Every path must resolve to a stored user field in the same table; system fields cannot be named. Repeating a field within one constraint is invalid, as is declaring the same field set twice (order-insensitive).
+- Field order within a constraint is preserved because it controls SQLite index prefix usability.
+- All currently storable field types are accepted; arrays use their canonical encoded representation. There is no field-level `"unique": true` alias — one table-level form covers single and compound constraints.
+- Equality is SQLite equality over the stored column representation (case-sensitive text under default collation). Constrained components may be `NULL`; applications requiring present-and-unique values must also declare the field `required`.
+
+### Namespace Scoping
+
+Every generated index begins with `namespace_id`: equal values may coexist across namespaces but never within one. For `namespaced: false` tables all rows share namespace ID `0`, so the same index provides global uniqueness. There is deliberately no global-uniqueness override for namespaced tables: avoiding cross-tenant coupling and existence leakage is the safe default.
+
+### Write Behavior
+
+The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. The containing batch transaction rolls back normally, preserving all-or-nothing semantics. Because default `confirm: "accepted"` writes only confirm queue admission, applications that branch on duplicates must use `confirm: "committed"`; confirmed failures surface as public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
+
+### Migration Behavior
+
+Adding, removing, reordering, or changing a constraint is an index migration — non-destructive, transactional, and rolled back entirely on failure. Adding or changing a constraint over existing duplicate rows fails startup; ZyncBase does not pick winners, delete rows, or rewrite values. Removing a constraint drops its managed index and permits future duplicates.
+
+### Explicitly Rejected Alternatives
+
+- **Preflight reads / duplicate caches** — reintroduce check-then-write races.
+- **Global-on-namespaced uniqueness** — couples tenants and leaks existence.
+- **Automatic deduplication during migration** — silent data loss.
+- **Field-level `unique: true` alias** — parallel grammar for what one form expresses.
+- **Named public constraints / stable public index names, partial indexes, expression indexes, configurable collations, deferrable constraints** — deferred until concrete requirements exist.
+
+**Consequences**:
+- Uniqueness holds under any level of client concurrency with no application coordination.
+- Startup owns index lifecycle: migrations are the sole DDL owner, so index changes are atomic and version-persisted.
+- Duplicate rejection is observable only on committed confirmations; accepted writes give no delivery guarantee by design (ADR-018).
+
+**Principles**: P-SBD, P-TSF

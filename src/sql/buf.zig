@@ -66,6 +66,26 @@ pub const SqlBuf = struct {
         self.buf.appendSliceAssumeCapacity(field_name);
         self.buf.appendAssumeCapacity('"');
     }
+
+    /// Appends a user unique index name of the form `"uidx_<table>_<ordinal>"`.
+    /// Ordinals avoid ambiguous concatenation collisions between field names.
+    pub fn appendUniqueIndexName(
+        self: *SqlBuf,
+        allocator: Allocator,
+        table_name: []const u8,
+        ordinal: usize,
+    ) !void {
+        var ordinal_buf: [20]u8 = undefined;
+        const ordinal_str = std.fmt.bufPrint(&ordinal_buf, "{d}", .{ordinal}) catch @panic("u64 ordinal never exceeds 20 digits");
+        const extra_len = 8 + table_name.len + ordinal_str.len;
+        try self.buf.ensureUnusedCapacity(allocator, extra_len);
+        self.buf.appendAssumeCapacity('"');
+        self.buf.appendSliceAssumeCapacity("uidx_");
+        self.buf.appendSliceAssumeCapacity(table_name);
+        self.buf.appendAssumeCapacity('_');
+        self.buf.appendSliceAssumeCapacity(ordinal_str);
+        self.buf.appendAssumeCapacity('"');
+    }
 };
 
 /// Stack-allocated separator-aware cursor into a `SqlBuf`.

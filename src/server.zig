@@ -492,17 +492,11 @@ pub const ZyncBaseServer = struct {
 
     fn runMigrationsAndStartEngine(self: *ZyncBaseServer) !void {
         const schema_ptr = &self.schema;
-        // Apply DDL for each table
         var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
-        for (schema_ptr.tables) |table| {
-            const ddl = try gen.generateDDL(table);
-            defer self.memory_strategy.generalAllocator().free(ddl);
-            const ddl_z = try self.memory_strategy.generalAllocator().dupeZ(u8, ddl);
-            defer self.memory_strategy.generalAllocator().free(ddl_z);
-            try self.storage_engine.execSetupSQL(ddl_z);
-        }
 
-        // Detect and execute migrations
+        // Migration execution is the sole owner of schema DDL: fresh databases
+        // are created through detection/execution so index lifecycle stays
+        // transactional and version persistence always runs.
         const setup_conn = try self.storage_engine.getSetupConn();
         var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn, schema_ptr);
         const plan = try detector.detectChanges(schema_ptr);
@@ -510,18 +504,18 @@ pub const ZyncBaseServer = struct {
 
         if (plan.changes.len > 0) {
             std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
-            var executor = MigrationExecutor.init(
-                self.io,
-                self.memory_strategy.generalAllocator(),
-                setup_conn,
-                &gen,
-                .{},
-            );
-            executor.execute(plan, schema_ptr.version) catch |err| {
-                std.log.err("Schema migration failed: {}", .{err});
-                return err;
-            };
         }
+        var executor = MigrationExecutor.init(
+            self.io,
+            self.memory_strategy.generalAllocator(),
+            setup_conn,
+            &gen,
+            .{},
+        );
+        executor.execute(plan, schema_ptr.version) catch |err| {
+            std.log.err("Schema migration failed: {}", .{err});
+            return err;
+        };
 
         // Lock the engine and start the runtime thread
         try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);

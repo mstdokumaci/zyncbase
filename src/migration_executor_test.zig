@@ -137,7 +137,7 @@ test "foreign key index migration replaces partial indexes in place" {
 
     const children = target.table("children") orelse return error.TestExpectedValue;
     const changes = [_]migration_detector.Change{.{
-        .kind = .change_foreign_key_indexes,
+        .kind = .change_indexes,
         .table = children,
         .field = null,
     }};
@@ -682,4 +682,179 @@ test "migration_executor: major version bump is refused" {
             try std.testing.expect(extra_type == null);
         }
     }
+}
+
+// ─── Unique-constraint migrations ────────────────────────────────────────────
+
+const unique_exec_old_json =
+    \\{"version":"1.0.0","store":{"projects":{"required":["slug","provider","externalId"],"fields":{"slug":{"type":"string"},"provider":{"type":"string"},"externalId":{"type":"string"}}}}}
+;
+
+const unique_exec_new_json =
+    \\{"version":"1.1.0","store":{"projects":{"required":["slug","provider","externalId"],"fields":{"slug":{"type":"string"},"provider":{"type":"string"},"externalId":{"type":"string"}},"unique":[["slug"]]}}}
+;
+
+const unique_exec_compound_json =
+    \\{"version":"1.2.0","store":{"projects":{"required":["slug","provider","externalId"],"fields":{"slug":{"type":"string"},"provider":{"type":"string"},"externalId":{"type":"string"}},"unique":[["provider","externalId"]]}}}
+;
+
+fn runMigration(allocator: std.mem.Allocator, db: *sqlite.Db, gen: *ddl_generator.DDLGenerator, target: *const schema_types.Schema) !void {
+    var detector = migration_detector.MigrationDetector.init(allocator, db, target);
+    const plan = try detector.detectChanges(target);
+    defer {
+        for (plan.changes) |c| {
+            if (c.field) |f| f.deinit(allocator);
+        }
+        allocator.free(plan.changes);
+    }
+    var executor = MigrationExecutor.init(std.testing.io, allocator, db, gen, .{});
+    try executor.execute(plan, target.version);
+}
+
+fn countIndexes(db: *sqlite.Db, allocator: std.mem.Allocator, table: []const u8) !i64 {
+    const sql_str = try std.fmt.allocPrint(allocator, "SELECT count(*) FROM pragma_index_list('{s}')", .{table});
+    defer allocator.free(sql_str);
+    return (try db.oneDynamic(i64, sql_str, .{}, .{})) orelse return error.TestExpectedValue;
+}
+
+fn countManagedIndexes(db: *sqlite.Db, allocator: std.mem.Allocator, table: []const u8) !i64 {
+    const sql_str = try std.fmt.allocPrint(allocator, "SELECT count(*) FROM pragma_index_list('{s}') WHERE name LIKE 'idx\\_%' ESCAPE '\\' OR name LIKE 'uidx\\_%' ESCAPE '\\'", .{table});
+    defer allocator.free(sql_str);
+    return (try db.oneDynamic(i64, sql_str, .{}, .{})) orelse return error.TestExpectedValue;
+}
+
+test "migration_executor: adding unique constraint over clean data succeeds and persists version" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var old_schema = try schema_parse.initFromJson(allocator, unique_exec_old_json);
+    defer old_schema.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &old_schema);
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'a', 'p', 'e1', 0, 0)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'b', 'q', 'e2', 0, 0)", .{}, .{});
+
+    var new_schema = try schema_parse.initFromJson(allocator, unique_exec_new_json);
+    defer new_schema.deinit();
+    try runMigration(allocator, &db, &gen, &new_schema);
+
+    const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+    defer if (version) |value| allocator.free(value);
+    try std.testing.expectEqualStrings("1.1.0", version orelse return error.TestExpectedValue);
+
+    const unique_count = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name = 'uidx_projects_0' AND \"unique\" = 1 AND partial = 0", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 1), unique_count);
+}
+
+fn insertDuplicateProjects(db: *sqlite.Db) !void {
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'p', 'e1', 0, 0)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'q', 'e2', 0, 0)", .{}, .{});
+}
+
+test "migration_executor: adding unique constraint over duplicates fails rolls back and keeps version" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var old_schema = try schema_parse.initFromJson(allocator, unique_exec_old_json);
+    defer old_schema.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &old_schema);
+    try insertDuplicateProjects(&db);
+    try db.exec("CREATE TABLE schema_meta (version TEXT NOT NULL, applied_at INTEGER NOT NULL)", .{}, .{});
+    try db.exec("INSERT INTO schema_meta VALUES ('1.0.0', 0)", .{}, .{});
+
+    // Snapshot pre-migration index set.
+    const indexes_before = try countIndexes(&db, allocator, "projects");
+
+    var new_schema = try schema_parse.initFromJson(allocator, unique_exec_new_json);
+    defer new_schema.deinit();
+
+    try std.testing.expectError(error.UniqueConstraintViolation, runMigration(allocator, &db, &gen, &new_schema));
+
+    // Rows untouched, previous index set restored, prior version unchanged.
+    try std.testing.expectEqual(@as(?i64, 2), try db.one(i64, "SELECT count(*) FROM projects", .{}, .{}));
+    try std.testing.expectEqual(indexes_before, try countIndexes(&db, allocator, "projects"));
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx_%'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
+    const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+    defer if (version) |value| allocator.free(value);
+    try std.testing.expectEqualStrings("1.0.0", version orelse return error.TestExpectedValue);
+}
+
+test "migration_executor: removing unique constraint drops its index without rebuilding" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var old_schema = try schema_parse.initFromJson(allocator, unique_exec_new_json);
+    defer old_schema.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &old_schema);
+    try db.exec("CREATE TABLE schema_meta (version TEXT NOT NULL, applied_at INTEGER NOT NULL)", .{}, .{});
+    try db.exec("INSERT INTO schema_meta VALUES ('1.1.0', 0)", .{}, .{});
+
+    var removed_schema = try schema_parse.initFromJson(allocator, unique_exec_old_json);
+    defer removed_schema.deinit();
+
+    // Constraint removal is non-destructive even without allow_destructive.
+    try runMigration(allocator, &db, &gen, &removed_schema);
+
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx_%'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
+    // Table was not rebuilt: rows survive.
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 3, zeroblob(16), 'x', 'p', 'e9', 0, 0)", .{}, .{});
+}
+
+test "migration_executor: changing unique constraint replaces its index atomically" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var old_schema = try schema_parse.initFromJson(allocator, unique_exec_new_json);
+    defer old_schema.deinit();
+    try execSchemaDDL(&db, allocator, &gen, &old_schema);
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'a', 'p', 'e1', 0, 0)", .{}, .{});
+
+    var changed_schema = try schema_parse.initFromJson(allocator, unique_exec_compound_json);
+    defer changed_schema.deinit();
+    try runMigration(allocator, &db, &gen, &changed_schema);
+
+    // The replacement index deterministically REUSES ordinal name uidx_projects_0.
+    const compound_cols = try db.one(
+        i64,
+        "SELECT count(*) FROM pragma_index_info('uidx_projects_0')",
+        .{},
+        .{},
+    );
+    try std.testing.expectEqual(@as(?i64, 3), compound_cols); // namespace_id + provider + externalId
+}
+
+fn execSchemaDDL(db: *sqlite.Db, allocator: std.mem.Allocator, gen: *ddl_generator.DDLGenerator, schema_value: *const schema_types.Schema) !void {
+    for (schema_value.tables) |table| {
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+        try execMultiSql(db, allocator, ddl);
+    }
+}
+
+test "migration_executor: fresh create_table installs complete managed index set" {
+    const allocator = std.testing.allocator;
+    var db = try openMemDb();
+    defer db.deinit();
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+
+    var target = try schema_parse.initFromJson(allocator, unique_exec_compound_json);
+    defer target.deinit();
+    try runMigration(allocator, &db, &gen, &target);
+
+    // Managed set only: namespace + owner + compound unique. SQLite's implicit
+    // sqlite_autoindex_* for the BLOB primary key is not ZyncBase-managed.
+    try std.testing.expectEqual(@as(?i64, 3), try countManagedIndexes(&db, allocator, "projects"));
+    try std.testing.expectEqual(@as(?i64, 3), try db.one(i64, "SELECT count(*) FROM pragma_index_info('uidx_projects_0')", .{}, .{}));
+    const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
+    defer if (version) |value| allocator.free(value);
+    try std.testing.expectEqualStrings("1.2.0", version orelse return error.TestExpectedValue);
 }

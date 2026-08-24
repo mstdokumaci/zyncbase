@@ -28,6 +28,18 @@ test "appendIndexName builds idx_table_field form" {
     try std.testing.expectEqualStrings("\"idx_users_email\"", b.items());
 }
 
+test "appendUniqueIndexName builds uidx_table_ordinal form" {
+    var b = SqlBuf.init();
+    defer b.deinit(std.testing.allocator);
+    try b.appendUniqueIndexName(std.testing.allocator, "projects", 0);
+    try std.testing.expectEqualStrings("\"uidx_projects_0\"", b.items());
+
+    var c = SqlBuf.init();
+    defer c.deinit(std.testing.allocator);
+    try c.appendUniqueIndexName(std.testing.allocator, "projects", 11);
+    try std.testing.expectEqualStrings("\"uidx_projects_11\"", c.items());
+}
+
 test "SqlList emits separator between items, not before first" {
     var b = SqlBuf.init();
     defer b.deinit(std.testing.allocator);

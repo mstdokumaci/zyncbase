@@ -1,7 +1,14 @@
 const std = @import("std");
 
+const sqlite = @import("sqlite");
+
 const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
+// ─── User-defined unique constraint enforcement ──────────────────────────────
+const st_errors = @import("storage_engine/errors.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const typed_doc_id = @import("typed/doc_id.zig");
+const tth = @import("typed/test_helpers.zig");
 
 const testing = std.testing;
 const StorageEngine = sth.StorageEngine;
@@ -185,4 +192,254 @@ test "storage: error handling delete non-existent key" {
         defer if (record) |r| r.deinit(allocator);
         try testing.expect(record == null);
     }
+}
+
+test "storage: extended errcode classifies real unique collision as UniqueConstraintViolation" {
+    var db = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer db.deinit();
+
+    try db.execMulti(
+        "CREATE TABLE projects (id BLOB NOT NULL, namespace_id INTEGER NOT NULL, slug TEXT, PRIMARY KEY(id));" ++
+            "CREATE UNIQUE INDEX \"uidx_projects_0\" ON \"projects\"(\"namespace_id\", \"slug\")",
+        .{},
+    );
+
+    try db.exec("INSERT INTO projects VALUES (zeroblob(16), 1, 'dup')", .{}, .{});
+
+    // Step the duplicate insert through the raw C API so expected constraint
+    // failures stay silent; then classify from the connection's error state.
+    const dup_sql = "INSERT INTO projects VALUES (randomblob(16), 1, 'dup')";
+    var stmt: ?*sqlite.c.sqlite3_stmt = null;
+    try testing.expectEqual(sqlite.c.SQLITE_OK, sqlite.c.sqlite3_prepare_v2(db.db, dup_sql.ptr, @intCast(dup_sql.len), &stmt, null));
+    _ = sqlite.c.sqlite3_step(stmt);
+    _ = sqlite.c.sqlite3_finalize(stmt);
+    try testing.expectEqual(error.UniqueConstraintViolation, st_errors.classifyStepError(&db));
+
+    // Foreign-key failures remain the generic ConstraintViolation.
+    var fk_db = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer fk_db.deinit();
+    _ = try fk_db.pragma(void, .{}, "foreign_keys", "on");
+    try fk_db.execMulti(
+        "CREATE TABLE parents (id BLOB NOT NULL PRIMARY KEY);" ++
+            "CREATE TABLE children (id BLOB NOT NULL PRIMARY KEY, parent_id BLOB NOT NULL REFERENCES parents(id))",
+        .{},
+    );
+    const orphan_sql = "INSERT INTO children VALUES (randomblob(16), randomblob(16))";
+    var orphan_stmt: ?*sqlite.c.sqlite3_stmt = null;
+    try testing.expectEqual(sqlite.c.SQLITE_OK, sqlite.c.sqlite3_prepare_v2(fk_db.db, orphan_sql.ptr, @intCast(orphan_sql.len), &orphan_stmt, null));
+    _ = sqlite.c.sqlite3_step(orphan_stmt);
+    _ = sqlite.c.sqlite3_finalize(orphan_stmt);
+    try testing.expectEqual(error.ConstraintViolation, st_errors.classifyStepError(&fk_db));
+}
+
+// ponytail: static fixture slices must outlive buildRuntimeTable's clone.
+const unique_project_fields = [_]schema_types.Field{
+    schema_helpers.makeField("slug", .text),
+    schema_helpers.makeField("provider", .text),
+    schema_helpers.makeField("external_id", .text),
+};
+const unique_project_constraints = [_]schema_types.UniqueConstraint{
+    .{ .field_indexes = &.{0} },
+    .{ .field_indexes = &.{ 1, 2 } },
+};
+
+fn uniqueProjectsTable() schema_types.Table {
+    var table = schema_helpers.makeTable("projects", &unique_project_fields);
+    table.unique_constraints = &unique_project_constraints;
+    return table;
+}
+
+// ponytail: static fixture slices must outlive buildRuntimeTable's clone.
+const global_code_fields = [_]schema_types.Field{schema_helpers.makeField("code", .text)};
+const global_code_constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
+
+fn globalCodesTable() schema_types.Table {
+    var table = schema_helpers.makeTable("global_codes", &global_code_fields);
+    table.namespaced = false;
+    table.unique_constraints = &global_code_constraints;
+    return table;
+}
+
+const member_fields = [_]schema_types.Field{
+    schema_helpers.makeField("handle", .text),
+    schema_helpers.makeField("region", .text),
+    schema_helpers.makeField("ext", .text),
+};
+const member_constraints = [_]schema_types.UniqueConstraint{
+    .{ .field_indexes = &.{0} },
+    .{ .field_indexes = &.{ 1, 2 } },
+};
+
+fn membersTable() schema_types.Table {
+    var table = schema_helpers.makeTable("members", &member_fields);
+    table.unique_constraints = &member_constraints;
+    return table;
+}
+
+test "storage: same unique key in one namespace fails across namespace succeeds" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-namespace-scoping", &.{uniqueProjectsTable()}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_a: typed_doc_id.DocId = 1;
+    const id_b: typed_doc_id.DocId = 2;
+
+    try ctx.insertText("projects", id_a, 1, "slug", "alpha");
+    try ctx.engine.flushPendingWrites();
+
+    // Same slug, same namespace → write aborts; row absent.
+    try ctx.insertText("projects", id_b, 1, "slug", "alpha");
+    try ctx.engine.flushPendingWrites();
+    {
+        const record = try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_b, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record == null);
+    }
+
+    // Same slug, different namespace → both rows coexist.
+    try ctx.insertText("projects", id_b, 2, "slug", "alpha");
+    try ctx.engine.flushPendingWrites();
+    {
+        const record = try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_b, 2);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
+    }
+}
+
+test "storage: compound key rejects only complete tuple matches" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-compound-tuple", &.{uniqueProjectsTable()}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_a: typed_doc_id.DocId = 1;
+    const id_b: typed_doc_id.DocId = 2;
+    const id_c: typed_doc_id.DocId = 3;
+
+    try ctx.insertNamed("projects", id_a, 1, .{
+        sth.named("provider", tth.valText("github")),
+        sth.named("external_id", tth.valText("42")),
+    });
+    try ctx.engine.flushPendingWrites();
+
+    // Same provider, different external_id → allowed.
+    try ctx.insertNamed("projects", id_b, 1, .{
+        sth.named("provider", tth.valText("github")),
+        sth.named("external_id", tth.valText("43")),
+    });
+    try ctx.engine.flushPendingWrites();
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_b, 1)) != null);
+
+    // Complete tuple match → rejected.
+    try ctx.insertNamed("projects", id_c, 1, .{
+        sth.named("provider", tth.valText("github")),
+        sth.named("external_id", tth.valText("42")),
+    });
+    try ctx.engine.flushPendingWrites();
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_c, 1)) == null);
+}
+
+test "storage: non-namespaced unique key is globally enforced" {
+    const allocator = std.heap.smp_allocator;
+    const table = globalCodesTable();
+
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-global-table", &.{table}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_a: typed_doc_id.DocId = 1;
+    const id_b: typed_doc_id.DocId = 2;
+
+    try ctx.insertText("global_codes", id_a, 7, "code", "one"); // namespace ignored for global tables
+    try ctx.engine.flushPendingWrites();
+
+    // Different requested namespace still maps to global namespace 0 → duplicate fails.
+    try ctx.insertText("global_codes", id_b, 9, "code", "one");
+    try ctx.engine.flushPendingWrites();
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("global_codes"), id_b, 7)) == null);
+}
+
+test "storage: update into another row's key fails and leaves both rows unchanged" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-update-collision", &.{uniqueProjectsTable()}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_a: typed_doc_id.DocId = 1;
+    const id_b: typed_doc_id.DocId = 2;
+    const tbl = try ctx.table("projects");
+
+    try ctx.insertText("projects", id_a, 1, "slug", "first");
+    try ctx.insertText("projects", id_b, 1, "slug", "second");
+    try ctx.engine.flushPendingWrites();
+
+    // Update b into a's key → whole batch rolls back.
+    try sth.enqueueUpdate(&ctx.engine, ctx.tableIndex("projects"), id_b, 1, &.{
+        .{ .index = try tbl.fieldIndex("slug"), .value = tth.valText("first") },
+    }, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var doc_a = try tbl.getOne(allocator, id_a, 1);
+    defer doc_a.deinit();
+    _ = try doc_a.expectFieldString("slug", "first");
+    var doc_b = try tbl.getOne(allocator, id_b, 1);
+    defer doc_b.deinit();
+    _ = try doc_b.expectFieldString("slug", "second");
+}
+
+test "storage: multiple null constrained values succeed" {
+    const allocator = std.heap.smp_allocator;
+
+    // Single optional field + compound with an optional component.
+    const table = membersTable();
+
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-null-semantics", &.{table}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_a: typed_doc_id.DocId = 1;
+    const id_b: typed_doc_id.DocId = 2;
+    const id_c: typed_doc_id.DocId = 3;
+
+    // Omitted single-field value stores NULL twice without conflict.
+    try ctx.insertNamed("members", id_a, 1, .{});
+    try ctx.insertNamed("members", id_b, 1, .{});
+    try ctx.engine.flushPendingWrites();
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("members"), id_a, 1)) != null);
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("members"), id_b, 1)) != null);
+
+    // Compound with one NULL component never collides.
+    try ctx.insertNamed("members", id_c, 1, .{
+        sth.named("region", tth.valText("eu")),
+        sth.named("ext", tth.valNil()),
+    });
+    try ctx.engine.flushPendingWrites();
+
+    const id_d: typed_doc_id.DocId = 4;
+    try ctx.insertNamed("members", id_d, 1, .{
+        sth.named("region", tth.valText("eu")),
+        sth.named("ext", tth.valNil()),
+    });
+    try ctx.engine.flushPendingWrites();
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("members"), id_d, 1)) != null);
+}
+
+test "storage: failed atomic batch leaves no partial writes" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-atomic-batch", &.{uniqueProjectsTable()}, .{ .in_memory = true });
+    defer ctx.deinit();
+
+    const id_ok: typed_doc_id.DocId = 1;
+    const id_dup: typed_doc_id.DocId = 2;
+
+    // Both ops enter the same batch; the second violates uniqueness so the
+    // transaction must roll back both writes.
+    try ctx.insertText("projects", id_ok, 1, "slug", "batch-ok");
+    try ctx.insertText("projects", id_dup, 1, "slug", "batch-ok");
+    try ctx.engine.flushPendingWrites();
+
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_ok, 1)) == null);
+    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_dup, 1)) == null);
 }
