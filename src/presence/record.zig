@@ -15,6 +15,29 @@ const Allocator = std.mem.Allocator;
 pub const PresenceRecord = struct {
     values: []?typed.Value,
 
+    pub fn validatePayload(
+        fields: []const schema_types.PresenceField,
+        patch: msgpack.Payload,
+        allocator: Allocator,
+    ) !void {
+        if (patch != .arr) return error.InvalidPayload;
+
+        for (patch.arr) |pair_payload| {
+            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
+            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
+            if (f_idx >= fields.len) return error.InvalidFieldIndex;
+
+            const value = pair_payload.arr[1];
+            if (value == .nil) continue;
+
+            const field = fields[f_idx];
+            try typed_codec.validateValue(field.declared_type, value);
+            if (field.constraints) |constraints| {
+                try schema_constraints.validate(constraints, field.declared_type, value, allocator);
+            }
+        }
+    }
+
     /// Allocate a new record with all-null slots.
     pub fn init(allocator: Allocator, field_count: usize) !PresenceRecord {
         const values = try allocator.alloc(?typed.Value, field_count);
@@ -57,7 +80,7 @@ pub const PresenceRecord = struct {
         fields: []const schema_types.PresenceField,
         patch: msgpack.Payload,
     ) !void {
-        if (patch != .arr) return error.InvalidPayload;
+        try validatePayload(fields, patch, allocator);
 
         const TempUpdate = struct {
             idx: usize,
@@ -70,16 +93,10 @@ pub const PresenceRecord = struct {
         }
 
         for (patch.arr) |pair_payload| {
-            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
             const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
-            if (f_idx >= fields.len) return error.InvalidFieldIndex;
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
-            if (field.constraints) |constraints| {
-                try schema_constraints.validate(constraints, field.declared_type, pair_payload.arr[1], allocator);
-            }
-
             const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,

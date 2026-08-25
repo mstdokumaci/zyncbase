@@ -156,6 +156,8 @@ The `users` collection is a special, hybrid system table:
 | `user` | `object` | Map of presence fields owned per connected user. |
 | `shared` | `object` | Map of namespace-level shared presence fields. |
 
+The presence root is closed: any key other than `user` or `shared` fails schema startup. Presence object fields accept only `type` and `fields`; primitive fields accept only `type` plus the supported validation constraints. Store-only properties (`indexed`, `references`, `onDelete`, `items`, and `metadata`) and `required` are rejected. Presence fields are always optional because writes are sparse merges.
+
 ### Implicit Presence Schema Layout
 
 If `presence` is omitted from `schema.json`, the server synthesizes the following layout:
@@ -184,9 +186,9 @@ At boot, the server flattens presence definitions to index arrays sent to client
 
 ## Metadata and Reserved Validation Keywords
 
-`metadata` objects are preserved at schema, table, and field boundaries for generated clients and operator tooling.
+`metadata` objects are preserved at schema, table, and store-field boundaries for generated clients and operator tooling.
 
-The parser accepts validation-key names (`enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`) so schema files can reserve future constraints without tripping unknown-key rejection. The current runtime write path enforces structural type compatibility, required fields, references, arrays, and system-column rules; it does not enforce these validation keywords.
+The parser validates and stores `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, and `maximum`. Store and presence writes enforce these constraints before accepting the operation.
 
 Reference values may be `null` when the field is optional. Non-null values must identify an existing row in the referenced table; failed writes and restricted deletes use the public `SCHEMA_VALIDATION_FAILED` error contract. References are ID-based and may cross namespaces because document IDs are table-wide primary keys. Foreign keys are immediate, so a batch must create a parent before a child that references it. `ON UPDATE` actions and deferred constraints are not supported.
 

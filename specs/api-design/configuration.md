@@ -341,6 +341,7 @@ Two tiers are supported:
 - **Flattening**: Nested objects are flattened on the wire using `__` (`cursor__x`, `cursor__y`). The SDK handles this transparently.
 - **Required**: Presence fields are never required. Both tiers use field-level merge semantics.
 - **Supported types**: `string`, `number`, `integer`, `boolean`. All standard constraints apply (`enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`).
+- **Strict grammar**: Only `user` and `shared` are accepted under `presence`. Presence fields reject store-only or unknown properties at startup.
 - **`presence.shared` is optional**: Omit if your application has no room-level shared state.
 
 ### Example: Collaborative Editor with Shared Slide

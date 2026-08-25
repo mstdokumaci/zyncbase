@@ -6,6 +6,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
+const PresenceRecord = @import("record.zig").PresenceRecord;
 const PresenceOp = @import("worker.zig").PresenceOp;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 
@@ -55,6 +56,7 @@ pub const PresenceService = struct {
     /// Authorize user presence write, clone patch onto service allocator, enqueue set_user.
     pub fn setUser(self: *PresenceService, session: Session, patch: msgpack.Payload) !void {
         try self.authorizeWrite(session, &patch);
+        try validatePatch(self.schema.presence_user_fields, patch, session.arena);
         const cloned_patch = try patch.deepClone(self.allocator);
         self.enqueue(.{ .set_user = .{
             .namespace_id = session.namespace_id,
@@ -66,6 +68,7 @@ pub const PresenceService = struct {
     /// Authorize shared presence write, clone patch onto service allocator, enqueue set_shared.
     pub fn setShared(self: *PresenceService, session: Session, patch: msgpack.Payload) !void {
         try self.authorizeSharedWrite(session, &patch);
+        try validatePatch(self.schema.presence_shared_fields, patch, session.arena);
         const cloned_patch = try patch.deepClone(self.allocator);
         self.enqueue(.{ .set_shared = .{
             .namespace_id = session.namespace_id,
@@ -156,6 +159,13 @@ pub const PresenceService = struct {
             patch,
             true,
         );
+    }
+
+    fn validatePatch(fields: []const schema_types.PresenceField, patch: msgpack.Payload, allocator: Allocator) !void {
+        PresenceRecord.validatePayload(fields, patch, allocator) catch |err| switch (err) {
+            error.InvalidFieldIndex => return error.SchemaValidationFailed,
+            else => return err,
+        };
     }
 
     /// Only path to PresenceWorker. Builds the PresenceOp internally.

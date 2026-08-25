@@ -3,7 +3,7 @@ const std = @import("std");
 const auth_helpers = @import("../authorization/test_helpers.zig");
 const auth_types = @import("../authorization/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
-const schema_helpers = @import("../schema/test_helpers.zig");
+const schema_parse = @import("../schema/parse.zig");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const th = @import("test_helpers.zig");
@@ -12,9 +12,16 @@ const PresenceService = @import("service.zig").PresenceService;
 const testing = std.testing;
 
 fn makeServiceTestSchema(allocator: std.mem.Allocator) !schema_types.Schema {
-    return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{
-        .{ .name = "posts", .fields = &[_][]const u8{"visibility"}, .types = &[_]schema_types.FieldType{.text} },
-    });
+    return schema_parse.initFromJson(allocator,
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{"posts":{"fields":{"visibility":{"type":"string"}}}},
+        \\  "presence":{
+        \\    "user":{"cursor":{"type":"number","maximum":100}},
+        \\    "shared":{"slide":{"type":"integer","maximum":10}}
+        \\  }
+        \\}
+    );
 }
 
 fn makePermissiveConfig(allocator: std.mem.Allocator, schema: *const schema_types.Schema) !auth_types.AuthConfig {
@@ -121,6 +128,30 @@ test "PresenceService: setShared rejected with unauthorized namespace" {
     defer patch.free(allocator);
 
     try testing.expectError(error.NamespaceUnauthorized, svc.setShared(session, patch));
+}
+
+test "PresenceService: rejects invalid user and shared patches before enqueue" {
+    const allocator = std.testing.allocator;
+    var schema = try makeServiceTestSchema(allocator);
+    defer schema.deinit();
+    var config = try makePermissiveConfig(allocator, &schema);
+    defer config.deinit();
+
+    var svc = PresenceService.init(allocator, null, &config, &schema);
+    const claims = std.StringHashMapUnmanaged(typed.Value){};
+    const session = makePermissiveSession(&claims, allocator);
+
+    var user_patch = try th.makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 101 } },
+    });
+    defer user_patch.free(allocator);
+    try testing.expectError(error.RangeViolation, svc.setUser(session, user_patch));
+
+    var shared_patch = try th.makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .uint = 11 } },
+    });
+    defer shared_patch.free(allocator);
+    try testing.expectError(error.RangeViolation, svc.setShared(session, shared_patch));
 }
 
 // ─── Null worker silently drops ops ──────────────────────────────────────────
