@@ -16,13 +16,14 @@ pub fn format(allocator: std.mem.Allocator, schema: *const types.Schema) ![]cons
     }
     try w.beginObjectField("store");
 
-    for (schema.tables) |table| {
+    for (schema.tables) |*table| {
         try w.beginObjectField(table.name);
         try w.boolField("namespaced", table.namespaced);
         if (table.metadata) |metadata| {
             try w.rawField("metadata", metadata.json);
         }
         try writeRequiredFields(&w, allocator, table.userFields());
+        try writeUniqueConstraints(&w, allocator, table);
         try w.beginObjectField("fields");
         try writeFieldsForPrefix(&w, allocator, table.userFields(), "");
         try w.endObject();
@@ -47,6 +48,21 @@ fn writeRequiredFields(w: *json_write.Writer, allocator: std.mem.Allocator, fiel
         const dotted = try field_path.toDotted(allocator, field.name);
         defer allocator.free(dotted);
         try w.stringValue(dotted);
+    }
+    try w.endArray();
+}
+
+fn writeUniqueConstraints(w: *json_write.Writer, allocator: std.mem.Allocator, table: *const types.Table) !void {
+    if (table.unique_constraints.len == 0) return;
+    try w.beginArrayField("unique");
+    for (table.unique_constraints) |constraint| {
+        try w.beginArrayItem();
+        for (constraint.field_indexes) |field_index| {
+            const dotted = try field_path.toDotted(allocator, table.userFields()[field_index].name);
+            defer allocator.free(dotted);
+            try w.stringValue(dotted);
+        }
+        try w.endArray();
     }
     try w.endArray();
 }

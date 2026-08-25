@@ -50,20 +50,28 @@ pub const SqlBuf = struct {
         self.buf.appendAssumeCapacity('"');
     }
 
-    /// Appends an index name of the form `"idx_<table>_<field>"`.
-    pub fn appendIndexName(
+    /// Appends a globally unambiguous managed index name.
+    pub fn appendManagedIndexName(
         self: *SqlBuf,
         allocator: Allocator,
+        unique: bool,
         table_name: []const u8,
-        field_name: []const u8,
+        kind: []const u8,
+        detail: ?[]const u8,
     ) !void {
-        const extra_len = 7 + table_name.len + field_name.len;
+        const prefix = if (unique) "uidx__" else "idx__";
+        const detail_len = if (detail) |value| 2 + value.len else 0;
+        const extra_len = 2 + prefix.len + table_name.len + 2 + kind.len + detail_len;
         try self.buf.ensureUnusedCapacity(allocator, extra_len);
         self.buf.appendAssumeCapacity('"');
-        self.buf.appendSliceAssumeCapacity("idx_");
+        self.buf.appendSliceAssumeCapacity(prefix);
         self.buf.appendSliceAssumeCapacity(table_name);
-        self.buf.appendAssumeCapacity('_');
-        self.buf.appendSliceAssumeCapacity(field_name);
+        self.buf.appendSliceAssumeCapacity("__");
+        self.buf.appendSliceAssumeCapacity(kind);
+        if (detail) |value| {
+            self.buf.appendSliceAssumeCapacity("__");
+            self.buf.appendSliceAssumeCapacity(value);
+        }
         self.buf.appendAssumeCapacity('"');
     }
 };
@@ -72,8 +80,8 @@ pub const SqlBuf = struct {
 /// Create one per list context with `SqlList.init(&buf, sep)`.
 /// Multiple nested `SqlList` instances are safe — each carries its own state.
 ///
-/// Methods that emit a complete single item (`appendItemSlice`, `appendQuoted`,
-/// `appendIndexName`) call `maybeSep` automatically. For multi-part items, call
+/// Methods that emit a complete single item (`appendItemSlice`, `appendQuoted`)
+/// call `maybeSep` automatically. For multi-part items, call
 /// `maybeSep` once at the start, then use `buf.appendSlice` for each part.
 pub const SqlList = struct {
     buf: *SqlBuf,
@@ -100,16 +108,5 @@ pub const SqlList = struct {
     pub fn appendQuoted(self: *SqlList, allocator: Allocator, identifier: []const u8) !void {
         try self.maybeSep(allocator);
         try self.buf.appendQuoted(allocator, identifier);
-    }
-
-    /// Appends an index name of the form `"idx_<table>_<field>"`, with automatic separator.
-    pub fn appendIndexName(
-        self: *SqlList,
-        allocator: Allocator,
-        table_name: []const u8,
-        field_name: []const u8,
-    ) !void {
-        try self.maybeSep(allocator);
-        try self.buf.appendIndexName(allocator, table_name, field_name);
     }
 };

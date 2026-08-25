@@ -11,6 +11,7 @@ interface SchemaField {
 interface SchemaCollection {
 	fields: Record<string, SchemaField>;
 	required?: string[];
+	unique?: string[][];
 }
 
 interface SchemaFile {

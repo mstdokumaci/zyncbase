@@ -314,14 +314,8 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
     try engine.init(std.testing.io, allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
 
+    // Migration execution is the sole DDL owner — same as server startup.
     var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (schema.tables) |table| {
-        const ddl = try gen.generateDDL(table);
-        defer allocator.free(ddl);
-        const ddl_z = try allocator.dupeZ(u8, ddl);
-        defer allocator.free(ddl_z);
-        try engine.execSetupSQL(ddl_z);
-    }
 
     // Detect and execute migrations
     const setup_conn = try engine.getSetupConn();
@@ -329,16 +323,17 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
     const plan = try detector.detectChanges(schema);
     defer detector.deinit(plan);
 
-    if (plan.changes.len > 0) {
-        var executor = MigrationExecutor.init(
-            std.testing.io,
-            allocator,
-            setup_conn,
-            &gen,
-            .{},
-        );
-        try executor.execute(plan, schema.version);
-    }
+    var executor = MigrationExecutor.init(
+        std.testing.io,
+        allocator,
+        setup_conn,
+        &gen,
+        .{},
+    );
+    executor.execute(plan, schema.version) catch |err| {
+        std.log.err("Schema migration failed in test setup: {}", .{err});
+        return err;
+    };
 
     // SAFETY: Immediately initialized by init() call below.
     var node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;

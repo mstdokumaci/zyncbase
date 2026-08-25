@@ -24,8 +24,9 @@ This document defines the schema configuration format (`schema.json`), system ta
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `Schema` | `Table` map, `PresenceSchema` | Root runtime schema context. |
-| `Table` | `Field` map, required field list | Metadata for a persistent collection (e.g. `namespaced` state). |
+| `Table` | `Field` map, `UniqueConstraint` list, required field list | Metadata for a persistent collection (e.g. `namespaced` state). |
 | `Field` | type enum, metadata | Metadata for a table column, foreign keys, array element type, and indices. |
+| `UniqueConstraint` | user-field indexes | One declared unique constraint; stores indexes into `Table.userFields()` in schema order and owns its allocation. Constraint metadata never changes canonical field order or wire dictionary indexes. |
 | `PresenceSchema` | user field map, shared field map | Typed ephemeral presence layout definitions. |
 | `SchemaIndex` | table and field maps | Dense lookup structure used by integer wire routing and query parsing. |
 
@@ -54,6 +55,7 @@ Schema configuration is rooted, not a bare table map:
 |:---|:---:|:---|:---|
 | `fields` | `object` | - | Map of field names to field definitions. |
 | `required` | `array<string>` | `[]` | List of required field names (supports dot notation for nested fields). |
+| `unique` | `array<array<string>>` | `[]` | Unique constraints as arrays of field paths (dot notation). A one-element inner array is a single-field constraint; multiple elements form one compound constraint. Formats back as an omitted property when empty. |
 | `namespaced` | `boolean` | `true` | If `true`, rows are scoped to the active namespace. If `false`, rows are stored globally under namespace ID `0`. |
 
 ### Field Properties
@@ -68,6 +70,23 @@ Schema configuration is rooted, not a bare table map:
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
 | `metadata` | `object` | `null` | Preserved field metadata for tooling and generated clients. |
 | `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum` | mixed | `null` | Accepted as reserved validation keywords by the parser, but not represented in runtime `Field` state or enforced on writes. |
+
+### Unique Constraint Validation Rules
+
+`unique` is accepted only as a table-level key (never a field key). Parsing rules:
+
+- Every outer item must be an array; empty inner arrays are rejected.
+- Every component must be a string field path. Dots normalize through the same path rules as `required` (e.g. `"profile.handle"` resolves flattened field `profile__handle`).
+- Each path must resolve to a stored user field in the same table. System fields (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`) and `users.external_id` cannot be named.
+- A field may not repeat within one constraint.
+- The same field set may not appear in two constraints, even in a different order.
+- Field order within a constraint is preserved because it controls SQLite index prefix usability.
+- Constraints are allowed on optional, reference, and array fields. There is no field-level `"unique": true` alias.
+- Malformed definitions fail schema startup with an internal error; no wire code is involved.
+
+### Unique Equality Semantics
+
+Equality is SQLite equality over the stored column representation: text stays case-sensitive under the default BINARY collation, compound constraints compare the complete ordered key, and arrays compare by their canonical encoded representation. Any constrained component may be `NULL`; SQLite permits multiple such rows, so present-and-unique requires `required`. No normalization, collation selection, partial predicate, or expression support exists in this version.
 
 ---
 
@@ -116,6 +135,7 @@ The `users` collection is a special, hybrid system table:
 - **Reserved Prefixes**: Namespaces starting with `_zync_` are reserved for internal database systems. Identifier keys must not contain `__`.
 - **Built-in Columns**: Every table implicitly includes `id` (`BLOB(16)`), `namespace_id` (`INTEGER`), `owner_id` (`BLOB(16)`), `created_at` (`INTEGER`), and `updated_at` (`INTEGER`).
 - **Field Limit**: Each table supports a maximum of 1024 fields (including flattened nested fields, excluding system columns).
+- **Reserved Index Name Prefixes**: ZyncBase-managed indexes are named `idx__<table>__...` and `uidx__<table>__...`. The double-underscore table boundary is unambiguous because declared identifiers cannot contain `__`. These prefixes are reserved per table; migration reconciliation may drop and recreate any matching index. Unrelated manual index names are left untouched.
 
 ---
 

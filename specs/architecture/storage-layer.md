@@ -119,6 +119,7 @@ The first segment of a path (e.g., `tasks`) maps to a database table. This simpl
     - **Simple arrays** (primitives) are normalized as canonical sorted sets on write.
     - Canonical arrays are persisted and returned in sorted, unique form.
     - **Object arrays** are forbidden; developers must use separate store paths and references.
+- **Unique constraints**: Table-level `unique` declarations compile to native SQLite unique indexes. Every user-defined index is prefixed with `namespace_id`, so equal keys may exist across namespaces but never within one (namespace ID `0` gives global uniqueness for non-namespaced tables). SQLite is the sole enforcement authority — there is no application-side preflight or duplicate cache, so uniqueness holds atomically under concurrent clients. See [ADR-021](./adrs.md#adr-021-namespace-scoped-user-unique-constraints).
 
 ### Schema Example: Tasks and Projects
 
@@ -151,9 +152,9 @@ CREATE TABLE tasks (
     FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_projectId ON tasks(projectId);
+CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
+CREATE INDEX idx__tasks__field__status ON tasks(status);
+CREATE INDEX idx__tasks__field__projectId ON tasks(projectId);
 ```
 
 Public SDKs still expose IDs and references as strings, but the core system stores and transports them as packed 16-byte values. `id` is collection-wide unique and remains the sole primary key; `namespace_id` is an integer routing/filtering column, not part of a composite document key.
@@ -185,9 +186,10 @@ For `confirm: "committed"` or otherwise tracked writes, the queued operation car
 ## Auto-Migration System
 
 ZyncBase includes a structural detection system that manages schema evolution automatically.
-- **Safe Additions**: Creating tables and adding columns are performed automatically.
+- **Safe Additions**: Creating tables, adding columns, and reconciling managed indexes (including user-defined unique indexes) are performed automatically. Index migrations are non-destructive: the executor drops the table's obsolete ZyncBase-managed indexes and recreates the target set inside one transaction; a failed unique-index creation (e.g. over pre-existing duplicates) rolls back the entire migration, restores previous indexes, leaves the schema version unchanged, and keeps the server offline rather than picking winners.
 - **Destructive Changes**: Type changes or column removals are gated behind environment configuration.
 - **Execution**: Uses temporary table backups to work around SQLite's `ALTER TABLE` limitations.
+- **Sole DDL Owner**: Migration execution is the only component that applies schema DDL at startup. Fresh databases are created entirely through detection/execution so index lifecycle is transactional and observable to the detector.
 
 ---
 

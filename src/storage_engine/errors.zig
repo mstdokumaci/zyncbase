@@ -6,8 +6,10 @@ const sqlite = @import("sqlite");
 pub const StorageError = error{
     /// Failed to reconnect after multiple attempts
     ReconnectionFailed,
-    /// Database constraint was violated (e.g. unique constraint)
+    /// Database constraint was violated (e.g. foreign keys, checks)
     ConstraintViolation,
+    /// A user-defined unique index rejected the write
+    UniqueConstraintViolation,
     /// Disk is full, cannot write more data
     DiskFull,
     /// Database file is corrupted
@@ -69,9 +71,16 @@ pub fn classifyError(err: anyerror) anyerror {
 }
 
 pub fn classifyStepError(db: *sqlite.Db) anyerror {
-    const rc = sqlite.c.sqlite3_errcode(db.db);
-    return switch (rc) {
-        sqlite.c.SQLITE_CONSTRAINT => StorageError.ConstraintViolation,
+    // Extended result codes distinguish unique collisions from other
+    // constraint classes; sqlite3_extended_errcode reports them even when
+    // extended codes are disabled for primary-code consumers.
+    const extended = sqlite.c.sqlite3_extended_errcode(db.db);
+    const primary = extended & 0xff;
+    return switch (primary) {
+        sqlite.c.SQLITE_CONSTRAINT => switch (extended) {
+            sqlite.c.SQLITE_CONSTRAINT_UNIQUE => StorageError.UniqueConstraintViolation,
+            else => StorageError.ConstraintViolation,
+        },
         sqlite.c.SQLITE_FULL => StorageError.DiskFull,
         sqlite.c.SQLITE_CORRUPT, sqlite.c.SQLITE_NOTADB => StorageError.DatabaseCorrupted,
         sqlite.c.SQLITE_BUSY, sqlite.c.SQLITE_LOCKED => StorageError.DatabaseLocked,

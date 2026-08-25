@@ -1,6 +1,6 @@
-import { describe, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
-import { ZyncBaseError } from "./errors";
+import { ErrorCodes, ZyncBaseError } from "./errors";
 
 /**
  * Property 11: ZyncBaseError construction from server response
@@ -20,5 +20,15 @@ describe("ZyncBaseError", () => {
 			),
 			{ numRuns: 100 },
 		);
+	});
+
+	test("UNIQUE_CONSTRAINT_VIOLATED derives validation category and is non-retryable", () => {
+		const error = ZyncBaseError.fromServerResponse({
+			code: ErrorCodes.UNIQUE_CONSTRAINT_VIOLATED,
+			message: "Unique constraint violated",
+		});
+		expect(error.code).toBe("UNIQUE_CONSTRAINT_VIOLATED");
+		expect(error.category).toBe("validation");
+		expect(error.retryable).toBe(false);
 	});
 });

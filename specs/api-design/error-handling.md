@@ -128,6 +128,7 @@ Error codes relevant to SDK consumers, grouped by category:
 | Code | Description | Auto-retry? |
 |------|-------------|-------------|
 | `SCHEMA_VALIDATION_FAILED` | Data does not match schema definition | No — fix data |
+| `UNIQUE_CONSTRAINT_VIOLATED` | Write conflicts with a schema-declared unique constraint | No — choose a different value |
 | `FIELD_NOT_FOUND` | Field name not defined in schema | No — fix path or data |
 | `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
 | `IMMUTABLE_FIELD` | Attempted to modify a protected system field (e.g., `id`) | No |

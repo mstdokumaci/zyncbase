@@ -502,3 +502,213 @@ test "schema_property: nested flattening uses only internal separator" {
         }
     }
 }
+
+// ─── Unique constraints ──────────────────────────────────────────────────────
+
+test "schema_parse: parses single-field and compound unique constraints" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.1.0","store":{"projects":{
+        \\  "required":["slug"],
+        \\  "fields":{
+        \\    "slug":{"type":"string"},
+        \\    "provider":{"type":"string"},
+        \\    "externalId":{"type":"string"}
+        \\  },
+        \\  "unique":[["slug"],["provider","externalId"]]
+        \\}}}
+    );
+    defer parsed.deinit();
+
+    const projects = parsed.table("projects") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 2), projects.unique_constraints.len);
+
+    const single = projects.unique_constraints[0];
+    try std.testing.expectEqual(@as(usize, 1), single.field_indexes.len);
+    try std.testing.expectEqual(@as(usize, 0), single.field_indexes[0]);
+
+    const compound = projects.unique_constraints[1];
+    try std.testing.expectEqual(@as(usize, 2), compound.field_indexes.len);
+    try std.testing.expectEqual(@as(usize, 1), compound.field_indexes[0]);
+    try std.testing.expectEqual(@as(usize, 2), compound.field_indexes[1]);
+}
+
+test "schema_parse: resolves nested dotted unique paths" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"projects":{
+        \\  "fields":{"profile":{"type":"object","fields":{"handle":{"type":"string"}}}},
+        \\  "unique":[["profile.handle"]]
+        \\}}}
+    );
+    defer parsed.deinit();
+
+    const projects = parsed.table("projects") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 1), projects.unique_constraints.len);
+    try std.testing.expectEqual(@as(usize, 0), projects.unique_constraints[0].field_indexes[0]);
+    try std.testing.expectEqualStrings("profile__handle", projects.userFields()[projects.unique_constraints[0].field_indexes[0]].name);
+}
+
+test "schema_parse: allows optional reference and array unique fields" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"items":{
+        \\  "fields":{
+        \\    "owner":{"type":"string","references":"users"},
+        \\    "tags":{"type":"array","items":"string"}
+        \\  },
+        \\  "unique":[["owner"],["tags"]]
+        \\}}}
+    );
+    defer parsed.deinit();
+
+    const items = parsed.table("items") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 2), items.unique_constraints.len);
+}
+
+test "schema_parse: accepts empty unique array as absent" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string"}},"unique":[]}}}
+    );
+    defer parsed.deinit();
+
+    const posts = parsed.table("posts") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 0), posts.unique_constraints.len);
+}
+
+test "schema_parse: rejects malformed unique definitions" {
+    const allocator = std.testing.allocator;
+    const invalid = [_][]const u8{
+        // Non-array unique value
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":"a"}}}
+        ,
+        // Non-array outer item
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":["a"]}}}
+        ,
+        // Empty inner array
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":[[]]}}}
+        ,
+        // Non-string component
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":[[1]]}}}
+        ,
+        // Missing field
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":[["missing"]]}}}
+        ,
+        // System field
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"unique":[["id"]]}}}
+        ,
+        // Object (non-leaf) path
+        \\{"version":"1.0.0","store":{"p":{"fields":{"obj":{"type":"object","fields":{"x":{"type":"string"}}}},"unique":[["obj"]]}}}
+        ,
+        // Repeated field in one constraint
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"},"b":{"type":"string"}},"unique":[["a","a"]]}}}
+        ,
+        // Duplicate constraint set, same order
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"},"b":{"type":"string"}},"unique":[["a","b"],["a","b"]]}}}
+        ,
+        // Duplicate constraint set, reversed order
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"},"b":{"type":"string"}},"unique":[["a","b"],["b","a"]]}}}
+        ,
+    };
+    for (invalid) |json_text| {
+        try std.testing.expectError(error.InvalidUniqueConstraint, schema_parse.initFromJson(allocator, json_text));
+    }
+
+    // Unknown table key still rejected.
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string"}},"uniqu":["a"]}}}
+    ));
+    // Field-level unique alias is unsupported.
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"p":{"fields":{"a":{"type":"string","unique":true}}}}}
+    ));
+}
+
+test "schema_parse: users custom fields may be unique but external_id may not" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"users":{"namespaced":false,"fields":{"handle":{"type":"string"}},"unique":[["handle"]]}}}
+    );
+    defer parsed.deinit();
+
+    const users = parsed.table("users") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 1), users.unique_constraints.len);
+    try std.testing.expectEqualStrings("handle", users.userFields()[users.unique_constraints[0].field_indexes[0]].name);
+
+    try std.testing.expectError(error.InvalidUniqueConstraint, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"users":{"namespaced":false,"fields":{"name":{"type":"string"}},"unique":[["external_id"]]}}}
+    ));
+}
+
+test "schema_parse: unique metadata does not change canonical field indexes" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"tasks":{"required":["title"],"fields":{"title":{"type":"string"},"status":{"type":"string"}},"unique":[["status"]]}}}
+    );
+    defer parsed.deinit();
+
+    const tasks = parsed.table("tasks") orelse return error.TestExpectedValue;
+    try std.testing.expectEqualStrings("id", tasks.fields[0].name);
+    try std.testing.expectEqualStrings("namespace_id", tasks.fields[1].name);
+    try std.testing.expectEqualStrings("owner_id", tasks.fields[2].name);
+    try std.testing.expectEqualStrings("title", tasks.fields[3].name);
+    try std.testing.expectEqualStrings("status", tasks.fields[4].name);
+    try std.testing.expectEqual(@as(usize, 3), tasks.fieldIndex("title").?);
+    try std.testing.expectEqual(@as(usize, 4), tasks.fieldIndex("status").?);
+    try std.testing.expect(tasks.field("title").?.required);
+}
+
+const unique_allocation_failure_json =
+    \\{"version":"1.0.0","store":{"projects":{
+    \\  "required":["slug"],
+    \\  "fields":{
+    \\    "slug":{"type":"string"},
+    \\    "provider":{"type":"string"},
+    \\    "externalId":{"type":"string"},
+    \\    "profile":{"type":"object","fields":{"handle":{"type":"string"}}}
+    \\  },
+    \\  "unique":[["slug"],["provider","externalId"],["profile.handle"]]
+    \\}}}
+;
+
+test "schema_property: parse cleanup survives allocation failures with unique constraints" {
+    // ponytail: explicit exhaustive scan instead of std.testing.checkAllAllocationFailures,
+    // whose calibration miscounts allocations in warm processes. Same property: parse
+    // either fails cleanly with OOM at every induced allocation index or succeeds
+    // leak-free, and cleanup never leaks.
+    const backing = std.testing.allocator;
+
+    const total_allocations = blk: {
+        var counting = std.testing.FailingAllocator.init(backing, .{});
+        var parsed = try schema_parse.initFromJson(counting.allocator(), unique_allocation_failure_json);
+        defer parsed.deinit();
+        // Sanity: the constraint set must be complete on the success path.
+        const projects = parsed.table("projects") orelse return error.TestExpectedValue;
+        try std.testing.expectEqual(@as(usize, 3), projects.unique_constraints.len);
+        break :blk counting.alloc_index;
+    };
+
+    var fail_i: usize = 0;
+    while (fail_i < total_allocations + 8) : (fail_i += 1) {
+        var failing = std.testing.FailingAllocator.init(backing, .{ .fail_index = fail_i });
+        if (schema_parse.initFromJson(failing.allocator(), unique_allocation_failure_json)) |parsed_value| {
+            var parsed = parsed_value;
+            parsed.deinit();
+            // Success despite an induced failure means an OOM was silently swallowed.
+            if (failing.has_induced_failure) return error.SwallowedOutOfMemoryError;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                // Every byte obtained must be released on the error path.
+                if (failing.allocated_bytes != failing.freed_bytes) return error.MemoryLeakDetected;
+            },
+            else => return err,
+        }
+    }
+}

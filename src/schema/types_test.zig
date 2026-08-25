@@ -38,3 +38,36 @@ test "schema_index: users external_id is not indexed" {
     const users = runtime_schema.table("users") orelse return error.TestExpectedValue;
     try std.testing.expect(users.fieldIndex("external_id") == null);
 }
+
+test "schema_types: unique constraints stay user-relative through runtime build" {
+    const allocator = std.testing.allocator;
+
+    const declared_fields = [_]schema_types.Field{
+        schema_helpers.makeField("slug", .text),
+        schema_helpers.makeField("provider", .text),
+        schema_helpers.makeField("externalId", .text),
+    };
+    // ponytail: static constraint fixture — declared tables never deinit here.
+    const declared_constraints = [_]schema_types.UniqueConstraint{
+        .{ .field_indexes = &.{0} },
+        .{ .field_indexes = &.{ 1, 2 } },
+    };
+    var declared = schema_helpers.makeTable("projects", &declared_fields);
+    declared.unique_constraints = &declared_constraints;
+
+    var runtime_schema = try schema_helpers.initSchemaFromTables(allocator, "1.0.0", &.{declared});
+    defer runtime_schema.deinit();
+
+    const projects = runtime_schema.table("projects") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 2), projects.unique_constraints.len);
+    try std.testing.expect(projects.unique_constraints[0].field_indexes.ptr != declared_constraints[0].field_indexes.ptr);
+    for (projects.unique_constraints, 0..) |constraint, ci| {
+        for (constraint.field_indexes) |idx| {
+            try std.testing.expect(idx < projects.userFields().len);
+            _ = ci;
+        }
+    }
+    try std.testing.expectEqualStrings("slug", projects.userFields()[projects.unique_constraints[0].field_indexes[0]].name);
+    try std.testing.expectEqualStrings("provider", projects.userFields()[projects.unique_constraints[1].field_indexes[0]].name);
+    try std.testing.expectEqualStrings("externalId", projects.userFields()[projects.unique_constraints[1].field_indexes[1]].name);
+}

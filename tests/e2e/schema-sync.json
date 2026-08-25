@@ -23,6 +23,21 @@
 				}
 			}
 		},
+		"unique_projects": {
+			"required": ["slug", "provider", "externalId"],
+			"fields": {
+				"slug": { "type": "string" },
+				"provider": { "type": "string" },
+				"externalId": { "type": "string" },
+				"profile": {
+					"type": "object",
+					"fields": {
+						"handle": { "type": "string" }
+					}
+				}
+			},
+			"unique": [["slug"], ["provider", "externalId"], ["profile.handle"]]
+		},
 		"fk_parents": { "fields": {} },
 		"fk_restrict_children": {
 			"fields": {

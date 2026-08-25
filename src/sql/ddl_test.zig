@@ -27,7 +27,7 @@ test "ddl_generator: generate DDL for a known table" {
     defer allocator.free(ddl);
 
     const expected =
-        \\CREATE TABLE IF NOT EXISTS "tasks" (
+        \\CREATE TABLE "tasks" (
         \\  "id" BLOB NOT NULL CHECK(length("id") = 16),
         \\  "namespace_id" INTEGER NOT NULL,
         \\  "owner_id" BLOB NOT NULL CHECK(length("owner_id") = 16),
@@ -38,9 +38,9 @@ test "ddl_generator: generate DDL for a known table" {
         \\  "updated_at" INTEGER NOT NULL,
         \\  PRIMARY KEY ("id")
         \\);
-        \\CREATE INDEX IF NOT EXISTS "idx_tasks_namespace_id" ON "tasks"("namespace_id");
-        \\CREATE INDEX IF NOT EXISTS "idx_tasks_owner_id" ON "tasks"("owner_id");
-        \\CREATE INDEX IF NOT EXISTS "idx_tasks_status" ON "tasks"("status");
+        \\CREATE INDEX "idx__tasks__namespace" ON "tasks"("namespace_id");
+        \\CREATE INDEX "idx__tasks__owner" ON "tasks"("owner_id");
+        \\CREATE INDEX "idx__tasks__field__status" ON "tasks"("status");
     ;
 
     try std.testing.expectEqualStrings(expected, ddl);
@@ -62,7 +62,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"user_id\") REFERENCES \"users\"(\"id\") ON DELETE CASCADE") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX IF NOT EXISTS \"idx_posts_user_id\" ON \"posts\"(\"user_id\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX \"idx__posts__field__user_id\" ON \"posts\"(\"user_id\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"id\" BLOB NOT NULL CHECK(length(\"id\") = 16),") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "\"user_id\" BLOB NOT NULL CHECK(length(\"user_id\") = 16)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (\"id\")") != null);
@@ -82,7 +82,7 @@ test "ddl_generator: foreign keys default to restrict and are indexed" {
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"author_id\") REFERENCES \"users\"(\"id\") ON DELETE RESTRICT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX IF NOT EXISTS \"idx_posts_author_id\" ON \"posts\"(\"author_id\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX \"idx__posts__field__author_id\" ON \"posts\"(\"author_id\")") != null);
 }
 
 test "ddl_generator: array field uses BLOB column type" {
@@ -192,7 +192,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
         try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (\"id\")") != null);
 
         // Assert CREATE INDEX on namespace_id
-        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS \"idx_{s}_namespace_id\" ON \"{s}\"(\"namespace_id\")", .{ "test_table", "test_table" });
+        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX \"idx__{s}__namespace\" ON \"{s}\"(\"namespace_id\")", .{ "test_table", "test_table" });
         defer allocator.free(ns_idx);
         try std.testing.expect(std.mem.indexOf(u8, ddl, ns_idx) != null);
 
@@ -369,4 +369,206 @@ test "ddl_generator: DDL emits BLOB for array fields" {
         defer allocator.free(text_def);
         try std.testing.expect(std.mem.indexOf(u8, ddl, text_def) == null);
     }
+}
+
+// ─── User-defined unique constraint indexes ──────────────────────────────────
+
+fn makeUniqueTable(
+    comptime name: []const u8,
+    fields: []const Field,
+    constraints: []const schema_types.UniqueConstraint,
+) schema_types.Table {
+    var t = schema_helpers.makeTable(name, fields);
+    t.unique_constraints = constraints;
+    return t;
+}
+
+test "ddl_generator: exact SQL for single and compound unique constraints" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    const fields = [_]Field{
+        schema_helpers.makeRequiredField("slug", .text),
+        schema_helpers.makeRequiredField("provider", .text),
+        schema_helpers.makeRequiredField("externalId", .text),
+    };
+    // ponytail: static fixture slices; this table is never deinit'd.
+    const constraints = [_]schema_types.UniqueConstraint{
+        .{ .field_indexes = &.{0} },
+        .{ .field_indexes = &.{ 1, 2 } },
+    };
+    const table = makeUniqueTable("projects", &fields, &constraints);
+
+    const indexes_ddl = try gen.generateIndexesDDL(table);
+    defer allocator.free(indexes_ddl);
+
+    try std.testing.expect(std.mem.indexOf(u8, indexes_ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, indexes_ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__1\" ON \"projects\"(\"namespace_id\", \"provider\", \"externalId\")") != null);
+}
+
+test "ddl_generator: namespace_id is first column for namespaced and global tables" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var slug = schema_helpers.makeRequiredField("slug", .text);
+    slug.indexed = true;
+
+    const fields = [_]Field{slug};
+    const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
+
+    var table = makeUniqueTable("items", &fields, &constraints);
+    const namespaced_ddl = try gen.generateIndexDDL(table, .{ .unique = 0 });
+    defer allocator.free(namespaced_ddl);
+    try std.testing.expectEqualStrings(
+        "CREATE UNIQUE INDEX \"uidx__items__constraint__0\" ON \"items\"(\"namespace_id\", \"slug\");",
+        namespaced_ddl,
+    );
+
+    table.namespaced = false;
+    const global_ddl = try gen.generateIndexDDL(table, .{ .unique = 0 });
+    defer allocator.free(global_ddl);
+    // Non-namespaced tables still prefix namespace_id (all rows use id 0).
+    try std.testing.expect(std.mem.startsWith(u8, global_ddl[std.mem.indexOf(u8, global_ddl, "(").? + 1 ..], "\"namespace_id\""));
+}
+
+test "ddl_generator: nested unique paths use flattened quoted columns in order" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    const fields = [_]Field{
+        schema_helpers.makeField("profile__handle", .text),
+        schema_helpers.makeField("b__c__d", .text),
+    };
+    const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{ 0, 1 } }};
+    const table = makeUniqueTable("deep", &fields, &constraints);
+
+    const ddl = try gen.generateIndexDDL(table, .{ .unique = 0 });
+    defer allocator.free(ddl);
+    try std.testing.expectEqualStrings(
+        "CREATE UNIQUE INDEX \"uidx__deep__constraint__0\" ON \"deep\"(\"namespace_id\", \"profile__handle\", \"b__c__d\");",
+        ddl,
+    );
+}
+
+test "ddl_generator: multiple unique constraints preserve schema order and coexist with managed indexes" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var status = schema_helpers.makeField("status", .text);
+    status.indexed = true;
+    const fields = [_]Field{
+        schema_helpers.makeField("a_b", .text),
+        schema_helpers.makeField("a", .text),
+        status,
+    };
+    // Ordinal names avoid the (a_b, c) vs (a, b_c) concatenation ambiguity.
+    const constraints = [_]schema_types.UniqueConstraint{
+        .{ .field_indexes = &.{ 0, 1 } },
+        .{ .field_indexes = &.{1} },
+    };
+    const table = makeUniqueTable("ord", &fields, &constraints);
+
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+
+    const find = struct {
+        fn idx(haystack: []const u8, needle: []const u8) usize {
+            return std.mem.indexOf(u8, haystack, needle) orelse std.math.maxInt(usize);
+        }
+    }.idx;
+    const pos_ns = find(ddl, "\"idx__ord__namespace\"");
+    const pos_owner = find(ddl, "\"idx__ord__owner\"");
+    const pos_status = find(ddl, "\"idx__ord__field__status\"");
+    const pos_u0 = find(ddl, "\"uidx__ord__constraint__0\"");
+    const pos_u1 = find(ddl, "\"uidx__ord__constraint__1\"");
+    try std.testing.expect(pos_ns != std.math.maxInt(usize));
+    try std.testing.expect(pos_owner != std.math.maxInt(usize));
+    try std.testing.expect(pos_status != std.math.maxInt(usize));
+    try std.testing.expect(pos_u0 != std.math.maxInt(usize));
+    try std.testing.expect(pos_u1 != std.math.maxInt(usize));
+    try std.testing.expect(pos_ns < pos_owner and pos_owner < pos_status and pos_status < pos_u0 and pos_u0 < pos_u1);
+}
+
+test "ddl_generator: users identity index unchanged and coexists with custom unique constraints" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    const fields = [_]Field{schema_helpers.makeField("handle", .text)};
+    const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
+    const table = makeUniqueTable("users", &fields, &constraints);
+
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE UNIQUE INDEX \"uidx__users__identity\" ON \"users\"(\"namespace_id\", \"external_id\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE UNIQUE INDEX \"uidx__users__constraint__0\" ON \"users\"(\"namespace_id\", \"handle\")") != null);
+}
+
+test "ddl_generator: managed names cannot collide across valid table and field boundaries" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var external_id = schema_helpers.makeField("external_id", .text);
+    external_id.indexed = true;
+    const users_namespace = schema_helpers.makeTable("users_namespace", &.{external_id});
+    const users = schema_helpers.makeTable("users", &.{});
+
+    var db = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer db.deinit();
+
+    for ([_]schema_types.Table{ users_namespace, users }) |table| {
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+        const ddl_z = try allocator.dupeZ(u8, ddl);
+        defer allocator.free(ddl_z);
+        try db.execMulti(ddl_z, .{});
+    }
+
+    try std.testing.expectEqual(
+        @as(?i64, 2),
+        try db.one(
+            i64,
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('idx__users_namespace__field__external_id', 'uidx__users__identity')",
+            .{},
+            .{},
+        ),
+    );
+}
+
+test "ddl_generator: generateDDL contains exactly generateIndexesDDL definitions" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var status = schema_helpers.makeField("status", .text);
+    status.indexed = true;
+    var author_id = schema_helpers.makeField("author_id", .doc_id);
+    author_id.references = "users";
+    const fields = [_]Field{
+        schema_helpers.makeRequiredField("slug", .text),
+        status,
+        author_id,
+    };
+    const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
+    const table = makeUniqueTable("posts", &fields, &constraints);
+
+    const full = try gen.generateDDL(table);
+    defer allocator.free(full);
+    const indexes_only = try gen.generateIndexesDDL(table);
+    defer allocator.free(indexes_only);
+
+    // Full DDL ends with the aggregate index statements.
+    const suffix_len = indexes_only.len + 1; // + separator between table/index sections
+    try std.testing.expect(full.len >= suffix_len);
+    const tail = full[full.len - suffix_len ..];
+    try std.testing.expectEqualStrings("\n", tail[0..1]);
+    try std.testing.expectEqualStrings(indexes_only, tail[1..]);
+
+    // Managed iterator enumerates namespace, owner, users identity, field/ref, unique.
+    var iter = ddl_generator.ManagedIndexIterator.init(&table);
+    var count: usize = 0;
+    while (iter.next()) |managed_index| {
+        count += 1;
+        if (managed_index == .users_identity) return error.TestUnexpectedResult; // posts is not the users table
+    }
+    try std.testing.expectEqual(@as(usize, 5), count); // ns, owner, slug(ref), status(indexed), unique
 }
