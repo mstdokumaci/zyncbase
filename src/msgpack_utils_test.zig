@@ -6,6 +6,12 @@ const msgpack_utils = @import("msgpack_utils.zig");
 
 const testing = std.testing;
 
+test "msgpack_utils: payloadToFloat rejects non-finite floats" {
+    for ([_]f64{ std.math.nan(f64), std.math.inf(f64), -std.math.inf(f64) }) |value| {
+        try testing.expectError(error.TypeMismatch, msgpack_utils.payloadToFloat(.{ .float = value }));
+    }
+}
+
 // ============================================================
 // writeMsgPackStr tests
 // ============================================================

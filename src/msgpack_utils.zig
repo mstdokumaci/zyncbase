@@ -183,12 +183,14 @@ pub fn payloadToInt(p: Payload) !i64 {
 }
 
 pub fn payloadToFloat(p: Payload) !f64 {
-    return switch (p) {
+    const value: f64 = switch (p) {
         .float => |v| v,
         .int => |v| @floatFromInt(v),
         .uint => |v| @floatFromInt(v),
-        else => error.TypeMismatch,
+        else => return error.TypeMismatch,
     };
+    if (!std.math.isFinite(value)) return error.TypeMismatch;
+    return value;
 }
 
 pub fn payloadToBool(p: Payload) !bool {
