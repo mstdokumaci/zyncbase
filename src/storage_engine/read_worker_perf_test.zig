@@ -173,7 +173,6 @@ fn runSelectQuerySweep(
     iterations: usize,
 ) !SweepResult {
     const namespace_id: i64 = 1;
-    const sort_field_index = filter.order_by.field_index;
 
     // --- Warmup: 5 iterations asserting correct row count ---
     for (0..5) |_| {
@@ -192,9 +191,10 @@ fn runSelectQuerySweep(
             &worker.node.conn,
             mstmt.stmt,
             query_res.values,
+            table_metadata.index,
             table_metadata,
             filter.limit,
-            sort_field_index,
+            filter.order_by,
             &worker.json_buf,
         );
 
@@ -234,9 +234,10 @@ fn runSelectQuerySweep(
                 &worker.node.conn,
                 mstmt.stmt,
                 query_res.values,
+                table_metadata.index,
                 table_metadata,
                 filter.limit,
-                sort_field_index,
+                filter.order_by,
                 &worker.json_buf,
             );
             mstmt.release();
@@ -287,7 +288,7 @@ fn runPrioritySweep(
     });
     defer filter.deinit(allocator);
     filter.limit = 1000;
-    filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+    filter.structural_hash = query_hasher.computeStructuralHash(table_metadata.index, &filter);
 
     const result = try runSelectQuerySweep(worker, table_metadata, &filter, expected_rows, iterations);
     const total = result.avg_a_ms + result.avg_b_ms + result.avg_c_ms;

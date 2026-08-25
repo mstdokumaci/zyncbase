@@ -27,19 +27,26 @@ pub const Record = struct {
     }
 };
 
+/// Cursor values in canonical sort order; the final value is always the document id.
 pub const Cursor = struct {
-    sort_value: Value,
-    id: DocId,
+    values: []Value,
 
     pub fn deinit(self: *Cursor, allocator: Allocator) void {
-        self.sort_value.deinit(allocator);
+        deinitValueSlice(allocator, self.values);
+        self.values = &[_]Value{};
     }
 
     pub fn clone(self: Cursor, allocator: Allocator) !Cursor {
-        return .{
-            .sort_value = try self.sort_value.clone(allocator),
-            .id = self.id,
-        };
+        const cloned = try allocator.alloc(Value, self.values.len);
+        var i: usize = 0;
+        errdefer {
+            for (cloned[0..i]) |value| value.deinit(allocator);
+            allocator.free(cloned);
+        }
+        while (i < self.values.len) : (i += 1) {
+            cloned[i] = try self.values[i].clone(allocator);
+        }
+        return .{ .values = cloned };
     }
 };
 

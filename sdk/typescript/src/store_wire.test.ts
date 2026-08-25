@@ -117,13 +117,55 @@ describe("store_wire", () => {
 		});
 
 		test("orderBy asc", () => {
-			const result = encodeQueryOptions({ orderBy: { name: "asc" } });
-			expect(result).toEqual({ orderBy: ["name", 0] });
+			const result = encodeQueryOptions({ orderBy: [{ name: "asc" }] });
+			expect(result).toEqual({ orderBy: [["name", 0]] });
 		});
 
 		test("orderBy desc", () => {
-			const result = encodeQueryOptions({ orderBy: { created_at: "desc" } });
-			expect(result).toEqual({ orderBy: ["created_at", 1] });
+			const result = encodeQueryOptions({
+				orderBy: [{ created_at: "desc" }],
+			});
+			expect(result).toEqual({ orderBy: [["created_at", 1]] });
+		});
+
+		test("orderBy multi-clause mixed directions preserve order", () => {
+			const result = encodeQueryOptions({
+				orderBy: [{ priority: "desc" }, { "profile.rank": "asc" }],
+			});
+			expect(result).toEqual({
+				orderBy: [
+					["priority", 1],
+					["profile__rank", 0],
+				],
+			});
+		});
+
+		test("orderBy rejects the old single-object form", () => {
+			expect(() =>
+				encodeQueryOptions({
+					orderBy: { created_at: "desc" } as unknown as QueryOptions["orderBy"],
+				}),
+			).toThrow();
+		});
+
+		test("orderBy rejects multi-key clauses", () => {
+			expect(() =>
+				encodeQueryOptions({ orderBy: [{ a: "asc", b: "desc" }] }),
+			).toThrow();
+		});
+
+		test("orderBy rejects empty arrays and excessive clauses", () => {
+			expect(() => encodeQueryOptions({ orderBy: [] })).toThrow();
+			const nine = Array.from({ length: 9 }, () => ({ f: "asc" as const }));
+			expect(() => encodeQueryOptions({ orderBy: nine })).toThrow();
+		});
+
+		test("orderBy rejects invalid direction values", () => {
+			expect(() =>
+				encodeQueryOptions({
+					orderBy: [{ name: "up" }] as unknown as QueryOptions["orderBy"],
+				}),
+			).toThrow();
 		});
 
 		test("where with direct equality", () => {
@@ -287,13 +329,13 @@ describe("store_wire", () => {
 		test("full options: where + orderBy + limit + after", () => {
 			const result = encodeQueryOptions({
 				where: { status: "active" },
-				orderBy: { created_at: "desc" },
+				orderBy: [{ created_at: "desc" }],
 				limit: 20,
 				after: "cursor_123",
 			});
 			expect(result).toEqual({
 				conditions: [["status", 0, "active"]],
-				orderBy: ["created_at", 1],
+				orderBy: [["created_at", 1]],
 				limit: 20,
 				after: "cursor_123",
 			});
@@ -327,11 +369,11 @@ describe("store_wire", () => {
 		test("property: orderBy asc/desc encodes to 0/1 for any field name", () => {
 			const fields = ["id", "name", "created_at", "updated_at", "score", "age"];
 			for (const field of fields) {
-				const asc = encodeQueryOptions({ orderBy: { [field]: "asc" } });
-				expect(asc.orderBy).toEqual([field, 0]);
+				const asc = encodeQueryOptions({ orderBy: [{ [field]: "asc" }] });
+				expect(asc.orderBy).toEqual([[field, 0]]);
 
-				const desc = encodeQueryOptions({ orderBy: { [field]: "desc" } });
-				expect(desc.orderBy).toEqual([field, 1]);
+				const desc = encodeQueryOptions({ orderBy: [{ [field]: "desc" }] });
+				expect(desc.orderBy).toEqual([[field, 1]]);
 			}
 		});
 

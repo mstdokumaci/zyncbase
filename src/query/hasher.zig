@@ -10,20 +10,23 @@ const QueryFilter = query_ast.QueryFilter;
 /// The hash identifies the SQL template — it includes all structural
 /// elements that affect the generated SQL string, but excludes literal
 /// values (which are bound as ? parameters at execution time).
-pub fn computeStructuralHash(filter: *const QueryFilter) u64 {
+pub fn computeStructuralHash(table_index: usize, filter: *const QueryFilter) u64 {
     var hasher = std.hash.Wyhash.init(0);
 
-    // 1. Predicate state
+    // 1. Table identity — the cached SQL includes the table name and schema.
+    std.hash.autoHash(&hasher, table_index);
+
+    // 2. Predicate state
     std.hash.autoHash(&hasher, filter.predicate.state);
 
-    // 2. AND conditions (structural parts only)
+    // 3. AND conditions (structural parts only)
     const conds = filter.predicate.conditions orelse @as([]const Condition, &.{});
     std.hash.autoHash(&hasher, conds.len);
     for (conds) |c| {
         hashConditionStructure(&hasher, c);
     }
 
-    // 3. OR clauses (structural parts only)
+    // 4. OR clauses (structural parts only)
     const clauses = filter.predicate.or_clauses orelse @as([]const OrClause, &.{});
     std.hash.autoHash(&hasher, clauses.len);
     for (clauses) |clause| {
@@ -33,17 +36,18 @@ pub fn computeStructuralHash(filter: *const QueryFilter) u64 {
         }
     }
 
-    // 4. Order by
-    std.hash.autoHash(&hasher, filter.order_by.field_index);
-    std.hash.autoHash(&hasher, filter.order_by.desc);
-    std.hash.autoHash(&hasher, filter.order_by.field_type);
-    std.hash.autoHash(&hasher, filter.order_by.items_type);
+    // 5. Order by — descriptor count, then each field index + direction in order
+    std.hash.autoHash(&hasher, filter.order_by.len);
+    for (filter.order_by) |d| {
+        std.hash.autoHash(&hasher, d.field_index);
+        std.hash.autoHash(&hasher, d.desc);
+    }
 
-    // 5. Limit presence (not value)
+    // 6. Limit presence (not value)
     const has_limit = filter.limit != null;
     std.hash.autoHash(&hasher, has_limit);
 
-    // 6. After presence (not values)
+    // 7. After presence (not values)
     const has_after = filter.after != null;
     std.hash.autoHash(&hasher, has_after);
 

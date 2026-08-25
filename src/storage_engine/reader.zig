@@ -4,7 +4,6 @@ const sqlite = @import("sqlite");
 
 const query_ast = @import("../query/ast.zig");
 const query_parser = @import("../query/parser.zig");
-const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const sql_build = @import("../sql/build.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -15,7 +14,6 @@ const SqlBuf = @import("../sql/buf.zig").SqlBuf;
 
 const Allocator = std.mem.Allocator;
 const DocId = typed_doc_id.DocId;
-const Cursor = typed.Cursor;
 const Record = typed.Record;
 const Value = typed.Value;
 
@@ -43,8 +41,9 @@ pub fn buildSelectQuery(
         for (values.items) |v| v.deinit(allocator);
         values.deinit(allocator);
     }
-    if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
-    const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
+    for (filter.order_by) |d| {
+        if (d.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
+    }
 
     // 1.. SELECT clause (pre-built, no field iteration per query)
     try buf.appendSlice(allocator, table_metadata.select_from_sql);
@@ -54,10 +53,10 @@ pub fn buildSelectQuery(
     try sql_build.appendNamespaceFilterSql(allocator, &buf);
     try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
-    try appendWhereConditions(allocator, &buf, &values, table_metadata, filter, sort_field_name_quoted);
+    try appendWhereConditions(allocator, &buf, &values, table_metadata, filter);
 
     // 3.. ORDER BY
-    try sql_build.appendOrderBySql(allocator, &buf, sort_field_name_quoted, filter.order_by.desc);
+    try sql_build.appendOrderBySql(allocator, &buf, table_metadata, filter.order_by);
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
@@ -82,7 +81,6 @@ fn appendWhereConditions(
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema_types.Table,
     filter: *const query_ast.QueryFilter,
-    sort_field_name_quoted: []const u8,
 ) !void {
     const has_conditions = !filter.predicate.isEmpty();
     if (!has_conditions and filter.after == null) return;
@@ -103,21 +101,11 @@ fn appendWhereConditions(
         try sql_build.appendCursorPredicateSql(
             allocator,
             buf,
-            sort_field_name_quoted,
-            filter.order_by.field_index == schema_system.id_field_index,
-            filter.order_by.desc,
+            table_metadata,
+            filter.order_by,
+            cursor.values,
+            values,
         );
-
-        if (filter.order_by.field_index == schema_system.id_field_index) {
-            try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
-        } else {
-            {
-                const sv = try cursor.sort_value.clone(allocator);
-                errdefer sv.deinit(allocator);
-                try values.append(allocator, sv);
-            }
-            try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
-        }
     }
 
     try buf.appendSlice(allocator, ")");
@@ -151,12 +139,15 @@ pub fn execQuery(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     values: []const Value,
+    table_index: usize,
     table_metadata: *const schema_types.Table,
     requested_limit: ?u32,
-    sort_field_index: usize,
+    descriptors: []const query_ast.SortDescriptor,
     json_buf: *sql.JsonBuf,
 ) !struct { records: []Record, next_cursor_str: ?[]const u8 } {
-    if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
+    for (descriptors) |d| {
+        if (d.field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
+    }
 
     for (values, 0..) |v, i| {
         try sql.bindValue(v, db, stmt, @intCast(i + 1), json_buf);
@@ -193,17 +184,25 @@ pub fn execQuery(
 
     var next_cursor_str: ?[]const u8 = null;
     if (limit) |lim| {
-        if (has_more and lim > 0) {
+        if (has_more and lim > 0 and owned_records.len >= lim) {
+            // Select each canonical sort value from the last returned record.
             const last_record = owned_records[lim - 1];
-            const sort_val = last_record.values[sort_field_index];
-            const id_val = last_record.values[schema_system.id_field_index];
-            if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
-
-            const cursor = Cursor{
-                .sort_value = sort_val,
-                .id = id_val.scalar.doc_id,
-            };
-            next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
+            const cursor_values = try allocator.alloc(Value, descriptors.len);
+            var initialized: usize = 0;
+            defer {
+                for (cursor_values[0..initialized]) |value| value.deinit(allocator);
+                allocator.free(cursor_values);
+            }
+            for (descriptors) |d| {
+                cursor_values[initialized] = try last_record.values[d.field_index].clone(allocator);
+                initialized += 1;
+            }
+            next_cursor_str = try query_parser.encodeCursorToken(
+                allocator,
+                table_index,
+                descriptors,
+                cursor_values,
+            );
         }
     }
 

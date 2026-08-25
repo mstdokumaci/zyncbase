@@ -20,67 +20,82 @@ ZyncBase exposes a purely cursor-driven pagination topology over offset-based eq
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `typed.Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
-| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active `orderBy`. |
+| `typed.Cursor` | ordered value list in canonical sort order | Represents the token state pointing directly after the last seen row; the final value is always the document id. |
+| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active canonical `orderBy`. |
 
 ---
 
 ## Opaque Cursor Layout
 
-The `nextCursor` token returned in `StoreQuery` responses is an opaque Base64 literal containing a MessagePack-encoded tuple:
+The `nextCursor` token returned in `StoreQuery` responses is an opaque Base64 literal containing a MessagePack-encoded triple bound to the collection and canonical order:
 
 ```typescript
-const cursorTuple = [sort_value, docIdBin16];
+const cursorTuple = [tableIndex, sortTuples, values];
+// sortTuples = [[field_index, desc_flag], ...]  — the canonical descriptor list (ends with id)
+// values     = [sort_value_0, ..., docIdBin16]  — one value per descriptor, count must match
 const nextCursor = base64(msgpackEncode(cursorTuple));
 ```
 
-- `sort_value`: The value of the sorting column for the last element on the page. Cursor sort values cannot be null.
-- `docIdBin16`: The 16-byte binary UUIDv7 of the last element on the page.
+- `tableIndex`: binds the token to one collection; reuse against another table is rejected.
+- `sortTuples`: the server's canonical order including the final `id` clause. A token whose embedded order differs from the active query fails deterministically instead of returning a plausible but incorrect page.
+- Sort values may be `nil` for optional fields only. Required/system fields reject null. The token remains opaque and unsigned: tampering can shift a page boundary but cannot alter authorization predicates, namespace scoping, selected table, or active order.
+
+### Cursor Validation
+
+Decoding uses wire MessagePack limits (not trusted/internal limits) because the token is client supplied:
+
+1. Base64-decode; decode with wire limits; require full byte consumption (reject trailing data).
+2. Require the exact three-element outer shape.
+3. Validate the table index against the active table.
+4. Validate the embedded descriptor list exactly against the active canonical order.
+5. Validate value count equals descriptor count.
+6. Decode each value against its field's schema storage type; permit `nil` only for optional fields; reject arrays.
+
+Failures map to `InvalidCursorSortValue` or `InvalidMessageFormat`.
 
 ---
 
 ## SQL Compilation & Parameter Binding
 
-When querying with a cursor, ZyncBase compiles the compound sorting criteria using an `OR` logic gate to handle colliding values (tie-breaking) while preserving database index usage:
-
-### Ascending Sort Query
+Every canonical clause appears in `ORDER BY`; non-required fields get explicit `NULLS LAST` so nulls sort last in both directions:
 
 ```sql
-SELECT ...
-FROM "collection"
-WHERE "namespace_id" = ?
-  AND (
-    sort_column > ? 
-    OR (sort_column = ? AND id > ?)
-  )
-ORDER BY sort_column ASC, id ASC
-LIMIT ?
+ORDER BY
+  "priority" DESC NULLS LAST,
+  "created_at" ASC,
+  "id" ASC
 ```
 
-### Descending Sort Query
+SQLite row-value comparison cannot express independent per-key directions, so the cursor predicate compiles to a **lexicographic disjunction**: branch `i` requires equality on `k0..k(i-1)` and an after-comparison on `ki`. SQL fragment generation and bind-list generation live in the same loop to prevent positional drift.
+
+### Example: `priority DESC, created_at ASC, id ASC`
 
 ```sql
-SELECT ...
-FROM "collection"
-WHERE "namespace_id" = ?
-  AND (
-    sort_column < ? 
-    OR (sort_column = ? AND id < ?)
-  )
-ORDER BY sort_column DESC, id DESC
-LIMIT ?
+AND (
+  "priority" < ?
+  OR ("priority" = ? AND "created_at" > ?)
+  OR ("priority" = ? AND "created_at" = ? AND "id" > ?)
+)
 ```
+
+### Null-Safe Forms for Optional Fields
+
+For an optional key with `NULLS LAST`, prefix equality becomes `"col" IS ?` and the comparison branch gains a null guard:
+
+```sql
+(? IS NOT NULL AND ("col" IS NULL OR "col" > ?))   -- ASC
+(? IS NOT NULL AND ("col" IS NULL OR "col" < ?))   -- DESC
+```
+
+The `? IS NOT NULL` guard makes the current-key branch false when the cursor value is null; a later branch still advances within the equal-null group via subsequent keys, ultimately reaching the unique non-null `id` tie-breaker.
 
 ### Parameter Bind Array Order
 
-The SQL queries require positional arguments. Parameters must be bound in the exact following order:
+Binds are positional and mirror the generated fragments exactly: namespace id first, then each branch's prefix equalities and comparisons in generation order (an optional comparison contributes two binds — guard then compare), then the page limit. The disjunction and repeated prefix binds are O(n²) in clause count, bounded by at most nine canonical keys.
 
-| Query Type | Parameters Array | Bind Types |
-|:---|:---|:---|
-| **Ascending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
-| **Descending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
+### Statement Cache Stability
 
-When the active sort field is the system `id` field, the cursor predicate is simplified to `id > ?` or `id < ?`; only `[namespace_id, last_doc_uuid, page_limit]` is bound.
+Generated SQL depends only on table schema, canonical descriptors, field requiredness, and the presence of predicates/cursor/limit — never on whether a particular cursor value is null. Cursor values remain bind parameters, preserving structural-hash statement reuse across pages with mixed null/non-null boundaries.
 
 ---
 

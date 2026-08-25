@@ -1,15 +1,25 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
+const schema_system = @import("../schema/system.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const query_ast = @import("ast.zig");
+const query_hasher = @import("hasher.zig");
 const query_parser = @import("parser.zig");
 const qth = @import("test_helpers.zig");
 
 const testing = std.testing;
+
+/// Builds a canonical [clause, hidden id ASC] descriptor pair for tests.
+fn twoClauseOrder(a: usize, a_desc: bool) [2]query_ast.SortDescriptor {
+    return .{
+        .{ .field_index = a, .desc = a_desc },
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+}
 
 test "basic query filter parsing" {
     const allocator = std.testing.allocator;
@@ -85,17 +95,18 @@ test "query with orderBy and after" {
     }});
     defer schema.deinit();
 
-    // cursor: Base64(MsgPack([42, doc_id(2)]))
-    const cursor: typed.Cursor = .{
-        .sort_value = .{ .scalar = .{ .integer = 42 } },
-        .id = 2,
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
+    const descriptors = twoClauseOrder(created_at_index, true);
+    const cursor_values = [_]typed.Value{
+        .{ .scalar = .{ .integer = 42 } },
+        .{ .scalar = .{ .doc_id = 2 } },
     };
-    const after_token = try query_parser.encodeCursorToken(allocator, cursor);
+    const after_token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &cursor_values);
     defer allocator.free(after_token);
 
-    const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
-        .orderBy = .{ "created_at", 1 }, // desc
+        .orderBy = .{.{ "created_at", 1 }}, // desc
         .cursor = after_token,
     });
     defer root.free(allocator);
@@ -103,11 +114,14 @@ test "query with orderBy and after" {
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
-    const items_md = schema.table("items") orelse return error.UnknownTable;
-    const created_at_index = items_md.fieldIndex("created_at") orelse return error.UnknownField;
-    try testing.expectEqual(created_at_index, filter.order_by.field_index);
-    try testing.expectEqual(true, filter.order_by.desc);
-    try testing.expectEqual(cursor.id, filter.after.?.id);
+    try testing.expectEqual(created_at_index, filter.order_by[0].field_index);
+    try testing.expectEqual(true, filter.order_by[0].desc);
+    // Hidden `id ASC` tie-breaker appended.
+    try testing.expectEqual(@as(usize, 2), filter.order_by.len);
+    try testing.expectEqual(schema_system.id_field_index, filter.order_by[1].field_index);
+    try testing.expectEqual(false, filter.order_by[1].desc);
+    try testing.expectEqual(@as(i64, 42), filter.after.?.values[0].scalar.integer);
+    try testing.expectEqual(@as(typed.DocId, 2), filter.after.?.values[1].scalar.doc_id);
 }
 
 test "query rejects invalid Base64 after cursor token" {
@@ -408,14 +422,18 @@ test "orderBy rejects invalid direction value" {
     }});
     defer schema.deinit();
 
-    // Manually construct invalid orderBy
+    // Manually construct invalid orderBy: outer array with one bad-direction tuple
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
-    var order_arr = try allocator.alloc(msgpack.Payload, 2);
     const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
+    var order_arr = try allocator.alloc(msgpack.Payload, 2);
+    errdefer allocator.free(order_arr);
     order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(2); // invalid direction
-    try root.mapPut("orderBy", .{ .arr = order_arr });
+    const outer = try allocator.alloc(msgpack.Payload, 1);
+    errdefer allocator.free(outer);
+    outer[0] = .{ .arr = order_arr };
+    try root.mapPut("orderBy", .{ .arr = outer });
 
     try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl_items.index, root));
 }
@@ -429,44 +447,447 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     }});
     defer schema.deinit();
 
-    const cursor: typed.Cursor = .{
-        .sort_value = .{ .scalar = .{ .integer = 42 } },
-        .id = 2,
+    const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
+    const created_at_index = tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue;
+    const descriptors = twoClauseOrder(created_at_index, true);
+    const cursor_values = [_]typed.Value{
+        .{ .scalar = .{ .integer = 42 } },
+        .{ .scalar = .{ .doc_id = 2 } },
     };
-    const after_token = try query_parser.encodeCursorToken(allocator, cursor);
+    const after_token = try query_parser.encodeCursorToken(allocator, tbl_items.index, &descriptors, &cursor_values);
     defer allocator.free(after_token);
 
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
     try root.mapPut("after", try msgpack.Payload.strToPayload(after_token, allocator));
 
-    var order_arr = try allocator.alloc(msgpack.Payload, 2);
-    const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
-    order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
-    order_arr[1] = msgpack.Payload.uintToPayload(1);
-    try root.mapPut("orderBy", .{ .arr = order_arr });
+    // Insert orderBy AFTER after to prove decoding waits for the canonical order.
+    try putOrderBy(allocator, &root, &.{.{ created_at_index, 1 }});
 
     var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl_items.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(@as(i64, 42), filter.after.?.sort_value.scalar.integer);
+    try testing.expectEqual(@as(i64, 42), filter.after.?.values[0].scalar.integer);
 }
 
 test "cursor token rejects wrong sort type" {
     const allocator = std.testing.allocator;
 
-    const cursor: typed.Cursor = .{
-        .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
-        .id = 2,
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "items",
+        .fields = &[_][]const u8{},
+    }});
+    defer schema.deinit();
+
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
+    const descriptors = twoClauseOrder(created_at_index, false);
+    const values = [_]typed.Value{
+        .{ .scalar = .{ .text = "not-an-int" } }, // created_at is integer
+        .{ .scalar = .{ .doc_id = 2 } },
     };
-    const token = try query_parser.encodeCursorToken(allocator, cursor);
+    const token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &values);
     defer allocator.free(token);
 
-    try testing.expectError(error.InvalidCursorSortValue, query_parser.decodeCursorToken(allocator, token, .integer, null));
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, token, tbl.index, tbl, &descriptors),
+    );
 }
 
 fn emptyArrayPayload(allocator: std.mem.Allocator) !msgpack.Payload {
     return .{ .arr = try allocator.alloc(msgpack.Payload, 0) };
+}
+
+/// Builds and transfers an `orderBy` wire payload to `root`.
+fn putOrderBy(allocator: std.mem.Allocator, root: *msgpack.Payload, clauses: []const [2]usize) !void {
+    const outer = try allocator.alloc(msgpack.Payload, clauses.len);
+    var populated: usize = 0;
+    errdefer {
+        for (outer[0..populated]) |c| c.free(allocator);
+        allocator.free(outer);
+    }
+    for (clauses) |clause| {
+        const tuple = try allocator.alloc(msgpack.Payload, 2);
+        tuple[0] = msgpack.Payload.uintToPayload(clause[0]);
+        tuple[1] = msgpack.Payload.uintToPayload(clause[1]);
+        outer[populated] = .{ .arr = tuple };
+        populated += 1;
+    }
+    try root.mapPut("orderBy", .{ .arr = outer });
+}
+
+fn itemsSchema(allocator: std.mem.Allocator, field_names: []const []const u8, field_types: []const schema_types.FieldType) !schema_types.Schema {
+    return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "items",
+        .fields = field_names,
+        .types = field_types,
+    }});
+}
+
+test "canonical order: omitted becomes [id ASC]" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{}, &.{});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{});
+    defer root.free(allocator);
+
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), filter.order_by.len);
+    try testing.expectEqual(schema_system.id_field_index, filter.order_by[0].field_index);
+    try testing.expectEqual(false, filter.order_by[0].desc);
+}
+
+test "canonical order: mixed-direction clauses preserve order and end with hidden id ASC" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{ "priority", "score" }, &.{ .integer, .integer });
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const priority_index = tbl.fieldIndex("priority") orelse return error.UnknownField;
+    const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
+
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .orderBy = .{
+            .{ "priority", @as(usize, 1) },
+            .{ "created_at", @as(usize, 0) },
+        },
+    });
+    defer root.free(allocator);
+
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 3), filter.order_by.len);
+    try testing.expectEqual(priority_index, filter.order_by[0].field_index);
+    try testing.expect(filter.order_by[0].desc);
+    try testing.expectEqual(created_at_index, filter.order_by[1].field_index);
+    try testing.expect(!filter.order_by[1].desc);
+    try testing.expectEqual(schema_system.id_field_index, filter.order_by[2].field_index);
+    try testing.expect(!filter.order_by[2].desc);
+}
+
+test "canonical order: explicit final id ASC is not duplicated; id DESC retained" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{}, &.{});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+
+    // [{ id: 'asc' }] — identical canonical form to omitted order.
+    {
+        const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+            .orderBy = .{.{ "id", @as(usize, 0) }},
+        });
+        defer root.free(allocator);
+        var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+        defer filter.deinit(allocator);
+        try testing.expectEqual(@as(usize, 1), filter.order_by.len);
+        try testing.expectEqual(schema_system.id_field_index, filter.order_by[0].field_index);
+        try testing.expect(!filter.order_by[0].desc);
+    }
+
+    // [{ id: 'desc' }] — direction retained, nothing appended.
+    {
+        const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+            .orderBy = .{.{ "id", @as(usize, 1) }},
+        });
+        defer root.free(allocator);
+        var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+        defer filter.deinit(allocator);
+        try testing.expectEqual(@as(usize, 1), filter.order_by.len);
+        try testing.expect(filter.order_by[0].desc);
+    }
+}
+
+test "canonical order: id before another clause is rejected" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{"priority"}, &.{.integer});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const id_index = schema_system.id_field_index;
+    const priority_index = tbl.fieldIndex("priority") orelse return error.UnknownField;
+
+    var root = msgpack.Payload.mapPayload(allocator);
+    defer root.free(allocator);
+    try putOrderBy(allocator, &root, &.{ .{ id_index, 0 }, .{ priority_index, 0 } });
+
+    try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+}
+
+test "structural hash includes table and ordered SQL shape but not cursor values" {
+    const allocator = std.testing.allocator;
+
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{
+        .{ .name = "items", .fields = &.{ "priority", "score" }, .types = &.{ .integer, .integer } },
+        .{ .name = "archive", .fields = &.{ "priority", "score" }, .types = &.{ .integer, .integer } },
+    });
+    defer schema.deinit();
+    const items = schema.table("items") orelse return error.TestExpectedValue;
+    const archive = schema.table("archive") orelse return error.TestExpectedValue;
+
+    const Make = struct {
+        fn filter(
+            alloc: std.mem.Allocator,
+            source_schema: *const schema_types.Schema,
+            table: *const schema_types.Table,
+            params: anytype,
+        ) !query_ast.QueryFilter {
+            const payload = try qth.createQueryFilterPayload(alloc, table, params);
+            defer payload.free(alloc);
+            return query_parser.parseQueryFilter(alloc, source_schema, table.index, payload);
+        }
+    };
+
+    var default_items = try Make.filter(allocator, &schema, items, .{});
+    defer default_items.deinit(allocator);
+    var explicit_id = try Make.filter(allocator, &schema, items, .{ .orderBy = .{.{ "id", 0 }} });
+    defer explicit_id.deinit(allocator);
+    var default_archive = try Make.filter(allocator, &schema, archive, .{});
+    defer default_archive.deinit(allocator);
+    var priority_score = try Make.filter(allocator, &schema, items, .{
+        .orderBy = .{ .{ "priority", 0 }, .{ "score", 1 } },
+    });
+    defer priority_score.deinit(allocator);
+    var score_priority = try Make.filter(allocator, &schema, items, .{
+        .orderBy = .{ .{ "score", 1 }, .{ "priority", 0 } },
+    });
+    defer score_priority.deinit(allocator);
+    var flipped = try Make.filter(allocator, &schema, items, .{
+        .orderBy = .{ .{ "priority", 1 }, .{ "score", 1 } },
+    });
+    defer flipped.deinit(allocator);
+
+    const default_hash = query_hasher.computeStructuralHash(items.index, &default_items);
+    try testing.expectEqual(default_hash, query_hasher.computeStructuralHash(items.index, &explicit_id));
+    try testing.expect(default_hash != query_hasher.computeStructuralHash(archive.index, &default_archive));
+    try testing.expect(
+        query_hasher.computeStructuralHash(items.index, &priority_score) !=
+            query_hasher.computeStructuralHash(items.index, &score_priority),
+    );
+    try testing.expect(
+        query_hasher.computeStructuralHash(items.index, &priority_score) !=
+            query_hasher.computeStructuralHash(items.index, &flipped),
+    );
+
+    var with_values = try priority_score.clone(allocator);
+    defer with_values.deinit(allocator);
+    const cursor_values = try allocator.alloc(typed.Value, with_values.order_by.len);
+    cursor_values[0] = .{ .scalar = .{ .integer = 4 } };
+    cursor_values[1] = .{ .scalar = .{ .integer = 9 } };
+    cursor_values[2] = .{ .scalar = .{ .doc_id = 2 } };
+    with_values.after = .{ .values = cursor_values };
+
+    var with_null = try priority_score.clone(allocator);
+    defer with_null.deinit(allocator);
+    const null_cursor_values = try allocator.alloc(typed.Value, with_null.order_by.len);
+    null_cursor_values[0] = .nil;
+    null_cursor_values[1] = .{ .scalar = .{ .integer = 1 } };
+    null_cursor_values[2] = .{ .scalar = .{ .doc_id = 3 } };
+    with_null.after = .{ .values = null_cursor_values };
+
+    const without_cursor_hash = query_hasher.computeStructuralHash(items.index, &priority_score);
+    const with_values_hash = query_hasher.computeStructuralHash(items.index, &with_values);
+    try testing.expect(without_cursor_hash != with_values_hash);
+    try testing.expectEqual(with_values_hash, query_hasher.computeStructuralHash(items.index, &with_null));
+}
+
+test "sort rejects: empty array, duplicates, ninth clause, unknown field, array field" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(
+        allocator,
+        &.{ "a", "b", "tags" },
+        &.{ .integer, .integer, .array },
+    );
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const a_index = tbl.fieldIndex("a") orelse return error.UnknownField;
+    const b_index = tbl.fieldIndex("b") orelse return error.UnknownField;
+    const tags_index = tbl.fieldIndex("tags") orelse return error.UnknownField;
+
+    // Empty outer array
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try root.mapPut("orderBy", try emptyArrayPayload(allocator));
+        try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // Duplicate field
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try putOrderBy(allocator, &root, &.{ .{ a_index, 0 }, .{ b_index, 1 }, .{ a_index, 0 } });
+        try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // Ninth client clause
+    {
+        var clauses: [9][2]usize = undefined;
+        // Alternate two distinct fields is invalid (dup), so use distinct valid indexes:
+        // only a/b exist as user fields; use system fields too — they are distinct fields.
+        clauses[0] = .{ a_index, 0 };
+        clauses[1] = .{ b_index, 0 };
+        clauses[2] = .{ schema_system.namespace_id_field_index, 0 };
+        clauses[3] = .{ schema_system.owner_id_field_index, 0 };
+        clauses[4] = .{ tbl.fieldIndex("created_at") orelse return error.UnknownField, 0 };
+        clauses[5] = .{ tbl.fieldIndex("updated_at") orelse return error.UnknownField, 0 };
+        clauses[6] = .{ a_index + 100, 0 };
+        clauses[7] = .{ b_index, 1 };
+        clauses[8] = .{ a_index, 1 };
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try putOrderBy(allocator, &root, &clauses);
+        try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // Unknown field index
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try putOrderBy(allocator, &root, &.{.{ a_index + 100, 0 }});
+        try testing.expectError(error.UnknownField, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // Array field sort → UnsupportedSortFieldType
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try putOrderBy(allocator, &root, &.{.{ tags_index, 0 }});
+        try testing.expectError(error.UnsupportedSortFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // Non-array orderBy value
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try root.mapPut("orderBy", msgpack.Payload.uintToPayload(a_index));
+        try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+}
+
+test "cursor round-trip with mixed text, integer, null, reference values" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(
+        allocator,
+        &.{ "title", "score", "note", "ref" },
+        &.{ .text, .integer, .text, .doc_id },
+    );
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const title_index = tbl.fieldIndex("title") orelse return error.UnknownField;
+    const score_index = tbl.fieldIndex("score") orelse return error.UnknownField;
+    const note_index = tbl.fieldIndex("note") orelse return error.UnknownField;
+    const ref_index = tbl.fieldIndex("ref") orelse return error.UnknownField;
+
+    // note is optional in this fixture; ref is doc_id.
+    const descriptors = [_]query_ast.SortDescriptor{
+        .{ .field_index = title_index, .desc = true },
+        .{ .field_index = score_index, .desc = false },
+        .{ .field_index = note_index, .desc = false },
+        .{ .field_index = ref_index, .desc = false },
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+    const values = [_]typed.Value{
+        .{ .scalar = .{ .text = "t" } },
+        .{ .scalar = .{ .integer = 42 } },
+        .nil,
+        .{ .scalar = .{ .doc_id = 42 } },
+        .{ .scalar = .{ .doc_id = 7 } },
+    };
+
+    const token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &values);
+    defer allocator.free(token);
+
+    var cursor = try query_parser.decodeCursorToken(allocator, token, tbl.index, tbl, &descriptors);
+    defer cursor.deinit(allocator);
+
+    try testing.expectEqual(descriptors.len, cursor.values.len);
+    for (cursor.values, values) |actual, expected| try testing.expect(actual.eql(expected));
+}
+
+test "cursor rejects wrong table, reordered descriptors, null required value, trailing bytes" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{"score"}, &.{.integer});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const score_index = tbl.fieldIndex("score") orelse return error.UnknownField;
+
+    const descriptors = [_]query_ast.SortDescriptor{
+        .{ .field_index = score_index, .desc = false },
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+    const values = [_]typed.Value{
+        .{ .scalar = .{ .integer = 5 } },
+        .{ .scalar = .{ .doc_id = 7 } },
+    };
+    const token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &values);
+    defer allocator.free(token);
+
+    // Wrong table index
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, token, tbl.index + 1, tbl, &descriptors),
+    );
+
+    // Reordered descriptor list
+    const reordered = [_]query_ast.SortDescriptor{
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+        .{ .field_index = score_index, .desc = false },
+    };
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, token, tbl.index, tbl, &reordered),
+    );
+
+    // Wrong direction on the first clause
+    const flipped = [_]query_ast.SortDescriptor{
+        .{ .field_index = score_index, .desc = true },
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, token, tbl.index, tbl, &flipped),
+    );
+
+    // Null for the required id field
+    const null_values = [_]typed.Value{
+        .{ .scalar = .{ .integer = 5 } },
+        .nil,
+    };
+    const null_token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &null_values);
+    defer allocator.free(null_token);
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, null_token, tbl.index, tbl, &descriptors),
+    );
+
+    // Trailing bytes after the MessagePack payload must be rejected.
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(token);
+    const decoded = try allocator.alloc(u8, decoded_len);
+    defer allocator.free(decoded);
+    try std.base64.standard.Decoder.decode(decoded, token);
+    const with_trailing = try allocator.alloc(u8, decoded_len + 1);
+    defer allocator.free(with_trailing);
+    @memcpy(with_trailing[0..decoded_len], decoded);
+    with_trailing[decoded_len] = 0xc0; // stray nil byte
+    const Encoder = std.base64.standard.Encoder;
+    const trailing_token = try allocator.alloc(u8, Encoder.calcSize(with_trailing.len));
+    defer allocator.free(trailing_token);
+    _ = Encoder.encode(trailing_token, with_trailing);
+    try testing.expectError(
+        error.InvalidMessageFormat,
+        query_parser.decodeCursorToken(allocator, trailing_token, tbl.index, tbl, &descriptors),
+    );
 }
 
 test "property: random valid query filters" {
@@ -523,11 +944,14 @@ test "property: random valid query filters" {
         }
 
         if (random.boolean()) {
+            const outer = try allocator.alloc(msgpack.Payload, 1);
+            errdefer allocator.free(outer);
             var order_arr = try allocator.alloc(msgpack.Payload, 2);
             errdefer allocator.free(order_arr);
             order_arr[0] = msgpack.Payload.uintToPayload(field_index);
             order_arr[1] = msgpack.Payload.uintToPayload(if (random.boolean()) 1 else 0);
-            try root.mapPut("orderBy", .{ .arr = order_arr });
+            outer[0] = .{ .arr = order_arr };
+            try root.mapPut("orderBy", .{ .arr = outer });
         }
         var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
         filter.deinit(allocator);

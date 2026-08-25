@@ -392,7 +392,7 @@ test "ddl_generator: exact SQL for single and compound unique constraints" {
         schema_helpers.makeRequiredField("provider", .text),
         schema_helpers.makeRequiredField("externalId", .text),
     };
-    // ponytail: static fixture slices; this table is never deinit'd.
+    // static fixture slices; this table is never deinit'd.
     const constraints = [_]schema_types.UniqueConstraint{
         .{ .field_indexes = &.{0} },
         .{ .field_indexes = &.{ 1, 2 } },

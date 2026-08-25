@@ -213,3 +213,21 @@ export function unpackDocId(bytes: Uint8Array): string {
 	}
 	return decodeShortDocId(bytesToBigInt(bytes));
 }
+
+/**
+ * Compare two document ID strings by their packed 16-byte representation,
+ * matching SQLite BINARY ordering of the stored DocId bytes (short IDs sort
+ * before UUIDv7 IDs because of the high-bit family tag).
+ */
+export function compareDocIds(a: string, b: string): number {
+	const aIsUuid = isCanonicalUUIDv7(a);
+	const bIsUuid = isCanonicalUUIDv7(b);
+
+	// Preserve packDocId's validation without paying its BigInt/Uint8Array cost
+	// for every comparison in a materialized-view sort.
+	if (!aIsUuid && !isValidShortDocId(a)) packDocId(a);
+	if (!bIsUuid && !isValidShortDocId(b)) packDocId(b);
+
+	if (aIsUuid !== bIsUuid) return aIsUuid ? 1 : -1;
+	return a < b ? -1 : a > b ? 1 : 0;
+}

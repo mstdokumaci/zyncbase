@@ -4,8 +4,10 @@ const app_test_helpers = @import("app_test_helpers.zig");
 const send_queue_mod = @import("connection/send_queue.zig");
 const fail_alloc = @import("failing_allocator_test_helper.zig");
 const query_ast = @import("query/ast.zig");
+const query_parser = @import("query/parser.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_parse = @import("schema/parse.zig");
+const schema_system = @import("schema/system.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
 const cache_mod = @import("storage_engine/cache.zig");
@@ -295,6 +297,109 @@ test "StorageEngine: query collection" {
     const qres = try people.queryDocs(allocator, 2, &filter);
     defer qres.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), qres.records.len);
+}
+
+test "StorageEngine: multi-field keyset pagination preserves total order" {
+    const engine_allocator = std.heap.smp_allocator;
+    const query_allocator = std.testing.allocator;
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("priority", .integer),
+        schema_helpers.makeField("rank", .integer),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, engine_allocator, "engine-multi-sort-pagination", table);
+    defer ctx.deinit();
+    const items = try ctx.table("items");
+
+    try items.insertNamed(1, 2, .{ sth.named("priority", tth.valInt(2)), sth.named("rank", tth.valInt(1)) });
+    try items.insertNamed(2, 2, .{ sth.named("priority", tth.valInt(2)), sth.named("rank", tth.valInt(1)) });
+    try items.insertNamed(3, 2, .{ sth.named("priority", tth.valInt(2)), sth.named("rank", tth.valInt(2)) });
+    try items.insertNamed(4, 2, .{ sth.named("priority", tth.valInt(1)), sth.named("rank", tth.valInt(0)) });
+    try items.insertNamed(5, 2, .{sth.named("priority", tth.valInt(1))});
+    try items.flush();
+
+    const Expect = struct {
+        fn ids(records: []const typed.Record, expected: []const typed_doc_id.DocId) !void {
+            try testing.expectEqual(expected.len, records.len);
+            for (records, expected) |record, expected_id| {
+                const value = record.values[schema_system.id_field_index];
+                if (value != .scalar or value.scalar != .doc_id) return error.TestExpectedValue;
+                try testing.expectEqual(expected_id, value.scalar.doc_id);
+            }
+        }
+    };
+
+    const filter_payload = try qth.createQueryFilterPayload(query_allocator, items.metadata, .{
+        .orderBy = .{ .{ "priority", 1 }, .{ "rank", 0 } },
+        .limit = 2,
+    });
+    defer filter_payload.free(query_allocator);
+    var filter = try query_parser.parseQueryFilter(query_allocator, &ctx.schema, items.metadata.index, filter_payload);
+    defer filter.deinit(query_allocator);
+
+    {
+        const page = try items.queryDocs(query_allocator, 2, &filter);
+        defer page.deinit(query_allocator);
+        try Expect.ids(page.records, &.{ 1, 2 });
+        const token = page.next_cursor orelse return error.TestExpectedValue;
+        filter.after = try query_parser.decodeCursorToken(
+            query_allocator,
+            token,
+            items.metadata.index,
+            items.metadata,
+            filter.order_by,
+        );
+    }
+    {
+        const page = try items.queryDocs(query_allocator, 2, &filter);
+        defer page.deinit(query_allocator);
+        try Expect.ids(page.records, &.{ 3, 4 });
+        const token = page.next_cursor orelse return error.TestExpectedValue;
+        const next = try query_parser.decodeCursorToken(
+            query_allocator,
+            token,
+            items.metadata.index,
+            items.metadata,
+            filter.order_by,
+        );
+        if (filter.after) |*old| old.deinit(query_allocator);
+        filter.after = next;
+    }
+    {
+        const page = try items.queryDocs(query_allocator, 2, &filter);
+        defer page.deinit(query_allocator);
+        try Expect.ids(page.records, &.{5});
+        try testing.expectEqual(@as(?[]const u8, null), page.next_cursor);
+    }
+
+    const id_filter_payload = try qth.createQueryFilterPayload(query_allocator, items.metadata, .{
+        .orderBy = .{.{ "id", 1 }},
+        .limit = 3,
+    });
+    defer id_filter_payload.free(query_allocator);
+    var id_filter = try query_parser.parseQueryFilter(query_allocator, &ctx.schema, items.metadata.index, id_filter_payload);
+    defer id_filter.deinit(query_allocator);
+
+    {
+        const page = try items.queryDocs(query_allocator, 2, &id_filter);
+        defer page.deinit(query_allocator);
+        try Expect.ids(page.records, &.{ 5, 4, 3 });
+        const token = page.next_cursor orelse return error.TestExpectedValue;
+        id_filter.after = try query_parser.decodeCursorToken(
+            query_allocator,
+            token,
+            items.metadata.index,
+            items.metadata,
+            id_filter.order_by,
+        );
+    }
+    {
+        const page = try items.queryDocs(query_allocator, 2, &id_filter);
+        defer page.deinit(query_allocator);
+        try Expect.ids(page.records, &.{ 2, 1 });
+        try testing.expectEqual(@as(?[]const u8, null), page.next_cursor);
+    }
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = std.heap.smp_allocator;

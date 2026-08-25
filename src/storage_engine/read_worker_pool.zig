@@ -32,10 +32,12 @@ fn cleanupRequest(req: ReadRequest, alloc: Allocator) void {
 }
 
 fn isPointLookup(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
+    if (filter.order_by.len != 1) return null;
+    const only = filter.order_by[0];
+    if (only.field_index != id_index or only.desc) return null;
     const conds = filter.predicate.conditions orelse return null;
     if (conds.len != 1) return null;
     if (filter.predicate.or_clauses != null) return null;
-    if (filter.order_by.field_index != id_index or filter.order_by.desc) return null;
     if (filter.after != null) return null;
     const cond = conds[0];
     if (cond.op != .eq) return null;
@@ -316,8 +318,6 @@ pub const ReadWorker = struct {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         };
 
-        const sort_field_index = filter.order_by.field_index;
-
         // Execute DB read under the node mutex
         self.node.mutex.lockUncancelable(self.node.io);
         defer self.node.mutex.unlock(self.node.io);
@@ -333,9 +333,10 @@ pub const ReadWorker = struct {
             &self.node.conn,
             stmt,
             query_res.values,
+            table_metadata.index,
             table_metadata,
             filter.limit,
-            sort_field_index,
+            filter.order_by,
             &self.json_buf,
         ) catch {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };

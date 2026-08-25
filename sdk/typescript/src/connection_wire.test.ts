@@ -23,7 +23,10 @@ describe("ConnectionWireCodec", () => {
 				type: "StoreQuery",
 				table_index: "users",
 				conditions: [["name", 0, "Ada"]],
-				orderBy: ["address__city", 1],
+				orderBy: [
+					["address__city", 1],
+					["name", 0],
+				],
 			},
 			7,
 		);
@@ -37,7 +40,10 @@ describe("ConnectionWireCodec", () => {
 			id: 7,
 			table_index: 0,
 			conditions: [[1, 0, "Ada"]],
-			orderBy: [2, 1],
+			orderBy: [
+				[2, 1],
+				[1, 0],
+			],
 		});
 	});
 

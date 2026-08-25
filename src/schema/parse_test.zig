@@ -707,7 +707,7 @@ const unique_allocation_failure_json =
 ;
 
 test "schema_property: parse cleanup survives allocation failures with unique constraints" {
-    // ponytail: explicit exhaustive scan instead of std.testing.checkAllAllocationFailures,
+    // explicit exhaustive scan instead of std.testing.checkAllAllocationFailures,
     // whose calibration miscounts allocations in warm processes. Same property: parse
     // either fails cleanly with OOM at every induced allocation index or succeeds
     // leak-free, and cleanup never leaks.

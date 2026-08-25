@@ -1,6 +1,7 @@
 // Store API
 
 import type { OutboundRequest } from "./connection_wire.js";
+import { compareDocIds } from "./doc_id.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { flatten, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
@@ -46,6 +47,12 @@ interface SubscribeState {
 	hasMore: boolean;
 	closed: boolean;
 	inFlight: Promise<void> | null;
+}
+
+interface SortEntry {
+	parts: string[];
+	desc: boolean;
+	docId: boolean;
 }
 
 export class StoreImpl {
@@ -187,6 +194,7 @@ export class StoreImpl {
 		callback: (results: JsonValue[]) => void,
 	): SubscriptionHandle {
 		const command = buildSubscribe(collection, options);
+		const comparator = this.buildCollectionComparator(collection, options);
 		const state: SubscribeState = {
 			subId: null,
 			nextCursor: null,
@@ -250,7 +258,7 @@ export class StoreImpl {
 					handle,
 					command.message,
 					collection,
-					options,
+					comparator,
 					callback,
 				),
 			)
@@ -265,7 +273,7 @@ export class StoreImpl {
 		handle: SubscriptionHandle,
 		params: Parameters<SubscriptionTracker["registerCollection"]>[1],
 		collection: string,
-		options: QueryOptions,
+		comparator: (a: JsonValue, b: JsonValue) => number,
 		callback: (results: JsonValue[]) => void,
 	): void {
 		if (this.unsubscribeRemoteIfClosed(state.closed, ok.subId)) return;
@@ -276,12 +284,7 @@ export class StoreImpl {
 		handle.hasMore = state.hasMore;
 		if (state.subId === null) return;
 
-		this.tracker.registerCollection(
-			state.subId,
-			params,
-			callback,
-			options.orderBy,
-		);
+		this.tracker.registerCollection(state.subId, params, callback, comparator);
 		if (ok.value !== undefined) {
 			this.tracker.dispatchInitialSnapshot(
 				state.subId,
@@ -289,6 +292,44 @@ export class StoreImpl {
 				ok.value as JsonValue,
 			);
 		}
+	}
+
+	/**
+	 * Builds the schema-aware materialized-view comparator for a subscription.
+	 * Mirrors the server's canonical order: public dot-path clauses in order,
+	 * nulls always last, packed DocId order for reference fields, UTF-8 byte
+	 * order for text, plus the hidden `id ASC` tie-breaker unless `id` is
+	 * already the final explicit clause.
+	 */
+	private buildCollectionComparator(
+		collection: string,
+		options: QueryOptions,
+	): (a: JsonValue, b: JsonValue) => number {
+		const schema = this.conn.schemaDictionary;
+		const tableIndex = schema.getTableIndex(collection);
+
+		const entries: SortEntry[] = [];
+		for (const clause of options.orderBy ?? []) {
+			const field = Object.keys(clause)[0];
+			if (field === undefined) continue;
+			// Public dot path segments; flattened with "__" for schema lookup.
+			const parts = field.split(".");
+			const fieldIndex = schema.getFieldIndex(tableIndex, parts.join("__"));
+			entries.push({
+				parts,
+				desc: clause[field] === "desc",
+				docId: schema.isDocIdField(tableIndex, fieldIndex),
+			});
+		}
+
+		const lastField =
+			entries.length > 0 ? entries[entries.length - 1].parts.join(".") : null;
+		if (lastField !== "id") {
+			entries.push({ parts: ["id"], desc: false, docId: true });
+		}
+
+		return (a: JsonValue, b: JsonValue): number =>
+			compareRecords(entries, a, b);
 	}
 
 	private async dispatchWrite(
@@ -493,4 +534,92 @@ export class StoreImpl {
 			},
 		);
 	}
+}
+
+function getNestedValue(
+	obj: JsonValue,
+	parts: string[],
+): JsonValue | undefined {
+	let current: JsonValue | undefined = obj;
+	for (const part of parts) {
+		if (
+			current == null ||
+			typeof current !== "object" ||
+			Array.isArray(current)
+		)
+			return undefined;
+		current = (current as Record<string, JsonValue>)[part];
+	}
+	return current;
+}
+
+function compareRecords(
+	entries: SortEntry[],
+	a: JsonValue,
+	b: JsonValue,
+): number {
+	for (const entry of entries) {
+		const result = compareSortEntry(entry, a, b);
+		if (result !== 0) return result;
+	}
+	return 0;
+}
+
+function compareSortEntry(
+	entry: SortEntry,
+	a: JsonValue,
+	b: JsonValue,
+): number {
+	const va = getNestedValue(a, entry.parts);
+	const vb = getNestedValue(b, entry.parts);
+
+	// Missing and null sort identically and are always last.
+	if (va == null) return vb == null ? 0 : 1;
+	if (vb == null) return -1;
+
+	const result = compareNonNullValues(va, vb, entry.docId);
+	return entry.desc ? -result : result;
+}
+
+function compareNonNullValues(
+	a: JsonValue,
+	b: JsonValue,
+	docId: boolean,
+): number {
+	if (typeof a !== typeof b) return 0;
+	switch (typeof a) {
+		case "number":
+			return compareNumbers(a, b as number);
+		case "boolean":
+			return compareBooleans(a, b as boolean);
+		case "string":
+			return compareStrings(a, b as string, docId);
+		default:
+			return 0;
+	}
+}
+
+function compareNumbers(a: number, b: number): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function compareBooleans(a: boolean, b: boolean): number {
+	return a === b ? 0 : a ? 1 : -1;
+}
+
+function compareStrings(a: string, b: string, docId: boolean): number {
+	return docId ? compareDocIds(a, b) : compareUtf8(a, b);
+}
+
+const textEncoder = new TextEncoder();
+
+/** Compares strings by the exact UTF-8 bytes used by SQLite BINARY ordering. */
+function compareUtf8(a: string, b: string): number {
+	const ba = textEncoder.encode(a);
+	const bb = textEncoder.encode(b);
+	const length = Math.min(ba.length, bb.length);
+	for (let i = 0; i < length; i++) {
+		if (ba[i] !== bb[i]) return ba[i] < bb[i] ? -1 : 1;
+	}
+	return ba.length < bb.length ? -1 : ba.length > bb.length ? 1 : 0;
 }

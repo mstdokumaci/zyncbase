@@ -48,6 +48,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "InvalidInOperand", wireError("INVALID_MESSAGE", "IN and NOT IN require an array operand") },
     .{ "NullOperandUnsupported", wireError("INVALID_MESSAGE", "Null is not allowed as a query operand") },
     .{ "UnsupportedOperatorForFieldType", wireError("INVALID_MESSAGE", "Query operator is not supported for this field type") },
+    .{ "UnsupportedSortFieldType", wireError("INVALID_MESSAGE", "Array fields cannot be used for sorting") },
     .{ "InvalidCursorSortValue", wireError("INVALID_MESSAGE", "Cursor sort value does not match the active sort field") },
     .{ "InvalidSubscriptionId", wireError("INVALID_MESSAGE", "Invalid subscription ID format") },
     .{ "SubscriptionNotFound", wireError("SUBSCRIPTION_NOT_FOUND", "Subscription not found") },

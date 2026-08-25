@@ -205,9 +205,10 @@ pub fn queryDocs(
         &node.conn,
         dynamic.stmt,
         query_res.values,
+        table_index,
         table_metadata,
         filter.limit,
-        filter.order_by.field_index,
+        filter.order_by,
         &json_buf,
     );
 

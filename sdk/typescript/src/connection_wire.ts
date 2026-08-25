@@ -452,14 +452,17 @@ export class ConnectionWireCodec {
 	}
 
 	private encodeOrderBy(tableIndex: number, raw: unknown): unknown {
-		if (!Array.isArray(raw) || raw.length !== 2) return raw;
-		const field = raw[0];
-		const dir = raw[1];
-		const fieldIndex =
-			typeof field === "string"
-				? this.schema.getFieldIndex(tableIndex, field)
-				: field;
-		return [fieldIndex, dir];
+		if (!Array.isArray(raw)) return raw;
+		return raw.map((tuple) => {
+			if (!Array.isArray(tuple) || tuple.length !== 2) return tuple;
+			const field = tuple[0];
+			const dir = tuple[1];
+			const fieldIndex =
+				typeof field === "string"
+					? this.schema.getFieldIndex(tableIndex, field)
+					: field;
+			return [fieldIndex, dir];
+		});
 	}
 
 	private decodeDelta(delta: StoreDelta): StoreDelta {

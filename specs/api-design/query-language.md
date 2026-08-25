@@ -267,13 +267,26 @@ You can have multiple conditions with OR groups:
 
 ## Sorting
 
-### Single Field Sort
+### Sort Syntax
+
+Sorting always uses an ordered **array** of clauses. Array order defines precedence.
 
 ```typescript
 {
-  orderBy: { created_at: 'desc' }
+  orderBy: [{ created_at: 'desc' }]
 }
 ```
+
+```typescript
+{
+  orderBy: [
+    { priority: 'desc' },       // Sort by priority first
+    { 'profile.rank': 'asc' }   // Then by nested rank
+  ]
+}
+```
+
+Each clause contains exactly one field and one direction. Nested fields use dot notation (`'profile.rank'`). Duplicate fields are rejected; up to 8 clauses are allowed.
 
 **Sort directions:**
 - `'asc'` - Ascending (A-Z, 0-9, oldest first)
@@ -281,18 +294,27 @@ You can have multiple conditions with OR groups:
 
 ---
 
-### Multiple Field Sort (Future)
+### Default Order
 
-```typescript
-{
-  orderBy: [
-    { priority: 'desc' },    // Sort by priority first
-    { created_at: 'asc' }    // Then by creation date
-  ]
-}
-```
+Omitting `orderBy` sorts by document `id` ascending. This is identical to requesting `orderBy: [{ id: 'asc' }]`.
 
-**Note:** Multi-field sorting is planned for a future release. Currently, only single-field sorting is supported.
+`id` may be requested explicitly only as the final clause (`[{ priority: 'desc' }, { id: 'desc' }]`). If `id` is absent, the server appends a hidden `id ASC` tie-breaker so every result order is deterministic and stable for pagination.
+
+---
+
+### Sort Semantics
+
+The server and SDK implement one ordering contract:
+
+| Value | Ascending order | Descending order |
+|---|---|---|
+| null/missing | always last | always last |
+| integer/real | numeric | reverse numeric |
+| boolean | `false`, then `true` | `true`, then `false` |
+| text | UTF-8 byte order (SQLite `BINARY`) | reverse byte order |
+| document/reference ID | packed 16-byte ID order | reverse packed order |
+
+No locale-aware or case-insensitive collation is provided. Array fields cannot be sorted and are rejected with an actionable error.
 
 ---
 
@@ -336,7 +358,7 @@ When subscribing to a query, ZyncBase manages a live window. You can load older 
 
 ```typescript
 const sub = client.store.subscribe('items', {
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 20
 }, (items) => {
   render(items)
@@ -376,7 +398,7 @@ const events = await client.store.query('events', {
     created_at: { gte: startDate, lte: endDate },
     status: { eq: 'active' }
   },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 50
 })
 ```
@@ -395,7 +417,7 @@ const tasks = await client.store.query('tasks', {
       { status: { eq: 'pending' } }
     ]
   },
-  orderBy: { priority: 'desc' }
+  orderBy: [{ priority: 'desc' }]
 })
 ```
 
@@ -461,7 +483,7 @@ const tasks = await client.store.query('tasks', {
       { assigned_role: { eq: 'editor' } }
     ]
   },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 100
 })
 ```
@@ -630,9 +652,8 @@ client.store.subscribe('tasks', {
 
 1. **Single OR group** - Only one `or` key at root level
 2. **No nested OR** - Cannot nest OR within OR
-3. **Single field sort** - Multi-field sorting coming in future release
-4. **No aggregations** - No `count`, `sum`, `avg` (use client-side or separate endpoint)
-5. **No joins** - Query one path at a time (denormalize data if needed)
+3. **No aggregations** - No `count`, `sum`, `avg` (use client-side or separate endpoint)
+4. **No joins** - Query one path at a time (denormalize data if needed)
 
 ### Workarounds
 

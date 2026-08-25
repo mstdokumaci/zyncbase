@@ -267,7 +267,7 @@ pub const StoreService = struct {
         }
 
         // Compute structural hash after merge
-        filter.structural_hash = query_hasher.computeStructuralHash(&filter);
+        filter.structural_hash = query_hasher.computeStructuralHash(table_index, &filter);
 
         return ReadRequest{
             .conn_id = ctx.conn_id,
@@ -280,8 +280,9 @@ pub const StoreService = struct {
     }
 
     /// Builds a ReadRequest for a load-more read over an existing subscription.
-    /// Clones the subscription's filter, decodes the cursor token, and attaches
-    /// it as the filter's `after` anchor. No re-authorization — the stored
+    /// Clones the subscription's filter, decodes the cursor token against the
+    /// subscription's table metadata and canonical descriptors, and attaches it
+    /// as the filter's `after` anchor. No re-authorization — the stored
     /// subscription filter already includes the guard from subscribe time.
     pub fn prepareLoadMoreRead(
         self: *StoreService,
@@ -292,7 +293,7 @@ pub const StoreService = struct {
         sub_id: u64,
         next_cursor: []const u8,
     ) !ReadRequest {
-        _ = self;
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
         var filter_clone = try sub_filter.clone(ctx.allocator);
         errdefer filter_clone.deinit(ctx.allocator);
@@ -300,15 +301,16 @@ pub const StoreService = struct {
         const cursor = try query_parser.decodeCursorToken(
             ctx.allocator,
             next_cursor,
-            filter_clone.order_by.field_type,
-            filter_clone.order_by.items_type,
+            table_index,
+            table,
+            filter_clone.order_by,
         );
         if (filter_clone.after) |*old| old.deinit(ctx.allocator);
         filter_clone.after = cursor;
 
         // Recompute structural hash — after presence is part of the hash,
         // so transitioning from null to a cursor changes it.
-        filter_clone.structural_hash = query_hasher.computeStructuralHash(&filter_clone);
+        filter_clone.structural_hash = query_hasher.computeStructuralHash(table_index, &filter_clone);
 
         return ReadRequest{
             .conn_id = ctx.conn_id,

@@ -47,7 +47,7 @@ test "schema_types: unique constraints stay user-relative through runtime build"
         schema_helpers.makeField("provider", .text),
         schema_helpers.makeField("externalId", .text),
     };
-    // ponytail: static constraint fixture — declared tables never deinit here.
+    // static constraint fixture — declared tables never deinit here.
     const declared_constraints = [_]schema_types.UniqueConstraint{
         .{ .field_indexes = &.{0} },
         .{ .field_indexes = &.{ 1, 2 } },

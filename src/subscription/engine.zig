@@ -75,11 +75,15 @@ pub const CanonicalFilterContext = struct {
                 }
             }
         }
-        std.hash.autoHash(&hasher, f.order_by);
+        std.hash.autoHash(&hasher, f.order_by.len);
+        for (f.order_by) |d| {
+            std.hash.autoHash(&hasher, d.field_index);
+            std.hash.autoHash(&hasher, d.desc);
+        }
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hash_context.hashValue(&hasher, a.sort_value);
-            std.hash.autoHash(&hasher, a.id);
+            std.hash.autoHash(&hasher, a.values.len);
+            for (a.values) |v| hash_context.hashValue(&hasher, v);
         }
         return hasher.final();
     }
@@ -88,15 +92,27 @@ pub const CanonicalFilterContext = struct {
         if (a.predicate.state != b.predicate.state) return false;
         if (!eqlConditionsSorted(a.predicate.conditions, b.predicate.conditions)) return false;
         if (!eqlOrClauses(a.predicate.or_clauses, b.predicate.or_clauses)) return false;
-        if (!std.meta.eql(a.order_by, b.order_by)) return false;
+        if (!eqlSortDescriptors(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
         if (a.after == null and b.after == null) return true;
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return aa.sort_value.eql(bb.sort_value) and std.meta.eql(aa.id, bb.id);
+        if (aa.values.len != bb.values.len) return false;
+        for (aa.values, bb.values) |va, vb| {
+            if (!va.eql(vb)) return false;
+        }
+        return true;
     }
 };
+
+fn eqlSortDescriptors(a: []const query_ast.SortDescriptor, b: []const query_ast.SortDescriptor) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |da, db| {
+        if (da.field_index != db.field_index or da.desc != db.desc) return false;
+    }
+    return true;
+}
 
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if ((a == null) != (b == null)) return false;

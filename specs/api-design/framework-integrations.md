@@ -36,7 +36,7 @@ Subscribe to filtered query results with pagination support.
 ```typescript
 const { data, loading, error, hasMore, loadMore, loadingMore } = useQuery('tasks', {
   where: { status: { eq: 'active' } },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 20
 })
 ```
@@ -89,7 +89,7 @@ function ConnectionBanner() {
 ```tsx
 function ActivityFeed() {
   const { data, hasMore, loadMore, loadingMore } = useQuery('activities', {
-    orderBy: { created_at: 'desc' },
+    orderBy: [{ created_at: 'desc' }],
     limit: 20
   })
 

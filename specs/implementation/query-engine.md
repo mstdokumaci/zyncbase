@@ -23,10 +23,11 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `QueryFilter` | `FilterPredicate`, `SortDescriptor`, schema field metadata | Full read/subscription query contract after parsing. |
+| `QueryFilter` | `FilterPredicate`, owned `SortDescriptor` slice | Full read/subscription query contract after parsing; owns the canonical order slice. |
 | `FilterPredicate` | `PredicateState`, `Condition` | Logical predicate tree for SQL lowering and in-memory evaluation. |
 | `Condition` | `Operator`, typed operands | One field/operator/value comparison. |
-| `SortDescriptor` | schema field index, direction | Stable order definition used by SQL and cursor encoding. |
+| `SortDescriptor` | schema field index, direction | Minimal sort identity; descriptor slices are canonical, non-empty, and end with `id`. |
+| `Cursor` | ordered owned values | Cursor values in canonical sort order; last value is always the document id. |
 | `ParserError` | wire/schema validation | Internal parser failure set mapped through public error taxonomy. |
 | `RenderedPredicate` | SQL fragment, bound values | Result of lowering AST predicates for SQLite. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Keeps active queries and evaluates committed changes. |
@@ -36,9 +37,10 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 ## Responsibilities
 
 - Decode wire query tuples into typed operators and operands.
-- Validate table/field names, operator compatibility, sort fields, and cursor shape.
+- Validate table/field names, operator compatibility, sort clauses (1..8, unique, sortable types, `id` final), and cursor shape.
+- Canonicalize every parsed order to a non-empty descriptor slice ending with the `id` field.
 - Preserve one semantic model for storage reads and subscription filtering.
-- Generate stable ordering and cursor predicates for paginated reads.
+- Generate stable multi-clause ordering and lexicographic, null-safe cursor predicates for paginated reads.
 - Apply authorization predicates before storage execution.
 - Retain subscription queries in a form that can be evaluated against committed changes.
 
@@ -56,7 +58,9 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 - Query grammar is owned by [Query Grammar](./query-grammar.md); do not duplicate operator catalogs here.
 - SQL lowering and in-memory filtering must agree for every supported operator.
-- Cursor tokens must be tied to the active sort order and reject mismatched sort values.
+- Cursor tokens are bound to the collection and the canonical order; mismatched table, order, value count, type, or nullability is rejected deterministically.
+- Generated SQL must not depend on cursor values — only on schema, canonical descriptors, requiredness, and predicate/cursor/limit presence — so structural statement-cache reuse holds across pages.
+- Statement-cache structural hashes include the table index, ordered descriptors, and cursor presence, but exclude cursor values so only identical SQL templates can share a prepared statement.
 - Namespace filters and authorization predicates must be applied before returning records.
 - Subscription matching uses committed record changes only; speculative writes must not be broadcast.
 - Parser/internal errors map through [Error Taxonomy](./error-taxonomy.md).

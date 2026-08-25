@@ -21,10 +21,10 @@ This document specifies the pipeline that parses wire-encoded query tuples, norm
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `QueryFilter` | `FilterPredicate`, `SortDescriptor` | Complete query descriptor mapping filter bounds and order options. |
+| `QueryFilter` | `FilterPredicate`, owned `SortDescriptor` slice | Complete query descriptor mapping filter bounds and canonical order options. |
 | `FilterPredicate` | `Condition` arrays, `PredicateState` | Combines AND groups and at most one OR group, tracking simplified match states. |
 | `Condition` | field schema index, `Operator`, value | Individual condition tuple (field index, operator, typed operand). |
-| `SortDescriptor` | field schema index, direction | Field sorting instruction. |
+| `SortDescriptor` | field schema index, direction | Minimal sort identity (`field_index`, `desc`); field types are derived from schema metadata at use sites. |
 | `Operator` | enum | Supported relational operators (e.g. `eq`, `contains`, `in`, `isNull`). |
 
 ---
@@ -47,6 +47,32 @@ Queries use compact integer tuples on the wire to minimize message size.
 
 - **Condition Tuple**: `[field_index: int, op: int, value: any]`. Value is omitted (size 2 array) for `isNull` / `isNotNull`.
 - **Sort Tuple**: `[field_index: int, desc: int]` where `desc` is `0` (ascending) or `1` (descending).
+- **Sort Clause Array**: `orderBy` is an ordered array of sort tuples. Array order defines precedence; 1 through 8 client clauses are accepted.
+
+### Sort Validation Rules
+
+The Zig parser is authoritative (wire clients are untrusted):
+
+| Input | Result |
+|:---|:---|
+| `orderBy` omitted | Canonical `[id ASC]` |
+| 0 or more than 8 clauses | `InvalidSortFormat` |
+| Malformed tuple, unknown field, invalid direction flag | `InvalidSortFormat` / `InvalidFieldName` |
+| Duplicate field across clauses | `InvalidSortFormat` |
+| Array-typed sort field | `UnsupportedSortFieldType` (`INVALID_MESSAGE`) |
+| `id` in any position except the final clause | `InvalidSortFormat` |
+
+### Canonical Internal Order
+
+After parsing every `QueryFilter` owns a non-empty descriptor slice ending with the `id` field:
+
+```text
+[]                                  -> [id ASC]
+[priority DESC]                     -> [priority DESC, id ASC]
+[priority DESC, id DESC]            -> [priority DESC, id DESC]
+```
+
+Canonicalization makes logically equivalent requests share subscription groups and prepared statements.
 
 ---
 
@@ -59,7 +85,7 @@ Queries use compact integer tuples on the wire to minimize message size.
 | `{ deleted_at: { isNull: true } }` | `[[5, 11]]` | `deleted_at = index 5` |
 | `{ role: { in: ['admin', 'editor'] } }` | `[[6, 9, ["admin", "editor"]]]` | `role = index 6` |
 | `{ address: { city: { eq: 'NYC' } } }` | `[[7, 0, "NYC"]]` | Flat column: `address__city = index 7` |
-| `{ orderBy: { created_at: 'desc' }, limit: 50, after: '...' }` | `{"orderBy": [8, 1], "limit": 50, "after": "..."}` | `created_at = index 8` |
+| `{ orderBy: [{ created_at: 'desc' }, { priority: 'asc' }], limit: 50, after: '...' }` | `{"orderBy": [[8, 1], [2, 0]], "limit": 50, "after": "..."}` | `created_at = index 8`, `priority = index 2` |
 
 ### Full Wire Message Layout (`StoreQuery`)
 
@@ -70,7 +96,7 @@ Queries use compact integer tuples on the wire to minimize message size.
   "table_index": 0,
   "conditions": [[3, 4, 18], [4, 0, "active"]],
   "orConditions": [[6, 0, "admin"], [6, 0, "editor"]],
-  "orderBy": [8, 1],
+  "orderBy": [[8, 1], [2, 0]],
   "limit": 50,
   "after": "eyJpZCI6..."
 }

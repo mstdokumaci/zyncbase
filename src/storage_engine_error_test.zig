@@ -232,7 +232,7 @@ test "storage: extended errcode classifies real unique collision as UniqueConstr
     try testing.expectEqual(error.ConstraintViolation, st_errors.classifyStepError(&fk_db));
 }
 
-// ponytail: static fixture slices must outlive buildRuntimeTable's clone.
+// static fixture slices must outlive buildRuntimeTable's clone.
 const unique_project_fields = [_]schema_types.Field{
     schema_helpers.makeField("slug", .text),
     schema_helpers.makeField("provider", .text),
@@ -249,7 +249,7 @@ fn uniqueProjectsTable() schema_types.Table {
     return table;
 }
 
-// ponytail: static fixture slices must outlive buildRuntimeTable's clone.
+// static fixture slices must outlive buildRuntimeTable's clone.
 const global_code_fields = [_]schema_types.Field{schema_helpers.makeField("code", .text)};
 const global_code_constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
 
