@@ -274,7 +274,7 @@ fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema_types.OnD
     try buf.appendSlice(allocator, fragment);
 }
 
-/// Emit one managed-index statement: `CREATE [UNIQUE] INDEX IF NOT EXISTS ...`
+/// Emit one managed-index statement: `CREATE [UNIQUE] INDEX ...`
 fn emitManagedIndex(allocator: std.mem.Allocator, buf: *SqlBuf, table: *const schema_types.Table, managed_index: ManagedIndex) !void {
     if (managed_index.isUnique()) {
         try buf.appendSlice(allocator, "CREATE UNIQUE INDEX ");
