@@ -275,6 +275,19 @@ test "schema_parse: preserves exact i64 precision for integer bounds" {
     ));
 }
 
+test "schema_parse: accepts integral float bounds beyond 2^53" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"metrics":{"fields":{"val":{"type":"integer","minimum":9007199254740994.0}}}}}
+    );
+    defer parsed.deinit();
+
+    const metrics = parsed.table("metrics") orelse return error.TestExpectedValue;
+    const field = metrics.field("val") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(?schema_types.Constraints.Bound, .{ .integer = 9007199254740994 }), field.constraints.?.minimum);
+}
+
 test "schema_parse: implicit users is canonical first table" {
     const allocator = std.testing.allocator;
 

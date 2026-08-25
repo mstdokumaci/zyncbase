@@ -290,7 +290,9 @@ fn parseIntegerBound(value: std.json.Value) !i64 {
         .float => |float| blk: {
             if (std.math.isNan(float) or std.math.isInf(float)) return error.InvalidConstraint;
             if (float != @trunc(float)) return error.InvalidConstraint;
-            if (float < -9007199254740992.0 or float > 9007199254740992.0) return error.InvalidConstraint;
+            const min_i64_float: f64 = @floatFromInt(std.math.minInt(i64));
+            const max_i64_exclusive = -min_i64_float;
+            if (float < min_i64_float or float >= max_i64_exclusive) return error.InvalidConstraint;
             break :blk @intFromFloat(float);
         },
         else => error.InvalidConstraint,
