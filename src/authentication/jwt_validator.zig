@@ -40,25 +40,12 @@ pub const Jwk = struct {
     pkey: ?*anyopaque = null,
 
     pub fn clone(self: Jwk, allocator: Allocator) !Jwk {
-        var cloned = Jwk{
-            .kty = try allocator.dupe(u8, self.kty),
-            .kid = try allocator.dupe(u8, self.kid),
-            .alg = if (self.alg) |a| try allocator.dupe(u8, a) else null,
-            .n = if (self.n) |n| try allocator.dupe(u8, n) else null,
-            .e = if (self.e) |e| try allocator.dupe(u8, e) else null,
-            .crv = if (self.crv) |crv_v| try allocator.dupe(u8, crv_v) else null,
-            .x = if (self.x) |x| try allocator.dupe(u8, x) else null,
-            .y = if (self.y) |y| try allocator.dupe(u8, y) else null,
-            .pkey = null,
-        };
+        var cloned = try cloneJwkStrings(allocator, self);
+        errdefer cloned.deinit(allocator);
 
         if (self.pkey) |p| {
-            if (c.openssl_pkey_up_ref(p) == 1) {
-                cloned.pkey = p;
-            } else {
-                cloned.deinit(allocator);
-                return error.PkeyRefFailed;
-            }
+            if (c.openssl_pkey_up_ref(p) != 1) return error.PkeyRefFailed;
+            cloned.pkey = p;
         }
 
         return cloned;
@@ -126,6 +113,44 @@ pub const Jwk = struct {
         }
     }
 };
+
+fn dupeOptionalBytes(allocator: Allocator, value: ?[]const u8) !?[]const u8 {
+    return if (value) |bytes| try allocator.dupe(u8, bytes) else null;
+}
+
+fn freeOptionalBytes(allocator: Allocator, value: ?[]const u8) void {
+    if (value) |bytes| allocator.free(bytes);
+}
+
+fn cloneJwkStrings(allocator: Allocator, source: Jwk) !Jwk {
+    const kty = try allocator.dupe(u8, source.kty);
+    errdefer allocator.free(kty);
+    const kid = try allocator.dupe(u8, source.kid);
+    errdefer allocator.free(kid);
+    const alg = try dupeOptionalBytes(allocator, source.alg);
+    errdefer freeOptionalBytes(allocator, alg);
+    const n = try dupeOptionalBytes(allocator, source.n);
+    errdefer freeOptionalBytes(allocator, n);
+    const e = try dupeOptionalBytes(allocator, source.e);
+    errdefer freeOptionalBytes(allocator, e);
+    const crv = try dupeOptionalBytes(allocator, source.crv);
+    errdefer freeOptionalBytes(allocator, crv);
+    const x = try dupeOptionalBytes(allocator, source.x);
+    errdefer freeOptionalBytes(allocator, x);
+    const y = try dupeOptionalBytes(allocator, source.y);
+    errdefer freeOptionalBytes(allocator, y);
+
+    return .{
+        .kty = kty,
+        .kid = kid,
+        .alg = alg,
+        .n = n,
+        .e = e,
+        .crv = crv,
+        .x = x,
+        .y = y,
+    };
+}
 
 pub const JwksState = struct {
     keys: []Jwk,
@@ -306,35 +331,17 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
         list.deinit(allocator);
     }
     for (parsed.value.keys) |key| {
-        const kty = try allocator.dupe(u8, key.kty);
-        errdefer allocator.free(kty);
-        const kid = try allocator.dupe(u8, key.kid);
-        errdefer allocator.free(kid);
-        const alg = if (key.alg) |a| try allocator.dupe(u8, a) else null;
-        errdefer if (alg) |a| allocator.free(a);
-        const n = if (key.n) |n| try allocator.dupe(u8, n) else null;
-        errdefer if (n) |v| allocator.free(v);
-        const e = if (key.e) |e| try allocator.dupe(u8, e) else null;
-        errdefer if (e) |v| allocator.free(v);
-        const crv = if (key.crv) |crv_v| try allocator.dupe(u8, crv_v) else null;
-        errdefer if (crv) |v| allocator.free(v);
-        const x = if (key.x) |x| try allocator.dupe(u8, x) else null;
-        errdefer if (x) |v| allocator.free(v);
-        const y = if (key.y) |y| try allocator.dupe(u8, y) else null;
-        errdefer if (y) |v| allocator.free(v);
-
-        var jwk = Jwk{
-            .kty = kty,
-            .kid = kid,
-            .alg = alg,
-            .n = n,
-            .e = e,
-            .crv = crv,
-            .x = x,
-            .y = y,
-            .pkey = null,
-        };
-        errdefer if (jwk.pkey) |p| c.openssl_pkey_free(p);
+        var jwk = try (Jwk{
+            .kty = key.kty,
+            .kid = key.kid,
+            .alg = key.alg,
+            .n = key.n,
+            .e = key.e,
+            .crv = key.crv,
+            .x = key.x,
+            .y = key.y,
+        }).clone(allocator);
+        errdefer jwk.deinit(allocator);
         try jwk.buildPkey(allocator);
         try list.append(allocator, jwk);
     }

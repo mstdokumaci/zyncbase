@@ -116,40 +116,35 @@ fn writeFieldDefinition(w: *json_write.Writer, field: types.Field) !void {
         try w.rawField("metadata", metadata.json);
     }
     if (field.constraints) |c| {
-        if (c.enum_values) |enums| {
-            try w.beginArrayField("enum");
-            for (enums) |e| {
-                switch (e) {
-                    .text => |t| try w.stringValue(t),
-                    .integer => |i| try w.intValue(i),
-                    .real => |r| try w.floatValue(r),
-                }
-            }
-            try w.endArray();
+        try writeConstraints(w, c);
+    }
+}
+
+fn writeConstraints(w: *json_write.Writer, constraints: types.Constraints) !void {
+    if (constraints.enum_values) |enums| try writeEnumValues(w, enums);
+    if (constraints.pattern_source) |pattern| try w.field("pattern", pattern);
+    if (constraints.format) |constraint_format| try w.field("format", constraint_format.schemaName());
+    if (constraints.min_length) |min_length| try w.intField("minLength", min_length);
+    if (constraints.max_length) |max_length| try w.intField("maxLength", max_length);
+    if (constraints.minimum) |minimum| try writeBoundField(w, "minimum", minimum);
+    if (constraints.maximum) |maximum| try writeBoundField(w, "maximum", maximum);
+}
+
+fn writeEnumValues(w: *json_write.Writer, enums: []const types.Constraints.EnumValue) !void {
+    try w.beginArrayField("enum");
+    for (enums) |value| {
+        switch (value) {
+            .text => |text| try w.stringValue(text),
+            .integer => |integer| try w.intValue(integer),
+            .real => |real| try w.floatValue(real),
         }
-        if (c.pattern_source) |pat| {
-            try w.field("pattern", pat);
-        }
-        if (c.format) |fmt| {
-            try w.field("format", fmt.schemaName());
-        }
-        if (c.min_length) |min_l| {
-            try w.intField("minLength", min_l);
-        }
-        if (c.max_length) |max_l| {
-            try w.intField("maxLength", max_l);
-        }
-        if (c.minimum) |min_val| {
-            switch (min_val) {
-                .integer => |i| try w.intField("minimum", i),
-                .real => |r| try w.floatField("minimum", r),
-            }
-        }
-        if (c.maximum) |max_val| {
-            switch (max_val) {
-                .integer => |i| try w.intField("maximum", i),
-                .real => |r| try w.floatField("maximum", r),
-            }
-        }
+    }
+    try w.endArray();
+}
+
+fn writeBoundField(w: *json_write.Writer, key: []const u8, bound: types.Constraints.Bound) !void {
+    switch (bound) {
+        .integer => |integer| try w.intField(key, integer),
+        .real => |real| try w.floatField(key, real),
     }
 }

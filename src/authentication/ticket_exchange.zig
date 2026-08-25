@@ -300,15 +300,70 @@ pub const RequestContext = struct {
     response_sent: bool,
 };
 
+fn destroyRequestContext(ctx: *RequestContext) void {
+    ctx.body.deinit(ctx.allocator);
+    if (ctx.auth_header) |header| ctx.allocator.free(header);
+    ctx.allocator.destroy(ctx);
+}
+
+fn sendInternalServerError(ctx: *RequestContext) void {
+    const ssl: c_int = if (ctx.ssl) 1 else 0;
+    c.uws_res_write_status(ssl, ctx.res, "500 Internal Server Error", "500 Internal Server Error".len);
+    c.uws_res_end(ssl, ctx.res, "Internal Server Error", "Internal Server Error".len, 0);
+}
+
+const TicketErrorResponse = struct {
+    status: []const u8,
+    code: []const u8,
+    message: []const u8,
+};
+
+fn ticketErrorResponse(err: anyerror) TicketErrorResponse {
+    return switch (err) {
+        error.InvalidMessage => .{
+            .status = "400 Bad Request",
+            .code = "INVALID_MESSAGE",
+            .message = "Identity verification failed",
+        },
+        error.InvalidAnonymousSubject => .{
+            .status = "400 Bad Request",
+            .code = "INVALID_MESSAGE",
+            .message = "Anonymous subject formatted incorrectly",
+        },
+        error.AnonymousDisabled => .{
+            .status = "401 Unauthorized",
+            .code = "AUTH_FAILED",
+            .message = "Anonymous authentication is disabled",
+        },
+        else => .{
+            .status = "401 Unauthorized",
+            .code = "AUTH_FAILED",
+            .message = "Identity verification failed",
+        },
+    };
+}
+
+fn sendTicketError(ctx: *RequestContext, err: anyerror) void {
+    const response = ticketErrorResponse(err);
+    const ssl: c_int = if (ctx.ssl) 1 else 0;
+    c.uws_res_write_status(ssl, ctx.res, response.status.ptr, response.status.len);
+    c.uws_res_write_header(ssl, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+
+    var response_buf: [256]u8 = undefined;
+    const body = std.fmt.bufPrint(&response_buf, "{{\"code\":\"{s}\",\"message\":\"{s}\"}}", .{ response.code, response.message }) catch |fmt_err| blk: {
+        std.log.warn("Failed to format error response: {}", .{fmt_err});
+        break :blk "{\"code\":\"AUTH_FAILED\"}";
+    };
+    c.uws_res_end(ssl, ctx.res, body.ptr, body.len, 0);
+}
+
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
     if (user_data == null) return;
     const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
     if (ctx.response_sent) {
         // Response was already sent; clean up the context now that
         // uWebSockets can no longer invoke the abort callback.
-        ctx.body.deinit(ctx.allocator);
-        if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
-        ctx.allocator.destroy(ctx);
+        destroyRequestContext(ctx);
     } else {
         ctx.aborted = true;
     }
@@ -321,53 +376,21 @@ fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_
     if (ctx.aborted) return;
 
     ctx.body.appendSlice(ctx.allocator, chunk[0..chunk_len]) catch {
-        const ssl_val: c_int = if (ctx.ssl) 1 else 0;
-        c.uws_res_write_status(ssl_val, ctx.res, "500 Internal Server Error", "500 Internal Server Error".len);
-        c.uws_res_end(ssl_val, ctx.res, "Internal Server Error", "Internal Server Error".len, 0);
-        ctx.body.deinit(ctx.allocator);
-        if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
-        ctx.allocator.destroy(ctx);
+        sendInternalServerError(ctx);
+        destroyRequestContext(ctx);
         return;
     };
 
     if (is_last != 0) {
         ctx.exchange.handlePostTicketComplete(ctx) catch |err| {
             std.log.warn("Error handling ticket POST: {}", .{err});
-            if (!ctx.aborted) {
-                const ssl_val: c_int = if (ctx.ssl) 1 else 0;
-                const status = if (err == error.InvalidMessage or err == error.InvalidAnonymousSubject)
-                    "400 Bad Request"
-                else
-                    "401 Unauthorized";
-                const code = if (err == error.InvalidMessage or err == error.InvalidAnonymousSubject)
-                    "INVALID_MESSAGE"
-                else
-                    "AUTH_FAILED";
-                const message = if (err == error.AnonymousDisabled)
-                    "Anonymous authentication is disabled"
-                else if (err == error.InvalidAnonymousSubject)
-                    "Anonymous subject formatted incorrectly"
-                else
-                    "Identity verification failed";
-
-                c.uws_res_write_status(ssl_val, ctx.res, status.ptr, status.len);
-                c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
-
-                var resp_buf: [256]u8 = undefined;
-                const resp = std.fmt.bufPrint(&resp_buf, "{{\"code\":\"{s}\",\"message\":\"{s}\"}}", .{ code, message }) catch |fmt_err| blk: {
-                    std.log.warn("Failed to format error response: {}", .{fmt_err});
-                    break :blk "{\"code\":\"AUTH_FAILED\"}";
-                };
-                c.uws_res_end(ssl_val, ctx.res, resp.ptr, resp.len, 0);
-            }
+            if (!ctx.aborted) sendTicketError(ctx, err);
         };
 
         if (ctx.aborted) {
             // Aborted before response was sent — no callback will follow,
             // safe to destroy now.
-            ctx.body.deinit(ctx.allocator);
-            if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
-            ctx.allocator.destroy(ctx);
+            destroyRequestContext(ctx);
         } else {
             // Response was sent; keep ctx alive so onAbortedCallback can
             // safely access it if uWebSockets fires the abort after the send.

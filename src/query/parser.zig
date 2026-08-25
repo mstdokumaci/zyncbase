@@ -128,17 +128,7 @@ pub fn parseQueryFilter(
     var after_token: ?[]u8 = null;
 
     errdefer {
-        if (predicate.conditions) |conds| {
-            for (conds) |*c| c.deinit(allocator);
-            allocator.free(conds);
-        }
-        if (predicate.or_clauses) |clauses| {
-            for (clauses) |clause| {
-                for (clause) |*c| c.deinit(allocator);
-                allocator.free(clause);
-            }
-            allocator.free(clauses);
-        }
+        predicate.deinit(allocator);
         if (after) |*a| a.deinit(allocator);
         if (after_token) |token| allocator.free(token);
     }

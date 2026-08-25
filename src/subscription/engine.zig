@@ -390,6 +390,43 @@ pub const SubscriptionEngine = struct {
         op: MatchOp,
     };
 
+    inline fn appendSubscriberMatches(
+        self: *SubscriptionEngine,
+        allocator: Allocator,
+        matched_before: []const u64,
+        matched_after: []const u64,
+        matches: *std.ArrayListUnmanaged(Match),
+    ) !void {
+        var after_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer after_set.deinit(allocator);
+        for (matched_after) |gid| try after_set.put(allocator, gid, {});
+
+        for (matched_after) |gid| {
+            const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .set_op,
+                });
+            }
+        }
+
+        for (matched_before) |gid| {
+            if (after_set.contains(gid)) continue;
+            const group = self.groups.get(gid) orelse continue;
+            var sub_it = group.subscribers.keyIterator();
+            while (sub_it.next()) |sub| {
+                try matches.append(allocator, .{
+                    .connection_id = sub.connection_id,
+                    .subscription_id = sub.id,
+                    .op = .remove,
+                });
+            }
+        }
+    }
+
     pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
         self.mutex.lockSharedUncancelable(self.io);
         defer self.mutex.unlockShared(self.io);
@@ -418,37 +455,7 @@ pub const SubscriptionEngine = struct {
             try self.filterResidualMatches(&matched_after, &new);
         }
 
-        // Build after-set for O(1) membership checks.
-        var after_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer after_set.deinit(allocator);
-        for (matched_after.items) |gid| try after_set.put(allocator, gid, {});
-
-        // Emit set for all after-matches (enter + within).
-        for (matched_after.items) |gid| {
-            const group = self.groups.get(gid) orelse continue;
-            var sub_it = group.subscribers.keyIterator();
-            while (sub_it.next()) |sub| {
-                try matches.append(allocator, .{
-                    .connection_id = sub.connection_id,
-                    .subscription_id = sub.id,
-                    .op = .set_op,
-                });
-            }
-        }
-
-        // Emit remove for before-only (leave).
-        for (matched_before.items) |gid| {
-            if (after_set.contains(gid)) continue; // within-change, already emitted as set
-            const group = self.groups.get(gid) orelse continue;
-            var sub_it = group.subscribers.keyIterator();
-            while (sub_it.next()) |sub| {
-                try matches.append(allocator, .{
-                    .connection_id = sub.connection_id,
-                    .subscription_id = sub.id,
-                    .op = .remove,
-                });
-            }
-        }
+        try self.appendSubscriberMatches(allocator, matched_before.items, matched_after.items, &matches);
 
         return try matches.toOwnedSlice(allocator);
     }
