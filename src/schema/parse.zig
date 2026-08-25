@@ -10,9 +10,13 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 
-const all_field_keys = [_][]const u8{
+const store_field_keys = [_][]const u8{
     "type", "indexed", "references", "onDelete",  "items",     "fields",  "metadata",
     "enum", "pattern", "format",     "minLength", "maxLength", "minimum", "maximum",
+};
+
+const presence_leaf_field_keys = [_][]const u8{
+    "type", "enum", "pattern", "format", "minLength", "maxLength", "minimum", "maximum",
 };
 
 fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
@@ -124,6 +128,7 @@ fn collectPresenceFields(
     if (root_obj.get("presence")) |presence_val| {
         if (presence_val != .object) return error.InvalidSchema;
         const po = presence_val.object;
+        try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "user", "shared" }, po);
         if (po.get("user")) |user_val| {
             try parsePresenceTier(allocator, user_val, presence_user_fields);
         }
@@ -180,9 +185,8 @@ fn parseObjectFields(
         if (!isValidFieldIdentifier(field_name)) return error.InvalidFieldName;
         if (field_def != .object) return error.InvalidFieldDefinition;
 
-        try ctx.preValidate(field_name, field_def);
-
         const type_value = (json_read.getString(field_def.object, "type") catch return error.InvalidFieldType) orelse return error.MissingFieldType;
+        try ctx.preValidate(field_name, type_value, field_def);
 
         const full_name = try field_path.join(allocator, prefix, field_name);
         errdefer allocator.free(full_name);
@@ -392,10 +396,10 @@ const StoreFieldContext = struct {
     required_set: *std.StringHashMap(bool),
     reserve_external_id: bool,
 
-    fn preValidate(ctx: *@This(), name: []const u8, def: std.json.Value) !void {
+    fn preValidate(ctx: *@This(), name: []const u8, _: []const u8, def: std.json.Value) !void {
         if (system.isSystemColumn(name)) return error.ReservedFieldName;
         if (ctx.reserve_external_id and std.mem.eql(u8, name, "external_id")) return error.ReservedFieldName;
-        try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &all_field_keys, def.object);
+        try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &store_field_keys, def.object);
     }
 
     fn preObjectValidate(ctx: *@This(), full_name: []const u8) !void {
@@ -460,8 +464,12 @@ const StoreFieldContext = struct {
 const PresenceFieldContext = struct {
     fields_list: *std.ArrayListUnmanaged(types.PresenceField),
 
-    fn preValidate(_: *@This(), _: []const u8, def: std.json.Value) !void {
-        try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &all_field_keys, def.object);
+    fn preValidate(_: *@This(), _: []const u8, type_str: []const u8, def: std.json.Value) !void {
+        if (std.mem.eql(u8, type_str, "object")) {
+            try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "type", "fields" }, def.object);
+        } else {
+            try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &presence_leaf_field_keys, def.object);
+        }
     }
 
     fn preObjectValidate(_: *@This(), _: []const u8) !void {}

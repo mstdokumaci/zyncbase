@@ -84,6 +84,21 @@ test "schema_parse: rejects unknown keys outside extension points" {
     try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"title":{"type":"string","nullable":false}}}}}
     ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"presence":{"users":{}}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"presence":{"required":["status"],"user":{}}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"presence":{"user":{"status":{"type":"string","indexed":true}}}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"presence":{"user":{"status":{"type":"string","metadata":{}}}}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"presence":{"user":{"status":{"type":"string","fields":{}}}}}
+    ));
 }
 
 test "schema_parse: parses and stores constraint keywords" {

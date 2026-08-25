@@ -122,6 +122,49 @@ test "MessageHandler: store operations require ready scope" {
     try testing.expectEqualStrings("SESSION_NOT_READY", result.code.?);
 }
 
+test "MessageHandler: invalid constrained presence value fails before acknowledgement" {
+    const allocator = std.testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "mh-presence-validation",
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{},
+        \\  "presence":{"user":{"status":{"type":"string","enum":["active","idle"]}}}
+        \\}
+    );
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    sc.conn.pending_presence_namespace = try sc.conn.allocator.dupe(u8, "public");
+    try testing.expect(sc.conn.setScopeIfSeq(sc.conn.presence_scope_seq, sc.conn.namespace_id, sc.conn.user_doc_id, true));
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
+    try writer.writeByte(0x83); // fixmap(3)
+    try msgpack.writeMsgPackStr(writer, "type");
+    try writer.writeByte(@intFromEnum(MessageType.presence_set));
+    try msgpack.writeMsgPackStr(writer, "id");
+    try writer.writeByte(1);
+    try msgpack.writeMsgPackStr(writer, "data");
+    try writer.writeByte(0x91); // fixarray(1)
+    try writer.writeByte(0x92); // fixarray(2)
+    try writer.writeByte(0); // status field index
+    try msgpack.writeMsgPackStr(writer, "banned");
+
+    const message = try buf.toOwnedSlice();
+    defer allocator.free(message);
+    const response = try routeWithArena(&app.handler, allocator, sc.conn, message);
+    defer allocator.free(response);
+    const result = try parseResponse(allocator, response);
+    defer if (result.code) |code| allocator.free(code);
+
+    try testing.expectEqual(MessageType.@"error", result.resp_type);
+    try testing.expectEqualStrings("SCHEMA_VALIDATION_FAILED", result.code.?);
+}
+
 test "MessageHandler: StoreSet document with auth predicate persists and is readable" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;

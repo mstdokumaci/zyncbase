@@ -2,7 +2,7 @@
 
 **Drivers**: [ADR-017](../architecture/adrs.md#adr-017-strict-sdk-api-surface--store-vs-presence), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system), [Wire Protocol](./wire-protocol.md), [Auth System](./auth-system.md)
 
-Presence is an in-memory, typed, two-tier system. User presence is keyed by resolved namespace/user/connection, while shared presence is keyed by namespace and field. Presence writes are fire-and-forget unless the wire request itself is malformed or unauthorized.
+Presence is an in-memory, typed, two-tier system. User presence is keyed by resolved namespace/user/connection, while shared presence is keyed by namespace and field. Presence writes are authorized and schema-validated before acknowledgement; the accepted mutation is then queued fire-and-forget.
 
 ## Source Files
 
@@ -53,7 +53,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 - Presence messages and push names are owned by [Wire Protocol](./wire-protocol.md).
 - Presence field ids and dictionary shape come from schema sync; do not duplicate the integer encoding catalog here.
-- Presence writes use schema field ids and runtime type validation from the schema.
+- Presence writes use schema field ids and enforce types and value constraints before queueing.
 - User and shared channels are separate push streams.
 
 ## Authorization
@@ -82,7 +82,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 | Field limit | 500 per tier | Hard limit on flat presence fields per user/shared tier. |
 | Latency target | Sub-100 ms | Presence operations should complete within 100 ms end-to-end. |
 
-**Overflow policy**: Presence writes are fire-and-forget after authorization. If enqueue/allocation fails at the service boundary, the failure is logged and that ephemeral operation is dropped rather than blocking the event loop indefinitely.
+**Overflow policy**: Presence writes are fire-and-forget after authorization and schema validation. If enqueue/allocation fails at the service boundary, the failure is logged and that ephemeral operation is dropped rather than blocking the event loop indefinitely.
 
 ## Threading Model
 
