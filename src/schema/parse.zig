@@ -10,14 +10,15 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 
-const store_field_keys = [_][]const u8{
-    "type", "indexed", "references", "onDelete",  "items",     "fields",  "metadata",
-    "enum", "pattern", "format",     "minLength", "maxLength", "minimum", "maximum",
+const constraint_keys = [_][]const u8{
+    "enum", "pattern", "format", "minLength", "maxLength", "minimum", "maximum",
 };
 
-const presence_leaf_field_keys = [_][]const u8{
-    "type", "enum", "pattern", "format", "minLength", "maxLength", "minimum", "maximum",
-};
+const store_field_keys = [_][]const u8{
+    "type", "indexed", "references", "onDelete", "items", "fields", "metadata",
+} ++ constraint_keys;
+
+const presence_leaf_field_keys = [_][]const u8{"type"} ++ constraint_keys;
 
 fn cloneMetadata(allocator: Allocator, value: std.json.Value) !types.Metadata {
     if (value != .object) return error.InvalidMetadata;
@@ -160,13 +161,10 @@ fn parsePresenceTier(
 }
 
 fn hasConstraintKeys(field_obj: std.json.ObjectMap) bool {
-    return field_obj.contains("enum") or
-        field_obj.contains("pattern") or
-        field_obj.contains("format") or
-        field_obj.contains("minLength") or
-        field_obj.contains("maxLength") or
-        field_obj.contains("minimum") or
-        field_obj.contains("maximum");
+    for (constraint_keys) |key| {
+        if (field_obj.contains(key)) return true;
+    }
+    return false;
 }
 
 /// Shared recursive object-field parser. Flattens nested objects using `__` prefix.
@@ -206,188 +204,149 @@ fn parseObjectFields(
     }
 }
 
-fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_obj: std.json.ObjectMap) !?types.Constraints {
-    if (!hasConstraintKeys(field_obj)) {
-        return null;
+fn hasAnyKey(object: std.json.ObjectMap, keys: []const []const u8) bool {
+    for (keys) |key| {
+        if (object.contains(key)) return true;
     }
+    return false;
+}
 
-    const has_pattern = field_obj.contains("pattern");
-    const has_format = field_obj.contains("format");
-    const has_min_length = field_obj.contains("minLength");
-    const has_max_length = field_obj.contains("maxLength");
-    const has_min = field_obj.contains("minimum");
-    const has_max = field_obj.contains("maximum");
-
-    // Type compatibility checks
-    if (declared_type == .array or declared_type == .boolean or declared_type == .doc_id) {
-        return error.InvalidConstraint;
+fn validateConstraintApplicability(declared_type: types.FieldType, field_obj: std.json.ObjectMap) !void {
+    switch (declared_type) {
+        .text => if (hasAnyKey(field_obj, &.{ "minimum", "maximum" })) return error.InvalidConstraint,
+        .integer, .real => if (hasAnyKey(field_obj, &.{ "pattern", "format", "minLength", "maxLength" })) return error.InvalidConstraint,
+        else => return error.InvalidConstraint,
     }
-    if (declared_type != .text and (has_pattern or has_format or has_min_length or has_max_length)) {
-        return error.InvalidConstraint;
-    }
-    if (declared_type != .integer and declared_type != .real and (has_min or has_max)) {
-        return error.InvalidConstraint;
-    }
+}
 
-    var enum_values: ?[]const types.Constraints.EnumValue = null;
-    var pattern_source: ?[]const u8 = null;
-    var compiled_regex: ?*anyopaque = null;
-    var format: ?types.Constraints.Format = null;
-    var min_length: ?u64 = null;
-    var max_length: ?u64 = null;
-    var minimum: ?types.Constraints.Bound = null;
-    var maximum: ?types.Constraints.Bound = null;
-
-    errdefer {
-        if (enum_values) |enums| {
-            for (enums) |e| e.deinit(allocator);
-            allocator.free(enums);
-        }
-        if (pattern_source) |p| allocator.free(p);
-        if (compiled_regex) |r| schema_constraints.freePattern(allocator, r);
-    }
-
-    if (field_obj.get("enum")) |enum_val| {
-        if (enum_val != .array) return error.InvalidConstraint;
-        const items = enum_val.array.items;
-        if (items.len == 0) return error.InvalidConstraint;
-
-        const list = try allocator.alloc(types.Constraints.EnumValue, items.len);
-        var built: usize = 0;
-        errdefer {
-            for (list[0..built]) |e| e.deinit(allocator);
-            allocator.free(list);
-        }
-
-        for (items) |item| {
-            switch (declared_type) {
-                .text => {
-                    if (item != .string) return error.InvalidConstraint;
-                    list[built] = .{ .text = try allocator.dupe(u8, item.string) };
-                },
-                .integer => {
-                    if (item != .integer) return error.InvalidConstraint;
-                    list[built] = .{ .integer = item.integer };
-                },
-                .real => {
-                    const num: f64 = switch (item) {
-                        .float => |f| f,
-                        .integer => |i| @floatFromInt(i),
-                        else => return error.InvalidConstraint,
-                    };
-                    list[built] = .{ .real = num };
-                },
-                else => return error.InvalidConstraint,
-            }
-            built += 1;
-        }
-        enum_values = list;
-    }
-
-    if (field_obj.get("pattern")) |pattern_val| {
-        if (pattern_val != .string or pattern_val.string.len == 0 or std.mem.indexOfScalar(u8, pattern_val.string, 0) != null) return error.InvalidConstraint;
-        const reg = schema_constraints.compilePattern(allocator, pattern_val.string) catch return error.InvalidConstraint;
-        compiled_regex = reg;
-        pattern_source = try allocator.dupe(u8, pattern_val.string);
-    }
-
-    if (field_obj.get("format")) |format_val| {
-        if (format_val != .string) return error.InvalidConstraint;
-        format = types.Constraints.Format.fromString(format_val.string) orelse return error.InvalidConstraint;
-    }
-
-    if (field_obj.get("minLength")) |min_l_val| {
-        if (min_l_val != .integer or min_l_val.integer < 0) return error.InvalidConstraint;
-        min_length = @intCast(min_l_val.integer);
-    }
-
-    if (field_obj.get("maxLength")) |max_l_val| {
-        if (max_l_val != .integer or max_l_val.integer < 0) return error.InvalidConstraint;
-        max_length = @intCast(max_l_val.integer);
-    }
-
-    if (min_length != null and max_length != null) {
-        if (min_length.? > max_length.?) return error.InvalidConstraint;
-    }
-
-    if (field_obj.get("minimum")) |min_val| {
-        switch (declared_type) {
-            .integer => {
-                const val: i64 = switch (min_val) {
-                    .integer => |i| i,
-                    .float => |f| blk: {
-                        if (std.math.isNan(f) or std.math.isInf(f)) return error.InvalidConstraint;
-                        if (f != @trunc(f)) return error.InvalidConstraint;
-                        if (f < -9007199254740992.0 or f > 9007199254740992.0) return error.InvalidConstraint;
-                        break :blk @intFromFloat(f);
-                    },
-                    else => return error.InvalidConstraint,
-                };
-                minimum = .{ .integer = val };
-            },
-            .real => {
-                const val: f64 = switch (min_val) {
-                    .float => |f| f,
-                    .integer => |i| @floatFromInt(i),
-                    else => return error.InvalidConstraint,
-                };
-                if (std.math.isNan(val) or std.math.isInf(val)) return error.InvalidConstraint;
-                minimum = .{ .real = val };
-            },
+fn parseEnumValue(allocator: Allocator, declared_type: types.FieldType, item: std.json.Value) !types.Constraints.EnumValue {
+    return switch (declared_type) {
+        .text => if (item == .string)
+            .{ .text = try allocator.dupe(u8, item.string) }
+        else
+            error.InvalidConstraint,
+        .integer => if (item == .integer)
+            .{ .integer = item.integer }
+        else
+            error.InvalidConstraint,
+        .real => .{ .real = switch (item) {
+            .float => |f| f,
+            .integer => |i| @floatFromInt(i),
             else => return error.InvalidConstraint,
-        }
-    }
-
-    if (field_obj.get("maximum")) |max_val| {
-        switch (declared_type) {
-            .integer => {
-                const val: i64 = switch (max_val) {
-                    .integer => |i| i,
-                    .float => |f| blk: {
-                        if (std.math.isNan(f) or std.math.isInf(f)) return error.InvalidConstraint;
-                        if (f != @trunc(f)) return error.InvalidConstraint;
-                        if (f < -9007199254740992.0 or f > 9007199254740992.0) return error.InvalidConstraint;
-                        break :blk @intFromFloat(f);
-                    },
-                    else => return error.InvalidConstraint,
-                };
-                maximum = .{ .integer = val };
-            },
-            .real => {
-                const val: f64 = switch (max_val) {
-                    .float => |f| f,
-                    .integer => |i| @floatFromInt(i),
-                    else => return error.InvalidConstraint,
-                };
-                if (std.math.isNan(val) or std.math.isInf(val)) return error.InvalidConstraint;
-                maximum = .{ .real = val };
-            },
-            else => return error.InvalidConstraint,
-        }
-    }
-
-    if (minimum != null and maximum != null) {
-        switch (declared_type) {
-            .integer => {
-                if (minimum.?.integer > maximum.?.integer) return error.InvalidConstraint;
-            },
-            .real => {
-                if (minimum.?.real > maximum.?.real) return error.InvalidConstraint;
-            },
-            else => return error.InvalidConstraint,
-        }
-    }
-
-    return .{
-        .enum_values = enum_values,
-        .pattern_source = pattern_source,
-        .compiled_regex = compiled_regex,
-        .format = format,
-        .min_length = min_length,
-        .max_length = max_length,
-        .minimum = minimum,
-        .maximum = maximum,
+        } },
+        else => error.InvalidConstraint,
     };
+}
+
+fn parseEnumConstraint(allocator: Allocator, declared_type: types.FieldType, value: ?std.json.Value) !?[]const types.Constraints.EnumValue {
+    const enum_val = value orelse return null;
+    if (enum_val != .array or enum_val.array.items.len == 0) return error.InvalidConstraint;
+
+    const list = try allocator.alloc(types.Constraints.EnumValue, enum_val.array.items.len);
+    var built: usize = 0;
+    errdefer {
+        for (list[0..built]) |item| item.deinit(allocator);
+        allocator.free(list);
+    }
+    for (enum_val.array.items) |item| {
+        list[built] = try parseEnumValue(allocator, declared_type, item);
+        built += 1;
+    }
+    return list;
+}
+
+const ParsedPattern = struct {
+    source: []const u8,
+    compiled: *anyopaque,
+};
+
+fn parsePatternConstraint(allocator: Allocator, value: ?std.json.Value) !?ParsedPattern {
+    const pattern_val = value orelse return null;
+    if (pattern_val != .string or pattern_val.string.len == 0 or std.mem.indexOfScalar(u8, pattern_val.string, 0) != null) return error.InvalidConstraint;
+
+    const compiled = schema_constraints.compilePattern(allocator, pattern_val.string) catch return error.InvalidConstraint;
+    errdefer schema_constraints.freePattern(allocator, compiled);
+    return .{
+        .source = try allocator.dupe(u8, pattern_val.string),
+        .compiled = compiled,
+    };
+}
+
+fn parseFormatConstraint(value: ?std.json.Value) !?types.Constraints.Format {
+    const format_val = value orelse return null;
+    if (format_val != .string) return error.InvalidConstraint;
+    return types.Constraints.Format.fromString(format_val.string) orelse error.InvalidConstraint;
+}
+
+fn parseLengthConstraint(value: ?std.json.Value) !?u64 {
+    const length_val = value orelse return null;
+    if (length_val != .integer or length_val.integer < 0) return error.InvalidConstraint;
+    return @intCast(length_val.integer);
+}
+
+fn parseIntegerBound(value: std.json.Value) !i64 {
+    return switch (value) {
+        .integer => |integer| integer,
+        .float => |float| blk: {
+            if (std.math.isNan(float) or std.math.isInf(float)) return error.InvalidConstraint;
+            if (float != @trunc(float)) return error.InvalidConstraint;
+            if (float < -9007199254740992.0 or float > 9007199254740992.0) return error.InvalidConstraint;
+            break :blk @intFromFloat(float);
+        },
+        else => error.InvalidConstraint,
+    };
+}
+
+fn parseRealBound(value: std.json.Value) !f64 {
+    const result: f64 = switch (value) {
+        .float => |float| float,
+        .integer => |integer| @floatFromInt(integer),
+        else => return error.InvalidConstraint,
+    };
+    if (std.math.isNan(result) or std.math.isInf(result)) return error.InvalidConstraint;
+    return result;
+}
+
+fn parseBound(declared_type: types.FieldType, value: ?std.json.Value) !?types.Constraints.Bound {
+    const bound = value orelse return null;
+    return switch (declared_type) {
+        .integer => .{ .integer = try parseIntegerBound(bound) },
+        .real => .{ .real = try parseRealBound(bound) },
+        else => error.InvalidConstraint,
+    };
+}
+
+fn validateConstraintOrder(declared_type: types.FieldType, constraints: types.Constraints) !void {
+    if (constraints.min_length != null and constraints.max_length != null and constraints.min_length.? > constraints.max_length.?) {
+        return error.InvalidConstraint;
+    }
+    if (constraints.minimum == null or constraints.maximum == null) return;
+    switch (declared_type) {
+        .integer => if (constraints.minimum.?.integer > constraints.maximum.?.integer) return error.InvalidConstraint,
+        .real => if (constraints.minimum.?.real > constraints.maximum.?.real) return error.InvalidConstraint,
+        else => return error.InvalidConstraint,
+    }
+}
+
+fn parseConstraints(allocator: Allocator, declared_type: types.FieldType, field_obj: std.json.ObjectMap) !?types.Constraints {
+    if (!hasConstraintKeys(field_obj)) return null;
+    try validateConstraintApplicability(declared_type, field_obj);
+
+    var constraints: types.Constraints = .{};
+    errdefer constraints.deinit(allocator);
+
+    constraints.enum_values = try parseEnumConstraint(allocator, declared_type, field_obj.get("enum"));
+    if (try parsePatternConstraint(allocator, field_obj.get("pattern"))) |pattern| {
+        constraints.pattern_source = pattern.source;
+        constraints.compiled_regex = pattern.compiled;
+    }
+    constraints.format = try parseFormatConstraint(field_obj.get("format"));
+    constraints.min_length = try parseLengthConstraint(field_obj.get("minLength"));
+    constraints.max_length = try parseLengthConstraint(field_obj.get("maxLength"));
+    constraints.minimum = try parseBound(declared_type, field_obj.get("minimum"));
+    constraints.maximum = try parseBound(declared_type, field_obj.get("maximum"));
+    try validateConstraintOrder(declared_type, constraints);
+    return constraints;
 }
 
 /// Context for store-field parsing (handles required_set, array items, references, etc.)
@@ -771,6 +730,44 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
 
 /// Parse the table-level `unique` array into owned constraints whose field
 /// indexes are relative to `fields` (the declared user-field list, in order).
+fn findDeclaredFieldIndex(fields: []const types.Field, name: []const u8) ?usize {
+    for (fields, 0..) |field, index_value| {
+        if (std.mem.eql(u8, field.name, name)) return index_value;
+    }
+    return null;
+}
+
+fn sameFieldSet(left: []const usize, right: []const usize) bool {
+    // ponytail: O(n²) set comparison; schema counts are startup-bounded —
+    // sort copies or add hash sets only if startup profiling proves it matters.
+    if (left.len != right.len) return false;
+    for (left) |field_index| {
+        if (std.mem.indexOfScalar(usize, right, field_index) == null) return false;
+    }
+    return true;
+}
+
+fn parseUniqueConstraint(
+    allocator: Allocator,
+    constraint_value: std.json.Value,
+    declared_fields: []const types.Field,
+) !types.UniqueConstraint {
+    if (constraint_value != .array or constraint_value.array.items.len == 0) return error.InvalidUniqueConstraint;
+
+    const indexes = try allocator.alloc(usize, constraint_value.array.items.len);
+    errdefer allocator.free(indexes);
+    for (constraint_value.array.items, 0..) |component, component_index| {
+        if (component != .string) return error.InvalidUniqueConstraint;
+        const normalized = try field_path.normalizeDots(allocator, component.string);
+        defer allocator.free(normalized);
+
+        const field_index = findDeclaredFieldIndex(declared_fields, normalized) orelse return error.InvalidUniqueConstraint;
+        if (std.mem.indexOfScalar(usize, indexes[0..component_index], field_index) != null) return error.InvalidUniqueConstraint;
+        indexes[component_index] = field_index;
+    }
+    return .{ .field_indexes = indexes };
+}
+
 fn parseUniqueConstraints(
     allocator: Allocator,
     table_obj: std.json.ObjectMap,
@@ -787,55 +784,15 @@ fn parseUniqueConstraints(
     }
 
     for (unique_value.items) |constraint_value| {
-        if (constraint_value != .array) return error.InvalidUniqueConstraint;
-        const components = constraint_value.array.items;
-        if (components.len == 0) return error.InvalidUniqueConstraint;
-
-        const indexes = try allocator.alloc(usize, components.len);
-        errdefer allocator.free(indexes);
-
-        for (components, 0..) |component, ci| {
-            if (component != .string) return error.InvalidUniqueConstraint;
-            const normalized = try field_path.normalizeDots(allocator, component.string);
-            defer allocator.free(normalized);
-
-            const field_index = blk: {
-                for (declared_fields, 0..) |field, fi| {
-                    if (std.mem.eql(u8, field.name, normalized)) break :blk fi;
-                }
-                // Missing or system field name.
-                return error.InvalidUniqueConstraint;
-            };
-
-            // ponytail: O(n²) duplicate-set scan below; schema counts are
-            // startup-bounded — hash sets only if startup profiling proves it.
-            for (indexes[0..ci]) |seen| {
-                if (seen == field_index) return error.InvalidUniqueConstraint;
-            }
-            indexes[ci] = field_index;
-        }
+        const constraint = try parseUniqueConstraint(allocator, constraint_value, declared_fields);
+        errdefer constraint.deinit(allocator);
 
         // Reject duplicate constraint field sets regardless of order.
         for (constraints[0..built]) |existing| {
-            if (existing.field_indexes.len != indexes.len) continue;
-            var all_matched = true;
-            for (indexes) |idx| {
-                var found = false;
-                for (existing.field_indexes) |other| {
-                    if (other == idx) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    all_matched = false;
-                    break;
-                }
-            }
-            if (all_matched) return error.InvalidUniqueConstraint;
+            if (sameFieldSet(existing.field_indexes, constraint.field_indexes)) return error.InvalidUniqueConstraint;
         }
 
-        constraints[built] = .{ .field_indexes = indexes };
+        constraints[built] = constraint;
         built += 1;
     }
 

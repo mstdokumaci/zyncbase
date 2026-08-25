@@ -390,6 +390,17 @@ pub const PresenceManager = struct {
         return null;
     }
 
+    inline fn findPayloadValue(
+        pairs: []msgpack.Payload,
+        index: msgpack.Payload,
+    ) ?*msgpack.Payload {
+        for (pairs) |*pair| {
+            if (pair.* != .arr or pair.*.arr.len != 2) continue;
+            if (payloadUintEqual(index, pair.*.arr[0])) return &pair.*.arr[1];
+        }
+        return null;
+    }
+
     fn mergePayloadArrays(
         self: *PresenceManager,
         target: *msgpack.Payload,
@@ -407,20 +418,11 @@ pub const PresenceManager = struct {
             if (source_pair != .arr or source_pair.arr.len != 2) continue;
             const source_idx = source_pair.arr[0];
 
-            var found = false;
-            for (target.*.arr) |*target_pair| {
-                if (target_pair.* != .arr or target_pair.*.arr.len != 2) continue;
-                const target_idx = target_pair.*.arr[0];
-                if (payloadUintEqual(source_idx, target_idx)) {
-                    const cloned_val = try source_pair.arr[1].deepClone(self.allocator);
-                    target_pair.*.arr[1].free(self.allocator);
-                    target_pair.*.arr[1] = cloned_val;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (findPayloadValue(target.*.arr, source_idx)) |target_value| {
+                const cloned_val = try source_pair.arr[1].deepClone(self.allocator);
+                target_value.free(self.allocator);
+                target_value.* = cloned_val;
+            } else {
                 const cloned_pair = try source_pair.deepClone(self.allocator);
                 try new_pairs.append(self.allocator, cloned_pair);
             }

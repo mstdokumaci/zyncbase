@@ -31,6 +31,63 @@ fn isManagedColumn(table: schema_types.Table, name: []const u8) bool {
         (table.is_users_table and std.mem.eql(u8, name, "external_id"));
 }
 
+const ForeignKeyRow = struct {
+    id: i64,
+    seq: i64,
+    table: []const u8,
+    from: []const u8,
+    to: ?[]const u8,
+    on_update: []const u8,
+    on_delete: []const u8,
+    match: []const u8,
+
+    fn deinit(self: ForeignKeyRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.table);
+        allocator.free(self.from);
+        if (self.to) |to| allocator.free(to);
+        allocator.free(self.on_update);
+        allocator.free(self.on_delete);
+        allocator.free(self.match);
+    }
+};
+
+fn expectedForeignKeyCount(fields: []const schema_types.Field) usize {
+    var count: usize = 0;
+    for (fields) |field| {
+        if (field.references != null) count += 1;
+    }
+    return count;
+}
+
+fn foreignKeyRowMatches(field: schema_types.Field, row: ForeignKeyRow, already_seen: bool) bool {
+    const reference = field.references orelse return false;
+    const target_column = row.to orelse return false;
+    return !already_seen and
+        row.seq == 0 and
+        std.mem.eql(u8, field.name, row.from) and
+        std.mem.eql(u8, reference, row.table) and
+        std.mem.eql(u8, "id", target_column) and
+        std.mem.eql(u8, "NO ACTION", row.on_update) and
+        std.mem.eql(u8, ddl_generator.onDeleteSql(field.on_delete orelse .restrict).action, row.on_delete) and
+        std.mem.eql(u8, "NONE", row.match);
+}
+
+fn markForeignKeySeen(fields: []const schema_types.Field, row: ForeignKeyRow, seen: []bool) bool {
+    for (fields, 0..) |field, field_index| {
+        if (!foreignKeyRowMatches(field, row, seen[field_index])) continue;
+        seen[field_index] = true;
+        return true;
+    }
+    return false;
+}
+
+fn allForeignKeysSeen(fields: []const schema_types.Field, seen: []const bool) bool {
+    for (fields, 0..) |field, field_index| {
+        if (field.references != null and !seen[field_index]) return false;
+    }
+    return true;
+}
+
 pub const MigrationDetector = struct {
     allocator: std.mem.Allocator,
     db: *sqlite.Db,
@@ -246,71 +303,24 @@ pub const MigrationDetector = struct {
         defer self.allocator.free(seen);
         @memset(seen, false);
 
-        var expected_count: usize = 0;
-        for (fields) |field| {
-            if (field.references != null) expected_count += 1;
-        }
+        const expected_count = expectedForeignKeyCount(fields);
 
         const pragma_sql = try std.fmt.allocPrint(self.allocator, "PRAGMA foreign_key_list({s})", .{table.name_quoted});
         defer self.allocator.free(pragma_sql);
         var stmt = try self.db.prepareDynamic(pragma_sql);
         defer stmt.deinit();
 
-        const ForeignKeyRow = struct {
-            id: i64,
-            seq: i64,
-            table: []const u8,
-            from: []const u8,
-            to: ?[]const u8,
-            on_update: []const u8,
-            on_delete: []const u8,
-            match: []const u8,
-        };
-
         var actual_count: usize = 0;
         var valid = true;
         var iter = try stmt.iteratorAlloc(ForeignKeyRow, self.allocator, .{});
         while (try iter.nextAlloc(self.allocator, .{})) |row| {
-            defer {
-                self.allocator.free(row.table);
-                self.allocator.free(row.from);
-                if (row.to) |to| self.allocator.free(to);
-                self.allocator.free(row.on_update);
-                self.allocator.free(row.on_delete);
-                self.allocator.free(row.match);
-            }
+            defer row.deinit(self.allocator);
             actual_count += 1;
-
-            var matched = false;
-            for (fields, 0..) |field, field_idx| {
-                const reference = field.references orelse continue;
-                const expected_action = switch (field.on_delete orelse .restrict) {
-                    .cascade => "CASCADE",
-                    .restrict => "RESTRICT",
-                    .set_null => "SET NULL",
-                };
-                if (std.mem.eql(u8, field.name, row.from) and
-                    std.mem.eql(u8, reference, row.table) and
-                    row.to != null and std.mem.eql(u8, "id", row.to.?) and
-                    row.seq == 0 and
-                    std.mem.eql(u8, "NO ACTION", row.on_update) and
-                    std.mem.eql(u8, expected_action, row.on_delete) and
-                    std.mem.eql(u8, "NONE", row.match) and
-                    !seen[field_idx])
-                {
-                    seen[field_idx] = true;
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) valid = false;
+            if (!markForeignKeySeen(fields, row, seen)) valid = false;
         }
 
         if (!valid or actual_count != expected_count) return false;
-        for (fields, 0..) |field, field_idx| {
-            if (field.references != null and !seen[field_idx]) return false;
-        }
-        return true;
+        return allForeignKeysSeen(fields, seen);
     }
 
     const ActualIndex = struct {

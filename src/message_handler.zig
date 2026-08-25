@@ -75,6 +75,34 @@ pub const MessageHandler = struct {
         _ = self;
     }
 
+    fn closeForSecurityViolation(self: *MessageHandler, conn: *Connection, err: anyerror) !bool {
+        if (!isSecurityError(err)) return false;
+        if (!try self.violation_tracker.recordViolation(conn.id)) return false;
+        std.log.warn("Closing connection {} due to repeated security violations", .{conn.id});
+        conn.ws.close();
+        return true;
+    }
+
+    fn handleEnvelopeError(self: *MessageHandler, conn: *Connection, err: anyerror) !void {
+        if (try self.closeForSecurityViolation(conn, err)) return;
+        try self.sendError(self.allocator, conn, null, wire_errors.getWireError(err));
+    }
+
+    fn handleRouteError(
+        self: *MessageHandler,
+        arena_allocator: Allocator,
+        conn: *Connection,
+        message_id: u64,
+        err: anyerror,
+    ) !void {
+        if (try self.closeForSecurityViolation(conn, err)) return;
+        const response = try wire_encode.encodeError(arena_allocator, message_id, wire_errors.getWireError(err));
+        conn.send(response) catch {
+            std.log.warn("Connection {}: dropped while sending error response, closing", .{conn.id});
+            conn.ws.close();
+        };
+    }
+
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
     pub fn handleMessage(
@@ -127,14 +155,7 @@ pub const MessageHandler = struct {
         // 2. Extract envelope from raw bytes (zero-alloc)
         const envelope = wire_decode.extractEnvelopeFast(message) catch |err| {
             std.log.warn("Failed to extract envelope from connection {}: {}", .{ conn_id, err });
-            if (isSecurityError(err)) {
-                if (try self.violation_tracker.recordViolation(conn_id)) {
-                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
-                    ws.close();
-                    return;
-                }
-            }
-            try self.sendError(self.allocator, conn, null, wire_errors.getWireError(err));
+            try self.handleEnvelopeError(conn, err);
             return;
         };
 
@@ -145,18 +166,7 @@ pub const MessageHandler = struct {
 
         // 4. Route and handle errors
         const response = self.routeMessageFast(arena_allocator, conn, envelope, message) catch |err| {
-            if (isSecurityError(err)) {
-                if (try self.violation_tracker.recordViolation(conn_id)) {
-                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
-                    ws.close();
-                    return;
-                }
-            }
-            const response_err = try wire_encode.encodeError(arena_allocator, envelope.id, wire_errors.getWireError(err));
-            conn.send(response_err) catch {
-                std.log.warn("Connection {}: dropped while sending error response, closing", .{conn_id});
-                ws.close();
-            };
+            try self.handleRouteError(arena_allocator, conn, envelope.id, err);
             return;
         };
 

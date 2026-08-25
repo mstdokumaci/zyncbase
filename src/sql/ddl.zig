@@ -266,12 +266,20 @@ fn emitForeignKeys(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_typ
 }
 
 fn emitOnDelete(allocator: std.mem.Allocator, buf: *SqlBuf, od: schema_types.OnDelete) !void {
-    const fragment: []const u8 = switch (od) {
-        .cascade => " ON DELETE CASCADE",
-        .restrict => " ON DELETE RESTRICT",
-        .set_null => " ON DELETE SET NULL",
+    try buf.appendSlice(allocator, onDeleteSql(od).clause);
+}
+
+pub const OnDeleteSql = struct {
+    action: []const u8,
+    clause: []const u8,
+};
+
+pub fn onDeleteSql(od: schema_types.OnDelete) OnDeleteSql {
+    return switch (od) {
+        .cascade => .{ .action = "CASCADE", .clause = " ON DELETE CASCADE" },
+        .restrict => .{ .action = "RESTRICT", .clause = " ON DELETE RESTRICT" },
+        .set_null => .{ .action = "SET NULL", .clause = " ON DELETE SET NULL" },
     };
-    try buf.appendSlice(allocator, fragment);
 }
 
 /// Emit one managed-index statement: `CREATE [UNIQUE] INDEX ...`

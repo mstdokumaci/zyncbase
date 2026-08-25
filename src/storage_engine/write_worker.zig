@@ -353,6 +353,24 @@ pub const WriteWorker = struct {
         }
     }
 
+    inline fn resolveEntryTarget(
+        self: *WriteWorker,
+        entry: anytype,
+        op_idx: usize,
+        fail_fast: bool,
+        guard_rejected: *std.ArrayListUnmanaged(usize),
+    ) !EntryTarget {
+        const table = self.schema.tableByIndex(entry.table_index) orelse {
+            std.log.debug("Unknown table index {d} in op #{d}", .{ entry.table_index, op_idx });
+            if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+            return StorageError.UnknownTable;
+        };
+        return .{
+            .table = table,
+            .namespace_id = if (table.namespaced) entry.namespace_id else schema_system.global_namespace_id,
+        };
+    }
+
     fn runTransaction(
         self: *WriteWorker,
         ops: []const WriteOp,
@@ -402,31 +420,16 @@ pub const WriteWorker = struct {
         for (ops, 0..) |op, op_idx| {
             const succeeded = switch (op) {
                 .upsert => |iop| blk: {
-                    const table_metadata = self.schema.tableByIndex(iop.table_index) orelse {
-                        std.log.debug("Unknown table index {d} in op #{d}", .{ iop.table_index, op_idx });
-                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
-                        return StorageError.UnknownTable;
-                    };
-                    const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema_system.global_namespace_id;
-                    break :blk executeUpsertEntry(&ctx, iop, namespace_id, table_metadata);
+                    const target = try self.resolveEntryTarget(iop, op_idx, fail_fast, guard_rejected);
+                    break :blk executeUpsertEntry(&ctx, iop, target.namespace_id, target.table);
                 },
                 .update => |uop| blk: {
-                    const table_metadata = self.schema.tableByIndex(uop.table_index) orelse {
-                        std.log.debug("Unknown table index {d} in op #{d}", .{ uop.table_index, op_idx });
-                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
-                        return StorageError.UnknownTable;
-                    };
-                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema_system.global_namespace_id;
-                    break :blk executeUpdateEntry(&ctx, uop, namespace_id, table_metadata);
+                    const target = try self.resolveEntryTarget(uop, op_idx, fail_fast, guard_rejected);
+                    break :blk executeUpdateEntry(&ctx, uop, target.namespace_id, target.table);
                 },
                 .delete => |dop| blk: {
-                    const table_metadata = self.schema.tableByIndex(dop.table_index) orelse {
-                        std.log.debug("Unknown table index {d} in op #{d}", .{ dop.table_index, op_idx });
-                        if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
-                        return StorageError.UnknownTable;
-                    };
-                    const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema_system.global_namespace_id;
-                    break :blk executeDeleteEntry(&ctx, dop, namespace_id, table_metadata);
+                    const target = try self.resolveEntryTarget(dop, op_idx, fail_fast, guard_rejected);
+                    break :blk executeDeleteEntry(&ctx, dop, target.namespace_id, target.table);
                 },
                 else => {
                     std.log.debug("Unsupported WriteOp variant at op #{d}", .{op_idx});
@@ -967,6 +970,11 @@ pub const WriteWorker = struct {
         key: DocumentCacheKey,
         kind: enum { update, evict },
         record: ?Record,
+    };
+
+    const EntryTarget = struct {
+        table: *const schema_types.Table,
+        namespace_id: i64,
     };
 
     const BatchCtx = struct {
