@@ -283,7 +283,41 @@ $data` variable available in `presenceWrite rules exposes incoming field values 
     }
   }
 }
-```Reserved `users` Collection hybrid table managed by ZyncBase defaults to"namespaced false `external_id column maps external identity string JWT internal `BLOB(16) UUIDv7 `owner_id$session.userId `userId foreign keys extend with optional custom fields```json
+```Unique Constraints Tables declare uniqueness-field set constraint table-level `unique array Nested paths use dot notation `required```json
+{
+  "version": "1.1.0",
+  "store": {
+    "projects": {
+      "required": ["slug", "provider", "externalId"],
+      "fields": {
+        "slug": { "type": "string" },
+        "provider": { "type": "string" },
+        "externalId": { "type": "string" },
+        "profile": {
+          "type": "object",
+          "fields": {
+            "handle": { "type": "string" }
+          }
+        }
+      },
+      "unique": [
+        ["slug"],
+        ["provider", "externalId"],
+        ["profile.handle"]
+      ]
+    }
+  }
+}
+```generates namespace-scoped SQLite indexes_id first indexed```sql
+CREATE UNIQUE INDEX "uidx__projects__constraint__0"
+ON "projects"("namespace_id", "slug");
+
+CREATE UNIQUE INDEX "uidx__projects__constraint__1"
+ON "projects"("namespace_id", "provider", "externalId");
+
+CREATE UNIQUE INDEX "uidx__projects__constraint__2"
+ON "projects"("namespace_id", "profile__handle");
+```Rules behavior **Namespace Equal values namespaces same namespace"namespaced false tables rows share namespace ID `0` uniqueness global no global-uniqueness override namespaced table **Required plus Constrained components `NULL SQLite permits multiple rows field present-and-unique `required sensitivity** Text equality follows default SQLite collation duplicate create update aborts write updates row Confirmed failures use code `UNIQUE_CONSTRAINT_VIOLATED` non-retryable). default writes confirm queue admission duplicate detection requires `confirm "committed" API Adding removing reordering changing constraints automatic index migration constraint encounters duplicate rows startup fails before change remove merge duplicates delete rows `unique entries non-empty arrays user-field paths system fields named repeat same field declared twice no per-field `"unique": true` alias Reserved `users` Collection hybrid table managed ZyncBasedefaults false `external_id column maps external identity string JWT internal `BLOB(16) UUIDv7 `owner_id$session.userId presence `userId foreign keys extend optional custom fields```json
 {
   "version": "1.0.0",
   "store": {
@@ -330,7 +364,7 @@ CREATE TABLE users (
     PRIMARY KEY (id)
 );
 
-CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
+CREATE UNIQUE INDEX uidx__users__identity ON users(namespace_id, external_id);
 ````id` primary key unique collection/table `namespace_id` visibility identity-provider lookup permit duplicate document IDs namespaces Schema Structure ZyncBase schema format Define data store structure```json
 {
   "version": "1.0.0",
@@ -546,8 +580,8 @@ CREATE TABLE tasks (
     PRIMARY KEY (id)
 );
 
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
+CREATE INDEX idx__tasks__field__status ON tasks(status);
+CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
 ```primary key `id not Namespace-aware tables require document IDs references cursors caches SDK single-key Auto-Migration changes auto-migrate zero friction```json
 // Initial schema.json
 {

@@ -33,6 +33,7 @@ SDK errors `ZyncBaseError `category `retryable `retryAfter `requestId SDK-local 
 | `FIELD_NOT_FOUND` | `validation` | Server | Referenced field is not present in the table schema. |
 | `IMMUTABLE_FIELD` | `validation` | Server | Request attempted to write a protected system field. |
 | `SCHEMA_VALIDATION_FAILED` | `validation` | Server | Value failed type, constraint, or required-field validation. |
+| `UNIQUE_CONSTRAINT_VIOLATED` | `validation` | Server | Write collided with a schema-declared unique constraint in the row's effective namespace. Non-retryable; the client must change the value. Observable only on `confirm: "committed"` writes — default accepted writes give no writer-failure guarantee (see ADR-018). Constraint names are not included in the payload. |
 | `INVALID_FIELD_NAME` | `validation` | Server | Field name contains a forbidden sequence or identifier shape. |
 | `INVALID_ARRAY_ELEMENT` | `validation` | Server | Array field contains a nested array/object or other unsupported element. |
 | `INVALID_MESSAGE` | `validation` | Server | Request payload is malformed for the selected message type. |
