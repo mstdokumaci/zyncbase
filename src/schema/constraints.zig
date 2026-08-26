@@ -114,74 +114,86 @@ pub fn validate(
         try validateEnum(enums, ft, value);
     }
 
-    // 2. String constraints
-    if (ft == .text) {
-        if (value != .str) return error.TypeMismatch;
-        const str = value.str.value();
+    switch (ft) {
+        .text => try validateTextConstraints(constraints, value, allocator),
+        .integer => try validateIntegerRange(constraints, value),
+        .real => try validateRealRange(constraints, value),
+        else => {},
+    }
+}
 
-        if (constraints.min_length != null or constraints.max_length != null) {
-            const count = std.unicode.utf8CountCodepoints(str) catch return error.LengthViolation;
-            if (constraints.min_length) |min_l| {
-                if (count < min_l) return error.LengthViolation;
-            }
-            if (constraints.max_length) |max_l| {
-                if (count > max_l) return error.LengthViolation;
-            }
-        }
+inline fn validateTextConstraints(constraints: types.Constraints, value: msgpack.Payload, allocator: Allocator) !void {
+    if (value != .str) return error.TypeMismatch;
+    const str = value.str.value();
 
-        if (constraints.compiled_regex) |regex| {
-            const is_match = try matchPattern(regex, allocator, str);
-            if (!is_match) return error.PatternViolation;
-        }
+    try validateTextLength(constraints, str);
 
-        if (constraints.format) |fmt| {
-            const ok = switch (fmt) {
-                .email => validateEmail(str),
-                .uuid => validateUuid(str),
-                .uri => validateUri(str),
-            };
-            if (!ok) return error.FormatViolation;
-        }
+    if (constraints.compiled_regex) |regex| {
+        const is_match = try matchPattern(regex, allocator, str);
+        if (!is_match) return error.PatternViolation;
     }
 
-    // 3. Numeric range constraints
-    if (ft == .integer) {
-        if (constraints.minimum != null or constraints.maximum != null) {
-            const int_val = msgpack.payloadToInt(value) catch return error.TypeMismatch;
+    if (constraints.format) |fmt| {
+        try validateTextFormat(fmt, str);
+    }
+}
 
-            if (constraints.minimum) |min_val| {
-                switch (min_val) {
-                    .integer => |min_i| if (int_val < min_i) return error.RangeViolation,
-                    .real => |min_r| if (@as(f64, @floatFromInt(int_val)) < min_r) return error.RangeViolation,
-                }
-            }
-            if (constraints.maximum) |max_val| {
-                switch (max_val) {
-                    .integer => |max_i| if (int_val > max_i) return error.RangeViolation,
-                    .real => |max_r| if (@as(f64, @floatFromInt(int_val)) > max_r) return error.RangeViolation,
-                }
-            }
-        }
-    } else if (ft == .real) {
-        if (constraints.minimum != null or constraints.maximum != null) {
-            const float_val = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
-            if (std.math.isNan(float_val)) return error.RangeViolation;
+inline fn validateTextLength(constraints: types.Constraints, str: []const u8) !void {
+    if (constraints.min_length == null and constraints.max_length == null) return;
+    const count = std.unicode.utf8CountCodepoints(str) catch return error.LengthViolation;
+    if (constraints.min_length) |min_l| {
+        if (count < min_l) return error.LengthViolation;
+    }
+    if (constraints.max_length) |max_l| {
+        if (count > max_l) return error.LengthViolation;
+    }
+}
 
-            if (constraints.minimum) |min_val| {
-                const min_r = switch (min_val) {
-                    .real => |r| r,
-                    .integer => |i| @as(f64, @floatFromInt(i)),
-                };
-                if (float_val < min_r) return error.RangeViolation;
-            }
-            if (constraints.maximum) |max_val| {
-                const max_r = switch (max_val) {
-                    .real => |r| r,
-                    .integer => |i| @as(f64, @floatFromInt(i)),
-                };
-                if (float_val > max_r) return error.RangeViolation;
-            }
+inline fn validateTextFormat(format: types.Constraints.Format, str: []const u8) !void {
+    const valid = switch (format) {
+        .email => validateEmail(str),
+        .uuid => validateUuid(str),
+        .uri => validateUri(str),
+    };
+    if (!valid) return error.FormatViolation;
+}
+
+inline fn validateIntegerRange(constraints: types.Constraints, value: msgpack.Payload) !void {
+    if (constraints.minimum == null and constraints.maximum == null) return;
+    const int_val = msgpack.payloadToInt(value) catch return error.TypeMismatch;
+
+    if (constraints.minimum) |min_val| {
+        switch (min_val) {
+            .integer => |min_i| if (int_val < min_i) return error.RangeViolation,
+            .real => |min_r| if (@as(f64, @floatFromInt(int_val)) < min_r) return error.RangeViolation,
         }
+    }
+    if (constraints.maximum) |max_val| {
+        switch (max_val) {
+            .integer => |max_i| if (int_val > max_i) return error.RangeViolation,
+            .real => |max_r| if (@as(f64, @floatFromInt(int_val)) > max_r) return error.RangeViolation,
+        }
+    }
+}
+
+inline fn validateRealRange(constraints: types.Constraints, value: msgpack.Payload) !void {
+    if (constraints.minimum == null and constraints.maximum == null) return;
+    const float_val = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
+    if (std.math.isNan(float_val)) return error.RangeViolation;
+
+    if (constraints.minimum) |min_val| {
+        const min_r = switch (min_val) {
+            .real => |r| r,
+            .integer => |i| @as(f64, @floatFromInt(i)),
+        };
+        if (float_val < min_r) return error.RangeViolation;
+    }
+    if (constraints.maximum) |max_val| {
+        const max_r = switch (max_val) {
+            .real => |r| r,
+            .integer => |i| @as(f64, @floatFromInt(i)),
+        };
+        if (float_val > max_r) return error.RangeViolation;
     }
 }
 

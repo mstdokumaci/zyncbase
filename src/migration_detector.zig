@@ -105,65 +105,10 @@ pub const MigrationDetector = struct {
         }
 
         for (target.tables) |*table| {
-            var col_result = try self.queryExistingColumns(table);
-            defer {
-                var it = col_result.columns.iterator();
-                while (it.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
-                    self.allocator.free(entry.value_ptr.*);
-                }
-                col_result.columns.deinit();
-            }
-
-            if (!col_result.table_exists) {
-                try changes.append(self.allocator, .{
-                    .kind = .create_table,
-                    .table = table,
-                    .field = null,
-                });
-                continue;
-            }
-
-            try self.detectColumnChanges(&changes, table, &col_result.columns);
-            try self.detectRemovedColumns(&changes, table, &col_result.columns);
-
-            // Rebuild-classified changes install the complete target index set
-            // themselves; scheduling index reconciliation would be redundant.
-            var scheduled_rebuild = false;
-            for (changes.items) |c| {
-                if (c.table == table and
-                    (c.kind == .change_type or c.kind == .remove_column or c.kind == .change_foreign_keys))
-                {
-                    scheduled_rebuild = true;
-                    break;
-                }
-            }
-
-            if (!scheduled_rebuild) {
-                if (!try self.foreignKeysMatch(table)) {
-                    try changes.append(self.allocator, .{
-                        .kind = .change_foreign_keys,
-                        .table = table,
-                        .field = null,
-                    });
-                } else if (!try self.managedIndexesMatch(table)) {
-                    try changes.append(self.allocator, .{
-                        .kind = .change_indexes,
-                        .table = table,
-                        .field = null,
-                    });
-                }
-            }
+            try self.appendTableChanges(&changes, table);
         }
 
-        var is_destructive = false;
-        for (changes.items) |c| {
-            if (c.kind == .change_type or c.kind == .remove_column or c.kind == .change_foreign_keys) {
-                is_destructive = true;
-                break;
-            }
-        }
-
+        const is_destructive = containsDestructiveChange(changes.items);
         return MigrationPlan{
             .changes = try changes.toOwnedSlice(self.allocator),
             .is_destructive = is_destructive,
@@ -177,14 +122,7 @@ pub const MigrationDetector = struct {
 
     fn queryExistingColumns(self: *MigrationDetector, table: *const schema_types.Table) !ExistingColumns {
         var existing = std.StringHashMap([]const u8).init(self.allocator);
-        errdefer {
-            var it = existing.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            existing.deinit();
-        }
+        errdefer self.deinitExistingColumns(&existing);
 
         const pragma_sql = try std.fmt.allocPrint(self.allocator, "PRAGMA table_info({s})", .{table.name});
         defer self.allocator.free(pragma_sql);
@@ -220,6 +158,73 @@ pub const MigrationDetector = struct {
         }
 
         return .{ .columns = existing, .table_exists = table_exists };
+    }
+
+    fn deinitExistingColumns(self: *MigrationDetector, columns: *std.StringHashMap([]const u8)) void {
+        var it = columns.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        columns.deinit();
+    }
+
+    fn appendTableChanges(
+        self: *MigrationDetector,
+        changes: *std.ArrayListUnmanaged(Change),
+        table: *const schema_types.Table,
+    ) !void {
+        var col_result = try self.queryExistingColumns(table);
+        defer self.deinitExistingColumns(&col_result.columns);
+
+        if (!col_result.table_exists) {
+            try changes.append(self.allocator, .{
+                .kind = .create_table,
+                .table = table,
+                .field = null,
+            });
+            return;
+        }
+
+        const first_table_change = changes.items.len;
+        try self.detectColumnChanges(changes, table, &col_result.columns);
+        try self.detectRemovedColumns(changes, table, &col_result.columns);
+
+        // Rebuild-classified changes install the complete target index set
+        // themselves; scheduling index reconciliation would be redundant.
+        if (hasScheduledRebuild(table, changes.items[first_table_change..])) return;
+
+        if (!try self.foreignKeysMatch(table)) {
+            try changes.append(self.allocator, .{
+                .kind = .change_foreign_keys,
+                .table = table,
+                .field = null,
+            });
+        } else if (!try self.managedIndexesMatch(table)) {
+            try changes.append(self.allocator, .{
+                .kind = .change_indexes,
+                .table = table,
+                .field = null,
+            });
+        }
+    }
+
+    fn hasScheduledRebuild(table: *const schema_types.Table, changes: []const Change) bool {
+        for (changes) |change| {
+            if (change.table == table and
+                (change.kind == .change_type or change.kind == .remove_column or change.kind == .change_foreign_keys))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn containsDestructiveChange(changes: []const Change) bool {
+        for (changes) |change| {
+            if (change.kind == .change_type or change.kind == .remove_column or change.kind == .change_foreign_keys) return true;
+        }
+        return false;
     }
 
     fn detectColumnChanges(

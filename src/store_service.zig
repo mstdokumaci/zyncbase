@@ -390,19 +390,7 @@ pub const StoreService = struct {
         const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
 
         for (ops) |op_payload| {
-            if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
-            const tuple = op_payload.arr;
-            if (tuple[0] != .str) return error.InvalidMessageFormat;
-            const kind_str = tuple[0].str.value();
-
-            if (std.mem.eql(u8, kind_str, "s")) {
-                if (tuple.len < 3) return error.MissingRequiredFields;
-                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, &doc_states);
-            } else if (std.mem.eql(u8, kind_str, "r")) {
-                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, &doc_states);
-            } else {
-                return error.InvalidMessageFormat;
-            }
+            entries[initialized] = try self.buildBatchEntry(ctx, op_payload, timestamp, &doc_states);
             initialized += 1;
         }
 
@@ -422,6 +410,28 @@ pub const StoreService = struct {
         errdefer op.deinit(self.allocator);
 
         try self.storage_engine.enqueueWriteOp(op);
+    }
+
+    inline fn buildBatchEntry(
+        self: *StoreService,
+        ctx: WriteContext,
+        payload: msgpack.Payload,
+        timestamp: i64,
+        doc_states: *BatchDocStates,
+    ) !storage_mod.WriteOp {
+        if (payload != .arr or payload.arr.len < 2) return error.InvalidMessageFormat;
+        const tuple = payload.arr;
+        if (tuple[0] != .str) return error.InvalidMessageFormat;
+
+        const kind = tuple[0].str.value();
+        if (std.mem.eql(u8, kind, "s")) {
+            if (tuple.len < 3) return error.MissingRequiredFields;
+            return self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, doc_states);
+        }
+        if (std.mem.eql(u8, kind, "r")) {
+            return self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, doc_states);
+        }
+        return error.InvalidMessageFormat;
     }
 
     fn parseStorePath(
