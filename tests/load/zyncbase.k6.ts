@@ -36,7 +36,7 @@ type Role =
 
 const profile = enumEnv("PROFILE", profiles, "connections");
 const smoke = __ENV.SMOKE === "1";
-const socketsPerVu = intEnv("SOCKETS_PER_VU", 20);
+const socketsPerVu = intEnv("SOCKETS_PER_VU", 30);
 const clients = intEnv("CLIENTS", smoke ? 5 : 5_000);
 const subscribers = intEnv("SUBSCRIBERS", smoke ? 3 : 5_000);
 const defaultWriters = profile === "presence-shared" ? 1 : smoke ? 2 : 32;
@@ -192,7 +192,9 @@ class RawClient {
 	private sequence = 2;
 	private probeSequence = 10_000_000;
 	private finalWriteId?: string;
+	private finalAccepted = false;
 	private finalCommitted = false;
+	private finalSent = false;
 	private inflight = new Map<string, CommitInfo>();
 	private lastSequences?: Int32Array;
 	private tableIndex = -1;
@@ -264,23 +266,45 @@ class RawClient {
 		}
 	}
 
-	sendFinal(): void {
-		if (!this.isWriter() || !this.isReady()) return;
+	sendFinal(): boolean {
+		if (this.finalSent) return true;
+		if (!this.isWriter() || !this.isReady()) return false;
 		const sequence = finalSequenceBase + this.logicalId;
+		let sent: boolean;
 		if (this.role === "store-writer") {
-			this.sendCommittedStore(sequence, 0, false, true);
+			if (profile === "store-accepted") {
+				const id = this.nextRequestId++;
+				this.pending.set(id, () => {
+					this.finalAccepted = true;
+				});
+				sent = this.send(
+					this.storeFrame(sequence, 0, "accepted", undefined, id),
+					false,
+				);
+				if (!sent) {
+					this.pending.delete(id);
+				}
+			} else {
+				sent = this.sendCommittedStore(sequence, 0, false, true, false);
+			}
 		} else if (this.role === "presence-user-writer") {
-			this.send(this.presenceFrame(sequence, 0, false));
+			sent = this.send(this.presenceFrame(sequence, 0, false), false);
 		} else if (this.role === "presence-shared-writer") {
-			this.send(this.presenceFrame(sequence, 0, true));
+			sent = this.send(this.presenceFrame(sequence, 0, true), false);
+		} else {
+			return false;
 		}
+		this.finalSent = sent;
+		return sent;
 	}
 
 	validateFinal(): void {
 		if (this.role === "store-writer") {
 			finalConvergence.add(
-				this.finalCommitted &&
-					(profile !== "store-committed" || this.inflight.size === 0),
+				profile === "store-accepted"
+					? this.finalAccepted
+					: this.finalCommitted &&
+						(profile !== "store-committed" || this.inflight.size === 0),
 				this.tags("cooldown"),
 			);
 			return;
@@ -522,10 +546,11 @@ class RawClient {
 		probeSentAt: number,
 		confirm: "accepted" | "committed",
 		writeId?: string,
+		id = 0,
 	): Uint8Array {
 		return encodeMessage({
 			type: WireMessageType.StoreSet,
-			id: 0,
+			id,
 			path: [this.tableIndex, documentId(this.logicalId)],
 			value: [
 				[this.matchField, true],
@@ -561,10 +586,12 @@ class RawClient {
 		probeSentAt: number,
 		measured: boolean,
 		final: boolean,
+		reportBackpressure = true,
 	): boolean {
 		const writeId = makeWriteId(this.logicalId, sequence);
 		const sent = this.send(
 			this.storeFrame(sequence, probeSentAt, "committed", writeId),
+			reportBackpressure,
 		);
 		if (!sent) return false;
 		this.inflight.set(writeId, { startedAt: Date.now(), measured });
@@ -585,10 +612,10 @@ class RawClient {
 		}
 	}
 
-	private send(bytes: Uint8Array): boolean {
+	private send(bytes: Uint8Array, reportBackpressure = true): boolean {
 		if (this.socket.readyState !== 1) return false;
 		if (this.socket.bufferedAmount > maxBufferedBytes) {
-			backpressure.add(1, this.tags());
+			if (reportBackpressure) backpressure.add(1, this.tags());
 			return false;
 		}
 		this.socket.send(bytes);
@@ -739,9 +766,21 @@ export function run(): void {
 			at(timeline.measureEnd, () => clearInterval(probes));
 		}
 
-		at(timeline.measureEnd, () =>
-			writersForVu.forEach((client) => client.sendFinal()),
-		);
+		let finalRetry: ReturnType<typeof setInterval> | undefined;
+		at(timeline.measureEnd, () => {
+			let pending = writersForVu;
+			const sendFinals = () => {
+				pending = pending.filter((client) => !client.sendFinal());
+				if (pending.length === 0 && finalRetry !== undefined) {
+					clearInterval(finalRetry);
+				}
+			};
+			sendFinals();
+			if (pending.length > 0) finalRetry = setInterval(sendFinals, 100);
+		});
+		at(timeline.finalCheck, () => {
+			if (finalRetry !== undefined) clearInterval(finalRetry);
+		});
 	}
 
 	at(timeline.finalCheck, () =>

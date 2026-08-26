@@ -33,7 +33,7 @@ stops the server. Results remain under `test-artifacts/load/<timestamp>-<profile
 | Profile | Default topology | What it measures |
 | --- | --- | --- |
 | `connections` | 5,000 clients | Ticket exchange, WebSocket establishment, SchemaSync, and idle connection cost |
-| `store-accepted` | 5,000 writers | Mutation admission throughput; committed final sentinels prove each writer queue drained |
+| `store-accepted` | 5,000 writers | Mutation admission throughput; accepted final sentinels prove each writer stream was admitted |
 | `store-committed` | 5,000 writers | Durable commit throughput and commit latency with bounded per-client pipelines |
 | `store-identical-filter` | 5,000 subscribers + 32 writers | Store subscription fanout through one structurally identical `match == true` filter group |
 | `presence-user` | 5,000 subscribers + 32 writers | User-presence coalescing and namespace-wide fanout |
@@ -51,7 +51,7 @@ ramp because registering 5,000 subscriptions has a longer tail. All profiles use
 barrier, 10 seconds warmup, 30 seconds measurement, and 10 seconds cooldown.
 The default aggregate target is 10,000 messages/second for standalone store
 profiles and a conservative 100 writes/second for fanout profiles. Each VU owns
-20 sockets and uses one drift-correcting send pump. Hot-path accepted and presence
+30 sockets and uses one drift-correcting send pump. Hot-path accepted and presence
 frames are pre-encoded.
 
 Useful overrides:
