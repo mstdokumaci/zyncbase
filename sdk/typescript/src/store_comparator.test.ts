@@ -34,6 +34,7 @@ function makeStore(schema: SchemaDictionary) {
 		},
 		onMessage: (_handler) => {},
 		on: (_event: LifecycleEvent, _handler: (...args: unknown[]) => void) => {},
+		isSchemaReady: () => schema.isReady(),
 		schemaDictionary: schema,
 	};
 
@@ -87,17 +88,19 @@ describe("materialized-view comparator", () => {
 		// Short IDs pack below the UUIDv7 family tag bit, so they come first.
 		push(setOp("b-uuid-v7-doc", { name: "x" }));
 		push(
-			setOp("019c1e50-7d11-7abc-9def-0123456789ab".replace("abc", "abc"), {
+			setOp("019c1e50-7d11-7abc-9def-0123456789ab", {
 				name: "y",
 			}),
 		);
 		push(setOp("aardvark", { name: "z" }));
+		push(setOp("INVALID", { name: "invalid" }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual([
 			"aardvark",
 			"b-uuid-v7-doc",
 			"019c1e50-7d11-7abc-9def-0123456789ab",
+			"INVALID",
 		]);
 	});
 
@@ -218,12 +221,14 @@ describe("materialized-view comparator", () => {
 		push(setOp("ref1", { ref: "zzz-short" }));
 		push(setOp("ref2", { ref: "019c1e50-7d11-7abc-9def-0123456789ab" }));
 		push(setOp("ref3", { ref: "aaa-short" }));
+		push(setOp("ref4", { ref: "INVALID" }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual([
 			"ref3",
 			"ref1",
 			"ref2",
+			"ref4",
 		]);
 	});
 });

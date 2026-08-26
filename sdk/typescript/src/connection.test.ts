@@ -212,6 +212,7 @@ describe("ConnectionManager", () => {
 		test("processes StoreDelta only after SchemaSync is fully ready", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
+			expect(manager.isSchemaReady()).toBe(false);
 
 			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
@@ -234,6 +235,7 @@ describe("ConnectionManager", () => {
 			await (manager as unknown as { processingPromise: Promise<void> })
 				.processingPromise;
 
+			expect(manager.isSchemaReady()).toBe(true);
 			expect(received).toHaveLength(1);
 			expect(
 				(received[0] as { ops: { path: string[] }[] }).ops[0].path,

@@ -38,6 +38,7 @@ export interface StoreConnection {
 	dispatch(msg: OutboundRequest): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
+	isSchemaReady(): boolean;
 	readonly schemaDictionary: SchemaDictionary;
 }
 
@@ -193,8 +194,6 @@ export class StoreImpl {
 		options: QueryOptions,
 		callback: (results: JsonValue[]) => void,
 	): SubscriptionHandle {
-		const command = buildSubscribe(collection, options);
-		const comparator = this.buildCollectionComparator(collection, options);
 		const state: SubscribeState = {
 			subId: null,
 			nextCursor: null,
@@ -248,6 +247,24 @@ export class StoreImpl {
 				}
 			},
 		};
+
+		if (!this.conn.isSchemaReady()) {
+			this.emitOnly(
+				new ZyncBaseError(
+					"Schema is not ready; await client.connect() before subscribing",
+					{
+						code: ErrorCodes.SESSION_NOT_READY,
+						category: "state",
+						retryable: false,
+					},
+				),
+				"Subscribe failed",
+			);
+			return handle;
+		}
+
+		const command = buildSubscribe(collection, options);
+		const comparator = this.buildCollectionComparator(collection, options);
 
 		this.conn
 			.dispatch(command.message)
@@ -322,9 +339,10 @@ export class StoreImpl {
 			});
 		}
 
-		const lastField =
-			entries.length > 0 ? entries[entries.length - 1].parts.join(".") : null;
-		if (lastField !== "id") {
+		const hasExplicitId = entries.some(
+			(entry) => entry.parts.length === 1 && entry.parts[0] === "id",
+		);
+		if (!hasExplicitId) {
 			entries.push({ parts: ["id"], desc: false, docId: true });
 		}
 
@@ -615,6 +633,13 @@ const textEncoder = new TextEncoder();
 
 /** Compares strings by the exact UTF-8 bytes used by SQLite BINARY ordering. */
 function compareUtf8(a: string, b: string): number {
+	if (isUtf8LexicalFastPath(a) && isUtf8LexicalFastPath(b)) {
+		return compareLexically(a, b);
+	}
+	return compareUtf8Bytes(a, b);
+}
+
+function compareUtf8Bytes(a: string, b: string): number {
 	const ba = textEncoder.encode(a);
 	const bb = textEncoder.encode(b);
 	const length = Math.min(ba.length, bb.length);
@@ -622,4 +647,15 @@ function compareUtf8(a: string, b: string): number {
 		if (ba[i] !== bb[i]) return ba[i] < bb[i] ? -1 : 1;
 	}
 	return ba.length < bb.length ? -1 : ba.length > bb.length ? 1 : 0;
+}
+
+function compareLexically(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function isUtf8LexicalFastPath(value: string): boolean {
+	for (let i = 0; i < value.length; i += 1) {
+		if (value.charCodeAt(i) >= 0x800) return false;
+	}
+	return true;
 }

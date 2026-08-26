@@ -215,19 +215,18 @@ export function unpackDocId(bytes: Uint8Array): string {
 }
 
 /**
- * Compare two document ID strings by their packed 16-byte representation,
- * matching SQLite BINARY ordering of the stored DocId bytes (short IDs sort
- * before UUIDv7 IDs because of the high-bit family tag).
+ * Compare document IDs in packed order without allocating packed bytes.
+ * Invalid strings sort lexically after both canonical ID families so callers
+ * such as materialized-view comparators remain total and non-throwing.
  */
 export function compareDocIds(a: string, b: string): number {
-	const aIsUuid = isCanonicalUUIDv7(a);
-	const bIsUuid = isCanonicalUUIDv7(b);
-
-	// Preserve packDocId's validation without paying its BigInt/Uint8Array cost
-	// for every comparison in a materialized-view sort.
-	if (!aIsUuid && !isValidShortDocId(a)) packDocId(a);
-	if (!bIsUuid && !isValidShortDocId(b)) packDocId(b);
-
-	if (aIsUuid !== bIsUuid) return aIsUuid ? 1 : -1;
+	const aFamily = docIdSortFamily(a);
+	const bFamily = docIdSortFamily(b);
+	if (aFamily !== bFamily) return aFamily - bFamily;
 	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function docIdSortFamily(id: string): number {
+	if (isCanonicalUUIDv7(id)) return 1;
+	return isValidShortDocId(id) ? 0 : 2;
 }

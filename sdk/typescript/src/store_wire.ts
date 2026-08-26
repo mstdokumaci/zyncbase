@@ -350,7 +350,14 @@ export function encodeOrderBy(
 		);
 	}
 	const seen = new Set<string>();
-	return orderBy.map((clause, index) => encodeSortClause(clause, index, seen));
+	const encoded = orderBy.map((clause, index) =>
+		encodeSortClause(clause, index, seen),
+	);
+	const idIndex = encoded.findIndex(([field]) => field === "id");
+	if (idIndex !== -1 && idIndex !== encoded.length - 1) {
+		throw invalidSortError('orderBy field "id" must be the final clause');
+	}
+	return encoded;
 }
 
 function encodeSortClause(

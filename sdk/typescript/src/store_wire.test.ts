@@ -168,6 +168,24 @@ describe("store_wire", () => {
 			).toThrow();
 		});
 
+		test("orderBy requires an explicit id clause to be final", () => {
+			expect(() =>
+				encodeQueryOptions({
+					orderBy: [{ id: "asc" }, { name: "asc" }],
+				}),
+			).toThrow('orderBy field "id" must be the final clause');
+			expect(
+				encodeQueryOptions({
+					orderBy: [{ name: "asc" }, { id: "desc" }],
+				}),
+			).toEqual({
+				orderBy: [
+					["name", 0],
+					["id", 1],
+				],
+			});
+		});
+
 		test("where with direct equality", () => {
 			const result = encodeQueryOptions({ where: { status: "active" } });
 			expect(result).toEqual({

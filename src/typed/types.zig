@@ -14,16 +14,7 @@ pub const Record = struct {
     }
 
     pub fn clone(self: Record, allocator: Allocator) !Record {
-        const cloned = try allocator.alloc(Value, self.values.len);
-        var i: usize = 0;
-        errdefer {
-            for (cloned[0..i]) |value| value.deinit(allocator);
-            allocator.free(cloned);
-        }
-        while (i < self.values.len) : (i += 1) {
-            cloned[i] = try self.values[i].clone(allocator);
-        }
-        return .{ .values = cloned };
+        return .{ .values = try cloneValueSlice(allocator, self.values) };
     }
 };
 
@@ -37,16 +28,7 @@ pub const Cursor = struct {
     }
 
     pub fn clone(self: Cursor, allocator: Allocator) !Cursor {
-        const cloned = try allocator.alloc(Value, self.values.len);
-        var i: usize = 0;
-        errdefer {
-            for (cloned[0..i]) |value| value.deinit(allocator);
-            allocator.free(cloned);
-        }
-        while (i < self.values.len) : (i += 1) {
-            cloned[i] = try self.values[i].clone(allocator);
-        }
-        return .{ .values = cloned };
+        return .{ .values = try cloneValueSlice(allocator, self.values) };
     }
 };
 
@@ -184,6 +166,20 @@ pub const Value = union(enum) {
 pub fn deinitValueSlice(allocator: Allocator, values: []Value) void {
     for (values) |value| value.deinit(allocator);
     allocator.free(values);
+}
+
+/// Clone an owned value slice, cleaning up any successfully cloned prefix on error.
+pub fn cloneValueSlice(allocator: Allocator, values: []const Value) ![]Value {
+    const cloned = try allocator.alloc(Value, values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (cloned[0..initialized]) |value| value.deinit(allocator);
+        allocator.free(cloned);
+    }
+    while (initialized < values.len) : (initialized += 1) {
+        cloned[initialized] = try values[initialized].clone(allocator);
+    }
+    return cloned;
 }
 
 fn scalarValueLessThan(_: void, a: ScalarValue, b: ScalarValue) bool {

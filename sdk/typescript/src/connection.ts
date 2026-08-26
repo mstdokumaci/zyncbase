@@ -187,6 +187,14 @@ export class ConnectionManager {
 		return this.schemaSyncPromise;
 	}
 
+	isSchemaReady(): boolean {
+		return (
+			this.status === "connected" &&
+			this.schemaSyncResolve === null &&
+			this.schemaDictionary.isReady()
+		);
+	}
+
 	_computeBackoffDelay(attempt: number): number {
 		const base = this.options.reconnectDelay ?? 1000;
 		const maxDelay = this.options.maxReconnectDelay ?? 30_000;

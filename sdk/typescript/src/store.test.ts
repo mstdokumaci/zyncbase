@@ -68,6 +68,7 @@ function makeStore(
 			if (event === "disconnected")
 				disconnectHandlers.push(handler as () => void);
 		},
+		isSchemaReady: () => schema.isReady(),
 		schemaDictionary: schema,
 	};
 
@@ -231,6 +232,17 @@ describe("StoreImpl", () => {
 			{ id: "u1", name: "Ada" },
 			{ id: "u2", name: "Grace" },
 		]);
+	});
+
+	test("subscribe before SchemaSync emits a controlled error without dispatching", () => {
+		const { store, messages, errors } = makeStore();
+
+		const handle = store.subscribe("users", {}, () => {});
+
+		expect(messages).toHaveLength(0);
+		expect(errors).toHaveLength(1);
+		expect((errors[0] as { code: string }).code).toBe("SESSION_NOT_READY");
+		handle.unsubscribe();
 	});
 
 	test("loadMore decodes raw tuple rows via decodeLoadMoreRows", async () => {
