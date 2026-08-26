@@ -67,41 +67,60 @@ pub fn decodeCursorToken(
     defer decode_result.payload.free(allocator);
     if (decode_result.consumed != decoded.len) return error.InvalidMessageFormat;
 
-    const payload = decode_result.payload;
+    const token_values = try validateCursorIdentity(decode_result.payload, table_index, descriptors);
+    const values = try decodeCursorValues(allocator, table_metadata, descriptors, token_values);
+    return Cursor{ .values = values };
+}
+
+inline fn validateCursorIdentity(
+    payload: msgpack.Payload,
+    table_index: usize,
+    descriptors: []const query_ast.SortDescriptor,
+) ParserError![]const msgpack.Payload {
     if (payload != .arr or payload.arr.len != 3) return error.InvalidMessageFormat;
 
-    const token_table_index = msgpack.extractPayloadUsize(payload.arr[0]) orelse
-        return error.InvalidMessageFormat;
+    const token_table_index = msgpack.extractPayloadUsize(payload.arr[0]) orelse return error.InvalidMessageFormat;
     if (token_table_index != table_index) return error.InvalidCursorSortValue;
 
     const token_descriptors = payload.arr[1];
-    if (token_descriptors != .arr or token_descriptors.arr.len != descriptors.len)
-        return error.InvalidCursorSortValue;
-    for (token_descriptors.arr, descriptors) |td, d| {
+    if (token_descriptors != .arr or token_descriptors.arr.len != descriptors.len) return error.InvalidCursorSortValue;
+    try validateCursorDescriptors(token_descriptors.arr, descriptors);
+
+    const token_values = payload.arr[2];
+    if (token_values != .arr or token_values.arr.len != descriptors.len) return error.InvalidCursorSortValue;
+    return token_values.arr;
+}
+
+inline fn validateCursorDescriptors(
+    token_descriptors: []const msgpack.Payload,
+    descriptors: []const query_ast.SortDescriptor,
+) ParserError!void {
+    for (token_descriptors, descriptors) |td, d| {
         if (td != .arr or td.arr.len != 2) return error.InvalidCursorSortValue;
-        const field_index = msgpack.extractPayloadUsize(td.arr[0]) orelse
-            return error.InvalidCursorSortValue;
-        const desc = switch (msgpack.extractPayloadUsize(td.arr[1]) orelse
-            return error.InvalidCursorSortValue) {
+        const field_index = msgpack.extractPayloadUsize(td.arr[0]) orelse return error.InvalidCursorSortValue;
+        const desc = switch (msgpack.extractPayloadUsize(td.arr[1]) orelse return error.InvalidCursorSortValue) {
             0 => false,
             1 => true,
             else => return error.InvalidCursorSortValue,
         };
         if (field_index != d.field_index or desc != d.desc) return error.InvalidCursorSortValue;
     }
+}
 
-    const token_values = payload.arr[2];
-    if (token_values != .arr or token_values.arr.len != descriptors.len)
-        return error.InvalidCursorSortValue;
-
-    const values = try allocator.alloc(typed.Value, token_values.arr.len);
+inline fn decodeCursorValues(
+    allocator: std.mem.Allocator,
+    table_metadata: *const schema_types.Table,
+    descriptors: []const query_ast.SortDescriptor,
+    payloads: []const msgpack.Payload,
+) ParserError![]typed.Value {
+    const values = try allocator.alloc(typed.Value, payloads.len);
     var initialized: usize = 0;
     errdefer {
         for (values[0..initialized]) |v| v.deinit(allocator);
         allocator.free(values);
     }
 
-    for (token_values.arr, 0..) |item, i| {
+    for (payloads, 0..) |item, i| {
         const field = table_metadata.fields[descriptors[i].field_index];
         if (item == .nil and field.required) return error.InvalidCursorSortValue;
         if (item == .arr) return error.InvalidCursorSortValue;
@@ -111,8 +130,7 @@ pub fn decodeCursorToken(
         };
         initialized += 1;
     }
-
-    return Cursor{ .values = values };
+    return values;
 }
 
 /// Encodes a Cursor to a Base64-encoded MessagePack cursor token.

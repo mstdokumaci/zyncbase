@@ -929,6 +929,34 @@ test "StoreService: batchWrite - rejects invalid kind" {
     try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
+test "StoreService: batchWrite - cleans a valid prefix when a later entry is malformed" {
+    const allocator = std.testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-valid-prefix-cleanup", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const table = try app.table("data");
+    const value = try store_helpers.createDocumentMapPayload(allocator, table.metadata, .{
+        .{ "val", "not-written" },
+    });
+    defer value.free(allocator);
+    const valid = try batchSetTuple(allocator, app.tableIndex("data"), 1, value);
+    defer valid.free(allocator);
+
+    const ops = try allocator.alloc(msgpack.Payload, 2);
+    defer allocator.free(ops);
+    ops[0] = valid;
+    ops[1] = .nil;
+
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .{ .arr = ops }));
+    try app.storage_engine.flushPendingWrites();
+    const record = try table.readDoc(allocator, 1, 1);
+    defer if (record) |owned| owned.deinit(allocator);
+    try testing.expect(record == null);
+}
+
 test "StoreService: batchWrite - rejects set with missing value" {
     const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;

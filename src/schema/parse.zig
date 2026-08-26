@@ -664,70 +664,122 @@ fn parseTable(allocator: Allocator, table_name_raw: []const u8, table_def: std.j
     if (table_def != .object) return error.InvalidTableDefinition;
     try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "fields", "required", "namespaced", "metadata", "unique" }, table_def.object);
 
-    const table_name = try allocator.dupe(u8, table_name_raw);
-    errdefer allocator.free(table_name);
-    const table_name_quoted = try quoteIdentifier(allocator, table_name_raw);
-    errdefer allocator.free(table_name_quoted);
+    var header = try parseTableHeader(allocator, table_name_raw, table_def.object, is_users_table);
+    errdefer header.deinit(allocator);
 
-    const table_metadata = if (table_def.object.get("metadata")) |metadata|
-        try cloneMetadata(allocator, metadata)
-    else
-        null;
-    errdefer if (table_metadata) |metadata| metadata.deinit(allocator);
+    var required_set = try parseRequiredSet(allocator, table_def.object, is_users_table);
+    defer deinitRequiredSet(allocator, &required_set);
 
-    const namespaced = (json_read.getBool(table_def.object, "namespaced") catch return error.InvalidTableDefinition) orelse !is_users_table;
+    const fields = try parseDeclaredFields(allocator, table_def.object, is_users_table, &required_set);
+    errdefer deinitDeclaredFields(allocator, fields);
 
-    var required_set = std.StringHashMap(bool).init(allocator);
-    defer {
-        var key_it = required_set.keyIterator();
-        while (key_it.next()) |key| allocator.free(key.*);
-        required_set.deinit();
-    }
-
-    if (json_read.getArray(table_def.object, "required") catch return error.InvalidTableDefinition) |required_value| {
-        if (is_users_table) return error.InvalidTableDefinition;
-        for (required_value.items) |item| {
-            if (item != .string) return error.InvalidTableDefinition;
-            const normalized = try field_path.normalizeDots(allocator, item.string);
-            errdefer allocator.free(normalized);
-            const gop = try required_set.getOrPut(normalized);
-            if (gop.found_existing) {
-                allocator.free(normalized);
-            } else {
-                gop.value_ptr.* = false;
-            }
-        }
-    }
-
-    var fields = std.ArrayListUnmanaged(types.Field).empty;
-    errdefer {
-        for (fields.items) |field| field.deinit(allocator);
-        fields.deinit(allocator);
-    }
-
-    const fields_value = (json_read.getObject(table_def.object, "fields") catch return error.InvalidSchema) orelse return error.MissingFields;
-    try parseFields(allocator, fields_value, &fields, &required_set, "", is_users_table);
-
-    var req_it = required_set.iterator();
-    while (req_it.next()) |entry| {
-        if (!entry.value_ptr.*) return error.InvalidRequiredField;
-    }
-
-    const unique_constraints = try parseUniqueConstraints(allocator, table_def.object, fields.items);
+    const unique_constraints = try parseUniqueConstraints(allocator, table_def.object, fields);
     errdefer if (unique_constraints.len > 0) {
         for (unique_constraints) |c| c.deinit(allocator);
         allocator.free(unique_constraints);
     };
 
     return .{
-        .name = table_name,
-        .name_quoted = table_name_quoted,
-        .fields = try fields.toOwnedSlice(allocator),
-        .namespaced = namespaced,
+        .name = header.name,
+        .name_quoted = header.name_quoted,
+        .fields = fields,
+        .namespaced = header.namespaced,
         .is_users_table = is_users_table,
-        .metadata = table_metadata,
+        .metadata = header.metadata,
         .unique_constraints = unique_constraints,
     };
+}
+
+const ParsedTableHeader = struct {
+    name: []const u8,
+    name_quoted: []const u8,
+    namespaced: bool,
+    metadata: ?types.Metadata,
+
+    fn deinit(self: ParsedTableHeader, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.name_quoted);
+        if (self.metadata) |metadata| metadata.deinit(allocator);
+    }
+};
+
+fn parseTableHeader(
+    allocator: Allocator,
+    table_name: []const u8,
+    table_obj: std.json.ObjectMap,
+    is_users_table: bool,
+) !ParsedTableHeader {
+    const name = try allocator.dupe(u8, table_name);
+    errdefer allocator.free(name);
+    const name_quoted = try quoteIdentifier(allocator, table_name);
+    errdefer allocator.free(name_quoted);
+    const metadata = if (table_obj.get("metadata")) |value| try cloneMetadata(allocator, value) else null;
+    errdefer if (metadata) |value| value.deinit(allocator);
+    const namespaced = (json_read.getBool(table_obj, "namespaced") catch return error.InvalidTableDefinition) orelse !is_users_table;
+
+    return .{
+        .name = name,
+        .name_quoted = name_quoted,
+        .namespaced = namespaced,
+        .metadata = metadata,
+    };
+}
+
+fn parseDeclaredFields(
+    allocator: Allocator,
+    table_obj: std.json.ObjectMap,
+    is_users_table: bool,
+    required_set: *std.StringHashMap(bool),
+) ![]types.Field {
+    var fields = std.ArrayListUnmanaged(types.Field).empty;
+    errdefer {
+        for (fields.items) |field| field.deinit(allocator);
+        fields.deinit(allocator);
+    }
+
+    const fields_value = (json_read.getObject(table_obj, "fields") catch return error.InvalidSchema) orelse return error.MissingFields;
+    try parseFields(allocator, fields_value, &fields, required_set, "", is_users_table);
+    try ensureRequiredFieldsResolved(required_set);
+    return try fields.toOwnedSlice(allocator);
+}
+
+fn deinitDeclaredFields(allocator: Allocator, fields: []const types.Field) void {
+    for (fields) |field| field.deinit(allocator);
+    allocator.free(fields);
+}
+
+fn parseRequiredSet(allocator: Allocator, table_obj: std.json.ObjectMap, is_users_table: bool) !std.StringHashMap(bool) {
+    var required_set = std.StringHashMap(bool).init(allocator);
+    errdefer deinitRequiredSet(allocator, &required_set);
+
+    const required = (json_read.getArray(table_obj, "required") catch return error.InvalidTableDefinition) orelse return required_set;
+    if (is_users_table) return error.InvalidTableDefinition;
+
+    for (required.items) |item| {
+        if (item != .string) return error.InvalidTableDefinition;
+        const normalized = try field_path.normalizeDots(allocator, item.string);
+        errdefer allocator.free(normalized);
+        const gop = try required_set.getOrPut(normalized);
+        if (gop.found_existing) {
+            allocator.free(normalized);
+        } else {
+            gop.value_ptr.* = false;
+        }
+    }
+    return required_set;
+}
+
+fn deinitRequiredSet(allocator: Allocator, required_set: *std.StringHashMap(bool)) void {
+    var key_it = required_set.keyIterator();
+    while (key_it.next()) |key| allocator.free(key.*);
+    required_set.deinit();
+}
+
+fn ensureRequiredFieldsResolved(required_set: *std.StringHashMap(bool)) !void {
+    var it = required_set.iterator();
+    while (it.next()) |entry| {
+        if (!entry.value_ptr.*) return error.InvalidRequiredField;
+    }
 }
 
 /// Parse the table-level `unique` array into owned constraints whose field
@@ -818,70 +870,35 @@ fn parseFields(
 }
 
 pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: usize) !types.Table {
-    const name = try allocator.dupe(u8, declared.name);
-    var name_owned_by_table = false;
-    errdefer if (!name_owned_by_table) allocator.free(name);
+    var table = try initRuntimeTable(allocator, declared, table_index);
+    errdefer table.deinit(allocator);
 
+    try index.buildFieldIndex(allocator, &table);
+    try buildRuntimeTableSql(allocator, &table);
+    return table;
+}
+
+fn initRuntimeTable(allocator: Allocator, declared: types.Table, table_index: usize) !types.Table {
+    const name = try allocator.dupe(u8, declared.name);
+    errdefer allocator.free(name);
     const name_quoted = if (declared.name_quoted.len > 0)
         try allocator.dupe(u8, declared.name_quoted)
     else
         try quoteIdentifier(allocator, declared.name);
-    var name_quoted_owned_by_table = false;
-    errdefer if (!name_quoted_owned_by_table) allocator.free(name_quoted);
-
+    errdefer allocator.free(name_quoted);
     const metadata = if (declared.metadata) |md| try md.clone(allocator) else null;
-    var metadata_owned_by_table = false;
-    errdefer if (!metadata_owned_by_table) if (metadata) |md| md.deinit(allocator);
+    errdefer if (metadata) |md| md.deinit(allocator);
 
     // Constraints stay relative to `userFields()`; no system-field offset is applied.
-    var unique_constraints: []const types.UniqueConstraint = &.{};
-    var unique_owned_by_table = false;
-    errdefer if (!unique_owned_by_table) {
-        for (unique_constraints) |c| c.deinit(allocator);
+    const unique_constraints = try cloneUniqueConstraints(allocator, declared.unique_constraints);
+    errdefer if (unique_constraints.len > 0) {
+        for (unique_constraints) |constraint| constraint.deinit(allocator);
         allocator.free(unique_constraints);
     };
-    if (declared.unique_constraints.len > 0) {
-        const cloned_constraints = try allocator.alloc(types.UniqueConstraint, declared.unique_constraints.len);
-        var built_constraints: usize = 0;
-        errdefer {
-            for (cloned_constraints[0..built_constraints]) |c| c.deinit(allocator);
-            allocator.free(cloned_constraints);
-        }
-        for (declared.unique_constraints) |c| {
-            cloned_constraints[built_constraints] = try c.clone(allocator);
-            built_constraints += 1;
-        }
-        unique_constraints = cloned_constraints;
-    }
 
-    const total_fields = system.leading_system_field_count + declared.fields.len + system.trailing_system_field_count;
-    var fields = try allocator.alloc(types.Field, total_fields);
-    var count: usize = 0;
-    var fields_owned_by_table = false;
-    errdefer if (!fields_owned_by_table) {
-        for (fields[0..count]) |field| field.deinit(allocator);
-        allocator.free(fields);
-    };
-
-    for (system.leading_system_fields) |field| {
-        fields[count] = field;
-        count += 1;
-    }
-
-    const user_field_start = count;
-    for (declared.fields) |field| {
-        fields[count] = try cloneUserField(allocator, field);
-        fields[count].kind = .user;
-        count += 1;
-    }
-    const user_field_end = count;
-
-    for (system.trailing_system_fields) |field| {
-        fields[count] = field;
-        count += 1;
-    }
-
-    var table = types.Table{
+    const fields = try buildRuntimeFields(allocator, declared.fields);
+    const user_field_start = system.leading_system_field_count;
+    return .{
         .name = name,
         .name_quoted = name_quoted,
         .fields = fields,
@@ -890,25 +907,58 @@ pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_inde
         .index = table_index,
         .canonical_fields = true,
         .user_field_start = user_field_start,
-        .user_field_end = user_field_end,
+        .user_field_end = user_field_start + declared.fields.len,
         .metadata = metadata,
         .unique_constraints = unique_constraints,
     };
-    name_owned_by_table = true;
-    name_quoted_owned_by_table = true;
-    metadata_owned_by_table = true;
-    fields_owned_by_table = true;
-    unique_owned_by_table = true;
-    errdefer table.deinit(allocator);
+}
 
-    try index.buildFieldIndex(allocator, &table);
-
-    table.select_from_sql = try sql_strings.buildSelectFromSql(allocator, &table);
+fn buildRuntimeTableSql(allocator: Allocator, table: *types.Table) !void {
+    table.select_from_sql = try sql_strings.buildSelectFromSql(allocator, table);
     table.select_document_sql = try sql_strings.buildSelectDocumentSql(allocator, table.select_from_sql);
-    table.delete_document_sql_prefix = try sql_strings.buildDeleteDocumentSqlPrefix(allocator, &table);
-    table.delete_document_sql_suffix = try sql_strings.buildDeleteDocumentSqlSuffix(allocator, &table);
+    table.delete_document_sql_prefix = try sql_strings.buildDeleteDocumentSqlPrefix(allocator, table);
+    table.delete_document_sql_suffix = try sql_strings.buildDeleteDocumentSqlSuffix(allocator, table);
+}
 
-    return table;
+fn cloneUniqueConstraints(allocator: Allocator, constraints: []const types.UniqueConstraint) ![]const types.UniqueConstraint {
+    if (constraints.len == 0) return &.{};
+
+    const cloned = try allocator.alloc(types.UniqueConstraint, constraints.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (cloned[0..initialized]) |constraint| constraint.deinit(allocator);
+        allocator.free(cloned);
+    }
+    for (constraints) |constraint| {
+        cloned[initialized] = try constraint.clone(allocator);
+        initialized += 1;
+    }
+    return cloned;
+}
+
+fn buildRuntimeFields(allocator: Allocator, declared_fields: []const types.Field) ![]types.Field {
+    const total_fields = system.leading_system_field_count + declared_fields.len + system.trailing_system_field_count;
+    const fields = try allocator.alloc(types.Field, total_fields);
+    var initialized: usize = 0;
+    errdefer {
+        for (fields[0..initialized]) |field| field.deinit(allocator);
+        allocator.free(fields);
+    }
+
+    for (system.leading_system_fields) |field| {
+        fields[initialized] = field;
+        initialized += 1;
+    }
+    for (declared_fields) |field| {
+        fields[initialized] = try cloneUserField(allocator, field);
+        fields[initialized].kind = .user;
+        initialized += 1;
+    }
+    for (system.trailing_system_fields) |field| {
+        fields[initialized] = field;
+        initialized += 1;
+    }
+    return fields;
 }
 
 fn cloneUserField(allocator: Allocator, field: types.Field) !types.Field {

@@ -21,6 +21,17 @@ fn twoClauseOrder(a: usize, a_desc: bool) [2]query_ast.SortDescriptor {
     };
 }
 
+fn encodeRawCursorToken(allocator: std.mem.Allocator, payload: msgpack.Payload) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try msgpack.encode(payload, &output.writer);
+
+    const bytes = output.written();
+    const token = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
+    _ = std.base64.standard.Encoder.encode(token, bytes);
+    return token;
+}
+
 test "basic query filter parsing" {
     const allocator = std.testing.allocator;
 
@@ -887,6 +898,67 @@ test "cursor rejects wrong table, reordered descriptors, null required value, tr
     try testing.expectError(
         error.InvalidMessageFormat,
         query_parser.decodeCursorToken(allocator, trailing_token, tbl.index, tbl, &descriptors),
+    );
+
+    var reader: std.Io.Reader = .fixed(decoded);
+    var decoded_cursor = try msgpack.decodeConsumed(allocator, &reader);
+    defer decoded_cursor.payload.free(allocator);
+
+    var wrong_root = decoded_cursor.payload;
+    wrong_root.arr = wrong_root.arr[0..2];
+    const wrong_root_token = try encodeRawCursorToken(allocator, wrong_root);
+    defer allocator.free(wrong_root_token);
+    try testing.expectError(
+        error.InvalidMessageFormat,
+        query_parser.decodeCursorToken(allocator, wrong_root_token, tbl.index, tbl, &descriptors),
+    );
+
+    const original_direction = decoded_cursor.payload.arr[1].arr[0].arr[1];
+    decoded_cursor.payload.arr[1].arr[0].arr[1] = .{ .uint = 2 };
+    const invalid_direction_token = try encodeRawCursorToken(allocator, decoded_cursor.payload);
+    decoded_cursor.payload.arr[1].arr[0].arr[1] = original_direction;
+    defer allocator.free(invalid_direction_token);
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, invalid_direction_token, tbl.index, tbl, &descriptors),
+    );
+
+    const original_values = decoded_cursor.payload.arr[2].arr;
+    decoded_cursor.payload.arr[2].arr = original_values[0..1];
+    const short_values_token = try encodeRawCursorToken(allocator, decoded_cursor.payload);
+    decoded_cursor.payload.arr[2].arr = original_values;
+    defer allocator.free(short_values_token);
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, short_values_token, tbl.index, tbl, &descriptors),
+    );
+}
+
+test "cursor rejects nested value after allocating an owned prefix" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{ "title", "score" }, &.{ .text, .integer });
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const title_index = tbl.fieldIndex("title") orelse return error.UnknownField;
+    const score_index = tbl.fieldIndex("score") orelse return error.UnknownField;
+    const descriptors = [_]query_ast.SortDescriptor{
+        .{ .field_index = title_index, .desc = false },
+        .{ .field_index = score_index, .desc = false },
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+    var nested_items = [_]typed.ScalarValue{.{ .integer = 5 }};
+    const values = [_]typed.Value{
+        .{ .scalar = .{ .text = "allocates-when-decoded" } },
+        .{ .array = &nested_items },
+        .{ .scalar = .{ .doc_id = 7 } },
+    };
+    const token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &values);
+    defer allocator.free(token);
+
+    try testing.expectError(
+        error.InvalidCursorSortValue,
+        query_parser.decodeCursorToken(allocator, token, tbl.index, tbl, &descriptors),
     );
 }
 

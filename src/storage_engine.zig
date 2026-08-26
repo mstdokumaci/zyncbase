@@ -421,33 +421,7 @@ pub const StorageEngine = struct {
             try connection.verifyForeignKeys(&self.write_worker.conn);
         }
 
-        // ─── Bootstrap pk_sets from existing rows ───────────────────────────
-        // Reset any pk_sets populated by a previous (failed) bootstrap attempt
-        // so stale IDs cannot survive into documentExists/write-path checks.
-        self.reset_pk_sets();
-        // One-shot prepare per table: the SELECT "id" FROM "<t>" query is run
-        // exactly once at startup, so it does NOT go through stmt_cache (avoids
-        // polluting the LRU with single-use entries).
-        for (self.schema.tables, 0..) |table, table_index| {
-            const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
-            defer self.allocator.free(sql_str);
-
-            var dynamic = try self.write_worker.conn.prepareDynamic(sql_str);
-            defer dynamic.deinit();
-
-            while (true) {
-                const rc = sqlite.c.sqlite3_step(dynamic.stmt);
-                if (rc == sqlite.c.SQLITE_DONE) break;
-                if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.write_worker.conn);
-
-                const ptr = sqlite.c.sqlite3_column_blob(dynamic.stmt, 0);
-                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(dynamic.stmt, 0));
-                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-                const doc_id = try typed_doc_id.fromBytes(bytes);
-
-                try self.pk_sets[table_index].put(self.allocator, doc_id, {});
-            }
-        }
+        try self.bootstrapPrimaryKeySets();
 
         // ─── Prepare static stmts (schema is locked, threads not yet spawned) ───
         // Writer: per-table select_document + the two compile-time resolve stmts.
@@ -530,6 +504,32 @@ pub const StorageEngine = struct {
         self.state.store(.running, .release);
 
         std.log.info("Storage engine started (Runtime Phase)", .{});
+    }
+
+    fn bootstrapPrimaryKeySets(self: *StorageEngine) !void {
+        // Reset sets populated by a previous failed bootstrap attempt.
+        self.reset_pk_sets();
+
+        // These statements run once at startup and must not pollute stmt_cache.
+        for (self.schema.tables, 0..) |table, table_index| {
+            const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
+            defer self.allocator.free(sql_str);
+
+            var dynamic = try self.write_worker.conn.prepareDynamic(sql_str);
+            defer dynamic.deinit();
+
+            while (true) {
+                const rc = sqlite.c.sqlite3_step(dynamic.stmt);
+                if (rc == sqlite.c.SQLITE_DONE) break;
+                if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.write_worker.conn);
+
+                const ptr = sqlite.c.sqlite3_column_blob(dynamic.stmt, 0);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(dynamic.stmt, 0));
+                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+                const doc_id = try typed_doc_id.fromBytes(bytes);
+                try self.pk_sets[table_index].put(self.allocator, doc_id, {});
+            }
+        }
     }
 
     pub fn enqueueRead(self: *StorageEngine, request: ReadRequest) !void {

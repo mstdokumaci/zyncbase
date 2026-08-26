@@ -145,6 +145,32 @@ test "constraints: numeric range validation" {
     try std.testing.expectError(error.RangeViolation, constraints.validate(c_big, .integer, msgpack.Payload.intToPayload(9007199254740992), allocator));
 }
 
+test "constraints: validate preserves edge behavior and error precedence" {
+    const allocator = std.testing.allocator;
+    const constrained = types.Constraints{
+        .enum_values = &.{.{ .integer = 2 }},
+        .minimum = .{ .integer = 2 },
+    };
+
+    try constraints.validate(constrained, .integer, .nil, allocator);
+    try std.testing.expectError(error.EnumViolation, constraints.validate(constrained, .integer, msgpack.Payload.intToPayload(1), allocator));
+
+    const text_value = try msgpack.Payload.strToPayload("value", allocator);
+    defer text_value.free(allocator);
+    try std.testing.expectError(error.TypeMismatch, constraints.validate(.{ .minimum = .{ .integer = 0 } }, .integer, text_value, allocator));
+    try std.testing.expectError(error.TypeMismatch, constraints.validate(.{ .minimum = .{ .real = 0 } }, .real, text_value, allocator));
+    try std.testing.expectError(error.TypeMismatch, constraints.validate(.{}, .text, msgpack.Payload.intToPayload(1), allocator));
+
+    const real_range = types.Constraints{ .minimum = .{ .integer = 2 } };
+    try std.testing.expectError(error.TypeMismatch, constraints.validate(real_range, .real, .{ .float = std.math.nan(f64) }, allocator));
+    try std.testing.expectError(error.RangeViolation, constraints.validate(real_range, .real, .{ .float = 1.5 }, allocator));
+    try constraints.validate(real_range, .real, .{ .float = 2.0 }, allocator);
+
+    const integer_range = types.Constraints{ .minimum = .{ .real = 1.5 } };
+    try std.testing.expectError(error.RangeViolation, constraints.validate(integer_range, .integer, msgpack.Payload.intToPayload(1), allocator));
+    try constraints.validate(integer_range, .integer, msgpack.Payload.intToPayload(2), allocator);
+}
+
 test "constraints: enum validation" {
     const allocator = std.testing.allocator;
 
