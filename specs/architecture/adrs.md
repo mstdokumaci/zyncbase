@@ -281,7 +281,7 @@ The SDK is responsible for translating developer-facing syntax into compact wire
 | :--- | :--- |
 | `'users.u1.name'` (path) | `[table_index, 'u1', field_index]` |
 | `{ age: { gte: 18 } }` (query condition) | `[field_index, op_code, 18]` (positional tuple) |
-| `{ created_at: 'desc' }` (sort) | `[field_index, 1]` (positional tuple, desc flag) |
+| `[{ created_at: 'desc' }]` (sort) | `[[field_index, 1]]` (array of positional tuples; array order = precedence) |
 | `'address.city'` (nested field) | field index for `address__city` (flattened with `__`) |
 | `{ type: "StoreSet" }` (message) | `type: 0x11` — one-byte positive fixint message ID |
 
@@ -477,7 +477,7 @@ All server reads are collection-level with optional filters. The server has no c
 
 ### Subscriber Grouping
 
-Subscribers with identical `(namespace, collection, where, orderBy)` share one evaluation group. A `RecordChange` event evaluates each unique group exactly once — not once per subscriber. `limit` is per-subscriber metadata, applied after group evaluation. New subscribers joining an existing warm group receive the current snapshot immediately.
+Subscribers with identical `(namespace, collection, where, orderBy)` share one evaluation group. `orderBy` participates in group identity as the parsed **canonical order**: every query's sort descriptor list is non-empty and ends with a unique `id` clause (an explicit final `id`, or a hidden `id ASC` tie-breaker appended by the server). Omitted order and `[{ id: 'asc' }]` therefore canonicalize identically and share groups. A `RecordChange` event evaluates each unique group exactly once — not once per subscriber. `limit` is per-subscriber metadata, applied after group evaluation. New subscribers joining an existing warm group receive the current snapshot immediately.
 
 ### In-Memory AST Evaluation
 

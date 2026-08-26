@@ -216,8 +216,6 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field_index: usize,
     desc: bool,
-    field_type: schema_types.FieldType,
-    items_type: ?schema_types.FieldType,
 };
 
 pub const PredicateState = enum(u8) {
@@ -458,7 +456,8 @@ pub const FilterPredicate = struct {
 
 pub const QueryFilter = struct {
     predicate: FilterPredicate = .{},
-    order_by: SortDescriptor,
+    /// Canonical, non-empty sort order owned by this filter; always ends with the id field.
+    order_by: []SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
     structural_hash: u64 = 0,
@@ -467,13 +466,16 @@ pub const QueryFilter = struct {
         self.predicate.deinit(allocator);
         if (self.after) |*a| a.deinit(allocator);
         self.after = null;
+        allocator.free(self.order_by);
+        self.order_by = &[_]SortDescriptor{};
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {
         var copy = self; // copies structural_hash by value
         copy.predicate = try self.predicate.clone(allocator);
         errdefer copy.predicate.deinit(allocator);
-        copy.order_by = self.order_by;
+        copy.order_by = try allocator.dupe(SortDescriptor, self.order_by);
+        errdefer allocator.free(copy.order_by);
         if (self.after) |a| {
             copy.after = try a.clone(allocator);
         }

@@ -73,13 +73,16 @@ test "Value: clone preserves eql and ownership" {
 
     // Cursor clone roundtrip
     {
-        var cur = Cursor{
-            .sort_value = .{ .scalar = .{ .integer = 99 } },
-            .id = 0xaaa,
-        };
+        const values = try allocator.alloc(Value, 2);
+        values[0] = .{ .scalar = .{ .integer = 99 } };
+        values[1] = .{ .scalar = .{ .doc_id = 0xaaa } };
+        var cur = Cursor{ .values = values };
+
         var cloned = try cur.clone(allocator);
-        try testing.expect(cur.sort_value.eql(cloned.sort_value));
-        try testing.expectEqual(cur.id, cloned.id);
+        try testing.expectEqual(cur.values.len, cloned.values.len);
+        for (cur.values, cloned.values) |a, b| {
+            try testing.expect(a.eql(b));
+        }
         cur.deinit(allocator);
         cloned.deinit(allocator);
     }

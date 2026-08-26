@@ -2,6 +2,7 @@ const std = @import("std");
 
 const helpers = @import("app_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
+const query_ast = @import("query/ast.zig");
 const query_parser = @import("query/parser.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_system = @import("schema/system.zig");
@@ -11,6 +12,7 @@ const sth = @import("storage_engine_test_helpers.zig");
 const store_service = @import("store_service.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
+const typed = @import("typed/types.zig");
 
 const testing = std.testing;
 const StorageError = storage_mod.StorageError;
@@ -499,7 +501,7 @@ test "StoreService: query - orderBy and limit" {
     // Filter: orderBy created_at DESC, limit 2
     const tbl_md = app.schema.table("tasks") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
-        .orderBy = .{ "created_at", 1 }, // DESC
+        .orderBy = .{.{ "created_at", 1 }}, // DESC
         .limit = 2,
     });
     defer filter_map.free(allocator);
@@ -508,8 +510,10 @@ test "StoreService: query - orderBy and limit" {
     defer read_req.deinit(allocator);
 
     try testing.expectEqual(@as(?u32, 2), read_req.filter.limit);
-    // created_at is the last field (index = fields.len - 1), order_by.desc = true
-    try testing.expectEqual(true, read_req.filter.order_by.desc);
+    // created_at DESC followed by hidden id ASC tie-breaker.
+    const created_at_index = tbl_md.fieldIndex("created_at") orelse return error.UnknownField;
+    try testing.expectEqual(created_at_index, read_req.filter.order_by[0].field_index);
+    try testing.expectEqual(true, read_req.filter.order_by[0].desc);
 }
 
 test "StoreService: query - negative cases" {
@@ -567,11 +571,14 @@ test "StoreService: queryMore - pagination" {
     defer initial_req.deinit(allocator);
 
     // Encode a synthetic cursor for the load-more request.
-    // Default order_by is the id field (doc_id type), so sort_value must be a doc_id.
-    const cursor_token = try query_parser.encodeCursorToken(allocator, .{
-        .sort_value = .{ .scalar = .{ .doc_id = typed_doc_id.zero } },
-        .id = typed_doc_id.zero,
-    });
+    // Canonical default order is [id ASC], so the single value must be a doc_id.
+    const descriptors = [_]query_ast.SortDescriptor{
+        .{ .field_index = schema_system.id_field_index, .desc = false },
+    };
+    const cursor_values = [_]typed.Value{
+        .{ .scalar = .{ .doc_id = typed_doc_id.zero } },
+    };
+    const cursor_token = try query_parser.encodeCursorToken(allocator, table_index, &descriptors, &cursor_values);
     defer allocator.free(cursor_token);
 
     // Prepare a load-more read request using the initial filter and cursor

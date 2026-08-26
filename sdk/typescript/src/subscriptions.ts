@@ -1,12 +1,8 @@
 // Subscription Tracker
 
+import { compareDocIds } from "./doc_id.js";
 import { joinFieldPath, unflatten } from "./path.js";
-import type {
-	JsonValue,
-	QueryOptions,
-	StoreDelta,
-	StoreSubscribe,
-} from "./types.js";
+import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,8 +18,8 @@ export interface ListenProjection {
 export interface MaterializedView {
 	/** Current records keyed by document id. Values are unflattened. */
 	records: Map<string, JsonValue>;
-	/** Comparator for orderBy sort on snapshot. Null = no ordering. */
-	comparator: ((a: JsonValue, b: JsonValue) => number) | null;
+	/** Total-order comparator applied to every snapshot. Never null. */
+	comparator: (a: JsonValue, b: JsonValue) => number;
 }
 
 /** A single registered subscription entry. */
@@ -76,7 +72,7 @@ export class SubscriptionTracker {
 		subId: number,
 		params: Omit<StoreSubscribe, "id">,
 		callback: (results: JsonValue[]) => void,
-		orderBy?: QueryOptions["orderBy"],
+		comparator?: (a: JsonValue, b: JsonValue) => number,
 	): void {
 		this.register(subId, {
 			params,
@@ -84,7 +80,7 @@ export class SubscriptionTracker {
 			projection: null,
 			materializedView: {
 				records: new Map(),
-				comparator: buildComparator(orderBy),
+				comparator: comparator ?? createIdComparator(),
 			},
 		});
 	}
@@ -448,78 +444,32 @@ export class SubscriptionTracker {
 	}
 
 	/**
-	 * Snapshot array from the view; sorted only when an orderBy comparator
-	 * exists.
+	 * Snapshot array from the view; always sorted by the view's comparator.
 	 */
 	private _snapshotView(view: MaterializedView): JsonValue[] {
 		const records = Array.from(view.records.values());
-		if (view.comparator) {
-			records.sort(view.comparator);
-		}
+		records.sort(view.comparator);
 		return records;
 	}
 }
 
-function hasNestedKey(v: Record<string, JsonValue>): boolean {
-	return Object.keys(v).some((k) => k.includes("__"));
-}
-
 /**
- * Build a sort comparator from QueryOptions.orderBy.
- * Returns null if no ordering is specified.
+ * Default total order: packed document-id ascending (matches the server's
+ * hidden `id ASC` tie-breaker across short IDs and UUIDv7 IDs).
  */
-export function buildComparator(
-	orderBy?: Record<string, "asc" | "desc">,
-): ((a: JsonValue, b: JsonValue) => number) | null {
-	if (!orderBy) return null;
-	const entries = Object.entries(orderBy).map(([field, dir]) => ({
-		parts: field.split("."),
-		dir,
-	}));
-	if (entries.length === 0) return null;
-
+export function createIdComparator(): (a: JsonValue, b: JsonValue) => number {
 	return (a: JsonValue, b: JsonValue): number => {
-		for (const { parts, dir } of entries) {
-			const diff = compareFields(a, b, parts, dir);
-			if (diff !== 0) return diff;
+		const ia = (a as Record<string, JsonValue>)?.id;
+		const ib = (b as Record<string, JsonValue>)?.id;
+		if (typeof ia === "string" && typeof ib === "string") {
+			return compareDocIds(ia, ib);
 		}
 		return 0;
 	};
 }
 
-function compareFields(
-	a: JsonValue,
-	b: JsonValue,
-	parts: string[],
-	dir: "asc" | "desc",
-): number {
-	const mult = dir === "desc" ? -1 : 1;
-	const va = getNestedValue(a, parts);
-	const vb = getNestedValue(b, parts);
-
-	if (va === vb) return 0;
-	if (va == null) return 1;
-	if (vb == null) return -1;
-	if (va < vb) return -1 * mult;
-	if (va > vb) return 1 * mult;
-	return 0;
-}
-
-function getNestedValue(
-	obj: JsonValue,
-	parts: string[],
-): JsonValue | undefined {
-	let current: JsonValue | undefined = obj;
-	for (const part of parts) {
-		if (
-			current == null ||
-			typeof current !== "object" ||
-			Array.isArray(current)
-		)
-			return undefined;
-		current = (current as Record<string, JsonValue>)[part];
-	}
-	return current;
+function hasNestedKey(v: Record<string, JsonValue>): boolean {
+	return Object.keys(v).some((k) => k.includes("__"));
 }
 
 export function createListenProjection(segments: string[]): ListenProjection {

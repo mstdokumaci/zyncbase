@@ -1,7 +1,9 @@
 const std = @import("std");
 
+const query_ast = @import("../query/ast.zig");
 const system = @import("../schema/system.zig");
 const types = @import("../schema/types.zig");
+const typed = @import("../typed/types.zig");
 const SqlBuf = @import("buf.zig").SqlBuf;
 const SqlList = @import("buf.zig").SqlList;
 
@@ -47,46 +49,88 @@ pub fn appendNamespaceFilterSql(allocator: Allocator, buf: *SqlBuf) !void {
     try buf.appendSlice(allocator, " = ?");
 }
 
-/// Appends a composite cursor predicate: `("sort_field", "id") > (?, ?)`.
+/// Appends the multi-key lexicographic cursor disjunction and appends the bound
+/// value clones to `values` in matching positional order. Fragment generation
+/// and bind generation live in one loop to prevent positional drift.
+///
+/// For canonical keys k0..kn, branch i requires equality on k0..k(i-1) and an
+/// after-comparison on ki. Optional (non-required) keys use null-safe forms:
+/// prefix equality is `column IS ?` and the comparison branch becomes
+/// `(? IS NOT NULL AND (column IS NULL OR column <op> ?))`.
 pub fn appendCursorPredicateSql(
     allocator: Allocator,
     buf: *SqlBuf,
-    sort_field_name_quoted: []const u8,
-    sort_field_is_id: bool,
-    desc: bool,
+    table: *const types.Table,
+    descriptors: []const query_ast.SortDescriptor,
+    cursor_values: []const typed.Value,
+    values: *std.ArrayListUnmanaged(typed.Value),
 ) !void {
-    const op = if (desc) "<" else ">";
+    std.debug.assert(descriptors.len == cursor_values.len);
+    if (descriptors.len == 0) return;
 
-    if (sort_field_is_id) {
-        try buf.appendSlice(allocator, system.quoted_id);
-        try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, op);
-        try buf.appendSlice(allocator, " ?");
-        return;
+    try buf.appendSlice(allocator, "(");
+    for (descriptors, 0..) |d, i| {
+        if (i > 0) try buf.appendSlice(allocator, " OR ");
+        try buf.appendSlice(allocator, "(");
+
+        // Prefix equality on k0..k(i-1)
+        for (descriptors[0..i], 0..) |p, j| {
+            const pf = table.fields[p.field_index];
+            try buf.appendSlice(allocator, pf.name_quoted);
+            // repeated prefix binds are O(n²), bounded by max_sort_clauses+1;
+            // numbered params/CTEs only if profiling shows bind cost matters.
+            try buf.appendSlice(allocator, if (pf.required) " = ? AND " else " IS ? AND ");
+            try appendBoundValueClone(allocator, values, cursor_values[j]);
+        }
+
+        const f = table.fields[d.field_index];
+        const op = if (d.desc) " < ?" else " > ?";
+        if (f.required) {
+            try buf.appendSlice(allocator, f.name_quoted);
+            try buf.appendSlice(allocator, op);
+            try appendBoundValueClone(allocator, values, cursor_values[i]);
+        } else {
+            try buf.appendSlice(allocator, "? IS NOT NULL AND (");
+            try buf.appendSlice(allocator, f.name_quoted);
+            try buf.appendSlice(allocator, " IS NULL OR ");
+            try buf.appendSlice(allocator, f.name_quoted);
+            try buf.appendSlice(allocator, op);
+            try buf.appendSlice(allocator, ")");
+            try appendBoundValueClone(allocator, values, cursor_values[i]); // null guard
+            try appendBoundValueClone(allocator, values, cursor_values[i]); // comparison
+        }
+
+        try buf.appendSlice(allocator, ")");
     }
-
-    try buf.append(allocator, '(');
-    try buf.appendSlice(allocator, sort_field_name_quoted);
-    try buf.appendSlice(allocator, ", ");
-    try buf.appendSlice(allocator, system.quoted_id);
-    try buf.appendSlice(allocator, ") ");
-    try buf.appendSlice(allocator, op);
-    try buf.appendSlice(allocator, " (?, ?)");
+    try buf.appendSlice(allocator, ")");
 }
 
-/// Appends ` ORDER BY <sort_field> <dir>, "id" <dir>` to `buf`.
+fn appendBoundValueClone(
+    allocator: Allocator,
+    values: *std.ArrayListUnmanaged(typed.Value),
+    value: typed.Value,
+) !void {
+    const copy = try value.clone(allocator);
+    errdefer copy.deinit(allocator);
+    try values.append(allocator, copy);
+}
+
+/// Appends ` ORDER BY <col> <dir> [NULLS LAST], ...` for every canonical clause.
 pub fn appendOrderBySql(
     allocator: Allocator,
     buf: *SqlBuf,
-    sort_field_name_quoted: []const u8,
-    desc: bool,
+    table: *const types.Table,
+    descriptors: []const query_ast.SortDescriptor,
 ) !void {
     try buf.appendSlice(allocator, " ORDER BY ");
-    try buf.appendSlice(allocator, sort_field_name_quoted);
-    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
-    try buf.appendSlice(allocator, ", ");
-    try buf.appendSlice(allocator, system.quoted_id);
-    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
+    var list = SqlList.init(buf, ", ");
+    for (descriptors) |d| {
+        const f = table.fields[d.field_index];
+        try list.maybeSep(allocator);
+        try buf.appendSlice(allocator, f.name_quoted);
+        try buf.appendSlice(allocator, if (d.desc) " DESC" else " ASC");
+        if (!f.required) try buf.appendSlice(allocator, " NULLS LAST");
+    }
 }
 
 /// Builds `SELECT <cols> FROM "<table>"`. Pre-built once per table.

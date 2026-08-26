@@ -78,6 +78,43 @@ test "SubscriptionEngine: group sharing" {
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 }
 
+test "SubscriptionEngine: identical filters stay isolated by collection" {
+    const allocator = std.heap.smp_allocator;
+    var engine = SubscriptionEngine.init(testing.io, allocator);
+    defer engine.deinit();
+
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+        .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
+
+    try engine.subscribe(1, 0, filter, 1, 101);
+    try engine.subscribe(1, 1, filter, 2, 102);
+    try engine.subscribe(2, 0, filter, 3, 103);
+    try testing.expectEqual(@as(u32, 3), engine.groups_by_filter.count());
+
+    var record = try tth.recordFromValues(allocator, &.{tth.valText("active")});
+    defer record.deinit(allocator);
+
+    const cases = [_]struct { namespace_id: i64, table_index: usize, subscription_id: u64 }{
+        .{ .namespace_id = 1, .table_index = 0, .subscription_id = 101 },
+        .{ .namespace_id = 1, .table_index = 1, .subscription_id = 102 },
+        .{ .namespace_id = 2, .table_index = 0, .subscription_id = 103 },
+    };
+    for (cases) |case| {
+        const matches = try engine.handleRecordChange(.{
+            .namespace_id = case.namespace_id,
+            .table_index = case.table_index,
+            .operation = .insert,
+            .new_record = record,
+            .old_record = null,
+        }, allocator);
+        defer allocator.free(matches);
+        try testing.expectEqual(@as(usize, 1), matches.len);
+        try testing.expectEqual(case.subscription_id, matches[0].subscription_id);
+    }
+}
+
 test "SubscriptionEngine: unsubscribe clean up" {
     const allocator = std.heap.smp_allocator;
     var engine = SubscriptionEngine.init(testing.io, allocator);

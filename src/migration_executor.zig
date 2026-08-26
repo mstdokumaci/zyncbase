@@ -153,7 +153,7 @@ pub const MigrationExecutor = struct {
     /// the full target set one statement at a time — all inside the caller's
     /// migration transaction. Unrelated manual indexes are untouched.
     fn reconcileManagedIndexes(self: *MigrationExecutor, table: schema_types.Table) !void {
-        // ponytail: rebuild all managed indexes for this table on mismatch; switch to
+        // rebuild all managed indexes for this table on mismatch; switch to
         // per-index diffs only if measured migration startup time makes it necessary.
         {
             var names = std.ArrayListUnmanaged([]const u8).empty;

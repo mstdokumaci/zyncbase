@@ -138,7 +138,7 @@ Execute a one-off query (non-real-time).
 ```typescript
 const users = await client.store.query('users', {
   where: { age: { gte: 18 }, status: { eq: 'active' } },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 50
 })
 
@@ -155,7 +155,7 @@ if (users.nextCursor) {
 - `collection` (string) - Name of the collection to query (e.g., 'users', 'events')
 - `options` (object) - Query options:
   - `where` (object) - Filter conditions
-  - `orderBy` (object) - Sort order
+  - `orderBy` (array) - Ordered sort clauses, e.g. `[{ created_at: 'desc' }]`; each clause has exactly one field and direction
   - `limit` (number) - Max results to return (must be > 0)
   - `after` (string) - Opaque token for the next page (cursor)
 

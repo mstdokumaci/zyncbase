@@ -189,7 +189,9 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     const order_tuple = try allocator.alloc(msgpack.Payload, 2);
     order_tuple[0] = msgpack.Payload.uintToPayload(created_at_index);
     order_tuple[1] = msgpack.Payload.uintToPayload(1);
-    try filter.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
+    const order_outer = try allocator.alloc(msgpack.Payload, 1);
+    order_outer[0] = msgpack.Payload{ .arr = order_tuple };
+    try filter.mapPut("orderBy", msgpack.Payload{ .arr = order_outer });
     try filter.mapPut("limit", msgpack.Payload.uintToPayload(1));
 
     const subscribe_message = try store_helpers.createStoreSubscribeMessage(allocator, 77, 1, table.index, filter, 0);

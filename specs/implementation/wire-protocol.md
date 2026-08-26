@@ -152,7 +152,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `PresenceUnsubscribeShared` | `subId` | Connection-local subscription id. | Stop shared-presence updates. |
 | `PresenceRemove` | none | Ready presence scope. | Remove the connection's user presence. |
 
-Query fields for `StoreQuery` and `StoreSubscribe` are owned by [Query Grammar](./query-grammar.md). Cursor behavior is owned by [Cursor Pagination](./cursor-pagination.md).
+Query fields for `StoreQuery` and `StoreSubscribe` are owned by [Query Grammar](./query-grammar.md). `orderBy` is an ordered array of positional sort tuples, `[[field_index, desc_flag], ...]`; array order defines precedence. Cursor behavior is owned by [Cursor Pagination](./cursor-pagination.md).
 
 ## Write Confirmation
 

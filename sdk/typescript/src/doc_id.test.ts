@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { packDocId, unpackDocId } from "./doc_id.js";
+import { compareDocIds, packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { generateUUIDv7 } from "./uuid.js";
 
@@ -31,6 +31,32 @@ describe("doc_id", () => {
 			const right = packDocId(ordered[i + 1]);
 			expect(compareBytes(left, right)).toBeLessThan(0);
 		}
+	});
+
+	test("string comparison matches packed order across ID families", () => {
+		const ids = [
+			"-",
+			"a",
+			"aa",
+			"z",
+			"019c1e50-7d11-7000-8000-000000000000",
+			"019c1e50-7d11-7fff-bfff-ffffffffffff",
+		];
+		for (const left of ids) {
+			for (const right of ids) {
+				expect(Math.sign(compareDocIds(left, right))).toBe(
+					Math.sign(compareBytes(packDocId(left), packDocId(right))),
+				);
+			}
+		}
+	});
+
+	test("comparison gives invalid IDs a deterministic non-throwing fallback", () => {
+		const short = "valid-short";
+		const uuid = "019c1e50-7d11-7000-8000-000000000000";
+		expect(compareDocIds(short, uuid)).toBeLessThan(0);
+		expect(compareDocIds(uuid, "INVALID-A")).toBeLessThan(0);
+		expect(compareDocIds("INVALID-A", "INVALID-B")).toBeLessThan(0);
 	});
 
 	test("rejects invalid short IDs immediately", () => {

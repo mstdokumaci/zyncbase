@@ -740,7 +740,7 @@ fn findDeclaredFieldIndex(fields: []const types.Field, name: []const u8) ?usize 
 }
 
 fn sameFieldSet(left: []const usize, right: []const usize) bool {
-    // ponytail: O(n²) set comparison; schema counts are startup-bounded —
+    // O(n²) set comparison; schema counts are startup-bounded
     // sort copies or add hash sets only if startup profiling proves it matters.
     if (left.len != right.len) return false;
     for (left) |field_index| {

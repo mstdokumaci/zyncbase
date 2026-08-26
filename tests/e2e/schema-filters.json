@@ -14,6 +14,14 @@
 					"type": "boolean",
 					"indexed": true
 				},
+				"metrics": {
+					"type": "object",
+					"fields": {
+						"rank": {
+							"type": "integer"
+						}
+					}
+				},
 				"tags": {
 					"type": "array",
 					"items": "string"

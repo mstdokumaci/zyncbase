@@ -2,8 +2,10 @@ const std = @import("std");
 
 const msgpack_helpers = @import("../msgpack_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
+const query_ast = @import("../query/ast.zig");
 const query_parser = @import("../query/parser.zig");
 const schema_parse = @import("../schema/parse.zig");
+const schema_system = @import("../schema/system.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
@@ -105,11 +107,11 @@ test "encodeQuery: includes subscription pagination fields" {
         allocator.free(records);
     }
 
-    const cursor = typed.Cursor{
-        .sort_value = tth.valInt(10),
-        .id = 1,
+    const descriptors = [_]query_ast.SortDescriptor{
+        .{ .field_index = schema_system.id_field_index, .desc = false },
     };
-    const next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
+    const cursor_values = [_]typed.Value{tth.valInt(10)};
+    const next_cursor_str = try query_parser.encodeCursorToken(allocator, table_metadata.index, &descriptors, &cursor_values);
     defer allocator.free(next_cursor_str);
 
     const response = try wire_encode.encodeQuery(allocator, .{

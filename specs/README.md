@@ -68,5 +68,5 @@ To focus on a rock-solid core, the following features are explicitly deferred or
 
 - **Horizontal Scaling**: **Rejected**. ZyncBase is designed for vertical scaling to 100k+ connections on a single node. Distributed state complexity is avoided to maintain predictability (See [ADR-002](./architecture/adrs.md#adr-002-vertical-scaling-as-the-scaling-strategy)).
 - **Offline Support**: Deferred. (Sync queue, client-side conflict resolution).
-- **Advanced Queries**: Multi-field sorting, Aggregations, Regex (Roadmap: future release).
+- **Advanced Queries**: Aggregations, Regex (Roadmap: future release).
 - **Frameworks**: Vue/Svelte integrations (focuses on React/Vanilla).

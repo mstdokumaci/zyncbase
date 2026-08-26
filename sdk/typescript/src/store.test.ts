@@ -68,6 +68,7 @@ function makeStore(
 			if (event === "disconnected")
 				disconnectHandlers.push(handler as () => void);
 		},
+		isSchemaReady: () => schema.isReady(),
 		schemaDictionary: schema,
 	};
 
@@ -92,6 +93,16 @@ async function flushPromises(): Promise<void> {
 /** Waits one macrotask tick so the batched materialized-view flush runs. */
 async function flushTimers(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function makeReadySchema(): Promise<SchemaDictionary> {
+	const schema = new SchemaDictionary();
+	await schema.processSchemaSync({
+		tables: ["users"],
+		fields: [["id", "name"]],
+		fieldFlags: [[0, 0]],
+	});
+	return schema;
 }
 
 describe("StoreImpl", () => {
@@ -177,23 +188,26 @@ describe("StoreImpl", () => {
 	});
 
 	test("subscribe registers collection view and loadMore dispatches cursor request", async () => {
-		const { store, messages } = makeStore([
-			{
-				type: "ok",
-				id: 1,
-				subId: 9,
-				value: [{ id: "u1", name: "Ada" }],
-				hasMore: true,
-				nextCursor: "next",
-			},
-			{
-				type: "ok",
-				id: 2,
-				value: [{ id: "u2", name: "Grace" }],
-				hasMore: false,
-				nextCursor: null,
-			},
-		]);
+		const { store, messages } = makeStore(
+			[
+				{
+					type: "ok",
+					id: 1,
+					subId: 9,
+					value: [{ id: "u1", name: "Ada" }],
+					hasMore: true,
+					nextCursor: "next",
+				},
+				{
+					type: "ok",
+					id: 2,
+					value: [{ id: "u2", name: "Grace" }],
+					hasMore: false,
+					nextCursor: null,
+				},
+			],
+			await makeReadySchema(),
+		);
 		const snapshots: JsonValue[][] = [];
 
 		const handle = store.subscribe("users", {}, (value) =>
@@ -220,13 +234,19 @@ describe("StoreImpl", () => {
 		]);
 	});
 
+	test("subscribe before SchemaSync emits a controlled error without dispatching", () => {
+		const { store, messages, errors } = makeStore();
+
+		const handle = store.subscribe("users", {}, () => {});
+
+		expect(messages).toHaveLength(0);
+		expect(errors).toHaveLength(1);
+		expect((errors[0] as { code: string }).code).toBe("SESSION_NOT_READY");
+		handle.unsubscribe();
+	});
+
 	test("loadMore decodes raw tuple rows via decodeLoadMoreRows", async () => {
-		const schema = new SchemaDictionary();
-		await schema.processSchemaSync({
-			tables: ["users"],
-			fields: [["id", "name"]],
-			fieldFlags: [[0, 0]],
-		});
+		const schema = await makeReadySchema();
 		const { store, messages } = makeStore(
 			[
 				{

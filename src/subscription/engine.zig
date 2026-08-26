@@ -75,11 +75,15 @@ pub const CanonicalFilterContext = struct {
                 }
             }
         }
-        std.hash.autoHash(&hasher, f.order_by);
+        std.hash.autoHash(&hasher, f.order_by.len);
+        for (f.order_by) |d| {
+            std.hash.autoHash(&hasher, d.field_index);
+            std.hash.autoHash(&hasher, d.desc);
+        }
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hash_context.hashValue(&hasher, a.sort_value);
-            std.hash.autoHash(&hasher, a.id);
+            std.hash.autoHash(&hasher, a.values.len);
+            for (a.values) |v| hash_context.hashValue(&hasher, v);
         }
         return hasher.final();
     }
@@ -88,15 +92,48 @@ pub const CanonicalFilterContext = struct {
         if (a.predicate.state != b.predicate.state) return false;
         if (!eqlConditionsSorted(a.predicate.conditions, b.predicate.conditions)) return false;
         if (!eqlOrClauses(a.predicate.or_clauses, b.predicate.or_clauses)) return false;
-        if (!std.meta.eql(a.order_by, b.order_by)) return false;
+        if (!eqlSortDescriptors(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
         if (a.after == null and b.after == null) return true;
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return aa.sort_value.eql(bb.sort_value) and std.meta.eql(aa.id, bb.id);
+        if (aa.values.len != bb.values.len) return false;
+        for (aa.values, bb.values) |va, vb| {
+            if (!va.eql(vb)) return false;
+        }
+        return true;
     }
 };
+
+const CollectionFilterKey = struct {
+    collection: CollectionKey,
+    filter: QueryFilter,
+};
+
+const CollectionFilterContext = struct {
+    pub fn hash(_: CollectionFilterContext, key: CollectionFilterKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.collection.namespace_id);
+        std.hash.autoHash(&hasher, key.collection.table_index);
+        std.hash.autoHash(&hasher, CanonicalFilterContext.hash(.{}, key.filter));
+        return hasher.final();
+    }
+
+    pub fn eql(_: CollectionFilterContext, a: CollectionFilterKey, b: CollectionFilterKey) bool {
+        return a.collection.namespace_id == b.collection.namespace_id and
+            a.collection.table_index == b.collection.table_index and
+            CanonicalFilterContext.eql(.{}, a.filter, b.filter);
+    }
+};
+
+fn eqlSortDescriptors(a: []const query_ast.SortDescriptor, b: []const query_ast.SortDescriptor) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |da, db| {
+        if (da.field_index != db.field_index or da.desc != db.desc) return false;
+    }
+    return true;
+}
 
 fn eqlConditionsSorted(a: ?[]const Condition, b: ?[]const Condition) bool {
     if ((a == null) != (b == null)) return false;
@@ -125,8 +162,8 @@ fn eqlOrClauses(a: ?[]const OrClause, b: ?[]const OrClause) bool {
 pub const SubscriptionEngine = struct {
     io: std.Io,
     allocator: Allocator align(16),
-    /// filter -> GroupId
-    groups_by_filter: std.HashMapUnmanaged(QueryFilter, u64, CanonicalFilterContext, 80) = .empty,
+    /// (collection, filter) -> GroupId
+    groups_by_filter: std.HashMapUnmanaged(CollectionFilterKey, u64, CollectionFilterContext, 80) = .empty,
     /// group_id -> SubscriptionGroup
     groups: std.AutoHashMapUnmanaged(u64, SubscriptionGroup) = .empty,
     /// collection_key -> ArrayList(GroupId)
@@ -199,12 +236,13 @@ pub const SubscriptionEngine = struct {
             _ = self.groups.remove(group_id);
         }
 
-        try self.groups_by_filter.put(self.allocator, cloned_filter, group_id);
+        const coll_key = CollectionKey{ .namespace_id = namespace_id, .table_index = table_index };
+        const filter_key = CollectionFilterKey{ .collection = coll_key, .filter = cloned_filter };
+        try self.groups_by_filter.put(self.allocator, filter_key, group_id);
         errdefer {
-            _ = self.groups_by_filter.remove(cloned_filter);
+            _ = self.groups_by_filter.remove(filter_key);
         }
 
-        const coll_key = CollectionKey{ .namespace_id = namespace_id, .table_index = table_index };
         const gop = try self.groups_by_collection.getOrPut(self.allocator, coll_key);
         var collection_created = false;
         if (!gop.found_existing) {
@@ -258,7 +296,7 @@ pub const SubscriptionEngine = struct {
         const coll_key = CollectionKey{ .namespace_id = namespace_id, .table_index = table_index };
 
         var group_id: u64 = 0;
-        if (self.groups_by_filter.get(filter)) |gid| {
+        if (self.groups_by_filter.get(.{ .collection = coll_key, .filter = filter })) |gid| {
             group_id = gid;
             var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
             try group.subscribers.put(self.allocator, sub_key, {});
@@ -315,7 +353,7 @@ pub const SubscriptionEngine = struct {
         group_id: u64,
         group: *SubscriptionGroup,
     ) void {
-        _ = self.groups_by_filter.remove(group.filter);
+        _ = self.groups_by_filter.remove(.{ .collection = coll_key, .filter = group.filter });
         self.removeGroupFromTrie(coll_key, group_id, &group.filter);
         self.removeGroupFromCollectionIndex(coll_key, group_id);
         group.deinit(self.allocator);

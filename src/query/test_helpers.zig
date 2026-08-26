@@ -18,7 +18,7 @@ pub fn makeDefaultFilter(allocator: std.mem.Allocator) !QueryFilter {
     return makeFilter(allocator, 0, false, .doc_id, null);
 }
 
-/// Creates a QueryFilter with a custom order_by field index.
+/// Creates a QueryFilter with a custom single-clause order_by field.
 /// Caller owns the memory and must call deinit(allocator).
 pub fn makeFilter(
     allocator: std.mem.Allocator,
@@ -27,15 +27,12 @@ pub fn makeFilter(
     field_type: FieldType,
     items_type: ?FieldType,
 ) !QueryFilter {
-    _ = allocator;
-    return QueryFilter{
-        .order_by = .{
-            .field_index = order_by_field_index,
-            .desc = desc,
-            .field_type = field_type,
-            .items_type = items_type,
-        },
-    };
+    _ = field_type;
+    _ = items_type;
+    const order_by = try allocator.alloc(query_ast.SortDescriptor, 1);
+    errdefer allocator.free(order_by);
+    order_by[0] = .{ .field_index = order_by_field_index, .desc = desc };
+    return QueryFilter{ .order_by = order_by };
 }
 
 /// Creates a QueryFilter with the given conditions and a default order_by = "id" ASC.
@@ -166,17 +163,27 @@ pub fn createQueryFilterPayload(
             const key = if (comptime std.mem.eql(u8, f.name, "or_conditions")) "orConditions" else "conditions";
             try filter_map.mapPut(key, Payload{ .arr = conds_arr });
         } else if (comptime std.mem.eql(u8, f.name, "orderBy")) {
-            const order_by = @field(params, f.name);
-            const raw_field = order_by[0];
-            const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
-                .int, .comptime_int => @as(usize, @intCast(raw_field)),
-                else => tbl_md.fieldIndex(raw_field) orelse return error.UnknownField,
-            };
+            // orderBy is an array of [field, desc] tuples.
+            const clauses = @field(params, f.name);
+            var clause_count: usize = 0;
+            inline for (clauses) |_| clause_count += 1;
 
-            var order_arr = try allocator.alloc(Payload, 2);
+            const order_arr = try allocator.alloc(Payload, clause_count);
             errdefer allocator.free(order_arr);
-            order_arr[0] = Payload.uintToPayload(f_idx);
-            order_arr[1] = Payload.uintToPayload(@intCast(order_by[1]));
+
+            inline for (clauses, 0..) |clause_src, ci| {
+                const raw_field = clause_src[0];
+                const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
+                    .int, .comptime_int => @as(usize, @intCast(raw_field)),
+                    else => tbl_md.fieldIndex(raw_field) orelse return error.UnknownField,
+                };
+
+                const tuple = try allocator.alloc(Payload, 2);
+                errdefer allocator.free(tuple);
+                tuple[0] = Payload.uintToPayload(f_idx);
+                tuple[1] = Payload.uintToPayload(@intCast(clause_src[1]));
+                order_arr[ci] = Payload{ .arr = tuple };
+            }
             try filter_map.mapPut("orderBy", Payload{ .arr = order_arr });
         } else if (comptime std.mem.eql(u8, f.name, "limit")) {
             const limit = @field(params, f.name);

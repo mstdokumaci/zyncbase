@@ -4,7 +4,6 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const query_ast = @import("ast.zig");
 
@@ -36,18 +35,26 @@ pub const ParserError = error{
     InvalidInOperand,
     NullOperandUnsupported,
     UnsupportedOperatorForFieldType,
+    UnsupportedSortFieldType,
     InvalidCursorSortValue,
     OutOfMemory,
 };
 
-/// Decodes a Base64-encoded MessagePack cursor tuple token into a Cursor.
-/// Expected decoded MessagePack shape: [sort_value, id_bin]
+/// Maximum number of client-supplied sort clauses.
+pub const max_sort_clauses: usize = 8;
+
+/// Decodes a Base64-encoded MessagePack cursor token into a Cursor.
+/// Decoded shape: [table_index, [[field_index, desc], ...], [value_0, ..., id_bin]]
+/// The embedded table index and descriptor list must exactly match the active
+/// query's canonical order; values are decoded against each field's schema type.
 pub fn decodeCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
-    field_type: schema_types.FieldType,
-    items_type: ?schema_types.FieldType,
+    table_index: usize,
+    table_metadata: *const schema_types.Table,
+    descriptors: []const query_ast.SortDescriptor,
 ) ParserError!Cursor {
+    // single decode pass; consumed-byte check rejects trailing data.
     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(token) catch
         return error.InvalidMessageFormat;
     const decoded = try allocator.alloc(u8, decoded_len);
@@ -55,50 +62,93 @@ pub fn decodeCursorToken(
     std.base64.standard.Decoder.decode(decoded, token) catch return error.InvalidMessageFormat;
 
     var reader: std.Io.Reader = .fixed(decoded);
-    const cursor_payload = msgpack.decodeTrusted(allocator, &reader) catch
+    const decode_result = msgpack.decodeConsumed(allocator, &reader) catch
         return error.InvalidMessageFormat;
-    defer cursor_payload.free(allocator);
+    defer decode_result.payload.free(allocator);
+    if (decode_result.consumed != decoded.len) return error.InvalidMessageFormat;
 
-    if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
-    if (cursor_payload.arr[1] != .bin) return error.InvalidMessageFormat;
+    const payload = decode_result.payload;
+    if (payload != .arr or payload.arr.len != 3) return error.InvalidMessageFormat;
 
-    const sort_value = try decodeCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
-    errdefer sort_value.deinit(allocator);
+    const token_table_index = msgpack.extractPayloadUsize(payload.arr[0]) orelse
+        return error.InvalidMessageFormat;
+    if (token_table_index != table_index) return error.InvalidCursorSortValue;
 
-    return Cursor{
-        .sort_value = sort_value,
-        .id = typed_doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
-    };
+    const token_descriptors = payload.arr[1];
+    if (token_descriptors != .arr or token_descriptors.arr.len != descriptors.len)
+        return error.InvalidCursorSortValue;
+    for (token_descriptors.arr, descriptors) |td, d| {
+        if (td != .arr or td.arr.len != 2) return error.InvalidCursorSortValue;
+        const field_index = msgpack.extractPayloadUsize(td.arr[0]) orelse
+            return error.InvalidCursorSortValue;
+        const desc = switch (msgpack.extractPayloadUsize(td.arr[1]) orelse
+            return error.InvalidCursorSortValue) {
+            0 => false,
+            1 => true,
+            else => return error.InvalidCursorSortValue,
+        };
+        if (field_index != d.field_index or desc != d.desc) return error.InvalidCursorSortValue;
+    }
+
+    const token_values = payload.arr[2];
+    if (token_values != .arr or token_values.arr.len != descriptors.len)
+        return error.InvalidCursorSortValue;
+
+    const values = try allocator.alloc(typed.Value, token_values.arr.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (values[0..initialized]) |v| v.deinit(allocator);
+        allocator.free(values);
+    }
+
+    for (token_values.arr, 0..) |item, i| {
+        const field = table_metadata.fields[descriptors[i].field_index];
+        if (item == .nil and field.required) return error.InvalidCursorSortValue;
+        if (item == .arr) return error.InvalidCursorSortValue;
+        values[i] = typedValueFromPayload(allocator, field.storage_type, field.items_type, item) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.InvalidCursorSortValue,
+        };
+        initialized += 1;
+    }
+
+    return Cursor{ .values = values };
 }
 
-/// Encodes a Cursor to a Base64-encoded MessagePack cursor tuple token.
-/// Encoded shape: [sort_value, id_bin]
-pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: Cursor) ![]const u8 {
+/// Encodes a Cursor to a Base64-encoded MessagePack cursor token.
+/// Encoded shape: [table_index, [[field_index, desc], ...], [values...]]
+pub fn encodeCursorToken(
+    allocator: std.mem.Allocator,
+    table_index: usize,
+    descriptors: []const query_ast.SortDescriptor,
+    values: []const typed.Value,
+) ![]const u8 {
+    std.debug.assert(descriptors.len == values.len);
+
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
     const writer = &output.writer;
-    try msgpack.encodeArrayHeader(writer, 2);
-    try writeValueMsgPack(cursor.sort_value, writer);
-    const id_bytes = typed_doc_id.toBytes(cursor.id);
-    try msgpack.writeMsgPackBin(writer, &id_bytes);
+
+    try msgpack.encodeArrayHeader(writer, 3);
+    try msgpack.encode(msgpack.Payload{ .uint = table_index }, writer);
+
+    try msgpack.encodeArrayHeader(writer, descriptors.len);
+    for (descriptors) |d| {
+        try msgpack.encodeArrayHeader(writer, 2);
+        try msgpack.encode(msgpack.Payload{ .uint = d.field_index }, writer);
+        try msgpack.encode(msgpack.Payload{ .uint = @intFromBool(d.desc) }, writer);
+    }
+
+    try msgpack.encodeArrayHeader(writer, values.len);
+    for (values) |v| {
+        try writeValueMsgPack(v, writer);
+    }
+
     const bytes = output.written();
     const encoded_len = std.base64.standard.Encoder.calcSize(bytes.len);
     const encoded = try allocator.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, bytes);
     return encoded;
-}
-
-fn decodeCursorSortValue(
-    allocator: std.mem.Allocator,
-    field_type: schema_types.FieldType,
-    items_type: ?schema_types.FieldType,
-    payload: msgpack.Payload,
-) ParserError!Value {
-    if (payload == .nil) return error.InvalidCursorSortValue;
-    return typedValueFromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidCursorSortValue,
-    };
 }
 
 /// Parse a MessagePack Payload (expected to be a map) into a QueryFilter AST.
@@ -116,20 +166,14 @@ pub fn parseQueryFilter(
     const table_metadata = schema.tableByIndex(table_index) orelse return error.UnknownTable;
 
     var predicate = query_ast.FilterPredicate{};
-    const id_field = table_metadata.fields[schema_system.id_field_index];
-    var order_by: SortDescriptor = .{
-        .field_index = schema_system.id_field_index,
-        .desc = false,
-        .field_type = id_field.storage_type,
-        .items_type = id_field.items_type,
-    };
+    var order_by: []SortDescriptor = &[_]SortDescriptor{};
+    var has_explicit_order = false;
     var limit: ?u32 = null;
-    var after: ?Cursor = null;
     var after_token: ?[]u8 = null;
 
     errdefer {
         predicate.deinit(allocator);
-        if (after) |*a| a.deinit(allocator);
+        if (order_by.len > 0) allocator.free(order_by);
         if (after_token) |token| allocator.free(token);
     }
 
@@ -138,6 +182,7 @@ pub fn parseQueryFilter(
         .table_metadata = table_metadata,
         .predicate = &predicate,
         .order_by = &order_by,
+        .has_explicit_order = &has_explicit_order,
         .limit = &limit,
         .after_token = &after_token,
     };
@@ -148,8 +193,17 @@ pub fn parseQueryFilter(
         try ctx.handleFilterKey(entry.key_ptr.*.str.value(), entry.value_ptr.*);
     }
 
+    // Canonicalize after map iteration so key order cannot influence the result.
+    if (!has_explicit_order) {
+        order_by = try defaultOrderBy(allocator);
+    } else {
+        order_by = try canonicalizeOrderBy(allocator, order_by);
+    }
+
+    var after: ?Cursor = null;
+    errdefer if (after) |*a| a.deinit(allocator);
     if (after_token) |token| {
-        after = try decodeCursorToken(allocator, token, order_by.field_type, order_by.items_type);
+        after = try decodeCursorToken(allocator, token, table_index, table_metadata, order_by);
         allocator.free(token);
         after_token = null;
     }
@@ -164,11 +218,41 @@ pub fn parseQueryFilter(
     };
 }
 
+fn defaultOrderBy(allocator: std.mem.Allocator) ParserError![]SortDescriptor {
+    const slice = try allocator.alloc(SortDescriptor, 1);
+    errdefer allocator.free(slice);
+    slice[0] = .{ .field_index = schema_system.id_field_index, .desc = false };
+    return slice;
+}
+
+/// Appends the hidden `id ASC` tie-breaker unless `id` is already the final clause.
+/// Rejects `id` anywhere except the final position.
+fn canonicalizeOrderBy(
+    allocator: std.mem.Allocator,
+    client_clauses: []SortDescriptor,
+) ParserError![]SortDescriptor {
+    std.debug.assert(client_clauses.len >= 1);
+    for (client_clauses[0 .. client_clauses.len - 1]) |clause| {
+        if (clause.field_index == schema_system.id_field_index) return error.InvalidSortFormat;
+    }
+
+    const last = client_clauses[client_clauses.len - 1];
+    if (last.field_index == schema_system.id_field_index) return client_clauses;
+
+    const extended = try allocator.alloc(SortDescriptor, client_clauses.len + 1);
+    errdefer allocator.free(extended);
+    @memcpy(extended[0..client_clauses.len], client_clauses);
+    extended[client_clauses.len] = .{ .field_index = schema_system.id_field_index, .desc = false };
+    allocator.free(client_clauses);
+    return extended;
+}
+
 const FilterParseCtx = struct {
     allocator: std.mem.Allocator,
     table_metadata: *const schema_types.Table,
     predicate: *query_ast.FilterPredicate,
-    order_by: *SortDescriptor,
+    order_by: *[]SortDescriptor,
+    has_explicit_order: *bool,
     limit: *?u32,
     after_token: *?[]u8,
 
@@ -178,7 +262,10 @@ const FilterParseCtx = struct {
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
             try self.replaceOrConditions(value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            self.order_by.* = try parseSortDescriptor(self.table_metadata, value);
+            const new_order = try parseSortDescriptors(self.allocator, self.table_metadata, value);
+            if (self.order_by.len > 0) self.allocator.free(self.order_by.*);
+            self.order_by.* = new_order;
+            self.has_explicit_order.* = true;
         } else if (std.mem.eql(u8, key, "limit")) {
             try self.parseLimit(value);
         } else if (std.mem.eql(u8, key, "after")) {
@@ -413,6 +500,33 @@ fn parseCondition(
     };
 }
 
+/// Parses the outer `orderBy` array of positional sort tuples.
+/// Validates clause count, tuple shape, directions, duplicates, and sortable types.
+fn parseSortDescriptors(
+    allocator: std.mem.Allocator,
+    table_metadata: *const schema_types.Table,
+    payload: msgpack.Payload,
+) ParserError![]SortDescriptor {
+    if (payload != .arr) return error.InvalidSortFormat;
+    const arr = payload.arr;
+    if (arr.len < 1 or arr.len > max_sort_clauses) return error.InvalidSortFormat;
+
+    const result = try allocator.alloc(SortDescriptor, arr.len);
+    var count: usize = 0;
+    errdefer allocator.free(result);
+
+    for (arr) |item| {
+        const descriptor = try parseSortDescriptor(table_metadata, item);
+        // Bounded O(n²) duplicate check — at most eight client clauses.
+        for (result[0..count]) |prev| {
+            if (prev.field_index == descriptor.field_index) return error.InvalidSortFormat;
+        }
+        result[count] = descriptor;
+        count += 1;
+    }
+    return result;
+}
+
 fn parseSortDescriptor(
     table_metadata: *const schema_types.Table,
     payload: msgpack.Payload,
@@ -423,13 +537,14 @@ fn parseSortDescriptor(
 
     // Field is now an integer index
     const field_index = msgpack.extractPayloadUsize(arr[0]) orelse return error.InvalidFieldName;
-    const resolved = try resolveFieldMetadata(table_metadata, field_index);
+    if (field_index >= table_metadata.fields.len) return error.UnknownField;
+    const field = table_metadata.fields[field_index];
+    if (field.storage_type == .array) return error.UnsupportedSortFieldType;
+
     const desc = try parseSortDirection(arr[1]);
 
     return SortDescriptor{
-        .field_index = resolved.field_index,
+        .field_index = field_index,
         .desc = desc,
-        .field_type = resolved.field_type,
-        .items_type = resolved.items_type,
     };
 }

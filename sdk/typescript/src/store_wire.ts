@@ -6,6 +6,7 @@ import type {
 	OkResponse,
 	Path,
 	QueryOptions,
+	SortClause,
 	StoreBatch,
 	StoreLoadMore,
 	StoreQuery,
@@ -312,7 +313,7 @@ export function shapeQueryResult(
 export function encodeQueryOptions(options: QueryOptions): {
 	conditions?: WireCondition[];
 	orConditions?: WireCondition[];
-	orderBy?: [string, number];
+	orderBy?: [string, number][];
 	limit?: number;
 	after?: string;
 } {
@@ -321,13 +322,81 @@ export function encodeQueryOptions(options: QueryOptions): {
 	if (options.where) {
 		Object.assign(result, encodeWhereClause(options.where));
 	}
-	if (options.orderBy) {
+	if (options.orderBy !== undefined) {
 		result.orderBy = encodeOrderBy(options.orderBy);
 	}
 	if (options.limit !== undefined) result.limit = options.limit;
 	if (options.after !== undefined) result.after = options.after;
 
 	return result;
+}
+
+const MIN_SORT_CLAUSES = 1;
+const MAX_SORT_CLAUSES = 8;
+
+/**
+ * Encode public orderBy clauses into ordered wire tuples [[field, descFlag], ...].
+ * Public dot paths are flattened to "__" schema paths. Throws a non-retryable
+ * client error on malformed input — the server rejects it with INVALID_MESSAGE.
+ */
+export function encodeOrderBy(
+	orderBy: readonly SortClause[],
+): [string, number][] {
+	if (!Array.isArray(orderBy))
+		throw invalidSortError("orderBy must be an array of sort clauses");
+	if (orderBy.length < MIN_SORT_CLAUSES || orderBy.length > MAX_SORT_CLAUSES) {
+		throw invalidSortError(
+			`orderBy requires between ${MIN_SORT_CLAUSES} and ${MAX_SORT_CLAUSES} clauses`,
+		);
+	}
+	const seen = new Set<string>();
+	const encoded = orderBy.map((clause, index) =>
+		encodeSortClause(clause, index, seen),
+	);
+	const idIndex = encoded.findIndex(([field]) => field === "id");
+	if (idIndex !== -1 && idIndex !== encoded.length - 1) {
+		throw invalidSortError('orderBy field "id" must be the final clause');
+	}
+	return encoded;
+}
+
+function encodeSortClause(
+	clause: SortClause,
+	index: number,
+	seen: Set<string>,
+): [string, number] {
+	if (clause === null || typeof clause !== "object" || Array.isArray(clause)) {
+		throw invalidSortError(`orderBy clause ${index} must be an object`);
+	}
+	const keys = Object.keys(clause);
+	if (keys.length !== 1) {
+		throw invalidSortError(
+			`orderBy clause ${index} must contain exactly one field and direction`,
+		);
+	}
+	const field = keys[0];
+	const dir = clause[field];
+	if (dir !== "asc" && dir !== "desc") {
+		throw invalidSortError(
+			`orderBy clause ${index} direction must be "asc" or "desc"`,
+		);
+	}
+	const encodedField = field.split(".").join("__");
+	if (seen.has(encodedField)) {
+		throw invalidSortError(
+			`orderBy clause ${index} duplicates field "${field}"`,
+		);
+	}
+	seen.add(encodedField);
+	return [encodedField, dir === "desc" ? 1 : 0];
+}
+
+function invalidSortError(message: string): ZyncBaseError {
+	return new ZyncBaseError(message, {
+		code: ErrorCodes.INVALID_MESSAGE,
+		category: "client",
+		retryable: false,
+	});
 }
 
 function buildIdQuery(segments: string[]): Omit<StoreQuery, "id"> {
@@ -438,11 +507,4 @@ function encodeWhereClause(
 		if (orConditions.length > 0) result.orConditions = orConditions;
 	}
 	return result;
-}
-
-function encodeOrderBy(
-	orderBy: Record<string, "asc" | "desc">,
-): [string, number] {
-	const [field, dir] = Object.entries(orderBy)[0];
-	return [field, dir === "desc" ? 1 : 0];
 }

@@ -17,6 +17,7 @@ import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
+import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
 setDefaultTimeout(100_000);
@@ -84,6 +85,7 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runFilters(port);
+					await runSorting(port);
 				},
 			);
 		});

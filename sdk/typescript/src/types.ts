@@ -66,9 +66,14 @@ export interface StatusDetail {
 
 // ─── SDK-side query types (Prisma-style, encoded to wire tuples before sending) ──
 
+export type SortDirection = "asc" | "desc";
+
+/** A single sort clause with exactly one field and one direction. */
+export type SortClause = Readonly<Record<string, SortDirection>>;
+
 export interface QueryOptions {
 	where?: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>; // e.g. { age: { gte: 18 }, or: [...] }
-	orderBy?: Record<string, "asc" | "desc">; // e.g. { created_at: 'desc' }
+	orderBy?: readonly SortClause[]; // e.g. [{ created_at: 'desc' }] — array order defines precedence
 	limit?: number;
 	after?: string; // opaque cursor token
 }
@@ -166,7 +171,7 @@ export interface StoreQuery {
 	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
-	orderBy?: [field: string, descFlag: number];
+	orderBy?: [field: string, descFlag: number][]; // ordered sort clauses; array order = precedence
 	limit?: number;
 	after?: string; // opaque Base64 cursor
 }
@@ -179,7 +184,7 @@ export interface StoreSubscribe {
 	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
-	orderBy?: [field: string, descFlag: number];
+	orderBy?: [field: string, descFlag: number][]; // ordered sort clauses; array order = precedence
 	limit?: number;
 }
 

@@ -213,3 +213,20 @@ export function unpackDocId(bytes: Uint8Array): string {
 	}
 	return decodeShortDocId(bytesToBigInt(bytes));
 }
+
+/**
+ * Compare document IDs in packed order without allocating packed bytes.
+ * Invalid strings sort lexically after both canonical ID families so callers
+ * such as materialized-view comparators remain total and non-throwing.
+ */
+export function compareDocIds(a: string, b: string): number {
+	const aFamily = docIdSortFamily(a);
+	const bFamily = docIdSortFamily(b);
+	if (aFamily !== bFamily) return aFamily - bFamily;
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function docIdSortFamily(id: string): number {
+	if (isCanonicalUUIDv7(id)) return 1;
+	return isValidShortDocId(id) ? 0 : 2;
+}
