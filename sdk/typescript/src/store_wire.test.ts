@@ -154,6 +154,14 @@ describe("store_wire", () => {
 			).toThrow();
 		});
 
+		test("orderBy rejects duplicate normalized field paths", () => {
+			expect(() =>
+				encodeQueryOptions({
+					orderBy: [{ "profile.rank": "asc" }, { profile__rank: "desc" }],
+				}),
+			).toThrow('duplicates field "profile__rank"');
+		});
+
 		test("orderBy rejects empty arrays and excessive clauses", () => {
 			expect(() => encodeQueryOptions({ orderBy: [] })).toThrow();
 			const nine = Array.from({ length: 9 }, () => ({ f: "asc" as const }));

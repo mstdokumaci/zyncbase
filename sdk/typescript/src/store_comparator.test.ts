@@ -12,14 +12,15 @@ import type {
 
 /**
  * Flags: 0b01 system, 0b10 doc-id/reference, 0b100 required.
- * Table "items": id(system+doc+req), name(req), score(req), ref(doc+req), opt(optional).
+ * Table "items": id(system+doc+req), name(req), score(req), ref(doc+req),
+ * opt(optional), profile.rank(optional).
  */
 async function makeReadySchema(): Promise<SchemaDictionary> {
 	const schema = new SchemaDictionary();
 	await schema.processSchemaSync({
 		tables: ["items"],
-		fields: [["id", "name", "score", "ref", "opt"]],
-		fieldFlags: [[7, 4, 4, 6, 0]],
+		fields: [["id", "name", "score", "ref", "opt", "profile__rank"]],
+		fieldFlags: [[7, 4, 4, 6, 0, 0]],
 	});
 	return schema;
 }
@@ -136,6 +137,20 @@ describe("materialized-view comparator", () => {
 			"r2",
 			"r3",
 		]);
+	});
+
+	test("flattened sort fields traverse the normalized nested document path", async () => {
+		const schema = await makeReadySchema();
+		const { store, push } = makeStore(schema);
+		const snapshots = await subscribeAndCollect(store, {
+			orderBy: [{ profile__rank: "asc" }],
+		});
+
+		push(setOp("r1", { profile: { rank: 2 } }));
+		push(setOp("r2", { profile: { rank: 1 } }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual(["r2", "r1"]);
 	});
 
 	test("captures the comparator before an async subscribe response", async () => {

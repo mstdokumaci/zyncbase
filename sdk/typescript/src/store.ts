@@ -329,9 +329,9 @@ export class StoreImpl {
 		for (const clause of options.orderBy ?? []) {
 			const field = Object.keys(clause)[0];
 			if (field === undefined) continue;
-			// Public dot path segments; flattened with "__" for schema lookup.
-			const parts = field.split(".");
-			const fieldIndex = schema.getFieldIndex(tableIndex, parts.join("__"));
+			const encodedField = field.split(".").join("__");
+			const parts = splitFieldPath(encodedField);
+			const fieldIndex = schema.getFieldIndex(tableIndex, encodedField);
 			entries.push({
 				parts,
 				desc: clause[field] === "desc",

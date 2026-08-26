@@ -381,13 +381,14 @@ function encodeSortClause(
 			`orderBy clause ${index} direction must be "asc" or "desc"`,
 		);
 	}
-	if (seen.has(field)) {
+	const encodedField = field.split(".").join("__");
+	if (seen.has(encodedField)) {
 		throw invalidSortError(
 			`orderBy clause ${index} duplicates field "${field}"`,
 		);
 	}
-	seen.add(field);
-	return [field.split(".").join("__"), dir === "desc" ? 1 : 0];
+	seen.add(encodedField);
+	return [encodedField, dir === "desc" ? 1 : 0];
 }
 
 function invalidSortError(message: string): ZyncBaseError {
