@@ -42,6 +42,7 @@ fn makeUpsertOp(
 fn runBatchSweep(
     allocator: Allocator,
     batch_len: usize,
+    cache_population: usize,
     iterations: usize,
     ctx: *EngineTestContext,
 ) !struct { avg_flush: f64, avg_drain: f64 } {
@@ -54,14 +55,15 @@ fn runBatchSweep(
     const ww_alloc = ctx.engine.write_worker.allocator;
 
     // Warmup: insert initial rows so later iterations hit the update path (prefetchOldRecord).
-    for (0..5) |_| {
+    for (0..5) |warmup_idx| {
         var batch = std.ArrayListUnmanaged(WriteOp).empty;
         defer {
             for (batch.items) |op| op.deinit(ww_alloc);
             batch.deinit(allocator);
         }
 
-        for (0..batch_len) |i| {
+        const warmup_len = if (warmup_idx == 0) @max(batch_len, cache_population) else batch_len;
+        for (0..warmup_len) |i| {
             const id: DocId = @intCast(i % 10_000);
             try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, ns_id, @intCast(i)));
         }
@@ -160,15 +162,20 @@ test "WriteWorker: flushBatch throughput" {
     defer ctx.deinit();
 
     const is_debug = builtin.mode == .Debug;
+    const is_release_safe = builtin.mode == .ReleaseSafe;
     const is_tsan = builtin.sanitize_thread;
 
     // batch_len=10
-    const r10 = try runBatchSweep(allocator, 10, if (is_tsan) 100 else if (is_debug) 100 else 500, &ctx);
+    const r10 = try runBatchSweep(allocator, 10, 10, if (is_tsan) 100 else if (is_debug) 100 else 500, &ctx);
     std.debug.print("flushBatch (batch_len=10) [ms]: flush={d:.3} drain={d:.3}\n", .{ r10.avg_flush, r10.avg_drain });
 
     // batch_len=100
-    const r100 = try runBatchSweep(allocator, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
+    const r100 = try runBatchSweep(allocator, 100, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
     std.debug.print("flushBatch (batch_len=100) [ms]: flush={d:.3} drain={d:.3}\n", .{ r100.avg_flush, r100.avg_drain });
+
+    // Production-sized batch against a small cache that still exposes per-write map cloning.
+    const r200 = try runBatchSweep(allocator, 200, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
+    std.debug.print("flushBatch (batch_len=200, cache_entries=512) [ms]: flush={d:.3} drain={d:.3}\n", .{ r200.avg_flush, r200.avg_drain });
 
     const target_flush_10: f64 = if (is_tsan) 3.0 else if (is_debug) 2.5 else 0.3;
     const target_drain_10: f64 = if (is_tsan) 0.02 else if (is_debug) 0.03 else 0.01;
@@ -179,4 +186,5 @@ test "WriteWorker: flushBatch throughput" {
     try testing.expect(r10.avg_drain < target_drain_10);
     try testing.expect(r100.avg_flush < target_flush_100);
     try testing.expect(r100.avg_drain < target_drain_100);
+    try testing.expect(r200.avg_flush < r100.avg_flush * 4.0);
 }

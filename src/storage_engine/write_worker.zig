@@ -30,7 +30,6 @@ const ChangeQueue = change_queue_mod.ChangeQueue;
 const OwnedRecordChange = change_queue_mod.OwnedRecordChange;
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
-const DocumentCacheKey = storage_cache.DocumentCacheKey;
 const StorageError = errors.StorageError;
 const StatementCache = sql.StatementCache;
 const WriteOp = write_queue.WriteOp;
@@ -386,9 +385,10 @@ pub const WriteWorker = struct {
 
         var pending_cache_ops = std.ArrayListUnmanaged(CacheOp).empty;
         defer {
-            for (pending_cache_ops.items) |*op| {
-                if (op.record) |r| r.deinit(self.allocator);
-            }
+            for (pending_cache_ops.items) |op| switch (op) {
+                .update => |update_op| update_op.data.deinit(self.allocator),
+                .evict => {},
+            };
             pending_cache_ops.deinit(self.allocator);
         }
 
@@ -481,26 +481,17 @@ pub const WriteWorker = struct {
             if (new_record) |nr| {
                 if (nr.clone(self.allocator)) |cloned| {
                     errdefer cloned.deinit(self.allocator);
-                    try ctx.pending_cache_ops.append(self.allocator, .{
+                    try ctx.pending_cache_ops.append(self.allocator, .{ .update = .{
                         .key = cache_key,
-                        .kind = .update,
-                        .record = cloned,
-                    });
+                        .data = cloned,
+                    } });
                 } else |err| {
                     const classified_err = errors.classifyError(err);
                     std.log.warn("Failed to clone record for cache write-through: {}", .{classified_err});
-                    try ctx.pending_cache_ops.append(self.allocator, .{
-                        .key = cache_key,
-                        .kind = .evict,
-                        .record = null,
-                    });
+                    try ctx.pending_cache_ops.append(self.allocator, .{ .evict = cache_key });
                 }
             } else if (pk_delete and old_record != null) {
-                try ctx.pending_cache_ops.append(self.allocator, .{
-                    .key = cache_key,
-                    .kind = .evict,
-                    .record = null,
-                });
+                try ctx.pending_cache_ops.append(self.allocator, .{ .evict = cache_key });
             }
             if (pk_insert and old_record == null) {
                 try ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
@@ -966,11 +957,7 @@ pub const WriteWorker = struct {
         cache_key: u64,
     };
 
-    const CacheOp = struct {
-        key: DocumentCacheKey,
-        kind: enum { update, evict },
-        record: ?Record,
-    };
+    const CacheOp = storage_cache.document_cache_type.Mutation;
 
     const EntryTarget = struct {
         table: *const schema_types.Table,
@@ -1065,22 +1052,38 @@ pub const WriteWorker = struct {
         tx_started.* = false;
         self.bumpVersion();
 
-        for (pending_cache_ops.items) |*op| {
-            switch (op.kind) {
-                .update => {
-                    if (op.record) |r| {
-                        self.document_cache.update(op.key, r) catch |err| {
-                            const classified_err = errors.classifyError(err);
-                            std.log.warn("Failed to update document cache: {}", .{classified_err});
-                            _ = self.document_cache.evict(op.key);
-                            r.deinit(self.allocator);
-                        };
-                        op.record = null;
-                    }
-                },
-                .evict => {
-                    _ = self.document_cache.evict(op.key);
-                },
+        var recovery_ok = true;
+        if (!self.document_cache.readable.load(.acquire)) {
+            self.document_cache.clear() catch |clear_err| {
+                std.log.warn("Failed to recover document cache: {}", .{errors.classifyError(clear_err)});
+                recovery_ok = false;
+            };
+        }
+
+        if (self.document_cache.applyBatch(pending_cache_ops.items)) |_| {
+            pending_cache_ops.clearRetainingCapacity();
+        } else |err| {
+            const classified_err = errors.classifyError(err);
+            std.log.warn("Failed to apply document cache batch: {}", .{classified_err});
+            self.document_cache.invalidate();
+            var evict_failed = false;
+            for (pending_cache_ops.items) |op| {
+                const key = switch (op) {
+                    .update => |update_op| update_op.key,
+                    .evict => |evict_key| evict_key,
+                };
+                _ = self.document_cache.evict(key) catch |evict_err| {
+                    std.log.err("Failed to evict stale document cache entry: {}", .{errors.classifyError(evict_err)});
+                    evict_failed = true;
+                    break;
+                };
+            }
+            if (!evict_failed and recovery_ok) {
+                self.document_cache.setReadable(true);
+            } else if (evict_failed) {
+                self.document_cache.clear() catch |clear_err| {
+                    std.log.err("Failed to clear document cache after eviction failure: {}", .{errors.classifyError(clear_err)});
+                };
             }
         }
 
