@@ -273,6 +273,63 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             self.readable.store(false, .release);
         }
 
+        pub fn setReadable(self: *Self, readable: bool) void {
+            self.readable.store(readable, .release);
+        }
+
+        /// Atomically clear all entries and restore readability.
+        /// Releases retained entries via epoch reclamation rather than leaking stale data.
+        pub fn clear(self: *Self) !void {
+            while (true) {
+                const epoch_slot = self.epoch_manager.enter();
+                defer self.epoch_manager.exit(epoch_slot);
+
+                const old_entries = self.entries.load(.acquire);
+                if (old_entries.count() == 0) {
+                    self.readable.store(true, .release);
+                    return;
+                }
+
+                const new_entries = try self.allocator.create(MapType);
+                errdefer self.allocator.destroy(new_entries);
+                new_entries.* = MapType.init(self.allocator);
+
+                var published = false;
+                defer if (!published) {
+                    new_entries.deinit();
+                    self.allocator.destroy(new_entries);
+                };
+
+                const deferred_count = old_entries.count() + 1;
+                const deferred_nodes = try self.allocator.alloc(*DeferNode, deferred_count);
+                defer self.allocator.free(deferred_nodes);
+
+                var reserved: usize = 0;
+                defer if (!published) {
+                    for (deferred_nodes[0..reserved]) |node| self.pool.release(node);
+                };
+                while (reserved < deferred_count) : (reserved += 1) {
+                    deferred_nodes[reserved] = try self.acquireDeferNode();
+                }
+
+                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                    continue;
+                }
+                published = true;
+
+                var idx: usize = 0;
+                var it = old_entries.iterator();
+                while (it.next()) |kv| {
+                    self.internalDeferWithNode(.{ .entry = kv.value_ptr.* }, deferred_nodes[idx]);
+                    idx += 1;
+                }
+                self.internalDeferWithNode(.{ .map = old_entries }, deferred_nodes[idx]);
+                _ = self.epoch_manager.bump();
+                self.readable.store(true, .release);
+                return;
+            }
+        }
+
         /// Signal release of a handle and potentially defer reclamation
         pub fn releaseHandle(self: *Self, handle: Handle) void {
             _ = handle.entry.ref_count.fetchSub(1, .acq_rel);

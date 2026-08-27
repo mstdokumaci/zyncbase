@@ -240,3 +240,144 @@ test "cache: deep free via value deinit" {
     _ = try cache.evict(42);
     cache.reclaim(true); // Force reclaim to run deinit.
 }
+
+test "cache: applyBatch failure fallback keeps unreadable during evictions then restores on success" {
+    const allocator = testing.allocator;
+    const u32_cache = lockFreeCache(U32Value, i64);
+
+    var cache: u32_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    // Seed cache with stale entries that a batch would have updated/evicted.
+    try cache.update(1, .{ .value = 10 });
+    try cache.update(2, .{ .value = 20 });
+    try cache.update(42, .{ .value = 99 });
+
+    const mutations = [_]u32_cache.Mutation{
+        .{ .update = .{ .key = 3, .data = .{ .value = 30 } } },
+        .{ .evict = 42 },
+        .{ .update = .{ .key = 1, .data = .{ .value = 11 } } },
+    };
+
+    // Force allocation failure in applyBatch (covers cloneEntries / deferred-node alloc).
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing.allocator();
+    try testing.expectError(error.OutOfMemory, cache.applyBatch(&mutations));
+    cache.allocator = allocator;
+
+    // Fallback path as in write_worker commitBatchAndApply: invalidate, evict each key while unreadable, restore only after all succeed.
+    cache.invalidate();
+    try testing.expectError(error.NotFound, cache.get(1));
+    try testing.expectError(error.NotFound, cache.get(2));
+
+    var evict_failed = false;
+    for (mutations) |op| {
+        const key = switch (op) {
+            .update => |u| u.key,
+            .evict => |k| k,
+        };
+        _ = cache.evict(key) catch {
+            evict_failed = true;
+            break;
+        };
+    }
+    if (!evict_failed) cache.setReadable(true) else try cache.clear();
+
+    try testing.expect(!evict_failed);
+    try testing.expect(cache.readable.load(.acquire));
+    try testing.expectError(error.NotFound, cache.get(42));
+    // 2 was not in mutation set, so it should still be readable after restore.
+    {
+        const h = try cache.get(2);
+        defer h.release();
+        try testing.expectEqual(@as(u32, 20), h.data().value);
+    }
+    try testing.expectError(error.NotFound, cache.get(3));
+
+    // Subsequent document-cache hit must succeed after successful cleanup.
+    try cache.update(3, .{ .value = 30 });
+    {
+        const h = try cache.get(3);
+        defer h.release();
+        try testing.expectEqual(@as(u32, 30), h.data().value);
+    }
+    try cache.update(1, .{ .value = 11 });
+    {
+        const h = try cache.get(1);
+        defer h.release();
+        try testing.expectEqual(@as(u32, 11), h.data().value);
+    }
+}
+
+test "cache: fallback clear on eviction failure releases retained entries and restores hit" {
+    const allocator = testing.allocator;
+    const CountingValue = struct {
+        value: u32,
+        counter: *std.atomic.Value(usize),
+        pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+            _ = alloc;
+            _ = self.counter.fetchAdd(1, .seq_cst);
+        }
+    };
+    const counting_cache = lockFreeCache(CountingValue, i64);
+
+    var deinit_count = std.atomic.Value(usize).init(0);
+
+    var cache: counting_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    try cache.update(1, .{ .value = 1, .counter = &deinit_count });
+    try cache.update(2, .{ .value = 2, .counter = &deinit_count });
+    cache.reclaim(true);
+    try testing.expectEqual(@as(usize, 0), deinit_count.load(.acquire));
+
+    const mutations = [_]counting_cache.Mutation{
+        .{ .update = .{ .key = 3, .data = .{ .value = 3, .counter = &deinit_count } } },
+        .{ .evict = 1 },
+    };
+
+    // Simulate applyBatch failure.
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing.allocator();
+    try testing.expectError(error.OutOfMemory, cache.applyBatch(&mutations));
+    cache.allocator = allocator;
+
+    // Invalidate then force eviction to fail, triggering atomic clear path.
+    cache.invalidate();
+    try testing.expectError(error.NotFound, cache.get(1));
+
+    var failing2 = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing2.allocator();
+    var evict_failed = false;
+    for (mutations) |op| {
+        const key = switch (op) {
+            .update => |u| u.key,
+            .evict => |k| k,
+        };
+        _ = cache.evict(key) catch {
+            evict_failed = true;
+            break;
+        };
+    }
+    try testing.expect(evict_failed);
+    cache.allocator = allocator;
+
+    // Atomic clear must release retained stale entries and restore readability.
+    try cache.clear();
+    try testing.expect(cache.readable.load(.acquire));
+    try testing.expectError(error.NotFound, cache.get(1));
+    try testing.expectError(error.NotFound, cache.get(2));
+
+    cache.reclaim(true);
+    try testing.expectEqual(@as(usize, 2), deinit_count.load(.acquire));
+
+    // Subsequent hit must succeed after clear.
+    try cache.update(99, .{ .value = 99, .counter = &deinit_count });
+    {
+        const h = try cache.get(99);
+        defer h.release();
+        try testing.expectEqual(@as(u32, 99), h.data().value);
+    }
+}
