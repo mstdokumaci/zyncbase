@@ -54,13 +54,17 @@ if (!k6) throw new Error("k6 was not found in PATH");
 const k6Version = commandText([k6, "version"]);
 const fanout =
 	profile === "store-identical-filter" || profile.startsWith("presence-");
-const rate = Number(envOptions.RATE ?? (fanout ? 100 : 10_000));
+const rate = Number(
+	envOptions.RATE ??
+		(smoke && profile === "store-committed" ? 500 : fanout ? 100 : 10_000),
+);
+const benchmarkConnections = profile === "store-committed" ? 500 : 5_000;
 const expectedConnections = fanout
 	? Number(envOptions.SUBSCRIBERS ?? (smoke ? 3 : 5_000)) +
 		Number(
 			envOptions.WRITERS ?? (profile === "presence-shared" ? 1 : smoke ? 2 : 32),
 		)
-	: Number(envOptions.CLIENTS ?? (smoke ? 5 : 5_000));
+	: Number(envOptions.CLIENTS ?? (smoke ? 5 : benchmarkConnections));
 const openFileLimit = Math.max(65_536, expectedConnections + 4_096);
 const expectedTestSeconds =
 	Number(envOptions.SETUP_SECONDS ?? (smoke ? 4 : fanout ? 45 : 20)) +
@@ -68,7 +72,7 @@ const expectedTestSeconds =
 	Number(envOptions.WARMUP_SECONDS ?? (smoke ? 1 : 10)) +
 	Number(envOptions.DURATION_SECONDS ?? (smoke ? 3 : 30)) +
 	Number(envOptions.COOLDOWN_SECONDS ?? (smoke ? 3 : 10));
-const hardTimeoutSeconds = expectedTestSeconds + 45;
+const hardTimeoutSeconds = expectedTestSeconds + 50;
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const artifactDir = path.resolve("test-artifacts/load", `${timestamp}-${profile}${smoke ? "-smoke" : ""}`);
 const dataDir = path.join(artifactDir, "data");

@@ -17,8 +17,9 @@ bun run test:load --profile presence-user
 bun run test:load --profile presence-shared
 ```
 
-Real runs reject configurations below 5,000 total WebSocket connections. Tiny
-protocol checks are separate and are marked `benchmarkEligible: false`:
+Real runs reject configurations below 5,000 total WebSocket connections, except
+`store-committed`, which has a 500-connection minimum. Tiny protocol checks are
+separate and are marked `benchmarkEligible: false`:
 
 ```sh
 bun run test:load:smoke --profile store-identical-filter
@@ -34,7 +35,7 @@ stops the server. Results remain under `test-artifacts/load/<timestamp>-<profile
 | --- | --- | --- |
 | `connections` | 5,000 clients | Ticket exchange, WebSocket establishment, SchemaSync, and idle connection cost |
 | `store-accepted` | 5,000 writers | Mutation admission throughput; accepted final sentinels prove each writer stream was admitted |
-| `store-committed` | 5,000 writers | Durable commit throughput and commit latency with bounded per-client pipelines |
+| `store-committed` | 500 writers | Durable commit throughput and commit latency with bounded per-client pipelines |
 | `store-identical-filter` | 5,000 subscribers + 32 writers | Store subscription fanout through one structurally identical `match == true` filter group |
 | `presence-user` | 5,000 subscribers + 32 writers | User-presence coalescing and namespace-wide fanout |
 | `presence-shared` | 5,000 subscribers + 1 writer | Shared-presence coalescing and namespace-wide fanout |

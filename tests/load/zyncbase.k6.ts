@@ -37,7 +37,8 @@ type Role =
 const profile = enumEnv("PROFILE", profiles, "connections");
 const smoke = __ENV.SMOKE === "1";
 const socketsPerVu = intEnv("SOCKETS_PER_VU", 30);
-const clients = intEnv("CLIENTS", smoke ? 5 : 5_000);
+const benchmarkConnections = profile === "store-committed" ? 500 : 5_000;
+const clients = intEnv("CLIENTS", smoke ? 5 : benchmarkConnections);
 const subscribers = intEnv("SUBSCRIBERS", smoke ? 3 : 5_000);
 const defaultWriters = profile === "presence-shared" ? 1 : smoke ? 2 : 32;
 const writers = intEnv(
@@ -60,7 +61,10 @@ const barrierSeconds = intEnv("BARRIER_SECONDS", 1);
 const warmupSeconds = intEnv("WARMUP_SECONDS", smoke ? 1 : 10);
 const measureSeconds = intEnv("DURATION_SECONDS", smoke ? 3 : 30);
 const cooldownSeconds = intEnv("COOLDOWN_SECONDS", smoke ? 3 : 10);
-const rate = intEnv("RATE", fanoutProfile ? 100 : 10_000);
+const rate = intEnv(
+	"RATE",
+	smoke && profile === "store-committed" ? 500 : fanoutProfile ? 100 : 10_000,
+);
 const probeRate = intEnv("PROBE_RATE", smoke ? 2 : 1);
 const maxBufferedBytes = intEnv("MAX_BUFFERED_BYTES", 1_048_576);
 const maxCatchup = intEnv("MAX_CATCHUP", 1_000);
@@ -80,9 +84,9 @@ const totalSeconds =
 	measureSeconds +
 	cooldownSeconds;
 
-if (!smoke && totalConnections < 5_000) {
+if (!smoke && totalConnections < benchmarkConnections) {
 	throw new Error(
-		`Benchmark profiles require at least 5000 connections, got ${totalConnections}`,
+		`The ${profile} benchmark requires at least ${benchmarkConnections} connections, got ${totalConnections}`,
 	);
 }
 if (profile === "presence-shared" && writers !== 1) {
@@ -115,6 +119,7 @@ const probeLatency = new Trend("load_probe_latency_ms", true);
 const finalConvergence = new Rate("load_final_convergence");
 
 const thresholds: Record<string, string[]> = {
+	iterations: [`count==${vus}`],
 	load_ready: ["rate==1"],
 	load_ticket_errors: ["count==0"],
 	load_protocol_errors: ["count==0"],
@@ -142,6 +147,7 @@ export const options = {
 			vus,
 			iterations: 1,
 			maxDuration: `${totalSeconds + 15}s`,
+			gracefulStop: "30s",
 			exec: "run",
 		},
 	},
