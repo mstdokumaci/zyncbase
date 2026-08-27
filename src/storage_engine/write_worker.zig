@@ -1052,6 +1052,12 @@ pub const WriteWorker = struct {
         tx_started.* = false;
         self.bumpVersion();
 
+        if (!self.document_cache.readable.load(.acquire)) {
+            self.document_cache.clear() catch |clear_err| {
+                std.log.warn("Failed to recover document cache: {}", .{errors.classifyError(clear_err)});
+            };
+        }
+
         if (self.document_cache.applyBatch(pending_cache_ops.items)) |_| {
             pending_cache_ops.clearRetainingCapacity();
         } else |err| {

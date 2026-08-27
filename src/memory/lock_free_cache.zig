@@ -291,7 +291,6 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 }
 
                 const new_entries = try self.allocator.create(MapType);
-                errdefer self.allocator.destroy(new_entries);
                 new_entries.* = MapType.init(self.allocator);
 
                 var published = false;

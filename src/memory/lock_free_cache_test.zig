@@ -260,7 +260,8 @@ test "cache: applyBatch failure fallback keeps unreadable during evictions then 
         .{ .update = .{ .key = 1, .data = .{ .value = 11 } } },
     };
 
-    // Force allocation failure in applyBatch (covers cloneEntries / deferred-node alloc).
+    // Force allocation failure in applyBatch (fail_index 0 covers the initial CacheEntry.init allocation;
+    // later fail_index values would exercise cloneEntries and acquireDeferNode paths).
     var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
     cache.allocator = failing.allocator();
     try testing.expectError(error.OutOfMemory, cache.applyBatch(&mutations));
