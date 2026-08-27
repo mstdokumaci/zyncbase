@@ -1228,6 +1228,122 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
     }
 }
 
+test "StorageEngine: recovery clear failure keeps cache unreadable and hides unaffected stale entry despite applyBatch failure" {
+    const allocator = std.heap.smp_allocator;
+
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("val", .text),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "cache-recovery-failure-test", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const namespace_id: i64 = 100;
+    const doc_affected: typed_doc_id.DocId = 1;
+    const doc_unaffected: typed_doc_id.DocId = 2;
+    const doc_evict: typed_doc_id.DocId = 42;
+
+    const val_field_idx = table_meta.fieldIndex("val").?;
+
+    // Use FailNextAllocator so we can fail exactly the recovery clear and applyBatch.
+    var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
+    ctx.engine.document_cache.deinit();
+    try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
+
+    const seed_columns = [_]sth.ColumnValue{
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial" } } },
+    };
+    for ([_]typed_doc_id.DocId{ doc_affected, doc_unaffected, doc_evict }) |doc_id| {
+        try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &seed_columns, null, null, null);
+    }
+    try ctx.engine.flushPendingWrites();
+
+    // Verify all three are cached and readable before failure injection.
+    for ([_]typed_doc_id.DocId{ doc_affected, doc_unaffected, doc_evict }) |doc_id| {
+        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
+        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
+            .miss => return error.TestUnexpectedResult,
+            .hit => |hit| {
+                defer hit.handle.release();
+                try testing.expectEqualStrings("initial", hit.record.values[val_field_idx].scalar.text);
+            },
+        }
+    }
+
+    // Make cache unreadable to trigger recovery path on next commit.
+    ctx.engine.document_cache.invalidate();
+    try testing.expect(!ctx.engine.document_cache.readable.load(.acquire));
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
+        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
+    }
+
+    // Fail recovery clear and the subsequent applyBatch.
+    failing.remaining = 2;
+
+    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new_val" } } }};
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_affected, namespace_id, &update_columns, null, null, null);
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_evict, namespace_id, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    // After both failures but successful evict of affected keys, cache must stay unreadable.
+    try testing.expect(!ctx.engine.document_cache.readable.load(.acquire));
+
+    // Unaffected stale entry must remain hidden (not restored via setReadable).
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
+        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
+    }
+    // Affected keys must also be misses while unreadable.
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_affected);
+        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
+    }
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_evict);
+        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
+    }
+
+    // DB must still have committed values despite cache being unreadable.
+    {
+        const r = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_affected, namespace_id);
+        defer if (r) |rec| rec.deinit(allocator);
+        try testing.expect(r != null);
+        try testing.expectEqualStrings("new_val", r.?.values[val_field_idx].scalar.text);
+    }
+    {
+        const r = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_evict, namespace_id);
+        defer if (r) |rec| rec.deinit(allocator);
+        try testing.expect(r == null);
+    }
+
+    // Only a successful clear restores readability and drops all stale entries.
+    failing.remaining = 0;
+    try ctx.engine.document_cache.clear();
+    try testing.expect(ctx.engine.document_cache.readable.load(.acquire));
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
+        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
+    }
+    // Subsequent cache hit must succeed after recovery.
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_affected, namespace_id);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expect(rec != null);
+        const cloned = try rec.?.clone(allocator);
+        try ctx.engine.document_cache.update(cache_mod.getCacheKey(table_meta, namespace_id, 99), cloned);
+    }
+    {
+        const k = cache_mod.getCacheKey(table_meta, namespace_id, 99);
+        const h = try ctx.engine.document_cache.get(k);
+        defer h.release();
+        try testing.expectEqualStrings("new_val", h.data().values[val_field_idx].scalar.text);
+    }
+}
+
 test "storage: engine init rejects empty data dir" {
     const allocator = std.heap.smp_allocator;
     var ms: sth.MemoryStrategy = undefined;

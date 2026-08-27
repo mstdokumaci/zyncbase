@@ -1052,9 +1052,11 @@ pub const WriteWorker = struct {
         tx_started.* = false;
         self.bumpVersion();
 
+        var recovery_ok = true;
         if (!self.document_cache.readable.load(.acquire)) {
             self.document_cache.clear() catch |clear_err| {
                 std.log.warn("Failed to recover document cache: {}", .{errors.classifyError(clear_err)});
+                recovery_ok = false;
             };
         }
 
@@ -1076,9 +1078,9 @@ pub const WriteWorker = struct {
                     break;
                 };
             }
-            if (!evict_failed) {
+            if (!evict_failed and recovery_ok) {
                 self.document_cache.setReadable(true);
-            } else {
+            } else if (evict_failed) {
                 self.document_cache.clear() catch |clear_err| {
                     std.log.err("Failed to clear document cache after eviction failure: {}", .{errors.classifyError(clear_err)});
                 };

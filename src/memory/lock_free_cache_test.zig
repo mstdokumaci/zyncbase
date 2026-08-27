@@ -382,3 +382,84 @@ test "cache: fallback clear on eviction failure releases retained entries and re
         try testing.expectEqual(@as(u32, 99), h.data().value);
     }
 }
+
+test "cache: recovery clear failure keeps unreadable and skips applyBatch fallback restore leaves unaffected stale hidden" {
+    const allocator = testing.allocator;
+    const u32_cache = lockFreeCache(U32Value, i64);
+
+    var cache: u32_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    // Seed with affected and unaffected stale entries.
+    try cache.update(1, .{ .value = 10 });
+    try cache.update(2, .{ .value = 20 }); // unaffected — not in mutations
+    try cache.update(42, .{ .value = 99 });
+
+    const mutations = [_]u32_cache.Mutation{
+        .{ .update = .{ .key = 3, .data = .{ .value = 30 } } },
+        .{ .evict = 42 },
+        .{ .update = .{ .key = 1, .data = .{ .value = 11 } } },
+    };
+
+    // Make cache unreadable as after a prior applyBatch failure.
+    cache.invalidate();
+    try testing.expect(!cache.readable.load(.acquire));
+
+    // 1) Recovery clear fails (simulate OOM).
+    var failing_clear = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing_clear.allocator();
+    var recovery_ok = true;
+    cache.clear() catch {
+        recovery_ok = false;
+    };
+    cache.allocator = allocator;
+    try testing.expect(!recovery_ok);
+    try testing.expect(!cache.readable.load(.acquire));
+    // Unaffected stale must still be hidden while unreadable.
+    try testing.expectError(error.NotFound, cache.get(2));
+
+    // 2) Subsequent applyBatch also fails.
+    var failing_batch = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing_batch.allocator();
+    try testing.expectError(error.OutOfMemory, cache.applyBatch(&mutations));
+    cache.allocator = allocator;
+
+    // 3) Fallback as in write_worker commitBatchAndApply: invalidate, evict affected keys, only restore if recovery_ok.
+    cache.invalidate();
+    var evict_failed = false;
+    for (mutations) |op| {
+        const key = switch (op) {
+            .update => |u| u.key,
+            .evict => |k| k,
+        };
+        _ = cache.evict(key) catch {
+            evict_failed = true;
+            break;
+        };
+    }
+    try testing.expect(!evict_failed);
+    if (!evict_failed and recovery_ok) cache.setReadable(true) else if (evict_failed) try cache.clear();
+
+    // Must remain unreadable because recovery clear failed; unaffected stale must stay hidden.
+    try testing.expect(!recovery_ok);
+    try testing.expect(!evict_failed);
+    try testing.expect(!cache.readable.load(.acquire));
+    try testing.expectError(error.NotFound, cache.get(1));
+    try testing.expectError(error.NotFound, cache.get(2));
+    try testing.expectError(error.NotFound, cache.get(42));
+    try testing.expectError(error.NotFound, cache.get(3));
+
+    // Only a successful clear restores readability and drops all stale entries.
+    try cache.clear();
+    try testing.expect(cache.readable.load(.acquire));
+    try testing.expectError(error.NotFound, cache.get(2));
+    try testing.expectError(error.NotFound, cache.get(1));
+    // Subsequent hit must succeed after successful recovery clear.
+    try cache.update(99, .{ .value = 99 });
+    {
+        const h = try cache.get(99);
+        defer h.release();
+        try testing.expectEqual(@as(u32, 99), h.data().value);
+    }
+}
