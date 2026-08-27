@@ -507,8 +507,8 @@ async function updateRandomRecords(
 }
 
 export async function run(port: number = 3000) {
-	const TOTAL_CLIENTS = 500;
-	const READ_WRITE_COUNT = 50;
+	const TOTAL_CLIENTS = 1000;
+	const READ_WRITE_COUNT = 100;
 	const t0 = Date.now();
 	const phase = (label: string) =>
 		console.log(`[t+${Date.now() - t0}ms] ${label}`);
