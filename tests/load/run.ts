@@ -298,10 +298,15 @@ function withOpenFileLimit(command: string[]): string[] {
 }
 
 function processResources(pid: number): ProcessResources | null {
-	const result = Bun.spawnSync(["ps", "-o", "%cpu=,rss=", "-p", String(pid)], {
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	let result: ReturnType<typeof Bun.spawnSync>;
+	try {
+		result = Bun.spawnSync(["ps", "-o", "%cpu=,rss=", "-p", String(pid)], {
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+	} catch {
+		return null;
+	}
 	if (result.exitCode !== 0) return null;
 	const values = new TextDecoder().decode(result.stdout).trim().split(/\s+/);
 	if (values.length !== 2) return null;

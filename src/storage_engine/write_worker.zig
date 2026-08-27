@@ -1057,6 +1057,7 @@ pub const WriteWorker = struct {
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.warn("Failed to apply document cache batch: {}", .{classified_err});
+            self.document_cache.invalidate();
             for (pending_cache_ops.items) |op| {
                 const key = switch (op) {
                     .update => |update_op| update_op.key,
@@ -1064,7 +1065,6 @@ pub const WriteWorker = struct {
                 };
                 _ = self.document_cache.evict(key) catch |evict_err| {
                     std.log.err("Failed to evict stale document cache entry: {}", .{errors.classifyError(evict_err)});
-                    self.document_cache.invalidate();
                     break;
                 };
             }
