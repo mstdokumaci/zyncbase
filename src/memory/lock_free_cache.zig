@@ -216,6 +216,14 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             NotFound,
         };
 
+        pub const Mutation = union(enum) {
+            update: struct {
+                key: KeyType,
+                data: t,
+            },
+            evict: KeyType,
+        };
+
         pub const CowResult = struct {
             replaced: ?*CacheEntry = null,
             created: ?*CacheEntry = null,
@@ -257,6 +265,100 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         pub fn releaseHandle(self: *Self, handle: Handle) void {
             _ = handle.entry.ref_count.fetchSub(1, .acq_rel);
             self.epoch_manager.exit(handle.epoch_slot);
+        }
+
+        /// Apply ordered cache mutations in one copy-on-write map swap.
+        /// Success consumes every update value; failure consumes none.
+        pub fn applyBatch(self: *Self, mutations: []const Mutation) !void {
+            if (mutations.len == 0) return;
+            if (mutations.len == 1) {
+                switch (mutations[0]) {
+                    .update => |update_op| try self.update(update_op.key, update_op.data),
+                    .evict => |key| _ = self.evict(key),
+                }
+                return;
+            }
+
+            var prepared_updates = std.ArrayListUnmanaged(*CacheEntry).empty;
+            defer prepared_updates.deinit(self.allocator);
+            errdefer for (prepared_updates.items) |entry| self.allocator.destroy(entry);
+
+            var update_count: usize = 0;
+            for (mutations) |mutation| switch (mutation) {
+                .update => update_count += 1,
+                .evict => {},
+            };
+            try prepared_updates.ensureTotalCapacity(self.allocator, update_count);
+            for (mutations) |mutation| switch (mutation) {
+                .update => |update_op| prepared_updates.appendAssumeCapacity(try CacheEntry.init(self.allocator, update_op.data)),
+                .evict => {},
+            };
+
+            while (true) {
+                const epoch_slot = self.epoch_manager.enter();
+                defer self.epoch_manager.exit(epoch_slot);
+
+                const old_entries = self.entries.load(.acquire);
+                if (prepared_updates.items.len == 0) {
+                    var contains_eviction = false;
+                    for (mutations) |mutation| switch (mutation) {
+                        .update => unreachable,
+                        .evict => |key| contains_eviction = contains_eviction or old_entries.contains(key),
+                    };
+                    if (!contains_eviction) return;
+                }
+
+                const new_entries = try self.cloneEntries(old_entries);
+                var published = false;
+                defer if (!published) {
+                    new_entries.deinit();
+                    self.allocator.destroy(new_entries);
+                };
+
+                var update_index: usize = 0;
+                for (mutations) |mutation| switch (mutation) {
+                    .update => |update_op| {
+                        const entry = prepared_updates.items[update_index];
+                        update_index += 1;
+                        const current = new_entries.get(update_op.key);
+                        entry.version.store(if (current) |old_entry| old_entry.version.load(.acquire) + 1 else 0, .release);
+                        const gop = try new_entries.getOrPut(update_op.key);
+                        gop.value_ptr.* = entry;
+                    },
+                    .evict => |key| {
+                        _ = new_entries.remove(key);
+                    },
+                };
+
+                if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                    continue;
+                }
+                published = true;
+
+                var old_it = old_entries.iterator();
+                while (old_it.next()) |item| {
+                    const old_entry = item.value_ptr.*;
+                    const new_entry = new_entries.get(item.key_ptr.*);
+                    if (new_entry == null or new_entry.? != old_entry) {
+                        self.internalDefer(.{ .entry = old_entry });
+                    }
+                }
+
+                update_index = 0;
+                for (mutations) |mutation| switch (mutation) {
+                    .update => |update_op| {
+                        const entry = prepared_updates.items[update_index];
+                        update_index += 1;
+                        const final_entry = new_entries.get(update_op.key);
+                        if (final_entry == null or final_entry.? != entry) entry.deinit(self.allocator);
+                    },
+                    .evict => {},
+                };
+
+                self.internalDefer(.{ .map = old_entries });
+                _ = self.epoch_manager.bump();
+                return;
+            }
         }
 
         /// Create a new version of the namespace entry (COW)

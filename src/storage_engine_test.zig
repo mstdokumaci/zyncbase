@@ -1168,10 +1168,9 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
 
     const table_meta = try ctx.tableMetadata("items");
     const namespace_id: i64 = 100;
-    const doc_id: typed_doc_id.DocId = 1;
+    const doc_ids = [_]typed_doc_id.DocId{ 1, 2 };
 
     const val_field_idx = table_meta.fieldIndex("val").?;
-    const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
 
     // Re-point the engine's document cache at an allocator that fails exactly
     // `remaining` allocations (unlike std.testing.FailingAllocator, which
@@ -1181,43 +1180,52 @@ test "StorageEngine: failed document cache update evicts stale entry post-commit
     ctx.engine.document_cache.deinit();
     try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
 
-    // 1. Initial upsert: Should write-through to document_cache
+    // 1. Initial upserts should write through to document_cache.
     const columns = [_]sth.ColumnValue{
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
     };
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &columns, null, null, null);
+    for (doc_ids) |doc_id| {
+        try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &columns, null, null, null);
+    }
     try ctx.engine.flushPendingWrites();
 
-    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-        .miss => return error.TestUnexpectedResult,
-        .hit => |hit| {
-            defer hit.handle.release();
-            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
-        },
+    for (doc_ids) |doc_id| {
+        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
+        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
+            .miss => return error.TestUnexpectedResult,
+            .hit => |hit| {
+                defer hit.handle.release();
+                try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
+            },
+        }
     }
 
     // 2. Fail the next cache allocation: the post-commit cache write for the
-    //    update below will fail, and the stale "initial_val" entry must be
-    //    evicted so subsequent reads produce a miss instead of stale data.
+    //    update batch below will fail, and every stale entry must be evicted.
     failing.remaining = 1;
 
     const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new_val" } } }};
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, null, null, null);
+    for (doc_ids) |doc_id| {
+        try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, null, null, null);
+    }
     try ctx.engine.flushPendingWrites();
 
-    // 3. Cache entry must be gone; the DB holds the committed value
-    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-        .miss => {},
-        .hit => |hit| {
-            defer hit.handle.release();
-            return error.TestUnexpectedResult;
-        },
-    }
+    // 3. Cache entries must be gone; the DB holds both committed values.
+    for (doc_ids) |doc_id| {
+        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
+        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
+            .miss => {},
+            .hit => |hit| {
+                defer hit.handle.release();
+                return error.TestUnexpectedResult;
+            },
+        }
 
-    const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
-    defer if (record) |r| r.deinit(allocator);
-    try testing.expect(record != null);
-    try testing.expectEqualStrings("new_val", record.?.values[val_field_idx].scalar.text);
+        const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
+        try testing.expectEqualStrings("new_val", record.?.values[val_field_idx].scalar.text);
+    }
 }
 
 test "storage: engine init rejects empty data dir" {

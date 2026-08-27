@@ -8,10 +8,10 @@ The lock-free cache is a reusable read-mostly cache primitive. It is used where 
 
 | File | Responsibility |
 |------|----------------|
-| `src/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
+| `src/memory/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
 | `src/storage_engine/cache.zig` | Storage metadata cache key/value types built on the cache primitive. |
 | `src/authentication/jwt_validator.zig` | JWKS/cache usage for authentication. |
-| `src/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
+| `src/memory/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
 
 ## Important Types
 
@@ -28,6 +28,8 @@ The lock-free cache is a reusable read-mostly cache primitive. It is used where 
 - Readers acquire a handle and must release it exactly once.
 - Values read through a handle remain valid until the handle is released.
 - Writers may replace entries, but retired entries are freed only after active readers release.
+- Ordered mutation batches publish with one atomic map swap; concurrent writers may force a full-batch CAS retry.
+- A successful batch consumes every update value, while a failed batch consumes none.
 - Cache users own key/value clone/deinit behavior for their domain.
 - Cache internals are not a public error-code source; unexpected overflow or allocator failure maps through the owning subsystem.
 
@@ -46,6 +48,7 @@ The lock-free cache is a reusable read-mostly cache primitive. It is used where 
 | Max deferred nodes | 100,000 | Maximum COW map snapshots + old entries before pool exhaustion. |
 | Reclamation interval | 100 ms | Background thread wake interval for freeing old snapshots. |
 | Thread epoch slots | 128 | Maximum concurrent thread readers (limits parallel cache access). |
+| Batch mutation | One map clone per CAS attempt | Updates and evictions in one committed write batch share a COW snapshot. |
 
 ### Performance Targets (from ADR-004)
 

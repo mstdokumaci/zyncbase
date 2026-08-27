@@ -108,6 +108,85 @@ test "cache: update increments version" {
     try testing.expectEqual(@as(u32, 2), handle.data().value);
 }
 
+test "cache: batch applies ordered updates and evictions" {
+    const allocator = testing.allocator;
+    const u32_cache = lockFreeCache(U32Value, i64);
+
+    var cache: u32_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    try cache.update(1, .{ .value = 1 });
+    try cache.update(2, .{ .value = 2 });
+
+    const old_handle = try cache.get(1);
+    defer old_handle.release();
+
+    const mutations = [_]u32_cache.Mutation{
+        .{ .update = .{ .key = 1, .data = .{ .value = 10 } } },
+        .{ .update = .{ .key = 1, .data = .{ .value = 11 } } },
+        .{ .evict = 2 },
+        .{ .evict = 3 },
+        .{ .update = .{ .key = 3, .data = .{ .value = 30 } } },
+    };
+    try cache.applyBatch(&mutations);
+
+    try testing.expectEqual(@as(u32, 1), old_handle.data().value);
+
+    const first = try cache.get(1);
+    defer first.release();
+    try testing.expectEqual(@as(u32, 11), first.data().value);
+    try testing.expectEqual(@as(u64, 2), first.entry.version.load(.acquire));
+
+    try testing.expectError(error.NotFound, cache.get(2));
+
+    const third = try cache.get(3);
+    defer third.release();
+    try testing.expectEqual(@as(u32, 30), third.data().value);
+}
+
+test "cache: batch retries concurrent mutations" {
+    const allocator = std.heap.smp_allocator;
+    const u32_cache = lockFreeCache(U32Value, i64);
+
+    var cache: u32_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    const Context = struct {
+        cache: *u32_cache,
+
+        fn batchWriter(ctx: @This()) void {
+            for (0..200) |i| {
+                const value: u32 = @intCast(i);
+                const mutations = [_]u32_cache.Mutation{
+                    .{ .update = .{ .key = 1, .data = .{ .value = value } } },
+                    .{ .update = .{ .key = 3, .data = .{ .value = value } } },
+                };
+                ctx.cache.applyBatch(&mutations) catch unreachable;
+            }
+        }
+
+        fn singleWriter(ctx: @This()) void {
+            for (0..200) |i| {
+                ctx.cache.update(2, .{ .value = @intCast(i) }) catch unreachable;
+            }
+        }
+    };
+
+    const ctx = Context{ .cache = &cache };
+    const batch_thread = try std.Thread.spawn(.{}, Context.batchWriter, .{ctx});
+    const single_thread = try std.Thread.spawn(.{}, Context.singleWriter, .{ctx});
+    batch_thread.join();
+    single_thread.join();
+
+    for ([_]i64{ 1, 2, 3 }) |key| {
+        const handle = try cache.get(key);
+        defer handle.release();
+        try testing.expectEqual(@as(u32, 199), handle.data().value);
+    }
+}
+
 test "cache: eviction" {
     const allocator = std.heap.smp_allocator;
     const u32_cache = lockFreeCache(U32Value, i64);
