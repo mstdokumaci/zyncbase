@@ -6,7 +6,7 @@ memory do not hide server limits.
 
 ## Run
 
-Install k6, then run a benchmark:
+Install k6 2.2.0 or newer, then run a benchmark:
 
 ```sh
 bun run test:load --profile connections

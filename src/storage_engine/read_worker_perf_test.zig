@@ -378,7 +378,7 @@ test "ReadWorker: cache miss → cache hit" {
     for (0..rounds) |i| {
         // Miss: first read for this doc_id in a fresh arena reset cycle.
         // We evict the cache entry between rounds to force a miss.
-        _ = ctx.engine.document_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
+        _ = try ctx.engine.document_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
 
         const miss_start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         const record_a = try worker.executeSelectDocument(table_metadata, doc_id, 1);

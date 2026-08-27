@@ -52,6 +52,14 @@ if (args.length > 0) throw new Error(`Unknown arguments: ${args.join(" ")}`);
 const k6 = Bun.which("k6");
 if (!k6) throw new Error("k6 was not found in PATH");
 const k6Version = commandText([k6, "version"]);
+const k6VersionMatch = /\bv?(\d+)\.(\d+)\.(\d+)\b/.exec(k6Version);
+if (
+	!k6VersionMatch ||
+	Number(k6VersionMatch[1]) < 2 ||
+	(Number(k6VersionMatch[1]) === 2 && Number(k6VersionMatch[2]) < 2)
+) {
+	throw new Error(`k6 >= 2.2.0 is required (found: ${k6Version})`);
+}
 const fanout =
 	profile === "store-identical-filter" || profile.startsWith("presence-");
 const rate = Number(
@@ -282,7 +290,7 @@ function withOpenFileLimit(command: string[]): string[] {
 	return [
 		"/bin/sh",
 		"-c",
-		'ulimit -n "$1" || exit $?; shift; exec "$@"',
+		'ulimit -n "$1" 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || echo "warning: could not raise the open-file limit; current soft limit $(ulimit -n)" >&2; shift; exec "$@"',
 		"zyncbase-load",
 		String(openFileLimit),
 		...command,

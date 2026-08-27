@@ -1062,7 +1062,11 @@ pub const WriteWorker = struct {
                     .update => |update_op| update_op.key,
                     .evict => |evict_key| evict_key,
                 };
-                _ = self.document_cache.evict(key);
+                _ = self.document_cache.evict(key) catch |evict_err| {
+                    std.log.err("Failed to evict stale document cache entry: {}", .{errors.classifyError(evict_err)});
+                    self.document_cache.invalidate();
+                    break;
+                };
             }
         }
 

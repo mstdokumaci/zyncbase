@@ -197,10 +197,32 @@ test "cache: eviction" {
 
     const key: i64 = 777;
     try cache.update(key, .{ .value = 99 });
-    _ = cache.evict(key);
+    _ = try cache.evict(key);
 
     const result = cache.get(key);
     try testing.expectError(error.NotFound, result);
+}
+
+test "cache: eviction distinguishes misses from allocation failures" {
+    const allocator = testing.allocator;
+    const u32_cache = lockFreeCache(U32Value, i64);
+
+    var cache: u32_cache = undefined;
+    try cache.init(testing.io, allocator, .{});
+    defer cache.deinit();
+
+    try cache.update(1, .{ .value = 99 });
+
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    cache.allocator = failing.allocator();
+    defer cache.allocator = allocator;
+
+    try testing.expect(!try cache.evict(2));
+    const mutation = [_]u32_cache.Mutation{.{ .evict = 1 }};
+    try testing.expectError(error.OutOfMemory, cache.applyBatch(&mutation));
+
+    const handle = try cache.get(1);
+    handle.release();
 }
 
 test "cache: deep free via value deinit" {
@@ -215,6 +237,6 @@ test "cache: deep free via value deinit" {
     try cache.update(42, .{ .value = val });
 
     // Evict should trigger deinit eventually (during reclaim).
-    _ = cache.evict(42);
+    _ = try cache.evict(42);
     cache.reclaim(true); // Force reclaim to run deinit.
 }

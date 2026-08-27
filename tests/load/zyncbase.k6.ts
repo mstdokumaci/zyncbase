@@ -844,11 +844,13 @@ function acquireTickets(assignments: Assignment[]): string[] {
 		if (response.status !== 200) {
 			ticketErrors.add(1, { profile, role: assignments[index].role });
 			exec.test.abort(`ticket exchange failed with HTTP ${response.status}`);
+			throw new Error(`ticket exchange failed with HTTP ${response.status}`);
 		}
 		const body = JSON.parse(String(response.body)) as { ticket?: string };
 		if (!body.ticket) {
 			ticketErrors.add(1, { profile, role: assignments[index].role });
 			exec.test.abort("ticket exchange response did not contain a ticket");
+			throw new Error("ticket exchange response did not contain a ticket");
 		}
 		return body.ticket;
 	});

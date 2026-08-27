@@ -103,6 +103,40 @@ test "LockFreeCache: pool exhaustion retains and eventually reclaims all resourc
     try testing.expectEqual(@as(usize, 0), cache.pool.active_count.load(.acquire));
 }
 
+test "LockFreeCache: batch reserves every deferred resource before publishing" {
+    const allocator = testing.allocator;
+    const counting_cache = lockFreeCache(CountingValue, i64);
+    var deinit_count = std.atomic.Value(usize).init(0);
+
+    var cache: counting_cache = undefined;
+    try cache.init(testing.io, allocator, .{
+        .max_deferred_nodes = 1,
+        .reclamation_interval_ms = 60_000,
+    });
+    defer cache.deinit();
+
+    for (1..4) |key| {
+        try cache.update(@intCast(key), .{ .value = 0, .deinit_count = &deinit_count });
+        cache.reclaim(true);
+    }
+
+    const handle = try cache.get(1);
+    const mutations = [_]counting_cache.Mutation{
+        .{ .update = .{ .key = 1, .data = .{ .value = 1, .deinit_count = &deinit_count } } },
+        .{ .update = .{ .key = 2, .data = .{ .value = 2, .deinit_count = &deinit_count } } },
+        .{ .update = .{ .key = 3, .data = .{ .value = 3, .deinit_count = &deinit_count } } },
+    };
+    try cache.applyBatch(&mutations);
+
+    try testing.expectEqual(@as(u32, 4), cache.pool.active_count.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), deinit_count.load(.acquire));
+
+    handle.release();
+    cache.reclaim(true);
+    try testing.expectEqual(@as(usize, 3), deinit_count.load(.acquire));
+    try testing.expectEqual(@as(u32, 0), cache.pool.active_count.load(.acquire));
+}
+
 test "LockFreeCache: batch owns final values and frees superseded values" {
     const allocator = testing.allocator;
     const counting_cache = lockFreeCache(CountingValue, i64);

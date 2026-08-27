@@ -248,12 +248,42 @@ class Reader {
 		return value;
 	}
 
-	private i8(): number { const value = this.view.getInt8(this.offset); this.offset++; return value; }
-	private i16(): number { const value = this.view.getInt16(this.offset); this.offset += 2; return value; }
-	private i32(): number { const value = this.view.getInt32(this.offset); this.offset += 4; return value; }
-	private i64(): number { const high = this.view.getInt32(this.offset); const low = this.view.getUint32(this.offset + 4); this.offset += 8; return high * 0x1_0000_0000 + low; }
-	private f32(): number { const value = this.view.getFloat32(this.offset); this.offset += 4; return value; }
-	private f64(): number { const value = this.view.getFloat64(this.offset); this.offset += 8; return value; }
+	private i8(): number {
+		const value = this.view.getInt8(this.offset);
+		this.offset++;
+		return value;
+	}
+
+	private i16(): number {
+		const value = this.view.getInt16(this.offset);
+		this.offset += 2;
+		return value;
+	}
+
+	private i32(): number {
+		const value = this.view.getInt32(this.offset);
+		this.offset += 4;
+		return value;
+	}
+
+	private i64(): number {
+		const high = this.view.getInt32(this.offset);
+		const low = this.view.getUint32(this.offset + 4);
+		this.offset += 8;
+		return high * 0x1_0000_0000 + low;
+	}
+
+	private f32(): number {
+		const value = this.view.getFloat32(this.offset);
+		this.offset += 4;
+		return value;
+	}
+
+	private f64(): number {
+		const value = this.view.getFloat64(this.offset);
+		this.offset += 8;
+		return value;
+	}
 }
 
 export function encode(value: unknown): Uint8Array {

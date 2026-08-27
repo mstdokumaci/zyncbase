@@ -61,6 +61,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         reclaim_handle: ?std.Thread = null,
         reclaim_active: std.atomic.Value(bool),
         reclaim_event: std.Io.Event,
+        readable: std.atomic.Value(bool),
 
         pub const Config = struct {
             max_deferred_nodes: usize = 100_000,
@@ -140,6 +141,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 .reclaim_active = std.atomic.Value(bool).init(true),
                 .reclaim_handle = null,
                 .reclaim_event = .unset,
+                .readable = std.atomic.Value(bool).init(true),
             };
 
             try self.pool.init(allocator, @intCast(@as(u32, @intCast(config.max_deferred_nodes))), null, null);
@@ -246,6 +248,8 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
         /// Lock-free read operation with atomic ref_count increment
         pub fn get(self: *Self, key: KeyType) !Handle {
+            if (!self.readable.load(.acquire)) return Error.NotFound;
+
             const slot = self.epoch_manager.enter();
             errdefer self.epoch_manager.exit(slot);
 
@@ -253,12 +257,20 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             const entry = entries.get(key) orelse return Error.NotFound;
 
             _ = entry.ref_count.fetchAdd(1, .acq_rel);
+            if (!self.readable.load(.acquire)) {
+                _ = entry.ref_count.fetchSub(1, .acq_rel);
+                return Error.NotFound;
+            }
 
             return Handle{
                 .cache = self,
                 .entry = entry,
                 .epoch_slot = slot,
             };
+        }
+
+        pub fn invalidate(self: *Self) void {
+            self.readable.store(false, .release);
         }
 
         /// Signal release of a handle and potentially defer reclamation
@@ -274,7 +286,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             if (mutations.len == 1) {
                 switch (mutations[0]) {
                     .update => |update_op| try self.update(update_op.key, update_op.data),
-                    .evict => |key| _ = self.evict(key),
+                    .evict => |key| _ = try self.evict(key),
                 }
                 return;
             }
@@ -330,17 +342,36 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     },
                 };
 
+                var deferred_count: usize = 1;
+                var count_it = old_entries.iterator();
+                while (count_it.next()) |item| {
+                    const new_entry = new_entries.get(item.key_ptr.*);
+                    if (new_entry == null or new_entry.? != item.value_ptr.*) deferred_count += 1;
+                }
+
+                const deferred_nodes = try self.allocator.alloc(*DeferNode, deferred_count);
+                defer self.allocator.free(deferred_nodes);
+                var reserved_count: usize = 0;
+                defer if (!published) {
+                    for (deferred_nodes[0..reserved_count]) |node| self.pool.release(node);
+                };
+                while (reserved_count < deferred_nodes.len) : (reserved_count += 1) {
+                    deferred_nodes[reserved_count] = try self.acquireDeferNode();
+                }
+
                 if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                     continue;
                 }
                 published = true;
 
+                var deferred_index: usize = 0;
                 var old_it = old_entries.iterator();
                 while (old_it.next()) |item| {
                     const old_entry = item.value_ptr.*;
                     const new_entry = new_entries.get(item.key_ptr.*);
                     if (new_entry == null or new_entry.? != old_entry) {
-                        self.internalDefer(.{ .entry = old_entry });
+                        self.internalDeferWithNode(.{ .entry = old_entry }, deferred_nodes[deferred_index]);
+                        deferred_index += 1;
                     }
                 }
 
@@ -355,7 +386,8 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                     .evict => {},
                 };
 
-                self.internalDefer(.{ .map = old_entries });
+                self.internalDeferWithNode(.{ .map = old_entries }, deferred_nodes[deferred_index]);
+                std.debug.assert(deferred_index + 1 == deferred_nodes.len);
                 _ = self.epoch_manager.bump();
                 return;
             }
@@ -386,7 +418,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         }
 
         /// Evict an entry from the cache
-        pub fn evict(self: *Self, key: KeyType) bool {
+        pub fn evict(self: *Self, key: KeyType) !bool {
             while (true) {
                 const epoch_slot = self.epoch_manager.enter();
                 defer self.epoch_manager.exit(epoch_slot);
@@ -394,7 +426,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 const old_entries = self.entries.load(.acquire);
                 if (!old_entries.contains(key)) return false;
 
-                const new_entries = self.cloneEntries(old_entries) catch return false;
+                const new_entries = try self.cloneEntries(old_entries);
 
                 const old_val = new_entries.fetchRemove(key) orelse unreachable;
 
@@ -412,12 +444,20 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             }
         }
 
-        fn internalDefer(self: *Self, resource: Resource) void {
-            const node = self.pool.acquire() catch blk: {
+        fn acquireDeferNode(self: *Self) !*DeferNode {
+            return self.pool.acquire() catch {
                 self.reclaim(false);
-                break :blk self.pool.acquire() catch return;
+                return self.pool.acquire();
             };
+        }
 
+        fn internalDefer(self: *Self, resource: Resource) void {
+            const node = self.acquireDeferNode() catch return;
+
+            self.internalDeferWithNode(resource, node);
+        }
+
+        fn internalDeferWithNode(self: *Self, resource: Resource, node: *DeferNode) void {
             node.* = .{
                 .next = null,
                 .epoch = self.epoch_manager.current_epoch.load(.acquire),
