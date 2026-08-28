@@ -487,6 +487,8 @@ Change propagation never re-runs SQL. When a `RecordChange` event arrives, the e
 
 The server pushes `set` (full record — covers both add and update) and `remove` (record ID only) at record granularity. No field-level patches from the server. The SDK handles field projection and local cache updates.
 
+Record deltas describe committed state transitions, not individual mutation events. Within one successful writer transaction, repeated effects on the same canonical `(namespace_id, table_index, doc_id)` retain the record before the first effect and the record after the last effect, and publish at most one delta. A create-then-delete whose endpoints are both absent publishes nothing. SQL execution, guards, cascades, write outcomes, and atomic rollback remain operation-by-operation.
+
 ### Eviction and Resource Limits
 
 Collection state is evicted when the last subscriber unsubscribes. Disconnect triggers automatic unsubscription. A configurable `subscriptionEngine.maxMemoryMB` limit causes new subscriptions to be rejected with `RESOURCE_EXHAUSTED` when approached.
@@ -666,6 +668,8 @@ Both use `ZyncBaseError` with a `details.phase: 'accept' | 'write'` discriminant
 `store.batch(..., { confirm: 'committed' })` is atomic: resolves only if the full batch commits; rejects if any operation fails; no partial success; no partial writes on failure.
 
 Failed batch operations include `batchIndex` when the failing operation is identifiable. For transaction-level failures where no single operation is culpable, `batchIndex` is omitted.
+
+Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-operation confirmation outcomes. Subscriptions are state replication, not a mutation event log.
 
 ### Authorization Semantics for Creates
 

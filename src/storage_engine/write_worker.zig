@@ -311,24 +311,48 @@ pub const WriteWorker = struct {
         return null;
     }
 
-    fn pushOwnedChange(
+    fn operationForEndpoints(old_record: ?Record, new_record: ?Record) OwnedRecordChange.Operation {
+        if (new_record == null) return .delete;
+        if (old_record == null) return .insert;
+        return .update;
+    }
+
+    fn accumulateOwnedChange(
         allocator: Allocator,
+        index_allocator: Allocator,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        pending_change_index: *std.AutoHashMapUnmanaged(write_queue.OpTarget, usize),
         namespace_id: i64,
         table_index: usize,
         doc_id: DocId,
-        op: OwnedRecordChange.Operation,
         old_record: ?Record,
         new_record: ?Record,
     ) !void {
+        const key: write_queue.OpTarget = .{
+            .namespace_id = namespace_id,
+            .table_index = table_index,
+            .id = doc_id,
+        };
+        const index_entry = try pending_change_index.getOrPut(index_allocator, key);
+        if (index_entry.found_existing) {
+            const change = &pending_changes.items[index_entry.value_ptr.*];
+            if (change.new_record) |record| record.deinit(allocator);
+            if (old_record) |record| record.deinit(allocator);
+            change.new_record = new_record;
+            change.operation = operationForEndpoints(change.old_record, change.new_record);
+            return;
+        }
+
+        errdefer _ = pending_change_index.remove(key);
         try pending_changes.append(allocator, .{
             .namespace_id = namespace_id,
             .table_index = table_index,
             .doc_id = doc_id,
-            .operation = op,
+            .operation = operationForEndpoints(old_record, new_record),
             .old_record = old_record,
             .new_record = new_record,
         });
+        index_entry.value_ptr.* = pending_changes.items.len - 1;
     }
 
     fn flushPendingChanges(
@@ -338,6 +362,10 @@ pub const WriteWorker = struct {
         var changes_pushed = false;
         for (pending_changes.items) |raw_change| {
             var change = raw_change;
+            if (change.old_record == null and change.new_record == null) {
+                change.deinit(self.allocator);
+                continue;
+            }
             if (self.change_queue) |cq| {
                 cq.push(change, self.allocator);
                 changes_pushed = true;
@@ -382,6 +410,9 @@ pub const WriteWorker = struct {
             for (pending_changes.items) |*c| c.deinit(self.allocator);
             pending_changes.deinit(self.allocator);
         }
+        const arena_allocator = self.batch_arena.allocator();
+        var pending_change_index = std.AutoHashMapUnmanaged(write_queue.OpTarget, usize).empty;
+        defer pending_change_index.deinit(arena_allocator);
 
         var pending_cache_ops = std.ArrayListUnmanaged(CacheOp).empty;
         defer {
@@ -404,16 +435,14 @@ pub const WriteWorker = struct {
             }
         }
 
-        var pk_inserts = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_inserts.deinit(self.allocator);
-        var pk_deletes = std.ArrayListUnmanaged(PkTracking).empty;
-        defer pk_deletes.deinit(self.allocator);
+        var pk_mutations = std.ArrayListUnmanaged(PkMutation).empty;
+        defer pk_mutations.deinit(self.allocator);
 
         var ctx = BatchCtx{
             .self = self,
             .pending_changes = &pending_changes,
-            .pk_inserts = &pk_inserts,
-            .pk_deletes = &pk_deletes,
+            .pending_change_index = &pending_change_index,
+            .pk_mutations = &pk_mutations,
             .pending_cache_ops = &pending_cache_ops,
         };
 
@@ -449,7 +478,7 @@ pub const WriteWorker = struct {
             }
         }
 
-        try commitBatchAndApply(self, tx_started, &pk_inserts, &pk_deletes, &pending_changes, &pending_cache_ops);
+        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops);
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
@@ -494,19 +523,23 @@ pub const WriteWorker = struct {
                 try ctx.pending_cache_ops.append(self.allocator, .{ .evict = cache_key });
             }
             if (pk_insert and old_record == null) {
-                try ctx.pk_inserts.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
+                try ctx.pk_mutations.append(self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .insert });
             }
             if (pk_delete) {
-                try ctx.pk_deletes.append(self.allocator, .{ .table_index = table_index, .id = doc_id });
+                try ctx.pk_mutations.append(self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .delete });
             }
-            const op_type: OwnedRecordChange.Operation = if (pk_delete)
-                .delete
-            else if (old_record == null)
-                .insert
-            else
-                .update;
             if (self.change_queue != null) {
-                pushOwnedChange(self.allocator, ctx.pending_changes, namespace_id, table_index, doc_id, op_type, old_record, new_record) catch |err| {
+                accumulateOwnedChange(
+                    self.allocator,
+                    self.batch_arena.allocator(),
+                    ctx.pending_changes,
+                    ctx.pending_change_index,
+                    namespace_id,
+                    table_index,
+                    doc_id,
+                    old_record,
+                    new_record,
+                ) catch |err| {
                     const classified_err = errors.classifyError(err);
                     std.log.err("Failed to capture row change: {}", .{classified_err});
                     return classified_err;
@@ -746,6 +779,18 @@ pub const WriteWorker = struct {
         }
     }
 
+    fn containsEffectivePk(ctx: *BatchCtx, table_index: usize, id: DocId) bool {
+        var mutation_index = ctx.pk_mutations.items.len;
+        while (mutation_index > 0) {
+            mutation_index -= 1;
+            const mutation = ctx.pk_mutations.items[mutation_index];
+            if (mutation.table_index == table_index and mutation.id == id) {
+                return mutation.operation == .insert;
+            }
+        }
+        return ctx.self.pk_sets[table_index].contains(id);
+    }
+
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
     fn executeDeleteEntry(
         ctx: *BatchCtx,
@@ -756,9 +801,7 @@ pub const WriteWorker = struct {
         const self = ctx.self;
 
         const traverse_references = table_metadata.has_incoming_cascade_or_set_null and
-            (self.pk_sets[entry.table_index].contains(entry.id) or for (ctx.pk_inserts.items) |insert| {
-                if (insert.table_index == entry.table_index and insert.id == entry.id) break true;
-            } else false);
+            containsEffectivePk(ctx, entry.table_index, entry.id);
         var referential_changes = if (traverse_references)
             try captureReferentialChanges(ctx, table_metadata, entry.id)
         else
@@ -938,7 +981,11 @@ pub const WriteWorker = struct {
         };
     }
 
-    const PkTracking = struct { table_index: usize, id: DocId };
+    const PkMutation = struct {
+        table_index: usize,
+        id: DocId,
+        operation: enum { insert, delete },
+    };
 
     const ReferentialAction = enum { delete, set_null };
     const ReferentialKey = struct { table_index: usize, id: DocId };
@@ -967,8 +1014,8 @@ pub const WriteWorker = struct {
     const BatchCtx = struct {
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
-        pk_inserts: *std.ArrayListUnmanaged(PkTracking),
-        pk_deletes: *std.ArrayListUnmanaged(PkTracking),
+        pending_change_index: *std.AutoHashMapUnmanaged(write_queue.OpTarget, usize),
+        pk_mutations: *std.ArrayListUnmanaged(PkMutation),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
         referential_lookups: ?[]const ReferentialLookup = null,
     };
@@ -1031,17 +1078,16 @@ pub const WriteWorker = struct {
     fn commitBatchAndApply(
         self: *WriteWorker,
         tx_started: *bool,
-        pk_inserts: *std.ArrayListUnmanaged(PkTracking),
-        pk_deletes: *std.ArrayListUnmanaged(PkTracking),
+        pk_mutations: *std.ArrayListUnmanaged(PkMutation),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
     ) !void {
         const insert_counts = try self.allocator.alloc(u32, self.pk_sets.len);
         defer self.allocator.free(insert_counts);
         @memset(insert_counts, 0);
-        for (pk_inserts.items) |item| {
-            if (item.table_index < self.pk_sets.len) {
-                insert_counts[item.table_index] += 1;
+        for (pk_mutations.items) |mutation| {
+            if (mutation.operation == .insert and mutation.table_index < self.pk_sets.len) {
+                insert_counts[mutation.table_index] += 1;
             }
         }
         for (self.pk_sets, insert_counts) |*pk_set, insert_count| {
@@ -1087,14 +1133,12 @@ pub const WriteWorker = struct {
             }
         }
 
-        for (pk_inserts.items) |item| {
-            if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].putAssumeCapacity(item.id, {});
-            }
-        }
-        for (pk_deletes.items) |item| {
-            if (item.table_index < self.pk_sets.len) {
-                self.pk_sets[item.table_index].remove(item.id);
+        for (pk_mutations.items) |mutation| {
+            if (mutation.table_index < self.pk_sets.len) {
+                switch (mutation.operation) {
+                    .insert => self.pk_sets[mutation.table_index].putAssumeCapacity(mutation.id, {}),
+                    .delete => _ = self.pk_sets[mutation.table_index].remove(mutation.id),
+                }
             }
         }
 

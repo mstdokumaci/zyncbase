@@ -756,6 +756,18 @@ fn batchSetTuple(
     return .{ .arr = arr };
 }
 
+fn batchTextSetTuple(
+    allocator: std.mem.Allocator,
+    table: *const schema_types.Table,
+    id: typed_doc_id.DocId,
+    field: []const u8,
+    value: []const u8,
+) !msgpack.Payload {
+    const document = try store_helpers.createDocumentMapPayload(allocator, table, .{.{ field, value }});
+    defer document.free(allocator);
+    return batchSetTuple(allocator, table.index, id, document);
+}
+
 /// Build a msgpack batch "remove" tuple: ["r", path]
 fn batchRemoveTuple(
     allocator: std.mem.Allocator,
@@ -883,6 +895,132 @@ test "StoreService: batchWrite - mixed set and remove" {
     var doc2 = try items.getOne(allocator, 2, 1);
     defer doc2.deinit();
     _ = try doc2.expectFieldString("status", "fresh");
+}
+
+test "StoreService: batchWrite coalesces transaction changes to first-old and last-new endpoints" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-change-coalescing", &.{.{
+        .name = "items",
+        .fields = &.{"status"},
+        .types = &.{.text},
+    }});
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const items = try app.table("items");
+    const status_index = items.metadata.fieldIndex("status") orelse return error.TestExpectedValue;
+
+    for ([_]struct { id: typed_doc_id.DocId, status: []const u8 }{
+        .{ .id = 1, .status = "seed-1" },
+        .{ .id = 3, .status = "seed-3" },
+        .{ .id = 4, .status = "seed-4" },
+    }) |seed| {
+        const value = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{.{ "status", seed.status }});
+        defer value.free(allocator);
+        var path = try documentPath(allocator, items.metadata.index, seed.id);
+        defer path.free(allocator);
+        try service.setPath(writeCtx(1), path, value);
+    }
+    try app.storage_engine.flushPendingWrites();
+    for (app.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            owned.deinit(app.storage_engine.allocator);
+        }
+    }
+
+    const ops = try allocator.alloc(msgpack.Payload, 11);
+    var initialized_ops: usize = 0;
+    defer {
+        for (ops[0..initialized_ops]) |op| op.free(allocator);
+        allocator.free(ops);
+    }
+    for (ops, 0..) |*op, index| {
+        op.* = switch (index) {
+            0 => try batchTextSetTuple(allocator, items.metadata, 1, "status", "middle-1"),
+            1 => try batchTextSetTuple(allocator, items.metadata, 2, "status", "middle-2"),
+            2 => try batchTextSetTuple(allocator, items.metadata, 3, "status", "middle-3"),
+            3 => try batchRemoveTuple(allocator, items.metadata.index, 4),
+            4 => try batchTextSetTuple(allocator, items.metadata, 5, "status", "middle-5"),
+            5 => try batchTextSetTuple(allocator, items.metadata, 6, "status", "final-6"),
+            6 => try batchTextSetTuple(allocator, items.metadata, 1, "status", "final-1"),
+            7 => try batchTextSetTuple(allocator, items.metadata, 2, "status", "final-2"),
+            8 => try batchRemoveTuple(allocator, items.metadata.index, 3),
+            9 => try batchTextSetTuple(allocator, items.metadata, 4, "status", "final-4"),
+            10 => try batchRemoveTuple(allocator, items.metadata.index, 5),
+            else => unreachable,
+        };
+        initialized_ops += 1;
+    }
+
+    try service.batchWrite(writeCtx(1), .{ .arr = ops });
+    try app.storage_engine.flushPendingWrites();
+
+    var seen = [_]bool{false} ** 7;
+    var change_count: usize = 0;
+    for (app.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            defer owned.deinit(app.storage_engine.allocator);
+            const change = owned.change;
+            const id: usize = @intCast(change.doc_id);
+            try testing.expect(id > 0 and id < seen.len);
+            try testing.expect(!seen[id]);
+            seen[id] = true;
+            change_count += 1;
+
+            switch (id) {
+                1 => {
+                    try testing.expectEqual(.update, change.operation);
+                    try testing.expectEqualStrings("seed-1", change.old_record.?.values[status_index].scalar.text);
+                    try testing.expectEqualStrings("final-1", change.new_record.?.values[status_index].scalar.text);
+                },
+                2 => {
+                    try testing.expectEqual(.insert, change.operation);
+                    try testing.expect(change.old_record == null);
+                    try testing.expectEqualStrings("final-2", change.new_record.?.values[status_index].scalar.text);
+                },
+                3 => {
+                    try testing.expectEqual(.delete, change.operation);
+                    try testing.expectEqualStrings("seed-3", change.old_record.?.values[status_index].scalar.text);
+                    try testing.expect(change.new_record == null);
+                },
+                4 => {
+                    try testing.expectEqual(.update, change.operation);
+                    try testing.expectEqualStrings("seed-4", change.old_record.?.values[status_index].scalar.text);
+                    try testing.expectEqualStrings("final-4", change.new_record.?.values[status_index].scalar.text);
+                },
+                6 => {
+                    try testing.expectEqual(.insert, change.operation);
+                    try testing.expect(change.old_record == null);
+                    try testing.expectEqualStrings("final-6", change.new_record.?.values[status_index].scalar.text);
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 5), change_count);
+    try testing.expect(seen[1] and seen[2] and seen[3] and seen[4] and !seen[5] and seen[6]);
+
+    for ([_]struct { id: typed_doc_id.DocId, status: []const u8 }{
+        .{ .id = 1, .status = "final-1" },
+        .{ .id = 2, .status = "final-2" },
+        .{ .id = 4, .status = "final-4" },
+        .{ .id = 6, .status = "final-6" },
+    }) |expected| {
+        var document = try items.getOne(allocator, expected.id, 1);
+        defer document.deinit();
+        _ = try document.expectFieldString("status", expected.status);
+    }
+    const record_3 = try items.readDoc(allocator, 3, 1);
+    defer if (record_3) |owned| owned.deinit(allocator);
+    try testing.expect(record_3 == null);
+    const record_5 = try items.readDoc(allocator, 5, 1);
+    defer if (record_5) |owned| owned.deinit(allocator);
+    try testing.expect(record_5 == null);
+    try testing.expect(app.storage_engine.documentExists(items.metadata.index, 4));
+    try testing.expect(!app.storage_engine.documentExists(items.metadata.index, 5));
 }
 
 test "StoreService: batchWrite - empty ops is a no-op" {
