@@ -87,7 +87,7 @@ export function unflatten(
 	return result;
 }
 
-function setDeepProperty(
+export function setDeepProperty(
 	obj: Record<string, JsonValue>,
 	parts: string[],
 	value: JsonValue,

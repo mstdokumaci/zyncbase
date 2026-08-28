@@ -365,13 +365,7 @@ export class SubscriptionTracker {
 
 	private _handleRootOp(op: StoreDelta["ops"][number]): JsonValue | undefined {
 		if (op.op === "remove") return null;
-		if (op.op === "set") {
-			return op.value !== null &&
-				typeof op.value === "object" &&
-				!Array.isArray(op.value)
-				? unflatten(op.value as Record<string, JsonValue>)
-				: op.value;
-		}
+		if (op.op === "set") return op.value;
 		return undefined;
 	}
 
@@ -391,8 +385,7 @@ export class SubscriptionTracker {
 
 	/**
 	 * Apply delta ops to a materialized view.
-	 * Values arrive as flat string-keyed maps (e.g. { "address__city": "NYC" })
-	 * and are unflattened before storage.
+	 * Root values arrive as fully decoded records ready for storage.
 	 */
 	private _applyOpsToView(
 		view: MaterializedView,
@@ -421,22 +414,9 @@ export class SubscriptionTracker {
 		id: string,
 		op: Extract<StoreDelta["ops"][number], { op: "set" }>,
 	): void {
-		const record =
-			op.value !== null &&
-			typeof op.value === "object" &&
-			!Array.isArray(op.value)
-				? hasNestedKey(op.value as Record<string, JsonValue>)
-					? unflatten(op.value as Record<string, JsonValue>)
-					: { ...(op.value as Record<string, JsonValue>) }
-				: op.value;
-
-		if (record && typeof record === "object" && !Array.isArray(record)) {
-			(record as Record<string, JsonValue>).id = id;
-		}
-
 		// Map.set keeps insertion position for existing keys; ordered
 		// queries sort at snapshot.
-		view.records.set(id, record);
+		view.records.set(id, op.value);
 	}
 
 	private _handleRemoveOp(view: MaterializedView, id: string): void {
@@ -466,10 +446,6 @@ export function createIdComparator(): (a: JsonValue, b: JsonValue) => number {
 		}
 		return 0;
 	};
-}
-
-function hasNestedKey(v: Record<string, JsonValue>): boolean {
-	return Object.keys(v).some((k) => k.includes("__"));
 }
 
 export function createListenProjection(segments: string[]): ListenProjection {
@@ -517,6 +493,6 @@ function createInitialSnapshotOp(
 	return {
 		op: "set",
 		path: [collection, id],
-		value: item,
+		value: unflatten(value),
 	};
 }

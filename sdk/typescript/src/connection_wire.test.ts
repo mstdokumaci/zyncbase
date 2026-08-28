@@ -58,6 +58,7 @@ describe("ConnectionWireCodec", () => {
 						op: "set",
 						path: [0, "u1"],
 						value: [
+							[0, "duplicate-id"],
 							[1, "Ada"],
 							[2, "London"],
 						],
@@ -73,7 +74,7 @@ describe("ConnectionWireCodec", () => {
 				{
 					op: "set",
 					path: ["users", "u1"],
-					value: { name: "Ada", address__city: "London" },
+					value: { id: "u1", name: "Ada", address: { city: "London" } },
 				},
 			],
 		});
@@ -90,6 +91,7 @@ describe("ConnectionWireCodec", () => {
 					op: "set",
 					path: [0, "u1"],
 					value: [
+						[0, "duplicate-id"],
 						[1, "Ada"],
 						[2, "London"],
 					],
@@ -110,7 +112,7 @@ describe("ConnectionWireCodec", () => {
 				{
 					op: "set",
 					path: ["users", "u1"],
-					value: { name: "Ada", address__city: "London" },
+					value: { id: "u1", name: "Ada", address: { city: "London" } },
 				},
 			],
 		});

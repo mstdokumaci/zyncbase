@@ -72,7 +72,7 @@ function setOp(id: string, fields: Record<string, JsonValue>): InboundMessage {
 	return {
 		type: "StoreDelta",
 		subId: 5,
-		ops: [{ op: "set", path: ["items", id], value: fields }],
+		ops: [{ op: "set", path: ["items", id], value: { id, ...fields } }],
 	};
 }
 
@@ -94,6 +94,7 @@ describe("materialized-view comparator", () => {
 			}),
 		);
 		push(setOp("aardvark", { name: "z" }));
+		push(setOp("019c1e50-7d11-6abc-9def-0123456789ab", { name: "malformed" }));
 		push(setOp("INVALID", { name: "invalid" }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -101,6 +102,7 @@ describe("materialized-view comparator", () => {
 			"aardvark",
 			"b-uuid-v7-doc",
 			"019c1e50-7d11-7abc-9def-0123456789ab",
+			"019c1e50-7d11-6abc-9def-0123456789ab",
 			"INVALID",
 		]);
 	});
@@ -237,12 +239,14 @@ describe("materialized-view comparator", () => {
 		push(setOp("ref2", { ref: "019c1e50-7d11-7abc-9def-0123456789ab" }));
 		push(setOp("ref3", { ref: "aaa-short" }));
 		push(setOp("ref4", { ref: "INVALID" }));
+		push(setOp("ref5", { ref: "019c1e50-7d11-6abc-9def-0123456789ab" }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual([
 			"ref3",
 			"ref1",
 			"ref2",
+			"ref5",
 			"ref4",
 		]);
 	});

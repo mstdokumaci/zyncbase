@@ -466,52 +466,44 @@ export class ConnectionWireCodec {
 	}
 
 	private decodeDelta(delta: StoreDelta): StoreDelta {
-		const decodedOps = delta.ops.map((op) => {
+		for (const op of delta.ops) {
 			const wirePath = op.path as unknown as Array<
 				number | string | Uint8Array
 			>;
-			let decodedPath = op.path;
-			let tableIndex: number | null = null;
 			if (
-				Array.isArray(wirePath) &&
-				wirePath.length > 0 &&
-				typeof wirePath[0] === "number"
-			) {
-				tableIndex = wirePath[0] as number;
-				decodedPath = this.schema.decodePath(wirePath) as unknown as string[];
-			}
+				!(
+					Array.isArray(wirePath) &&
+					wirePath.length > 0 &&
+					typeof wirePath[0] === "number"
+				)
+			)
+				continue;
+
+			const tableIndex = wirePath[0] as number;
+			op.path = this.schema.decodePath(wirePath);
 
 			if (
 				op.op === "set" &&
-				tableIndex !== null &&
 				wirePath.length === 2 &&
 				op.value !== null &&
 				typeof op.value === "object" &&
 				Array.isArray(op.value)
 			) {
-				return {
-					...op,
-					path: decodedPath,
-					value: this.schema.decodeValue(
-						tableIndex,
-						op.value as Array<[number, unknown]>,
-					) as unknown as typeof op.value,
-				};
+				op.value = this.schema.decodeDeltaValue(
+					tableIndex,
+					op.value as Array<[number, unknown]>,
+					op.path[1],
+				);
 			}
-			if (op.op === "set" && tableIndex !== null && wirePath.length === 3) {
-				return {
-					...op,
-					path: decodedPath,
-					value: this.schema.decodeFieldValue(
-						tableIndex,
-						wirePath[2] as number,
-						op.value,
-					) as typeof op.value,
-				};
+			if (op.op === "set" && wirePath.length === 3) {
+				op.value = this.schema.decodeFieldValue(
+					tableIndex,
+					wirePath[2] as number,
+					op.value,
+				) as typeof op.value;
 			}
-			return { ...op, path: decodedPath };
-		});
-		return { ...delta, ops: decodedOps } as StoreDelta;
+		}
+		return delta;
 	}
 
 	private decodeRow(tableIndex: number, row: JsonValue): JsonValue {

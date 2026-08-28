@@ -202,7 +202,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
     const avg_total = avg_a + avg_b + avg_c + avg_d;
 
     std.debug.print(
-        "Fanout (10k subs / 5k matches) per stage [ms]: matching(A)={d:.3} suffix(B)={d:.3} dispatch(C)={d:.3} drain(D)={d:.3} total={d:.3}\n",
+        "Fanout (10k subs / 5k matches) per stage [ms]: matching(A)={d:.3} suffix(B)={d:.6} dispatch(C)={d:.3} drain(D)={d:.3} total={d:.3}\n",
         .{ avg_a, avg_b, avg_c, avg_d, avg_total },
     );
 

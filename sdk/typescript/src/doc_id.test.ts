@@ -54,7 +54,10 @@ describe("doc_id", () => {
 	test("comparison gives invalid IDs a deterministic non-throwing fallback", () => {
 		const short = "valid-short";
 		const uuid = "019c1e50-7d11-7000-8000-000000000000";
+		const malformedUuid = "019c1e50-7d11-6000-8000-000000000000";
 		expect(compareDocIds(short, uuid)).toBeLessThan(0);
+		expect(compareDocIds(uuid, malformedUuid)).toBeLessThan(0);
+		expect(compareDocIds(malformedUuid, uuid)).toBeGreaterThan(0);
 		expect(compareDocIds(uuid, "INVALID-A")).toBeLessThan(0);
 		expect(compareDocIds("INVALID-A", "INVALID-B")).toBeLessThan(0);
 	});
