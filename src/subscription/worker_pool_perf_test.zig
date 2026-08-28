@@ -34,7 +34,7 @@ const TestContext = struct {
         try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
-        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 4096, null, null);
+        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 32_768, null, null);
         self.send_queue = try send_queue_type.init(&self.send_node_pool);
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
@@ -148,9 +148,13 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
+        var unique_messages: std.AutoHashMapUnmanaged(usize, void) = .empty;
+        defer unique_messages.deinit(allocator);
         while (ctx.send_queue.pop()) |entry| {
+            try unique_messages.put(allocator, @intFromPtr(entry.data.ptr), {});
             entry.deinit();
         }
+        try testing.expectEqual(@as(u32, subs_per_group), unique_messages.count());
     }
 
     var total_a: u64 = 0;
@@ -208,9 +212,9 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
 
     const target_a: f64 = if (is_tsan) 0.7 else if (is_debug) 0.7 else 0.15;
     const target_b: f64 = if (is_tsan) 0.01 else if (is_debug) 0.02 else 0.01;
-    const target_c: f64 = if (is_tsan) 5.5 else if (is_debug) 6.0 else 1.0;
+    const target_c: f64 = if (is_tsan) 4.0 else if (is_debug) 4.0 else 0.6;
     const target_d: f64 = if (is_tsan) 1.0 else if (is_debug) 1.2 else 0.2;
-    const target_total: f64 = if (is_tsan) 7.0 else if (is_debug) 8.0 else 1.3;
+    const target_total: f64 = if (is_tsan) 6.0 else if (is_debug) 6.0 else 1.1;
 
     try testing.expect(avg_a < target_a);
     try testing.expect(avg_b < target_b);

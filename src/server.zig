@@ -264,7 +264,7 @@ pub const ZyncBaseServer = struct {
     }
 
     fn initQueues(self: *ZyncBaseServer) !void {
-        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 4096, null, null);
+        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 32_768, null, null);
         errdefer self.send_node_pool.deinit();
         self.send_queue = try send_queue_type.init(&self.send_node_pool);
         errdefer self.send_queue.deinit();
