@@ -369,11 +369,11 @@ async function waitForAllFiredAndConverged(
 	// skip heavy verify when no deltas arrived since last check
 	let lastGen = -1;
 	while (true) {
+		if (Date.now() > deadline)
+			throw new Error(
+				`Timeout: not converged — ${convergenceErrors(clients).slice(0, 6).join("; ")}`,
+			);
 		if (globalGeneration === lastGen) {
-			if (Date.now() > deadline)
-				throw new Error(
-					`Timeout: not converged — ${convergenceErrors(clients).slice(0, 6).join("; ")}`,
-				);
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			continue;
 		}
@@ -389,10 +389,6 @@ async function waitForAllFiredAndConverged(
 			);
 			return;
 		}
-		if (Date.now() > deadline)
-			throw new Error(
-				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
-			);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 }

@@ -16,6 +16,16 @@ describe("doc_id", () => {
 		expect(unpackDocId(packDocId(id))).toBe(id);
 	});
 
+	test("handles UUID cache collisions without aliasing mutable buffers", () => {
+		const first = "019c1e50-7d11-7000-8000-000000000001";
+		const second = "019c1e50-7d11-7000-8000-000000001001";
+		const packed = packDocId(first);
+		expect(unpackDocId(packed)).toBe(first);
+		packed.set(packDocId(second));
+		expect(unpackDocId(packed)).toBe(second);
+		expect(unpackDocId(packDocId(first))).toBe(first);
+	});
+
 	test("round-trips short IDs", () => {
 		expect(unpackDocId(packDocId("a"))).toBe("a");
 		expect(unpackDocId(packDocId("abc_09-z"))).toBe("abc_09-z");
