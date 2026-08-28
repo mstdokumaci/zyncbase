@@ -47,6 +47,34 @@ describe("SchemaDictionary doc IDs", () => {
 		});
 	});
 
+	test("decodes delta records with nested and document ID fields", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["tasks"],
+			fields: [["id", "metrics__rank", "owner_id"]],
+			fieldFlags: [[0b11, 0b00, 0b10]],
+		});
+
+		expect(
+			schema.decodeDeltaValue(
+				0,
+				[
+					[0, packDocId("ignored")],
+					[1, 7],
+					[2, packDocId("owner_1")],
+				],
+				"task_1",
+			),
+		).toEqual({
+			id: "task_1",
+			metrics: { rank: 7 },
+			owner_id: "owner_1",
+		});
+		expect(() =>
+			schema.decodeDeltaValue(0, [[99, "invalid"]], "task_1"),
+		).toThrow("field index 99 out of range");
+	});
+
 	test("rejects missing fieldFlags", async () => {
 		const schema = new SchemaDictionary();
 		await expect(
