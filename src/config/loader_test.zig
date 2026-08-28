@@ -37,7 +37,7 @@ test "ConfigLoader loads defaults when file not found" {
     try std.testing.expectEqual(@as(u16, 3000), config.server.port);
     try std.testing.expectEqualStrings("0.0.0.0", config.server.host);
     try std.testing.expectEqualStrings("./data", config.data_dir);
-    try std.testing.expectEqual(@as(usize, 200), config.performance.batch_size);
+    try std.testing.expectEqual(@as(usize, 500), config.performance.batch_size);
 }
 
 test "ConfigLoader parses valid JSON config" {
