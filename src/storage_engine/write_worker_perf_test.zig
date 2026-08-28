@@ -42,10 +42,12 @@ fn makeUpsertOp(
 fn runBatchSweep(
     allocator: Allocator,
     batch_len: usize,
+    distinct_doc_count: usize,
     cache_population: usize,
     iterations: usize,
     ctx: *EngineTestContext,
-) !struct { avg_flush: f64, avg_drain: f64 } {
+) !struct { avg_flush: f64, avg_drain: f64, change_jobs: usize } {
+    std.debug.assert(distinct_doc_count > 0 and distinct_doc_count <= batch_len);
     const table_metadata = try ctx.tableMetadata("items");
     const table_index = table_metadata.index;
     const ns_id: i64 = 1;
@@ -64,7 +66,7 @@ fn runBatchSweep(
 
         const warmup_len = if (warmup_idx == 0) @max(batch_len, cache_population) else batch_len;
         for (0..warmup_len) |i| {
-            const id: DocId = @intCast(i % 10_000);
+            const id: DocId = @intCast(if (warmup_idx == 0) i else i % distinct_doc_count);
             try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, ns_id, @intCast(i)));
         }
 
@@ -83,7 +85,7 @@ fn runBatchSweep(
     }
 
     // Warmup assertion: confirm last doc-id is present in SQLite.
-    const last_id: DocId = @intCast((batch_len - 1) % 10_000);
+    const last_id: DocId = @intCast((batch_len - 1) % distinct_doc_count);
     const warmup_record = try sth.readDoc(allocator, &ctx.engine, table_index, last_id, ns_id);
     try testing.expect(warmup_record != null);
     if (warmup_record) |r| r.deinit(allocator);
@@ -97,7 +99,7 @@ fn runBatchSweep(
         }
 
         for (0..batch_len) |i| {
-            const id: DocId = @intCast(i % 10_000);
+            const id: DocId = @intCast(i % distinct_doc_count);
             try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, ns_id, @intCast(i)));
         }
 
@@ -119,10 +121,13 @@ fn runBatchSweep(
         // Stage D: drains shard 0 of the ChangeQueue (num_shards=1 in tests).
         // In production, changes are sharded across N shards by (namespace_id,
         // table_index, doc_id) hash. D measures the single-shard happy path.
+        var change_jobs: usize = 0;
         while (ctx.test_context.change_queue.?.shards[0].popTimed(0)) |job| {
             var j = job;
             j.deinit(allocator);
+            change_jobs += 1;
         }
+        try testing.expectEqual(distinct_doc_count, change_jobs);
         now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         total_drain += @intCast(now_ns - last_ns);
 
@@ -134,6 +139,7 @@ fn runBatchSweep(
     return .{
         .avg_flush = @as(f64, @floatFromInt(total_flush)) / 1e6 * inv_iters,
         .avg_drain = @as(f64, @floatFromInt(total_drain)) / 1e6 * inv_iters,
+        .change_jobs = distinct_doc_count,
     };
 }
 
@@ -166,16 +172,19 @@ test "WriteWorker: flushBatch throughput" {
     const is_tsan = builtin.sanitize_thread;
 
     // batch_len=10
-    const r10 = try runBatchSweep(allocator, 10, 10, if (is_tsan) 100 else if (is_debug) 100 else 500, &ctx);
+    const r10 = try runBatchSweep(allocator, 10, 10, 10, if (is_tsan) 100 else if (is_debug) 100 else 500, &ctx);
     std.debug.print("flushBatch (batch_len=10) [ms]: flush={d:.3} drain={d:.3}\n", .{ r10.avg_flush, r10.avg_drain });
 
     // batch_len=100
-    const r100 = try runBatchSweep(allocator, 100, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
+    const r100 = try runBatchSweep(allocator, 100, 100, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
     std.debug.print("flushBatch (batch_len=100) [ms]: flush={d:.3} drain={d:.3}\n", .{ r100.avg_flush, r100.avg_drain });
 
     // Production-sized batch against a small cache that still exposes per-write map cloning.
-    const r200 = try runBatchSweep(allocator, 200, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
+    const r200 = try runBatchSweep(allocator, 200, 200, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
     std.debug.print("flushBatch (batch_len=200, cache_entries=512) [ms]: flush={d:.3} drain={d:.3}\n", .{ r200.avg_flush, r200.avg_drain });
+
+    const r200_hot = try runBatchSweep(allocator, 200, 10, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
+    std.debug.print("flushBatch (batch_len=200, distinct_docs=10) [ms]: flush={d:.3} drain={d:.3} jobs={d}\n", .{ r200_hot.avg_flush, r200_hot.avg_drain, r200_hot.change_jobs });
 
     const target_flush_10: f64 = if (is_tsan) 3.0 else if (is_debug) 2.5 else 0.3;
     const target_drain_10: f64 = if (is_tsan) 0.02 else if (is_debug) 0.03 else 0.01;

@@ -442,4 +442,14 @@ test "storage: failed atomic batch leaves no partial writes" {
 
     try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_ok, 1)) == null);
     try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_dup, 1)) == null);
+
+    var change_count: usize = 0;
+    for (ctx.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            owned.deinit(ctx.engine.allocator);
+            change_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), change_count);
 }

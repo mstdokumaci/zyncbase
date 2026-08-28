@@ -764,6 +764,12 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     };
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &seed_reject, null, null, null);
     try ctx.engine.flushPendingWrites();
+    for (ctx.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            owned.deinit(ctx.engine.allocator);
+        }
+    }
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
@@ -808,6 +814,18 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     defer if (rec_reject) |r| r.deinit(allocator);
     try testing.expect(rec_reject != null);
     try testing.expectEqualStrings("original", rec_reject.?.values[val_field_idx].scalar.text);
+
+    var change_count: usize = 0;
+    for (ctx.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            defer owned.deinit(ctx.engine.allocator);
+            change_count += 1;
+            try testing.expectEqual(doc_ok, owned.change.doc_id);
+            try testing.expectEqual(.update, owned.change.operation);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), change_count);
 }
 
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
@@ -1831,6 +1849,32 @@ fn fkDocId(id: u128) typed.Value {
     return .{ .scalar = .{ .doc_id = id } };
 }
 
+fn makeForeignKeyUpsertOp(
+    allocator: std.mem.Allocator,
+    table: *const sth.TableMetadata,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    reference_field: ?[]const u8,
+    reference_id: typed_doc_id.DocId,
+) !storage_mod.WriteOp {
+    const columns = try allocator.alloc(sth.ColumnValue, if (reference_field == null) 0 else 1);
+    errdefer allocator.free(columns);
+    if (reference_field) |field| {
+        columns[0] = .{
+            .index = table.fieldIndex(field) orelse return error.TestExpectedValue,
+            .value = fkDocId(reference_id),
+        };
+    }
+    return .{ .upsert = .{
+        .table_index = table.index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .owner_doc_id = typed_doc_id.zero,
+        .columns = columns,
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
+    } };
+}
+
 fn drainForeignKeyChanges(app: *app_test_helpers.AppTestContext) usize {
     const queue = &app.test_context.change_queue.?;
     var change_count: usize = 0;
@@ -1968,42 +2012,51 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
     }
 
     {
-        try parents.insertNamed(3, 1, .{});
-        try cascaded.insertNamed(55, 2, .{sth.named("parent_id", fkDocId(3))});
-        try nullable.insertNamed(66, 4, .{sth.named("parent_id", fkDocId(3))});
-        try parents.deleteDocument(3, 1);
-        try parents.flush();
+        const write_allocator = app.storage_engine.allocator;
+        const entries = try write_allocator.alloc(storage_mod.WriteOp, 4);
+        var initialized_entries: usize = 0;
+        var enqueued = false;
+        errdefer if (!enqueued) {
+            for (entries[0..initialized_entries]) |entry| entry.deinit(write_allocator);
+            write_allocator.free(entries);
+        };
+        entries[0] = try makeForeignKeyUpsertOp(write_allocator, parents.metadata, 3, 1, null, 0);
+        initialized_entries += 1;
+        entries[1] = try makeForeignKeyUpsertOp(write_allocator, cascaded.metadata, 55, 2, "parent_id", 3);
+        initialized_entries += 1;
+        entries[2] = try makeForeignKeyUpsertOp(write_allocator, nullable.metadata, 66, 4, "parent_id", 3);
+        initialized_entries += 1;
+        entries[3] = .{ .delete = .{ .table_index = parents.metadata.index, .id = 3, .namespace_id = 1 } };
+        initialized_entries += 1;
+        try app.storage_engine.enqueueWriteOp(.{ .batch = .{ .entries = entries } });
+        enqueued = true;
+        try app.storage_engine.flushPendingWrites();
 
+        try testing.expect((try parents.readDoc(allocator, 3, 1)) == null);
         try testing.expect((try cascaded.readDoc(allocator, 55, 2)) == null);
         var batch_nullable = try nullable.getOne(allocator, 66, 4);
         defer batch_nullable.deinit();
         try testing.expect(batch_nullable.getFieldDocIdOrNull("parent_id") == null);
+        try testing.expect(!app.storage_engine.documentExists(parents.metadata.index, 3));
+        try testing.expect(!app.storage_engine.documentExists(cascaded.metadata.index, 55));
+        try testing.expect(app.storage_engine.documentExists(nullable.metadata.index, 66));
 
-        var cascade_delete_published = false;
-        var set_null_update_published = false;
+        var change_count: usize = 0;
         const queue = &app.test_context.change_queue.?;
-        while (queue.shards[0].popTimed(0)) |job| {
-            var owned = job;
-            defer owned.deinit(app.storage_engine.allocator);
-            switch (owned.change.operation) {
-                .delete => {
-                    if (owned.change.table_index == cascaded.metadata.index and owned.change.doc_id == 55) {
-                        cascade_delete_published = true;
-                    }
-                },
-                .update => {
-                    if (owned.change.table_index == nullable.metadata.index and owned.change.doc_id == 66) {
-                        const parent_field_index = nullable.metadata.fieldIndex("parent_id") orelse return error.TestExpectedValue;
-                        try testing.expectEqual(@as(u128, 3), owned.change.old_record.?.values[parent_field_index].scalar.doc_id);
-                        try testing.expect(owned.change.new_record.?.values[parent_field_index] == .nil);
-                        set_null_update_published = true;
-                    }
-                },
-                .insert => {},
+        for (queue.shards) |*shard| {
+            while (shard.popTimed(0)) |job| {
+                var owned = job;
+                defer owned.deinit(app.storage_engine.allocator);
+                change_count += 1;
+                try testing.expectEqual(.insert, owned.change.operation);
+                try testing.expectEqual(nullable.metadata.index, owned.change.table_index);
+                try testing.expectEqual(@as(u128, 66), owned.change.doc_id);
+                try testing.expect(owned.change.old_record == null);
+                const parent_field_index = nullable.metadata.fieldIndex("parent_id") orelse return error.TestExpectedValue;
+                try testing.expect(owned.change.new_record.?.values[parent_field_index] == .nil);
             }
         }
-        try testing.expect(cascade_delete_published);
-        try testing.expect(set_null_update_published);
+        try testing.expectEqual(@as(usize, 1), change_count);
     }
 }
 
