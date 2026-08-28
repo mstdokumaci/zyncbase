@@ -1,6 +1,7 @@
 // Store API
 
 import type { OutboundRequest } from "./connection_wire.js";
+import { compareDocIds } from "./doc_id.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { flatten, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
@@ -594,15 +595,14 @@ function compareSortEntry(
 	if (va == null) return vb == null ? 0 : 1;
 	if (vb == null) return -1;
 
-	const result = compareNonNullValues(va, vb, entry.docId);
+	const result =
+		entry.docId && typeof va === "string" && typeof vb === "string"
+			? compareDocIds(va, vb)
+			: compareNonNullValues(va, vb);
 	return entry.desc ? -result : result;
 }
 
-function compareNonNullValues(
-	a: JsonValue,
-	b: JsonValue,
-	docId: boolean,
-): number {
+function compareNonNullValues(a: JsonValue, b: JsonValue): number {
 	if (typeof a !== typeof b) return 0;
 	switch (typeof a) {
 		case "number":
@@ -610,7 +610,7 @@ function compareNonNullValues(
 		case "boolean":
 			return compareBooleans(a, b as boolean);
 		case "string":
-			return compareStrings(a, b as string, docId);
+			return compareUtf8(a, b as string);
 		default:
 			return 0;
 	}
@@ -622,13 +622,6 @@ function compareNumbers(a: number, b: number): number {
 
 function compareBooleans(a: boolean, b: boolean): number {
 	return a === b ? 0 : a ? 1 : -1;
-}
-
-function compareStrings(a: string, b: string, docId: boolean): number {
-	if (!docId) return compareUtf8(a, b);
-	// Packed wire decoding already validated IDs; only UUIDv7 has length 36.
-	const family = Number(a.length === 36) - Number(b.length === 36);
-	return family || compareLexically(a, b);
 }
 
 const textEncoder = new TextEncoder();

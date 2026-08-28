@@ -63,8 +63,8 @@ describe("doc_id performance", () => {
 		);
 
 		expect(compareDocIds(ids[0], ids[1])).toBeLessThan(0);
-		// Direct comparison is ~0.2µs/call locally. Repacking both IDs took
-		// ~5µs/call and fails this budget.
-		expect(elapsedMs).toBeLessThan(600);
+		// The validated-family cache is ~0.05µs/call locally. Revalidating both
+		// IDs on every comparison is ~0.18µs/call and fails this budget.
+		expect(elapsedMs).toBeLessThan(80);
 	});
 });
