@@ -200,38 +200,49 @@ pub const SubscriptionWorker = struct {
         remove_suffix: ?[]const u8,
         handle: ArenaHandle,
     ) void {
+        const MessageKey = struct {
+            subscription_id: u64,
+            op: MatchOp,
+        };
+
         const alloc = handle.allocator();
         var out = std.Io.Writer.Allocating.init(alloc);
         defer out.deinit();
+        var messages: std.AutoHashMapUnmanaged(MessageKey, []const u8) = .empty;
+        defer messages.deinit(alloc);
         var pushed_any = false;
 
         for (matches) |match| {
-            out.clearRetainingCapacity();
-            const writer = &out.writer;
-
-            writer.writeAll(&wire_encode.store_delta_header) catch |err| {
-                std.log.err("SubscriptionWorker failed to write header: {}", .{err});
-                continue;
-            };
-
-            msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch |err| {
-                std.log.err("SubscriptionWorker failed to encode subId {}: {}", .{ match.subscription_id, err });
-                continue;
-            };
-
             const suffix = switch (match.op) {
                 MatchOp.set_op => set_suffix orelse continue,
                 MatchOp.remove => remove_suffix orelse continue,
             };
+            const key = MessageKey{ .subscription_id = match.subscription_id, .op = match.op };
+            const owned_msg = messages.get(key) orelse message: {
+                out.clearRetainingCapacity();
+                const writer = &out.writer;
 
-            writer.writeAll(suffix) catch |err| {
-                std.log.err("SubscriptionWorker failed to append suffix: {}", .{err});
-                continue;
-            };
+                writer.writeAll(&wire_encode.store_delta_header) catch |err| {
+                    std.log.err("SubscriptionWorker failed to write header: {}", .{err});
+                    continue;
+                };
+                msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch |err| {
+                    std.log.err("SubscriptionWorker failed to encode subId {}: {}", .{ match.subscription_id, err });
+                    continue;
+                };
+                writer.writeAll(suffix) catch |err| {
+                    std.log.err("SubscriptionWorker failed to append suffix: {}", .{err});
+                    continue;
+                };
 
-            const owned_msg = alloc.dupe(u8, out.written()) catch |err| {
-                std.log.err("SubscriptionWorker failed to dupe encoded delta: {}", .{err});
-                continue;
+                const msg = alloc.dupe(u8, out.written()) catch |err| {
+                    std.log.err("SubscriptionWorker failed to dupe encoded delta: {}", .{err});
+                    continue;
+                };
+                messages.put(alloc, key, msg) catch |err| {
+                    std.log.warn("SubscriptionWorker failed to cache encoded delta: {}", .{err});
+                };
+                break :message msg;
             };
 
             // Reserve a ref for this entry BEFORE pushing so the consumer can never
