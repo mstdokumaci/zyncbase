@@ -67,8 +67,8 @@ pub const Config = struct {
     pub const PerformanceConfig = struct {
         message_buffer_size: usize = 1000,
         batch_writes: bool = true,
-        batch_size: usize = 200,
-        batch_timeout: u32 = 10,
+        batch_size: usize = 500,
+        batch_timeout: u32 = 8,
         statement_cache_size: usize = 100,
     };
 
