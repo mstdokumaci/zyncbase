@@ -377,7 +377,10 @@ async function waitForAllFiredAndConverged(
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			continue;
 		}
-		lastGen = globalGeneration;
+		const gen = globalGeneration;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		if (globalGeneration !== gen) continue;
+		lastGen = gen;
 		const errors = convergenceErrors(clients);
 		verifyPasses++;
 		if (errors.length === 0) {
