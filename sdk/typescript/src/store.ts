@@ -1,7 +1,6 @@
 // Store API
 
 import type { OutboundRequest } from "./connection_wire.js";
-import { compareDocIds } from "./doc_id.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { flatten, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
@@ -626,7 +625,10 @@ function compareBooleans(a: boolean, b: boolean): number {
 }
 
 function compareStrings(a: string, b: string, docId: boolean): number {
-	return docId ? compareDocIds(a, b) : compareUtf8(a, b);
+	if (!docId) return compareUtf8(a, b);
+	// Packed wire decoding already validated IDs; only UUIDv7 has length 36.
+	const family = Number(a.length === 36) - Number(b.length === 36);
+	return family || compareLexically(a, b);
 }
 
 const textEncoder = new TextEncoder();

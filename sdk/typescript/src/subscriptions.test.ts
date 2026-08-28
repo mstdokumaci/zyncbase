@@ -80,7 +80,7 @@ describe("SubscriptionTracker", () => {
 });
 
 describe("SubscriptionTracker - materialized view set ops", () => {
-	test("flat-key set op stores the value with the doc id injected", async () => {
+	test("decoded record set op stores the final value", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
 
@@ -97,7 +97,7 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 				{
 					op: "set",
 					path: ["items", "doc-1"],
-					value: { name: "item", priority: 5 },
+					value: { id: "doc-1", name: "item", priority: 5 },
 				},
 			],
 		});
@@ -106,10 +106,10 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
 	});
 
-	test("flat-key set op does not mutate the inbound delta value", async () => {
+	test("stores the inbound delta value directly", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
-		const inputValue = { name: "item", priority: 5 };
+		const inputValue = { id: "doc-1", name: "item", priority: 5 };
 
 		tracker.registerCollection(
 			203,
@@ -131,10 +131,10 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		await flushTick();
 
 		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
-		expect(inputValue).toEqual({ name: "item", priority: 5 });
+		expect(snapshots[0][0]).toBe(inputValue);
 	});
 
-	test("nested __ keys are still unflattened into nested records", async () => {
+	test("keeps decoded nested records intact", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
 
@@ -148,7 +148,11 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 			type: "StoreDelta",
 			subId: 202,
 			ops: [
-				{ op: "set", path: ["users", "u1"], value: { address__city: "NYC" } },
+				{
+					op: "set",
+					path: ["users", "u1"],
+					value: { id: "u1", address: { city: "NYC" } },
+				},
 			],
 		});
 		await flushTick();

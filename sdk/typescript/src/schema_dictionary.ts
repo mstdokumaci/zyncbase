@@ -7,7 +7,13 @@
 import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
-import { flatten, joinFieldPath, splitFieldPath, unflatten } from "./path.js";
+import {
+	flatten,
+	joinFieldPath,
+	setDeepProperty,
+	splitFieldPath,
+	unflatten,
+} from "./path.js";
 import type { JsonValue } from "./types.js";
 
 /**
@@ -323,6 +329,29 @@ export class SchemaDictionary {
 		for (const [fieldIndex, val] of wireValue) {
 			const fieldName = this.getFieldName(tableIndex, fieldIndex);
 			result[fieldName] = this.decodeFieldValue(tableIndex, fieldIndex, val);
+		}
+		return result;
+	}
+
+	decodeDeltaValue(
+		tableIndex: number,
+		wireValue: Array<[number, unknown]>,
+		id: string,
+	): Record<string, JsonValue> {
+		const result: Record<string, JsonValue> = { id };
+		for (const [fieldIndex, val] of wireValue) {
+			const fieldName = this.getFieldName(tableIndex, fieldIndex);
+			if (fieldName === "id") continue;
+			const value = this.decodeFieldValue(
+				tableIndex,
+				fieldIndex,
+				val,
+			) as JsonValue;
+			if (fieldName.includes("__")) {
+				setDeepProperty(result, splitFieldPath(fieldName), value);
+			} else {
+				result[fieldName] = value;
+			}
 		}
 		return result;
 	}
