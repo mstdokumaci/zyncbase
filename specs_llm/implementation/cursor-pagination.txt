@@ -10,33 +10,25 @@ Cursor Pagination [ADR-013]-language), [ADR-014]-subscription [Query Engine]-eng
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `typed.Cursor` | sorting value, document ID | Represents the token state pointing directly after the last seen row. |
-| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active `orderBy`. |
-Opaque Cursor Layout `nextCursor token opaque Base64 MessagePack-encoded tuple```typescript
-const cursorTuple = [sort_value, docIdBin16];
+| `typed.Cursor` | ordered value list in canonical sort order | Represents the token state pointing directly after the last seen row; the final value is always the document id. |
+| `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active canonical `orderBy`. |
+Opaque Cursor Layout `nextCursor token opaque Base64 literal MessagePack-encoded triple collection canonical order```typescript
+const cursorTuple = [tableIndex, sortTuples, values];
+// sortTuples = [[field_index, desc_flag], ...]  — the canonical descriptor list (ends with id)
+// values     = [sort_value_0, ..., docIdBin16]  — one value per descriptor, count must match
 const nextCursor = base64(msgpackEncode(cursorTuple));
-```_value sorting column last element Cursor values null `docIdBin16 16-byte binary UUIDv7 last element SQL Compilation Parameter Binding querying cursor ZyncBase compiles compound sorting criteria `OR` logic colliding values database index usage Ascending Sort Query```sql
-SELECT ...
-FROM "collection"
-WHERE "namespace_id" = ?
-  AND (
-    sort_column > ? 
-    OR (sort_column = ? AND id > ?)
-  )
-ORDER BY sort_column ASC, id ASC
-LIMIT ?
-```Descending Query```sql
-SELECT ...
-FROM "collection"
-WHERE "namespace_id" = ?
-  AND (
-    sort_column < ? 
-    OR (sort_column = ? AND id < ?)
-  )
-ORDER BY sort_column DESC, id DESC
-LIMIT ?
-```Parameter Bind Array Order SQL queries require positional arguments bound| Query Type | Parameters Array | Bind Types |
-|:---|:---|:---|
-| **Ascending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
-| **Descending** | `[namespace_id, sort_value, sort_value, last_doc_uuid, page_limit]` | `[Int, Any, Any, Blob(16), Int]` |
-active sort field system `id field cursor predicate simplified `id > <[namespace_id last_doc_uuid page_limit Live Windowing`loadMore Active query subscriptions materialise real-time updates top collection view paginate backward fetch older elements SDK synthesises query cursor last client-side array `StoreLoadMore request uses cursor fetch next batch without disrupting subscription push listener SDK `table_index `StoreLoadMore server resolves retained query by `subId` Related Specifications [Query Engine [Storage [TypeScript SDK
+````tableIndex binds token collection rejected `sortTuples server's canonical order final `id clause token order query fails incorrect page Sort values `nil` optional fields Required fields reject null token opaque unsigned tampering page boundary alter authorization namespace scoping table active order Cursor Validation Decoding MessagePack limits token client supplied Base64-decode wire limits full byte consumption trailing three-element outer shape Validate table index active table descriptor list order value count descriptor count Decode value against field schema storage type `nil` optional fields reject arrays Failures map `InvalidCursorSortValue `InvalidMessageFormat SQL Compilation Parameter Binding canonical clause `ORDER BY non-required fields `NULLS LAST` sort last```sql
+ORDER BY
+  "priority" DESC NULLS LAST,
+  "created_at" ASC,
+  "id" ASC
+```SQLite row-value comparison-key directions cursor predicate compiles branch `i` requires equality `k0 after-comparison `ki` SQL fragment bind-list loop positional drift Example `priority DESC created ASC ASC```sql
+AND (
+  "priority" < ?
+  OR ("priority" = ? AND "created_at" > ?)
+  OR ("priority" = ? AND "created_at" = ? AND "id" > ?)
+)
+```Null-Safe Forms Optional Fields optional key `NULLS LAST prefix equality comparison branch null guard```sql
+(? IS NOT NULL AND ("col" IS NULL OR "col" > ?))   -- ASC
+(? IS NOT NULL AND ("col" IS NULL OR "col" < ?))   -- DESC
+```` NOT NULL` guard makes current-key branch false cursor value null later branch advances equal-null group reaching non-null `id tie-breaker Parameter Array Order Binds positional mirror generated fragments namespace id branch prefix equalities comparisons generation optional comparison contributes two binds page limit disjunction repeated prefix binds O(n2) clause count bounded nine keys Cache Stability SQL depends on table schema canonical descriptors field requiredness predicates/cursor/limit cursor value null Cursor values remain parameters structural-hash statement reuse mixed null/non-null boundaries Live Windowing query subscriptions real-time updates top collection view fetch older elements SDK synthesises query cursor last row client-side array `StoreLoadMore request uses cursor fetch next batch without SDK `table_index `StoreLoadMore server resolves retained query by `subId` Related Specifications [Query Engine [Storage SDK

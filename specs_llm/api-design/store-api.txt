@@ -32,7 +32,7 @@ const unlisten = client.store.listen('elements.rect-1', (element) => {
 ```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unlisten function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(collection options) one-off query-real-time).```typescript
 const users = await client.store.query('users', {
   where: { age: { gte: 18 }, status: { eq: 'active' } },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 50
 })
 
@@ -43,7 +43,7 @@ if (users.nextCursor) {
     limit: 50
   })
 }
-```**Parameters `collection Name query 'users 'events `options` Query options `where` Filter conditions `orderBy Sort order `limit` Max results return > 0 `after` Opaque token next page `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(collection options callback) Subscribe filtered query results-time).```typescript
+```**Parameters `collection Name query 'users 'events `options` Query options `where` Filter conditions `orderBy (array Ordered sort clauses created 'desc clause one field direction `limit Max results return > 0 `after` (string Opaque token next page `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(collection options callback) Subscribe filtered query results```typescript
 const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
   where: { status: { eq: 'active' } },
   limit: 50

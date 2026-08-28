@@ -66,7 +66,7 @@ System Table `users` hybrid system table Defaults"namespaced false under namespa
 |:---|:---:|:---|
 | `user` | `object` | Map of presence fields owned per connected user. |
 | `shared` | `object` | Map of namespace-level shared presence fields. |
-Implicit Presence Schema Layout omitted.json server synthesizes layout```json
+presence root closed key fails schema startup Presence object fields accept `type `fields primitive fields `type` validation constraints Store-only properties`indexed `onDelete `required Presence fields optional sparse merges Implicit Presence Schema Layout `presence` omitted `schema.json server synthesizes layout```json
 {
   "presence": {
     "user": {
@@ -79,4 +79,4 @@ Implicit Presence Schema Layout omitted.json server synthesizes layout```json
 |:---|:---|:---|:---|
 | **Phase 1** | `presence.user` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceUserFields[]`. (Position = Wire Index). |
 | **Phase 2** | `presence.shared` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceSharedFields[]`. (Position = Wire Index). |
-Metadata Reserved Validation objects preserved at schema table field boundaries clients operator tooling parser accepts validation-key names reserve future constraints without unknown-key rejection runtime write path enforces structural type compatibility fields references arrays system-column rules enforce validation keywords Reference values `null field optional Non-null values identify existing table failed writes restricted deletes use `SCHEMA_VALIDATION_FAILED error contract References ID-based cross namespaces IDs table-wide primary keys Foreign keys immediate batch create parent before child UPDATE actions deferred constraints supported Related Specifications [Error Taxonomy Grammar
+Metadata Reserved Validation objects preserved schema table store-field boundaries clients operator tooling parser validates stores `enum `minLength `maxLength Store presence writes enforce constraints before operation Reference values `null field optional Non-null values identify existing table failed writes restricted deletes use `SCHEMA_VALIDATION_FAILED error contract References ID-based cross IDs table-wide keys Foreign keys immediate batch create parent before child UPDATE actions deferred constraints not supported Related Specifications [Error Taxonomy [Storage Grammar

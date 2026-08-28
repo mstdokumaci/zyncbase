@@ -44,7 +44,6 @@ def main():
     try:
         llm_lingua = PromptCompressor(
             model_name=MODEL_NAME,
-            device_map="cpu",
             use_llmlingua2=USE_LLMLINGUA2,
         )
     except Exception as e:

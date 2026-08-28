@@ -3,7 +3,7 @@ const { data, loading, error } = useStore('elements')
 ```data T undefined loading boolean error ZyncBaseError options Subscribe filtered query results pagination support```typescript
 const { data, loading, error, hasMore, loadMore, loadingMore } = useQuery('tasks', {
   where: { status: { eq: 'active' } },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 20
 })
 ```data T loading boolean error ZyncBaseError null boolean Promise<void> loadingMore boolean `usePresence() Subscribe presence updates current```typescript
@@ -32,7 +32,7 @@ function ConnectionBanner() {
 ```Infinite Scroll```tsx
 function ActivityFeed() {
   const { data, hasMore, loadMore, loadingMore } = useQuery('activities', {
-    orderBy: { created_at: 'desc' },
+    orderBy: [{ created_at: 'desc' }],
     limit: 20
   })
 

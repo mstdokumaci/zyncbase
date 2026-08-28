@@ -1,9 +1,9 @@
 Lock-Free Cache [ADR-006-threaded-core [Threading Strategy lock-free cache reusable read-mostly cache used readers need stable handles without global lock replace retire entries controlled ownership Source Files| File | Responsibility |
 |------|----------------|
-| `src/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
+| `src/memory/lock_free_cache.zig` | Generic `lockFreeCache` type factory and handle/ref-count contract. |
 | `src/storage_engine/cache.zig` | Storage metadata cache key/value types built on the cache primitive. |
 | `src/authentication/jwt_validator.zig` | JWKS/cache usage for authentication. |
-| `src/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
+| `src/memory/*lock_free_cache*_test.zig` | Concurrency, lifetime, and leak coverage. |
 
 ## Important Types
 
@@ -14,11 +14,12 @@ Lock-Free Cache [ADR-006-threaded-core [Threading Strategy lock-free cache reusa
 | Cache handle | cache entry pointer | Keeps a value alive for a reader until release. |
 | Storage cache keys | namespace/identity typed ids | Avoid repeated namespace/user metadata lookup. |
 | JWKS cache state | JWT validator | Avoid repeated key fetch/parse while respecting refresh policy. |
-Contract Readers acquire handle release once Values valid until released Writers replace entries retired entries freed after release Cache users own key clone behavior Cache internals public error-code overflow failure maps subsystem Invariants No reader observes freed memory Reference counts wrap Entry retirement block unrelated readers Deinit no leaked handles Cache value types arena-owned pointers unless outlives handle Performance Contract| Property | Value | Notes |
+Contract Readers acquire handle release once Values valid until released Writers replace entries retired entries freed after release mutation batches publish atomic map swap force full-batch retry successful batch consumes update value failed none Cache users own key clone behavior Cache internals public error-code overflow failure maps subsystem Invariants No reader observes freed memory Reference counts wrap silently Entry retirement block unrelated readers Deinit no leaked handles Cache types arena-owned pointers unless outlives handle Performance Contract| Property | Value | Notes |
 |----------|-------|-------|
 | Max deferred nodes | 100,000 | Maximum COW map snapshots + old entries before pool exhaustion. |
 | Reclamation interval | 100 ms | Background thread wake interval for freeing old snapshots. |
 | Thread epoch slots | 128 | Maximum concurrent thread readers (limits parallel cache access). |
+| Batch mutation | One map clone per CAS attempt | Updates and evictions in one committed write batch share a COW snapshot. |
 Performance Targets ADR| Metric | Target |
 |--------|--------|
 | Cache throughput | > 100,000 reads/sec on 16-core |

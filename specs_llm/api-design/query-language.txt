@@ -111,18 +111,27 @@ alternatives```typescript
     ]
   }
 }
-```one `or` key supported root level complex boolean logic restructuring query multiple queries Sorting Single Field```typescript
+```one `or` key supported root level complex boolean logic restructuring query using multiple queries Sorting uses ordered clauses Array order defines precedence```typescript
 {
-  orderBy: { created_at: 'desc' }
+  orderBy: [{ created_at: 'desc' }]
 }
-```directions'asc Ascending-Z 0-9 oldest Descending-A 9-0 newest first Multiple Field Sort (Future```typescript
+```
+
+```typescript
 {
   orderBy: [
-    { priority: 'desc' },    // Sort by priority first
-    { created_at: 'asc' }    // Then by creation date
+    { priority: 'desc' },       // Sort by priority first
+    { 'profile.rank': 'asc' }   // Then by nested rank
   ]
 }
-```Multi-field sorting planned future release single-field sorting supported Pagination ZyncBase uses-based data consistency real Offset-based pagination not supported causes skipped duplicated items scrolling Basic Pagination```typescript
+```clause contains field direction Nested fields dot notation.rank Duplicate fields rejected 8 clauses allowed directions'asc Ascending-Z 0-9 oldest'desc Descending (Z-A 9-0 newest Default Order Omitting `orderBy sorts document `id` ascending identical requesting `orderBy id 'asc `id` requested final clause priority `id absent server appends `id ASC` tie-breaker result order deterministic stable Sort Semantics server SDK implement ordering contract| Value | Ascending order | Descending order |
+|---|---|---|
+| null/missing | always last | always last |
+| integer/real | numeric | reverse numeric |
+| boolean | `false`, then `true` | `true`, then `false` |
+| text | UTF-8 byte order (SQLite `BINARY`) | reverse byte order |
+| document/reference ID | packed 16-byte ID order | reverse packed order |
+No locale-aware case-insensitive collation Array fields rejected error Pagination ZyncBase uses **cursor-based pagination** data consistency real Offset-based pagination supported causes skipped duplicated items scrolling Basic Pagination```typescript
 {
   limit: 50,      // Max results to return
   after: '...'    // Opaque token from previous nextCursor
@@ -140,7 +149,7 @@ const page2 = await client.store.query('items', {
 })
 ```Infinite Scroll Subscriptions query ZyncBase manages live window load older data without breaking sync```typescript
 const sub = client.store.subscribe('items', {
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 20
 }, (items) => {
   render(items)
@@ -162,7 +171,7 @@ const events = await client.store.query('events', {
     created_at: { gte: startDate, lte: endDate },
     status: { eq: 'active' }
   },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 50
 })
 ```Multi-Status Filter tasks active pending```typescript
@@ -173,7 +182,7 @@ const tasks = await client.store.query('tasks', {
       { status: { eq: 'pending' } }
     ]
   },
-  orderBy: { priority: 'desc' }
+  orderBy: [{ priority: 'desc' }]
 })
 ```Role-Based Query users admin editor roles active```typescript
 const users = await client.store.query('users', {
@@ -207,7 +216,7 @@ const tasks = await client.store.query('tasks', {
       { assigned_role: { eq: 'editor' } }
     ]
   },
-  orderBy: { created_at: 'desc' },
+  orderBy: [{ created_at: 'desc' }],
   limit: 100
 })
 ```Operator Table| Operator | Type | Description | Example |
@@ -302,4 +311,4 @@ client.store.subscribe('tasks', {
     status: { ne: 'archived' }
   }
 }, callback)
-```Limitations Current OR one `or key root level nested Cannot nest OR within OR field Multi-field sorting future release No `count `sum `avg` client-side separate endpoint joins** Query one path at a time (denormalize data Workarounds complex queries **Denormalize Duplicate avoid joins **Multiple queries** Fetch data separately **Client-side filtering** complex logic **Computed fields** Pre-compute values write Related Specifications [README API overview entry point API queries SDK [Configuration Schema index configuration
+```Limitations Current OR one `or key root level nested nest within OR aggregations** No `count `sum `avg` client-side separate endpoint joins** Query one path at a time (denormalize data Workarounds complex queries **Denormalize Duplicate avoid joins **Multiple queries** Fetch data separately **Client-side filtering** complex logic **Computed fields** Pre-compute values write Related Specifications [README API overview entry API queries SDK [Configuration Schema index configuration

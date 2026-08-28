@@ -93,7 +93,7 @@ rules server-only IDs`0x00`0x03`0x1a`0x29 client requests `INVALID_MESSAGE_TYPE`
 | `PresenceSubscribeShared` | none | Ready presence scope. | Subscribe to shared presence and receive snapshot. |
 | `PresenceUnsubscribeShared` | `subId` | Connection-local subscription id. | Stop shared-presence updates. |
 | `PresenceRemove` | none | Ready presence scope. | Remove the connection's user presence. |
-Query fields `StoreQuery [Query Grammar-grammar Cursor behavior owned [Cursor Pagination-pagination Write Confirmation| Field/value | Meaning |
+Query fields `StoreQuery Grammar `orderBy ordered array positional sort tuples_index desc_flag array order defines precedence Cursor behavior owned Pagination Write Confirmation| Field/value | Meaning |
 |-------------|---------|
 | Omitted `confirm` or `confirm: "accepted"` | Server response confirms the mutation was accepted into the write path. |
 | `confirm: "committed"` | SDK waits for committed outcome before resolving the mutation. |
