@@ -1013,8 +1013,12 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
         defer document.deinit();
         _ = try document.expectFieldString("status", expected.status);
     }
-    try testing.expect((try items.readDoc(allocator, 3, 1)) == null);
-    try testing.expect((try items.readDoc(allocator, 5, 1)) == null);
+    const record_3 = try items.readDoc(allocator, 3, 1);
+    defer if (record_3) |owned| owned.deinit(allocator);
+    try testing.expect(record_3 == null);
+    const record_5 = try items.readDoc(allocator, 5, 1);
+    defer if (record_5) |owned| owned.deinit(allocator);
+    try testing.expect(record_5 == null);
     try testing.expect(app.storage_engine.documentExists(items.metadata.index, 4));
     try testing.expect(!app.storage_engine.documentExists(items.metadata.index, 5));
 }
