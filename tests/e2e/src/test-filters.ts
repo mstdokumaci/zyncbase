@@ -35,6 +35,38 @@ interface ClientState {
 	firstFiredAt: number;
 }
 
+// ponytail: generation gate + field compare avoid JSON.stringify per record
+let globalGeneration = 0;
+
+function tagsEqual(a: string[], b: string[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
+function ratingsEqual(a: number[], b: number[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
+function itemsEqual(a: ItemRecord, b: ItemRecord): boolean {
+	return (
+		a.name === b.name &&
+		a.priority === b.priority &&
+		a.active === b.active &&
+		tagsEqual(a.tags, b.tags)
+	);
+}
+
+function eventsEqual(a: EventRecord, b: EventRecord): boolean {
+	return (
+		a.title === b.title &&
+		a.score === b.score &&
+		ratingsEqual(a.ratings, b.ratings)
+	);
+}
+
 function matchesItemFilterA(item: ItemRecord): boolean {
 	return item.priority >= 5 && item.active === true;
 }
@@ -119,6 +151,7 @@ function subscribeClient(state: ClientState) {
 			for (const item of items as unknown as ItemRecord[]) {
 				state.itemsRecords.set(item.id, item);
 			}
+			globalGeneration++;
 		},
 	);
 
@@ -132,6 +165,7 @@ function subscribeClient(state: ClientState) {
 			for (const event of events as unknown as EventRecord[]) {
 				state.eventsRecords.set(event.id, event);
 			}
+			globalGeneration++;
 		},
 	);
 }
@@ -163,11 +197,11 @@ function statesMatch(a: ClientState, b: ClientState): boolean {
 	if (a.eventsRecords.size !== b.eventsRecords.size) return false;
 	for (const [id, item] of a.itemsRecords) {
 		const other = b.itemsRecords.get(id);
-		if (!other || JSON.stringify(item) !== JSON.stringify(other)) return false;
+		if (!other || !itemsEqual(item, other)) return false;
 	}
 	for (const [id, event] of a.eventsRecords) {
 		const other = b.eventsRecords.get(id);
-		if (!other || JSON.stringify(event) !== JSON.stringify(other)) return false;
+		if (!other || !eventsEqual(event, other)) return false;
 	}
 	return true;
 }
@@ -197,7 +231,7 @@ function verifyItemMatch(
 	for (const id of firstItemIds) {
 		const itemA = first.itemsRecords.get(id);
 		const itemB = client.itemsRecords.get(id);
-		if (itemA && itemB && JSON.stringify(itemA) !== JSON.stringify(itemB)) {
+		if (itemA && itemB && !itemsEqual(itemA, itemB)) {
 			errors.push(
 				`Client ${client.debugId} item ${id} value mismatch vs client ${first.debugId}`,
 			);
@@ -230,7 +264,7 @@ function verifyEventMatch(
 	for (const id of firstEventIds) {
 		const eventA = first.eventsRecords.get(id);
 		const eventB = client.eventsRecords.get(id);
-		if (eventA && eventB && JSON.stringify(eventA) !== JSON.stringify(eventB)) {
+		if (eventA && eventB && !eventsEqual(eventA, eventB)) {
 			errors.push(
 				`Client ${client.debugId} event ${id} value mismatch vs client ${first.debugId}`,
 			);
@@ -297,13 +331,18 @@ function verifySelfConsistentStates(
 	return errors;
 }
 
-async function waitForAllFiredAndConverged(
-	clients: ClientState[],
-	timeoutMs = 15000,
-): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	let polls = 0;
+function convergenceErrors(clients: ClientState[]): string[] {
+	return [
+		...verifySelfConsistentStates(clients, "A"),
+		...verifySelfConsistentStates(clients, "B"),
+	];
+}
 
+async function waitForFired(
+	clients: ClientState[],
+	deadline: number,
+): Promise<number> {
+	let polls = 0;
 	while (!clients.every((c) => c.itemsFired && c.eventsFired)) {
 		if (Date.now() > deadline) {
 			const notFired = clients
@@ -316,26 +355,42 @@ async function waitForAllFiredAndConverged(
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		polls++;
 	}
+	return polls;
+}
+
+async function waitForAllFiredAndConverged(
+	clients: ClientState[],
+	timeoutMs = 15000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	const polls = await waitForFired(clients, deadline);
 
 	let verifyPasses = 0;
+	// ponytail: skip heavy verify when no deltas arrived since last check
+	let lastGen = -1;
 	while (true) {
-		const errors = [
-			...verifySelfConsistentStates(clients, "A"),
-			...verifySelfConsistentStates(clients, "B"),
-		];
+		if (globalGeneration === lastGen) {
+			if (Date.now() > deadline)
+				throw new Error(
+					`Timeout: not converged — ${convergenceErrors(clients).slice(0, 6).join("; ")}`,
+				);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			continue;
+		}
+		lastGen = globalGeneration;
+		const errors = convergenceErrors(clients);
 		verifyPasses++;
 		if (errors.length === 0) {
 			console.log(
-				`[converge] fired after ${polls} polls, verified on pass ${verifyPasses}`,
+				`[converge] fired after ${polls} polls, verified on pass ${verifyPasses} (gen=${globalGeneration})`,
 			);
 			return;
 		}
-		if (Date.now() > deadline) {
+		if (Date.now() > deadline)
 			throw new Error(
 				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
 			);
-		}
-		await new Promise((resolve) => setTimeout(resolve, 300));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 }
 
@@ -513,6 +568,7 @@ export async function run(port: number = 3000) {
 	const phase = (label: string) =>
 		console.log(`[t+${Date.now() - t0}ms] ${label}`);
 
+	globalGeneration = 0;
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
 	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
 	phase("All clients connected.");
