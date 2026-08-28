@@ -34,9 +34,7 @@ describe("doc_id performance", () => {
 
 		// Sanity: the decode produced a correct value, not just a fast one.
 		expect(last).toBe("0189abcd-ef12-7345-89ab-cdef00000099");
-		// Measured ~0.12µs/call (≈60ms for 500k). Threshold has ~10x headroom
-		// for CI variance; the old BigInt path ran ~40x slower and fails here.
-		expect(elapsedMs).toBeLessThan(600);
+		expect(elapsedMs).toBeLessThan(200);
 	});
 
 	test("100k repeated short-ID decodes stay within budget", () => {
@@ -63,8 +61,7 @@ describe("doc_id performance", () => {
 		);
 
 		expect(last).toBe("task_99");
-		// Fresh views model MessagePack decoding: cache hits must be by content.
-		expect(elapsedMs).toBeLessThan(300);
+		expect(elapsedMs).toBeLessThan(60);
 	});
 
 	test("500k compareDocIds calls stay within budget", () => {
@@ -91,8 +88,6 @@ describe("doc_id performance", () => {
 		);
 
 		expect(compareDocIds(ids[0], ids[1])).toBeLessThan(0);
-		// The validated-family cache is ~0.05µs/call locally. Revalidating both
-		// IDs on every comparison is ~0.18µs/call and fails this budget.
-		expect(elapsedMs).toBeLessThan(80);
+		expect(elapsedMs).toBeLessThan(60);
 	});
 });

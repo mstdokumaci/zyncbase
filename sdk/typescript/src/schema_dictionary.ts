@@ -35,6 +35,7 @@ export class SchemaDictionary {
 	private tables: string[] = [];
 	private fields: string[][] = [];
 	private fieldFlags: number[][] = [];
+	private fieldPaths: Array<Array<string[] | undefined>> = [];
 
 	// ─── Presence field arrays (from SchemaSync) ──────────────────────────
 	private presenceUserFields: string[] = [];
@@ -112,6 +113,11 @@ export class SchemaDictionary {
 		this.tables = payload.tables;
 		this.fields = payload.fields;
 		this.fieldFlags = payload.fieldFlags;
+		this.fieldPaths = payload.fields.map((fields) =>
+			fields.map((field) =>
+				field.includes("__") ? splitFieldPath(field) : undefined,
+			),
+		);
 
 		this.tableToIndex.clear();
 		for (let i = 0; i < payload.tables.length; i++) {
@@ -339,16 +345,22 @@ export class SchemaDictionary {
 		id: string,
 	): Record<string, JsonValue> {
 		const result: Record<string, JsonValue> = { id };
-		for (const [fieldIndex, val] of wireValue) {
-			const fieldName = this.getFieldName(tableIndex, fieldIndex);
+		const fields = this.getFields(tableIndex);
+		const fieldFlags = this.fieldFlags[tableIndex];
+		const fieldPaths = this.fieldPaths[tableIndex];
+		for (let i = 0; i < wireValue.length; i++) {
+			const fieldIndex = wireValue[i][0];
+			const val = wireValue[i][1];
+			const fieldName =
+				fields[fieldIndex] ?? this.getFieldName(tableIndex, fieldIndex);
 			if (fieldName === "id") continue;
-			const value = this.decodeFieldValue(
-				tableIndex,
-				fieldIndex,
+			const value = this.decodeFieldValueWithFlags(
+				fieldFlags[fieldIndex],
 				val,
 			) as JsonValue;
-			if (fieldName.includes("__")) {
-				setDeepProperty(result, splitFieldPath(fieldName), value);
+			const fieldPath = fieldPaths[fieldIndex];
+			if (fieldPath !== undefined) {
+				setDeepProperty(result, fieldPath, value);
 			} else {
 				result[fieldName] = value;
 			}
@@ -383,7 +395,14 @@ export class SchemaDictionary {
 		fieldIndex: number,
 		value: unknown,
 	): unknown {
-		if (!this.isDocIdField(tableIndex, fieldIndex)) {
+		return this.decodeFieldValueWithFlags(
+			this.getFieldFlags(tableIndex, fieldIndex),
+			value,
+		);
+	}
+
+	private decodeFieldValueWithFlags(flags: number, value: unknown): unknown {
+		if ((flags & 0b10) === 0) {
 			return value;
 		}
 		if (value instanceof Uint8Array) {
