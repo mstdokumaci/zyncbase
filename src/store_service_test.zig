@@ -932,7 +932,7 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
 
     const ops = try allocator.alloc(msgpack.Payload, 11);
     var initialized_ops: usize = 0;
-    errdefer {
+    defer {
         for (ops[0..initialized_ops]) |op| op.free(allocator);
         allocator.free(ops);
     }
@@ -952,10 +952,6 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
             else => unreachable,
         };
         initialized_ops += 1;
-    }
-    defer {
-        for (ops) |op| op.free(allocator);
-        allocator.free(ops);
     }
 
     try service.batchWrite(writeCtx(1), .{ .arr = ops });
