@@ -35,7 +35,7 @@ interface ClientState {
 	firstFiredAt: number;
 }
 
-// ponytail: generation gate + field compare avoid JSON.stringify per record
+// generation gate + field compare avoid JSON.stringify per record
 let globalGeneration = 0;
 
 function tagsEqual(a: string[], b: string[]): boolean {
@@ -188,7 +188,7 @@ function reportRtts(label: string, samples: number[]) {
 	const total = samples.reduce((a, b) => a + b, 0);
 	console.log(
 		`[rtt] ${label}: n=${samples.length} total=${total.toFixed(0)}ms ` +
-			`min=${sorted[0].toFixed(1)} p50=${p(0.5).toFixed(1)} p95=${p(0.95).toFixed(1)} max=${sorted[sorted.length - 1].toFixed(1)}ms`,
+		`min=${sorted[0].toFixed(1)} p50=${p(0.5).toFixed(1)} p95=${p(0.95).toFixed(1)} max=${sorted[sorted.length - 1].toFixed(1)}ms`,
 	);
 }
 
@@ -366,7 +366,7 @@ async function waitForAllFiredAndConverged(
 	const polls = await waitForFired(clients, deadline);
 
 	let verifyPasses = 0;
-	// ponytail: skip heavy verify when no deltas arrived since last check
+	// skip heavy verify when no deltas arrived since last check
 	let lastGen = -1;
 	while (true) {
 		if (globalGeneration === lastGen) {
@@ -411,8 +411,8 @@ function closeAllClients(clients: ClientState[]) {
 	// synchronous call times, not remote completion.
 	console.log(
 		`[close] ${clients.length} clients: total=${Date.now() - t0}ms ` +
-			`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
-			`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
+		`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
+		`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
 	);
 }
 

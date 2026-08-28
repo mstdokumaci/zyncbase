@@ -26,7 +26,7 @@ function invalidDocIdError(message: string, code: string): ZyncBaseError {
 }
 
 function bytesToBigInt(bytes: Uint8Array): bigint {
-	// ponytail: DataView 2×64 vs 16× loop — 7x faster for short path (20ms vs 143ms)
+	// DataView 2×64 vs 16× loop — 7x faster for short path (20ms vs 143ms)
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const hi = view.getBigUint64(0, false);
 	const lo = view.getBigUint64(8, false);
