@@ -39,6 +39,34 @@ describe("doc_id performance", () => {
 		expect(elapsedMs).toBeLessThan(600);
 	});
 
+	test("100k repeated short-ID decodes stay within budget", () => {
+		const ids = Array.from({ length: 100 }, (_, i) => packDocId(`task_${i}`));
+
+		const warmup = 20_000;
+		for (let i = 0; i < warmup; i += 1) {
+			unpackDocId(ids[i % ids.length].subarray());
+		}
+
+		const inputs = Array.from({ length: 100_000 }, (_, i) =>
+			ids[i % ids.length].subarray(),
+		);
+		const t0 = performance.now();
+		let last = "";
+		for (const bytes of inputs) {
+			last = unpackDocId(bytes);
+		}
+		const elapsedMs = performance.now() - t0;
+
+		console.log(
+			`cached short unpackDocId (${inputs.length} calls) [ms]: ${elapsedMs.toFixed(1)}  ` +
+				`(${((elapsedMs / inputs.length) * 1000).toFixed(3)}µs/call)`,
+		);
+
+		expect(last).toBe("task_99");
+		// Fresh views model MessagePack decoding: cache hits must be by content.
+		expect(elapsedMs).toBeLessThan(300);
+	});
+
 	test("500k compareDocIds calls stay within budget", () => {
 		const ids = Array.from(
 			{ length: 100 },

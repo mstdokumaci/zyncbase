@@ -9,7 +9,8 @@ const SHORT_DIGITS = 24;
 const UUID_FAMILY_TAG = 1n << 127n;
 const UUID_V7_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const DOC_ID_SORT_FAMILY_CACHE_LIMIT = 4096;
+const DOC_ID_CACHE_LIMIT = 4096;
+const shortDocIdDecodeCache = new Map<bigint, string>();
 const docIdSortFamilyCache = new Map<string, 0 | 1 | 2>();
 
 const shortCharToDigit = new Map<string, number>(
@@ -213,7 +214,17 @@ export function unpackDocId(bytes: Uint8Array): string {
 	if ((bytes[0] & 0x80) !== 0) {
 		return decodeUuidV7DocId(bytes);
 	}
-	return decodeShortDocId(bytesToBigInt(bytes));
+
+	const value = bytesToBigInt(bytes);
+	const cached = shortDocIdDecodeCache.get(value);
+	if (cached !== undefined) return cached;
+
+	const id = decodeShortDocId(value);
+	if (shortDocIdDecodeCache.size >= DOC_ID_CACHE_LIMIT) {
+		shortDocIdDecodeCache.clear();
+	}
+	shortDocIdDecodeCache.set(value, id);
+	return id;
 }
 
 /**
@@ -233,7 +244,7 @@ function docIdSortFamily(id: string): 0 | 1 | 2 {
 	if (cached !== undefined) return cached;
 
 	const family = isCanonicalUUIDv7(id) ? 1 : isValidShortDocId(id) ? 0 : 2;
-	if (docIdSortFamilyCache.size >= DOC_ID_SORT_FAMILY_CACHE_LIMIT) {
+	if (docIdSortFamilyCache.size >= DOC_ID_CACHE_LIMIT) {
 		docIdSortFamilyCache.clear();
 	}
 	docIdSortFamilyCache.set(id, family);
