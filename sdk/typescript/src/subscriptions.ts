@@ -20,10 +20,6 @@ export interface MaterializedView {
 	records: Map<string, JsonValue>;
 	/** Total-order comparator applied to every snapshot. Never null. */
 	comparator: (a: JsonValue, b: JsonValue) => number;
-	/** Last sorted snapshot and positions, reused while sort keys stay equal. */
-	snapshot: JsonValue[];
-	positions: Map<string, number>;
-	orderDirty: boolean;
 }
 
 /** A single registered subscription entry. */
@@ -85,9 +81,6 @@ export class SubscriptionTracker {
 			materializedView: {
 				records: new Map(),
 				comparator: comparator ?? createIdComparator(),
-				snapshot: [],
-				positions: new Map(),
-				orderDirty: false,
 			},
 		});
 	}
@@ -285,9 +278,6 @@ export class SubscriptionTracker {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
-				entry.materializedView.snapshot = [];
-				entry.materializedView.positions.clear();
-				entry.materializedView.orderDirty = false;
 			}
 		}
 	}
@@ -424,42 +414,22 @@ export class SubscriptionTracker {
 		id: string,
 		op: Extract<StoreDelta["ops"][number], { op: "set" }>,
 	): void {
-		const previous = view.records.get(id);
 		// Map.set keeps insertion position for existing keys; ordered
 		// queries sort at snapshot.
 		view.records.set(id, op.value);
-		if (view.orderDirty) return;
-		if (previous === undefined || view.comparator(previous, op.value) !== 0) {
-			view.orderDirty = true;
-			return;
-		}
-		const position = view.positions.get(id);
-		if (position === undefined) {
-			view.orderDirty = true;
-			return;
-		}
-		view.snapshot[position] = op.value;
 	}
 
 	private _handleRemoveOp(view: MaterializedView, id: string): void {
-		if (view.records.delete(id)) view.orderDirty = true;
+		view.records.delete(id);
 	}
 
 	/**
 	 * Snapshot array from the view; always sorted by the view's comparator.
 	 */
 	private _snapshotView(view: MaterializedView): JsonValue[] {
-		if (view.orderDirty) {
-			view.snapshot = Array.from(view.records.values());
-			view.snapshot.sort(view.comparator);
-			view.positions.clear();
-			for (let i = 0; i < view.snapshot.length; i++) {
-				const id = (view.snapshot[i] as Record<string, JsonValue>)?.id;
-				if (typeof id === "string") view.positions.set(id, i);
-			}
-			view.orderDirty = false;
-		}
-		return view.snapshot.slice();
+		const records = Array.from(view.records.values());
+		records.sort(view.comparator);
+		return records;
 	}
 }
 
