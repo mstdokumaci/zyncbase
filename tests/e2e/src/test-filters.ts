@@ -188,7 +188,7 @@ function reportRtts(label: string, samples: number[]) {
 	const total = samples.reduce((a, b) => a + b, 0);
 	console.log(
 		`[rtt] ${label}: n=${samples.length} total=${total.toFixed(0)}ms ` +
-			`min=${sorted[0].toFixed(1)} p50=${p(0.5).toFixed(1)} p95=${p(0.95).toFixed(1)} max=${sorted[sorted.length - 1].toFixed(1)}ms`,
+		`min=${sorted[0].toFixed(1)} p50=${p(0.5).toFixed(1)} p95=${p(0.95).toFixed(1)} max=${sorted[sorted.length - 1].toFixed(1)}ms`,
 	);
 }
 
@@ -412,8 +412,8 @@ function closeAllClients(clients: ClientState[]) {
 	// synchronous call times, not remote completion.
 	console.log(
 		`[close] ${clients.length} clients: total=${Date.now() - t0}ms ` +
-			`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
-			`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
+		`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
+		`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
 	);
 }
 
@@ -564,7 +564,7 @@ async function updateRandomRecords(
 
 export async function run(port: number = 3000) {
 	const TOTAL_CLIENTS = 1000;
-	const READ_WRITE_COUNT = 100;
+	const READ_WRITE_COUNT = 200;
 	const t0 = Date.now();
 	const phase = (label: string) =>
 		console.log(`[t+${Date.now() - t0}ms] ${label}`);
