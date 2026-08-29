@@ -51,7 +51,7 @@ fn mapAndLogError(
 }
 
 pub fn claimNextCreatedAt(last: *i64, candidate_us: i64) StorageError!i64 {
-    if (last.* < 0 or last.* >= schema_system.max_safe_timestamp_us or candidate_us > schema_system.max_safe_timestamp_us) {
+    if (last.* < 0 or last.* >= schema_system.max_safe_timestamp_us or candidate_us < 0 or candidate_us > schema_system.max_safe_timestamp_us) {
         return StorageError.InvalidOperation;
     }
     const next = @max(candidate_us, last.* + 1);

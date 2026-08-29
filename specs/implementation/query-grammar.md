@@ -86,7 +86,7 @@ Canonicalization makes logically equivalent requests share subscription groups a
 | `{ deleted_at: { isNull: true } }` | `[[5, 11]]` | `deleted_at = index 5` |
 | `{ role: { in: ['admin', 'editor'] } }` | `[[6, 9, ["admin", "editor"]]]` | `role = index 6` |
 | `{ address: { city: { eq: 'NYC' } } }` | `[[7, 0, "NYC"]]` | Flat column: `address__city = index 7` |
-| `{ orderBy: [{ created_at: 'desc' }, { priority: 'asc' }], limit: 50, after: '...' }` | `{"orderBy": [[8, 1], [2, 0]], "limit": 50, "after": "..."}` | `created_at = index 8`, `priority = index 2` |
+| `{ orderBy: [{ priority: 'asc' }, { created_at: 'desc' }], limit: 50, after: '...' }` | `{"orderBy": [[2, 0], [8, 1]], "limit": 50, "after": "..."}` | `priority = index 2`, `created_at = index 8` |
 
 ### Full Wire Message Layout (`StoreQuery`)
 
@@ -97,7 +97,7 @@ Canonicalization makes logically equivalent requests share subscription groups a
   "table_index": 0,
   "conditions": [[3, 4, 18], [4, 0, "active"]],
   "orConditions": [[6, 0, "admin"], [6, 0, "editor"]],
-  "orderBy": [[8, 1], [2, 0]],
+  "orderBy": [[2, 0], [8, 1]],
   "limit": 50,
   "after": "eyJpZCI6..."
 }
