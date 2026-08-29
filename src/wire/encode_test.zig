@@ -162,34 +162,21 @@ test "encodeSetDeltaSuffix: set operation" {
     const suffix = try wire_encode.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), record, table_metadata);
     defer allocator.free(suffix);
 
-    const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
+    const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
-    const ops_opt = try p.mapGet("ops");
-    try testing.expect(ops_opt != null);
-    const ops = ops_opt.?;
-    try testing.expect(ops == .arr);
-    try testing.expectEqual(@as(usize, 1), ops.arr.len);
-
-    const op_obj = ops.arr[0];
-    try testing.expect(op_obj == .map);
-
-    const op = (try op_obj.mapGet("op")) orelse return error.MissingOp;
-    try testing.expectEqualStrings("set", op.str.value());
-
-    const path = (try op_obj.mapGet("path")) orelse return error.MissingPath;
-    try testing.expect(path == .arr);
-    try testing.expectEqual(@as(usize, 2), path.arr.len);
-    try testing.expectEqual(@as(u64, 0), path.arr[0].uint);
-    try testing.expectEqualStrings("user-123", path.arr[1].str.value());
-
-    const value = try op_obj.mapGet("value");
-    try testing.expect(value != null);
-    try testing.expect(value.? == .arr);
-    try testing.expectEqual(@as(usize, 6), value.?.arr.len);
+    try testing.expect(p == .arr);
+    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(u64, @intFromEnum(MessageType.store_delta)), p.arr[0].uint);
+    try testing.expectEqual(@as(u64, 42), p.arr[1].uint);
+    try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.DeltaOp.set)), p.arr[2].uint);
+    try testing.expectEqual(@as(u64, 0), p.arr[3].uint);
+    try testing.expectEqualStrings("user-123", p.arr[4].str.value());
+    try testing.expect(p.arr[5] == .arr);
+    try testing.expectEqual(@as(usize, 6), p.arr[5].arr.len);
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {
@@ -199,24 +186,18 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 0, id_val);
     defer allocator.free(suffix);
 
-    const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
+    const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
-    const ops_opt = try p.mapGet("ops");
-    try testing.expect(ops_opt != null);
-    const op_obj = ops_opt.?.arr[0];
-
-    const op = (try op_obj.mapGet("op")) orelse return error.MissingOp;
-    try testing.expectEqualStrings("remove", op.str.value());
-
-    const path = (try op_obj.mapGet("path")) orelse return error.MissingPath;
-    try testing.expectEqual(@as(u64, 0), path.arr[0].uint);
-    try testing.expectEqual(@as(u64, 999), path.arr[1].uint);
-
-    try testing.expect((try op_obj.mapGet("value")) == null);
+    try testing.expect(p == .arr);
+    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.DeltaOp.remove)), p.arr[2].uint);
+    try testing.expectEqual(@as(u64, 0), p.arr[3].uint);
+    try testing.expectEqual(@as(u64, 999), p.arr[4].uint);
+    try testing.expect(p.arr[5] == .nil);
 }
 
 test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
@@ -275,19 +256,20 @@ test "store_delta_header: decodes to StoreDelta type" {
     defer buf.deinit();
     const writer = &buf.writer;
     try writer.writeAll(&wire_encode.store_delta_header);
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, 42, .big);
-    try msgpack.writeMsgPackStr(writer, "ops");
-    try writer.writeByte(0x90);
+    try msgpack.encode(msgpack.Payload.uintToPayload(42), writer);
+    try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(wire_encode.DeltaOp.remove)), writer);
+    try msgpack.encode(msgpack.Payload.uintToPayload(0), writer);
+    try msgpack.writeMsgPackStr(writer, "doc-1");
+    try writer.writeByte(0xc0);
 
     var reader: std.Io.Reader = .fixed(buf.written());
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
-    try testing.expect(p == .map);
-    try expectType(buf.written(), p, .store_delta);
-    const sub_id_val = (try p.mapGet("subId")) orelse return error.MissingSubId;
-    try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
+    try testing.expect(p == .arr);
+    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(u64, @intFromEnum(MessageType.store_delta)), p.arr[0].uint);
+    try testing.expectEqual(@as(u64, 42), p.arr[1].uint);
 }
 
 test "encodeDeleteDeltaSuffix: with string id" {
@@ -297,22 +279,15 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const suffix = try wire_encode.encodeDeleteDeltaSuffix(allocator, 1, id_val);
     defer allocator.free(suffix);
 
-    const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
+    const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
-    const ops_opt = try p.mapGet("ops");
-    try testing.expect(ops_opt != null);
-    const ops = ops_opt.?;
-    const op_obj = ops.arr[0];
-
-    const path_opt = try op_obj.mapGet("path");
-    try testing.expect(path_opt != null);
-    const path = path_opt.?;
-    try testing.expectEqual(@as(u64, 1), path.arr[0].uint);
-    try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
+    try testing.expect(p == .arr);
+    try testing.expectEqual(@as(u64, 1), p.arr[3].uint);
+    try testing.expectEqualStrings("doc-abc-123", p.arr[4].str.value());
 }
 
 /// Test-only assembly of a full broadcast message from the production

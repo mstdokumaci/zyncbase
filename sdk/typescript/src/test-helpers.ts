@@ -9,21 +9,43 @@ import type { AuthConfig, ClientOptions } from "./types";
  * helpers can keep speaking the SDK's logical vocabulary.
  */
 export function encodeToBuffer(msg: unknown): ArrayBuffer {
-	let wireMsg = msg;
-	if (msg && typeof msg === "object" && !Array.isArray(msg)) {
-		const type = (msg as { type?: unknown }).type;
-		if (typeof type === "string" && Object.hasOwn(WireMessageType, type)) {
-			wireMsg = {
-				...(msg as Record<string, unknown>),
-				type: WireMessageType[type as keyof typeof WireMessageType],
-			};
-		}
-	}
-	const encoded = encode(wireMsg);
+	const encoded = encode(toWireMessage(msg));
 	return encoded.buffer.slice(
 		encoded.byteOffset,
 		encoded.byteOffset + encoded.byteLength,
 	) as ArrayBuffer;
+}
+
+function toWireMessage(msg: unknown): unknown {
+	if (!msg || typeof msg !== "object" || Array.isArray(msg)) return msg;
+	const type = (msg as { type?: unknown }).type;
+	if (type === "StoreDelta") return encodeStoreDeltaForTest(msg);
+	if (typeof type !== "string" || !Object.hasOwn(WireMessageType, type)) {
+		return msg;
+	}
+	return {
+		...(msg as Record<string, unknown>),
+		type: WireMessageType[type as keyof typeof WireMessageType],
+	};
+}
+
+function encodeStoreDeltaForTest(msg: object): unknown[] {
+	const delta = msg as {
+		subId: number;
+		ops: Array<{ op: "set" | "remove"; path: unknown[]; value?: unknown }>;
+	};
+	const op = delta.ops[0];
+	if (!op || delta.ops.length !== 1 || op.path.length !== 2) {
+		throw new Error("StoreDelta wire test helper requires one record op");
+	}
+	return [
+		WireMessageType.StoreDelta,
+		delta.subId,
+		op.op === "set" ? 0 : 1,
+		op.path[0],
+		op.path[1],
+		op.op === "set" ? op.value : null,
+	];
 }
 
 /** Mock WebSocket that captures the URL for ticket assertion. */

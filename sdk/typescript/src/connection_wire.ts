@@ -196,6 +196,7 @@ export class ConnectionWireCodec {
 	}
 
 	decodeMessage(raw: unknown): InboundMessage | null {
+		if (Array.isArray(raw)) return this.decodeStoreDelta(raw);
 		if (!raw || typeof raw !== "object" || !("type" in raw)) return null;
 		const name = this.inboundTypeName(raw);
 		if (!name) return null;
@@ -203,8 +204,7 @@ export class ConnectionWireCodec {
 		msg.type = name;
 		switch (msg.type) {
 			case "StoreDelta":
-				if (!Array.isArray(msg.ops)) return null;
-				return this.decodeDelta(msg);
+				return null;
 			case "PresenceBroadcast":
 				if (!Array.isArray(msg.users)) return null;
 				return this.decodePresenceBroadcast(msg);
@@ -465,45 +465,47 @@ export class ConnectionWireCodec {
 		});
 	}
 
-	private decodeDelta(delta: StoreDelta): StoreDelta {
-		for (const op of delta.ops) {
-			const wirePath = op.path as unknown as Array<
-				number | string | Uint8Array
-			>;
-			if (
-				!(
-					Array.isArray(wirePath) &&
-					wirePath.length > 0 &&
-					typeof wirePath[0] === "number"
-				)
-			)
-				continue;
-
-			const tableIndex = wirePath[0] as number;
-			op.path = this.schema.decodePath(wirePath);
-
-			if (
-				op.op === "set" &&
-				wirePath.length === 2 &&
-				op.value !== null &&
-				typeof op.value === "object" &&
-				Array.isArray(op.value)
-			) {
-				op.value = this.schema.decodeDeltaValue(
-					tableIndex,
-					op.value as Array<[number, unknown]>,
-					op.path[1],
-				);
-			}
-			if (op.op === "set" && wirePath.length === 3) {
-				op.value = this.schema.decodeFieldValue(
-					tableIndex,
-					wirePath[2] as number,
-					op.value,
-				) as typeof op.value;
-			}
+	private decodeStoreDelta(raw: unknown[]): StoreDelta | null {
+		if (
+			raw.length !== 6 ||
+			raw[0] !== WireMessageType.StoreDelta ||
+			!Number.isSafeInteger(raw[1]) ||
+			(raw[2] !== 0 && raw[2] !== 1) ||
+			!Number.isSafeInteger(raw[3]) ||
+			!(typeof raw[4] === "string" || raw[4] instanceof Uint8Array)
+		) {
+			return null;
 		}
-		return delta;
+
+		const subId = raw[1] as number;
+		const tableIndex = raw[3] as number;
+		if (subId < 0 || tableIndex < 0) return null;
+		const path = this.schema.decodePath([
+			tableIndex,
+			raw[4] as string | Uint8Array,
+		]);
+
+		if (raw[2] === 1) {
+			return raw[5] === null
+				? { type: "StoreDelta", subId, ops: [{ op: "remove", path }] }
+				: null;
+		}
+		if (!Array.isArray(raw[5])) return null;
+		return {
+			type: "StoreDelta",
+			subId,
+			ops: [
+				{
+					op: "set",
+					path,
+					value: this.schema.decodeDeltaValue(
+						tableIndex,
+						raw[5] as Array<[number, unknown]>,
+						path[1],
+					),
+				},
+			],
+		};
 	}
 
 	private decodeRow(tableIndex: number, row: JsonValue): JsonValue {

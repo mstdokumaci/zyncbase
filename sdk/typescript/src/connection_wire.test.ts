@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
-import { ConnectionWireCodec } from "./connection_wire.js";
+import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { StoreDelta } from "./types.js";
 
@@ -130,6 +130,9 @@ describe("ConnectionWireCodec", () => {
 		expect(single[0]).toEqual({ type: "ok", id: 1 });
 		expect(codec.decodeMulti(new ArrayBuffer(0))).toEqual([]);
 		expect(codec.decodeMulti(new Uint8Array([0xc1]))).toEqual([]);
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, "u1", null])),
+		).toBeNull();
 	});
 
 	test("decodes query response rows using pending request context", async () => {

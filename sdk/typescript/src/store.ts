@@ -19,7 +19,10 @@ import {
 	shapeGetResult,
 	shapeQueryResult,
 } from "./store_wire.js";
-import type { SubscriptionTracker } from "./subscriptions.js";
+import {
+	createCreatedAtComparator,
+	type SubscriptionTracker,
+} from "./subscriptions.js";
 import type {
 	BatchOperation,
 	InboundMessage,
@@ -322,6 +325,8 @@ export class StoreImpl {
 		collection: string,
 		options: QueryOptions,
 	): (a: JsonValue, b: JsonValue) => number {
+		if (!options.orderBy?.length) return createCreatedAtComparator();
+
 		const schema = this.conn.schemaDictionary;
 		const tableIndex = schema.getTableIndex(collection);
 

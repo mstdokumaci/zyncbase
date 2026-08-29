@@ -125,8 +125,9 @@ fixint. **Never reuse or renumber an assigned ID.**
 `INVALID_MESSAGE_TYPE`. `0x04` (`AuthRefresh`) is a client request; unknown or
 unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
-`INVALID_MESSAGE_FORMAT`. The map key remains the string `"type"`; only the
-value is numeric.
+`INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
+only its value is numeric. `StoreDelta` is the fixed tuple exception described
+below.
 
 ## Client Messages
 
@@ -185,7 +186,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 |------|--------|---------|
 | `Connected` | `userId` | Transport/session bootstrap push after connection setup. |
 | `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields` | Integer dictionaries used by store, query, and presence messages. |
-| `StoreDelta` | `subId`, `ops` | Committed record-level subscription changes. |
+| `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
 | `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
@@ -194,7 +195,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 ## Push Payload Notes
 
-- `StoreDelta.ops` contains record-level `set` and `remove` operations. `set` carries the full encoded record; `remove` carries the record path/id.
+- `StoreDelta` uses the fixed six-element tuple `[0x18, subId, opTag, tableIndex, docId, value]`. `opTag` is `0` for `set` and `1` for `remove`. A `set` value is the full record pair-array; a `remove` value is MessagePack nil. Each push carries exactly one record operation. The SDK expands the tuple to the public `{ type: "StoreDelta", subId, ops: [...] }` shape. Map-form `StoreDelta` messages are invalid.
 - `PresenceBroadcast.users` entries include `userId` and `event`. `join` includes `data` and `joinedAt`; `update` includes `data`; `leave` includes neither.
 - `SharedStateBroadcast.data` is one patch when a single update is flushed, or an array of patches when several updates are flushed together.
 - `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.

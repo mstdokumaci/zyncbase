@@ -110,12 +110,10 @@ const error_header_without_id = blk: {
 };
 
 pub const store_delta_header = blk: {
-    var buf: [1 + Keys.type.len + Values.store_delta.len + Keys.sub_id.len]u8 = undefined;
+    var buf: [2]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeByte(0x96) catch @panic("comptime: failed to write array header");
     w.writeAll(Values.store_delta) catch @panic("comptime: failed to write StoreDelta value");
-    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
     break :blk buf[0..w.end].*;
 };
 
@@ -420,32 +418,20 @@ fn encodeDeltaOp(
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try writer.writeAll(Keys.ops);
-    try writer.writeByte(0x91); // fixarray(1)
-
-    const op_map_size: u8 = @as(u8, 2) + @intFromBool(maybe_value != null);
-    try writer.writeByte(0x80 | op_map_size);
-
-    try writer.writeAll(Keys.op);
-    try writer.writeAll(switch (op) {
-        .remove => Values.op_remove,
-        .set => Values.op_set,
-    });
-
-    try writer.writeAll(Keys.path);
-    try writer.writeByte(0x92); // fixarray(2)
+    try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(op)), writer);
     try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
     try typed_codec.writeMsgPack(id_val, writer);
 
     if (maybe_value) |v| {
-        try writer.writeAll(Keys.value);
         try encodeRecord(writer, v.record, v.meta);
+    } else {
+        try writer.writeByte(0xc0); // nil
     }
 
     return output.toOwnedSlice();
 }
 
-pub const DeltaOp = enum { remove, set };
+pub const DeltaOp = enum(u8) { set = 0, remove = 1 };
 
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,

@@ -5,7 +5,8 @@ import { format } from "node:util";
 
 const DATA_DIR = "tests/e2e/data";
 const ARTIFACT_DIR = "test-artifacts/e2e";
-const SERVER_BIN = "./zig-out/bin/zyncbase";
+const SERVER_BIN =
+	process.env.ZYNCBASE_TEST_SERVER_BIN ?? "./zig-out/bin/zyncbase";
 const VERBOSE =
 	process.argv.includes("--verbose") ||
 	process.env.ZYNCBASE_TEST_VERBOSE === "1";

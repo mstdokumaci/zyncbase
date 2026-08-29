@@ -145,7 +145,7 @@ describe("ConnectionManager", () => {
 			const delta = {
 				type: "StoreDelta",
 				subId: 42,
-				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
+				ops: [{ op: "set", path: [1, "u1"], value: [[0, "Alice"]] }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 			await (manager as unknown as { processingPromise: Promise<void> })
@@ -165,12 +165,12 @@ describe("ConnectionManager", () => {
 			const delta1 = encodeToBuffer({
 				type: "StoreDelta",
 				subId: 1,
-				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
+				ops: [{ op: "set", path: [1, "u1"], value: [[0, "Alice"]] }],
 			});
 			const delta2 = encodeToBuffer({
 				type: "StoreDelta",
 				subId: 2,
-				ops: [{ op: "set", path: ["users", "u2"], value: { name: "Bob" } }],
+				ops: [{ op: "set", path: [1, "u2"], value: [[0, "Bob"]] }],
 			});
 			const frame = new Uint8Array(delta1.byteLength + delta2.byteLength);
 			frame.set(new Uint8Array(delta1), 0);
@@ -200,7 +200,11 @@ describe("ConnectionManager", () => {
 				value: 1,
 			});
 
-			const delta = { type: "StoreDelta", subId: 99, ops: [] };
+			const delta = {
+				type: "StoreDelta",
+				subId: 99,
+				ops: [{ op: "remove", path: [1, "u1"] }],
+			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
@@ -228,7 +232,7 @@ describe("ConnectionManager", () => {
 			const delta = {
 				type: "StoreDelta",
 				subId: 1,
-				ops: [{ op: "set", path: [0, "u1", 0], value: "Alice" }],
+				ops: [{ op: "set", path: [0, "u1"], value: [[0, "Alice"]] }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
@@ -239,7 +243,7 @@ describe("ConnectionManager", () => {
 			expect(received).toHaveLength(1);
 			expect(
 				(received[0] as { ops: { path: string[] }[] }).ops[0].path,
-			).toEqual(["users", "u1", "name"]);
+			).toEqual(["users", "u1"]);
 		});
 	});
 
