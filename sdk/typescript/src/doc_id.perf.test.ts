@@ -4,7 +4,7 @@ import { compareDocIds, packDocId, unpackDocId } from "./doc_id";
 /**
  * Pure unit benchmark for the doc-id decode hot path — the per-delta id
  * decode that used to run through BigInt (bytesToBigInt → decodeUuidV7DocId
- * → formatUuidBytes). Now byte-level with a LUT hex formatter.
+ * → formatUuidBytes). Now byte-level with a bounded decode cache and LUT.
  */
 describe("doc_id performance", () => {
 	test("500k unpackDocId calls stay within budget", () => {
@@ -34,7 +34,7 @@ describe("doc_id performance", () => {
 
 		// Sanity: the decode produced a correct value, not just a fast one.
 		expect(last).toBe("0189abcd-ef12-7345-89ab-cdef00000099");
-		expect(elapsedMs).toBeLessThan(200);
+		expect(elapsedMs).toBeLessThan(50);
 	});
 
 	test("100k repeated short-ID decodes stay within budget", () => {

@@ -12,6 +12,8 @@ const UUID_V7_REGEX =
 const DOC_ID_CACHE_LIMIT = 4096;
 const shortDocIdDecodeCache = new Map<bigint, string>();
 const docIdSortFamilyCache = new Map<string, 0 | 1 | 2>();
+const uuidDecodeCache: Array<{ packed: Uint8Array; id: string } | undefined> =
+	new Array(DOC_ID_CACHE_LIMIT);
 
 const shortCharToDigit = new Map<string, number>(
 	Array.from(SHORT_ID_ALPHABET, (char, index) => [char, index + 1]),
@@ -151,6 +153,19 @@ function decodeUuidV7DocId(packed: Uint8Array): string {
 			ErrorCodes.INVALID_MESSAGE,
 		);
 	}
+	const cacheIndex =
+		((packed[14] << 8) | packed[15]) & (DOC_ID_CACHE_LIMIT - 1);
+	const cached = uuidDecodeCache[cacheIndex];
+	if (cached !== undefined) {
+		let matches = true;
+		for (let i = 0; i < DOC_ID_BYTE_LENGTH; i += 1) {
+			if (packed[i] !== cached.packed[i]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return cached.id;
+	}
 
 	// Inverse of packUuidV7Bytes: the 122-bit payload is packed as
 	// [B0..B5 (48b)] [B6&0x0f (4b)] [B7 (8b)] [B8&0x3f (6b)] [B9..B15 (56b)].
@@ -172,7 +187,10 @@ function decodeUuidV7DocId(packed: Uint8Array): string {
 	bytes[14] = packed[14];
 	bytes[15] = packed[15];
 
-	return formatUuidBytes(bytes);
+	const id = formatUuidBytes(bytes);
+	// ponytail: direct-mapped cache; use set-associative slots if collisions matter.
+	uuidDecodeCache[cacheIndex] = { packed: packed.slice(), id };
+	return id;
 }
 
 export function isCanonicalUUIDv7(id: string): boolean {
