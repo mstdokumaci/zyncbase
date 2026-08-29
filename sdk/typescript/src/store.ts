@@ -315,8 +315,8 @@ export class StoreImpl {
 	 * Builds the schema-aware materialized-view comparator for a subscription.
 	 * Mirrors the server's canonical order: public dot-path clauses in order,
 	 * nulls always last, packed DocId order for reference fields, UTF-8 byte
-	 * order for text, plus the hidden `id ASC` tie-breaker unless `id` is
-	 * already the final explicit clause.
+	 * order for text, plus hidden `created_at ASC` unless the final explicit
+	 * clause is already unique (`created_at` or `id`).
 	 */
 	private buildCollectionComparator(
 		collection: string,
@@ -339,11 +339,11 @@ export class StoreImpl {
 			});
 		}
 
-		const hasExplicitId = entries.some(
-			(entry) => entry.parts.length === 1 && entry.parts[0] === "id",
-		);
-		if (!hasExplicitId) {
-			entries.push({ parts: ["id"], desc: false, docId: true });
+		const finalEntry = entries[entries.length - 1];
+		const finalField =
+			finalEntry?.parts.length === 1 ? finalEntry.parts[0] : undefined;
+		if (finalField !== "created_at" && finalField !== "id") {
+			entries.push({ parts: ["created_at"], desc: false, docId: false });
 		}
 
 		return (a: JsonValue, b: JsonValue): number =>

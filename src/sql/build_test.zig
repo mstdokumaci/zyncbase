@@ -156,6 +156,16 @@ test "buildSelectAllIdsSql builds simple id projection" {
     );
 }
 
+test "buildSelectMaxCreatedAtSql builds max timestamp projection" {
+    const allocator = std.testing.allocator;
+    const sql = try build.buildSelectMaxCreatedAtSql(allocator, "\"test_table\"");
+    defer allocator.free(sql);
+    try std.testing.expectEqualStrings(
+        "SELECT MAX(\"created_at\") FROM \"test_table\"",
+        sql,
+    );
+}
+
 test "buildDeleteDocumentSqlPrefix builds delete prefix" {
     const allocator = std.testing.allocator;
     const fields = [_]schema_types.Field{schema_helpers.makeField("title", .text)};

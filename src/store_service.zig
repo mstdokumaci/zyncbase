@@ -387,7 +387,7 @@ pub const StoreService = struct {
             self.allocator.free(entries);
         };
 
-        const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
+        const timestamp = std.Io.Clock.real.now(self.io).toMicroseconds();
 
         for (ops) |op_payload| {
             entries[initialized] = try self.buildBatchEntry(ctx, op_payload, timestamp, &doc_states);
@@ -499,7 +499,7 @@ pub const StoreService = struct {
                 .owner_doc_id = ctx.owner_doc_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
-                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
+                .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
                 .conn_id = ctx.conn_id,
                 .write_id = ctx.write_id,
             },
@@ -510,7 +510,7 @@ pub const StoreService = struct {
                 .namespace_id = ctx.namespace_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
-                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
+                .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
                 .conn_id = ctx.conn_id,
                 .write_id = ctx.write_id,
             },

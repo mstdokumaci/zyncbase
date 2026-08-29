@@ -54,6 +54,7 @@ test {
     _ = @import("query/eval_test.zig");
     _ = @import("authentication/jwt_validator_test.zig");
     _ = @import("authentication/ticket_exchange_test.zig");
+    _ = @import("storage_engine/write_worker_test.zig");
     _ = @import("storage_engine/write_worker_perf_test.zig");
     _ = @import("storage_engine/read_worker_perf_test.zig");
     _ = @import("subscription/engine_test.zig");

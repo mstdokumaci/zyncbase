@@ -153,6 +153,8 @@ CREATE TABLE tasks (
 );
 
 CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
+CREATE UNIQUE INDEX uidx__projects__created_at ON projects(created_at);
+CREATE UNIQUE INDEX uidx__tasks__created_at ON tasks(created_at);
 CREATE INDEX idx__tasks__field__status ON tasks(status);
 CREATE INDEX idx__tasks__field__projectId ON tasks(projectId);
 ```

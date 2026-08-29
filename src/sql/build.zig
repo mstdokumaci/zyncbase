@@ -169,6 +169,19 @@ pub fn buildSelectAllIdsSql(allocator: Allocator, table_name_quoted: []const u8)
     return buf.toOwnedSlice(allocator);
 }
 
+/// Builds `SELECT MAX("created_at") FROM "<table>"`.
+pub fn buildSelectMaxCreatedAtSql(allocator: Allocator, table_name_quoted: []const u8) ![]const u8 {
+    var buf = SqlBuf.init();
+    defer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, "SELECT MAX(");
+    try buf.appendSlice(allocator, system.quoted_created_at);
+    try buf.appendSlice(allocator, ") FROM ");
+    try buf.appendSlice(allocator, table_name_quoted);
+
+    return buf.toOwnedSlice(allocator);
+}
+
 /// Builds the WHERE prefix for a delete:
 /// `DELETE FROM "<table>" WHERE "id"=? AND "namespace_id"=?`
 /// For no-guard: concat(prefix, suffix). For guard: concat(prefix, guard_fragment, suffix).

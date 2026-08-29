@@ -12,7 +12,7 @@ const Condition = query_ast.Condition;
 const OrClause = query_ast.OrClause;
 const QueryFilter = query_ast.QueryFilter;
 
-/// Creates a QueryFilter with a default order_by = "id" ASC.
+/// Creates a synthetic QueryFilter ordered by field index 0 (`id`) for tests.
 /// Caller owns the memory and must call deinit(allocator).
 pub fn makeDefaultFilter(allocator: std.mem.Allocator) !QueryFilter {
     return makeFilter(allocator, 0, false, .doc_id, null);
@@ -35,7 +35,7 @@ pub fn makeFilter(
     return QueryFilter{ .order_by = order_by };
 }
 
-/// Creates a QueryFilter with the given conditions and a default order_by = "id" ASC.
+/// Creates a QueryFilter with the given conditions and the synthetic test order.
 /// This helper handles heap allocation for both the order_by field and the conditions slice/elements,
 /// ensuring that QueryFilter.deinit(allocator) can safely clean up all resources.
 pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Condition) !QueryFilter {

@@ -13,6 +13,7 @@ const SqlList = sql_buf.SqlList;
 pub const ManagedIndex = union(enum) {
     namespace,
     owner,
+    created_at,
     users_identity,
     /// Index into `table.userFields()` for a field marked `indexed` or carrying `references`.
     field: usize,
@@ -21,7 +22,7 @@ pub const ManagedIndex = union(enum) {
 
     pub fn isUnique(self: ManagedIndex) bool {
         return switch (self) {
-            .users_identity, .unique => true,
+            .created_at, .users_identity, .unique => true,
             else => false,
         };
     }
@@ -31,6 +32,7 @@ pub const ManagedIndex = union(enum) {
         switch (self) {
             .namespace => try buf.appendManagedIndexName(allocator, false, table.name, "namespace", null),
             .owner => try buf.appendManagedIndexName(allocator, false, table.name, "owner", null),
+            .created_at => try buf.appendManagedIndexName(allocator, true, table.name, "created_at", null),
             .users_identity => try buf.appendManagedIndexName(allocator, true, table.name, "identity", null),
             .field => |fi| try buf.appendManagedIndexName(allocator, false, table.name, "field", table.userFields()[fi].name),
             .unique => |ui| {
@@ -44,7 +46,7 @@ pub const ManagedIndex = union(enum) {
     /// Number of indexed columns in declaration order.
     pub fn columnCount(self: ManagedIndex, table: *const schema_types.Table) usize {
         return switch (self) {
-            .namespace, .owner, .field => 1,
+            .namespace, .owner, .created_at, .field => 1,
             .users_identity => 2,
             .unique => |ui| 1 + table.unique_constraints[ui].field_indexes.len,
         };
@@ -56,6 +58,7 @@ pub const ManagedIndex = union(enum) {
         switch (self) {
             .namespace => out[0] = "namespace_id",
             .owner => out[0] = "owner_id",
+            .created_at => out[0] = "created_at",
             .users_identity => {
                 out[0] = "namespace_id";
                 out[1] = "external_id";
@@ -76,6 +79,7 @@ pub const ManagedIndex = union(enum) {
         switch (self) {
             .namespace => try list.appendItemSlice(allocator, schema_system.quoted_namespace_id),
             .owner => try list.appendItemSlice(allocator, schema_system.quoted_owner_id),
+            .created_at => try list.appendItemSlice(allocator, schema_system.quoted_created_at),
             .users_identity => {
                 try list.appendItemSlice(allocator, schema_system.quoted_namespace_id);
                 try list.appendItemSlice(allocator, schema_system.quoted_external_id);
@@ -93,13 +97,13 @@ pub const ManagedIndex = union(enum) {
 };
 
 /// Allocation-free iterator over every managed index of one table, in the
-/// deterministic emission order: namespace, owner, users identity, ordinary
+/// deterministic emission order: namespace, owner, created_at, users identity, ordinary
 /// field/reference indexes, then user-defined unique indexes in schema order.
 pub const ManagedIndexIterator = struct {
     table: *const schema_types.Table,
     pos: usize = 0,
 
-    const header_count: usize = 3;
+    const header_count: usize = 4;
 
     pub fn init(table: *const schema_types.Table) ManagedIndexIterator {
         return .{ .table = table };
@@ -115,7 +119,8 @@ pub const ManagedIndexIterator = struct {
             self.pos += 1;
             if (pos == 0) return .namespace;
             if (pos == 1) return .owner;
-            if (pos == 2) {
+            if (pos == 2) return .created_at;
+            if (pos == 3) {
                 if (self.table.is_users_table) return .users_identity;
                 continue;
             }

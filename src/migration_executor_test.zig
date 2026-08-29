@@ -812,8 +812,8 @@ test "migration_executor: adding unique constraint over clean data succeeds and 
     var old_schema = try schema_parse.initFromJson(allocator, unique_exec_old_json);
     defer old_schema.deinit();
     try execSchemaDDL(&db, allocator, &gen, &old_schema);
-    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'a', 'p', 'e1', 0, 0)", .{}, .{});
-    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'b', 'q', 'e2', 0, 0)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'a', 'p', 'e1', 1, 1)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'b', 'q', 'e2', 2, 2)", .{}, .{});
 
     var new_schema = try schema_parse.initFromJson(allocator, unique_exec_new_json);
     defer new_schema.deinit();
@@ -828,8 +828,8 @@ test "migration_executor: adding unique constraint over clean data succeeds and 
 }
 
 fn insertDuplicateProjects(db: *sqlite.Db) !void {
-    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'p', 'e1', 0, 0)", .{}, .{});
-    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'q', 'e2', 0, 0)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'p', 'e1', 1, 1)", .{}, .{});
+    try db.exec("INSERT INTO projects VALUES (randomblob(16), 1, zeroblob(16), 'dup', 'q', 'e2', 2, 2)", .{}, .{});
 }
 
 test "migration_executor: adding unique constraint over duplicates fails rolls back and keeps version" {
@@ -856,7 +856,7 @@ test "migration_executor: adding unique constraint over duplicates fails rolls b
     // Rows untouched, previous index set restored, prior version unchanged.
     try std.testing.expectEqual(@as(?i64, 2), try db.one(i64, "SELECT count(*) FROM projects", .{}, .{}));
     try std.testing.expectEqual(indexes_before, try countIndexes(&db, allocator, "projects"));
-    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx__%'", .{}, .{});
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name = 'uidx__projects__constraint__0'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
     const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
     defer if (version) |value| allocator.free(value);
@@ -881,7 +881,7 @@ test "migration_executor: removing unique constraint drops its index without reb
     // Constraint removal is non-destructive even without allow_destructive.
     try runMigration(allocator, &db, &gen, &removed_schema);
 
-    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name LIKE 'uidx__%'", .{}, .{});
+    const uidx_gone = try db.one(i64, "SELECT count(*) FROM pragma_index_list('projects') WHERE name = 'uidx__projects__constraint__0'", .{}, .{});
     try std.testing.expectEqual(@as(?i64, 0), uidx_gone);
     // Table was not rebuilt: rows survive.
     try db.exec("INSERT INTO projects VALUES (randomblob(16), 3, zeroblob(16), 'x', 'p', 'e9', 0, 0)", .{}, .{});
@@ -930,9 +930,9 @@ test "migration_executor: fresh create_table installs complete managed index set
     defer target.deinit();
     try runMigration(allocator, &db, &gen, &target);
 
-    // Managed set only: namespace + owner + compound unique. SQLite's implicit
+    // Managed set only: namespace + owner + created_at + compound unique. SQLite's implicit
     // sqlite_autoindex_* for the BLOB primary key is not ZyncBase-managed.
-    try std.testing.expectEqual(@as(?i64, 3), try countManagedIndexes(&db, allocator, "projects"));
+    try std.testing.expectEqual(@as(?i64, 4), try countManagedIndexes(&db, allocator, "projects"));
     try std.testing.expectEqual(@as(?i64, 3), try db.one(i64, "SELECT count(*) FROM pragma_index_info('uidx__projects__constraint__0')", .{}, .{}));
     const version = try db.oneAlloc([]const u8, allocator, "SELECT version FROM schema_meta", .{}, .{});
     defer if (version) |value| allocator.free(value);

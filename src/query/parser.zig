@@ -44,7 +44,7 @@ pub const ParserError = error{
 pub const max_sort_clauses: usize = 8;
 
 /// Decodes a Base64-encoded MessagePack cursor token into a Cursor.
-/// Decoded shape: [table_index, [[field_index, desc], ...], [value_0, ..., id_bin]]
+/// Decoded shape: [table_index, [[field_index, desc], ...], [value_0, ..., unique_value]]
 /// The embedded table index and descriptor list must exactly match the active
 /// query's canonical order; values are decoded against each field's schema type.
 pub fn decodeCursorToken(
@@ -182,6 +182,7 @@ pub fn parseQueryFilter(
 
     // Find the table metadata in schema for validation
     const table_metadata = schema.tableByIndex(table_index) orelse return error.UnknownTable;
+    const created_at_index = table_metadata.fieldIndex("created_at") orelse return error.UnknownField;
 
     var predicate = query_ast.FilterPredicate{};
     var order_by: []SortDescriptor = &[_]SortDescriptor{};
@@ -213,9 +214,9 @@ pub fn parseQueryFilter(
 
     // Canonicalize after map iteration so key order cannot influence the result.
     if (!has_explicit_order) {
-        order_by = try defaultOrderBy(allocator);
+        order_by = try defaultOrderBy(allocator, created_at_index);
     } else {
-        order_by = try canonicalizeOrderBy(allocator, order_by);
+        order_by = try canonicalizeOrderBy(allocator, order_by, created_at_index);
     }
 
     var after: ?Cursor = null;
@@ -236,31 +237,34 @@ pub fn parseQueryFilter(
     };
 }
 
-fn defaultOrderBy(allocator: std.mem.Allocator) ParserError![]SortDescriptor {
+fn defaultOrderBy(allocator: std.mem.Allocator, created_at_index: usize) ParserError![]SortDescriptor {
     const slice = try allocator.alloc(SortDescriptor, 1);
     errdefer allocator.free(slice);
-    slice[0] = .{ .field_index = schema_system.id_field_index, .desc = false };
+    slice[0] = .{ .field_index = created_at_index, .desc = false };
     return slice;
 }
 
-/// Appends the hidden `id ASC` tie-breaker unless `id` is already the final clause.
-/// Rejects `id` anywhere except the final position.
+/// Appends hidden `created_at ASC` unless the final clause is already unique.
+/// Rejects unique system fields anywhere except the final position.
 fn canonicalizeOrderBy(
     allocator: std.mem.Allocator,
     client_clauses: []SortDescriptor,
+    created_at_index: usize,
 ) ParserError![]SortDescriptor {
     std.debug.assert(client_clauses.len >= 1);
     for (client_clauses[0 .. client_clauses.len - 1]) |clause| {
-        if (clause.field_index == schema_system.id_field_index) return error.InvalidSortFormat;
+        if (clause.field_index == schema_system.id_field_index or clause.field_index == created_at_index) {
+            return error.InvalidSortFormat;
+        }
     }
 
     const last = client_clauses[client_clauses.len - 1];
-    if (last.field_index == schema_system.id_field_index) return client_clauses;
+    if (last.field_index == schema_system.id_field_index or last.field_index == created_at_index) return client_clauses;
 
     const extended = try allocator.alloc(SortDescriptor, client_clauses.len + 1);
     errdefer allocator.free(extended);
     @memcpy(extended[0..client_clauses.len], client_clauses);
-    extended[client_clauses.len] = .{ .field_index = schema_system.id_field_index, .desc = false };
+    extended[client_clauses.len] = .{ .field_index = created_at_index, .desc = false };
     allocator.free(client_clauses);
     return extended;
 }

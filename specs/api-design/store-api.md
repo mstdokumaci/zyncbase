@@ -161,6 +161,8 @@ if (users.nextCursor) {
 
 **Returns**: `Promise<Array & { nextCursor: string | null }>` - A standard JavaScript Array with an additional `nextCursor` property.
 
+When `orderBy` is omitted, results use `created_at ASC`. Store `created_at` and `updated_at` values are Unix microseconds; convert to a JavaScript `Date` with `new Date(value / 1_000)`.
+
 ### `store.subscribe(collection, options, callback)`
 Subscribe to filtered query results (real-time).
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decode } from "@msgpack/msgpack";
+import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec } from "./connection_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { StoreDelta } from "./types.js";
@@ -16,6 +16,11 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 }
 
 describe("ConnectionWireCodec", () => {
+	test("preserves Unix-microsecond timestamps as exact numbers", () => {
+		const timestamp = 1_800_000_000_000_003;
+		expect(decode(encode(timestamp))).toBe(timestamp);
+	});
+
 	test("encodes schema-aware query fields", async () => {
 		const codec = await makeCodec();
 		const encoded = codec.encode(

@@ -55,20 +55,21 @@ The Zig parser is authoritative (wire clients are untrusted):
 
 | Input | Result |
 |:---|:---|
-| `orderBy` omitted | Canonical `[id ASC]` |
+| `orderBy` omitted | Canonical `[created_at ASC]` |
 | 0 or more than 8 clauses | `InvalidSortFormat` |
 | Malformed tuple, unknown field, invalid direction flag | `InvalidSortFormat` / `InvalidFieldName` |
 | Duplicate field across clauses | `InvalidSortFormat` |
 | Array-typed sort field | `UnsupportedSortFieldType` (`INVALID_MESSAGE`) |
-| `id` in any position except the final clause | `InvalidSortFormat` |
+| Unique system field (`id` or `created_at`) in any position except the final clause | `InvalidSortFormat` |
 
 ### Canonical Internal Order
 
-After parsing every `QueryFilter` owns a non-empty descriptor slice ending with the `id` field:
+After parsing every `QueryFilter` owns a non-empty descriptor slice ending with a unique required system field. Non-unique explicit orders receive hidden `created_at ASC`; explicit final `id` or `created_at` is already total:
 
 ```text
-[]                                  -> [id ASC]
-[priority DESC]                     -> [priority DESC, id ASC]
+[]                                  -> [created_at ASC]
+[priority DESC]                     -> [priority DESC, created_at ASC]
+[priority DESC, created_at DESC]    -> [priority DESC, created_at DESC]
 [priority DESC, id DESC]            -> [priority DESC, id DESC]
 ```
 

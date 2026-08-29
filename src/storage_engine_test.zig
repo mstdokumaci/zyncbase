@@ -1745,6 +1745,45 @@ test "storage: data persistence across restarts" {
     }
 }
 
+test "storage: created_at bootstrap continues above persisted future maximum" {
+    const allocator = std.heap.smp_allocator;
+    var context = try sth.TestContext.init(allocator, "storage-created-at-restart");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("test", &fields_arr);
+    const persisted_future: i64 = 8_000_000_000_000_000;
+
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        try ctx.insertText("test", 1, 1, "val", "first");
+        try ctx.engine.flushPendingWrites();
+        try ctx.engine.write_worker.conn.exec(
+            "UPDATE test SET created_at = 8000000000000000, updated_at = 8000000000000000",
+            .{},
+            .{},
+        );
+    }
+
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        try ctx.insertText("test", 2, 1, "val", "second");
+        try ctx.engine.flushPendingWrites();
+
+        const test_table = try ctx.table("test");
+        const record = (try test_table.readDoc(allocator, 2, 1)) orelse return error.TestExpectedValue;
+        defer record.deinit(allocator);
+        try testing.expectEqual(persisted_future + 1, try sth.getFieldInt(record, test_table.metadata, "created_at"));
+    }
+}
+
 // Property: Schema updates are reflected in persistence logic
 test "storage: schema update integrity" {
     const allocator = std.heap.smp_allocator;
@@ -1871,7 +1910,7 @@ fn makeForeignKeyUpsertOp(
         .namespace_id = namespace_id,
         .owner_doc_id = typed_doc_id.zero,
         .columns = columns,
-        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
     } };
 }
 

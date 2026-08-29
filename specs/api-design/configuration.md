@@ -608,6 +608,7 @@ CREATE TABLE users (
 );
 
 CREATE UNIQUE INDEX uidx__users__identity ON users(namespace_id, external_id);
+CREATE UNIQUE INDEX uidx__users__created_at ON users(created_at);
 ```
 
 `id` is the primary key by itself. It is expected to be unique across the whole collection/table; `namespace_id` scopes visibility and identity-provider lookup, but it does not permit duplicate document IDs in different namespaces.
@@ -933,6 +934,7 @@ CREATE TABLE tasks (
 
 CREATE INDEX idx__tasks__field__status ON tasks(status);
 CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
+CREATE UNIQUE INDEX uidx__tasks__created_at ON tasks(created_at);
 ```
 
 The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables still require collection-wide unique document IDs; this keeps references, cursors, caches, and SDK addressing single-key.

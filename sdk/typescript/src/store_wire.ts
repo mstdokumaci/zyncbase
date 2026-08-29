@@ -353,9 +353,13 @@ export function encodeOrderBy(
 	const encoded = orderBy.map((clause, index) =>
 		encodeSortClause(clause, index, seen),
 	);
-	const idIndex = encoded.findIndex(([field]) => field === "id");
-	if (idIndex !== -1 && idIndex !== encoded.length - 1) {
-		throw invalidSortError('orderBy field "id" must be the final clause');
+	const uniqueIndex = encoded.findIndex(
+		([field]) => field === "id" || field === "created_at",
+	);
+	if (uniqueIndex !== -1 && uniqueIndex !== encoded.length - 1) {
+		throw invalidSortError(
+			`orderBy field "${encoded[uniqueIndex]?.[0]}" must be the final clause`,
+		);
 	}
 	return encoded;
 }

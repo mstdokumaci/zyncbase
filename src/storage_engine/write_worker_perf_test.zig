@@ -35,7 +35,7 @@ fn makeUpsertOp(
         .namespace_id = namespace_id,
         .owner_doc_id = typed_doc_id.zero,
         .columns = columns,
-        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
     } };
 }
 

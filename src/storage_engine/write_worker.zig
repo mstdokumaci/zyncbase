@@ -50,6 +50,15 @@ fn mapAndLogError(
     return classified_err;
 }
 
+pub fn claimNextCreatedAt(last: *i64, candidate_us: i64) StorageError!i64 {
+    if (last.* < 0 or last.* >= schema_system.max_safe_timestamp_us or candidate_us > schema_system.max_safe_timestamp_us) {
+        return StorageError.InvalidOperation;
+    }
+    const next = @max(candidate_us, last.* + 1);
+    last.* = next;
+    return next;
+}
+
 pub const WriteWorker = struct {
     io: std.Io,
     allocator: Allocator,
@@ -78,6 +87,7 @@ pub const WriteWorker = struct {
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
     pk_sets: []storage_cache.pk_set_type,
+    last_created_at: []i64,
     schema: *const schema_types.Schema,
     is_healthy: std.atomic.Value(bool),
     queue: write_queue_type,
@@ -128,6 +138,11 @@ pub const WriteWorker = struct {
 
     pub fn notifyChanges(self: *WriteWorker) void {
         self.notifier.notify();
+    }
+
+    fn claimCreatedAt(self: *WriteWorker, table_index: usize, candidate_us: i64) StorageError!i64 {
+        if (table_index >= self.last_created_at.len) return StorageError.UnknownTable;
+        return claimNextCreatedAt(&self.last_created_at[table_index], candidate_us);
     }
 
     fn pushWriteOutcome(self: *WriteWorker, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
@@ -1172,20 +1187,24 @@ pub const WriteWorker = struct {
             const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
 
             if (self.resolve_user_stmt) |user_stmt| {
-                if (sql.resolveUserId(
-                    self.io,
-                    &self.conn,
-                    user_stmt,
-                    identity_namespace_id,
-                    sop.external_user_id,
-                    sop.timestamp,
-                )) |uid| {
-                    user_doc_id = uid;
-                    self.identity_cache.put(self.allocator, storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id), uid) catch |err| {
-                        std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
-                    };
+                if (self.claimCreatedAt(users_table.index, sop.timestamp)) |created_at| {
+                    if (sql.resolveUserId(
+                        self.io,
+                        &self.conn,
+                        user_stmt,
+                        identity_namespace_id,
+                        sop.external_user_id,
+                        created_at,
+                    )) |uid| {
+                        user_doc_id = uid;
+                        self.identity_cache.put(self.allocator, storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id), uid) catch |err| {
+                            std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
+                        };
+                    } else |err| {
+                        resolution_err = errors.classifyError(err);
+                    }
                 } else |err| {
-                    resolution_err = errors.classifyError(err);
+                    resolution_err = err;
                 }
             } else {
                 resolution_err = error.StatementNotPrepared;
@@ -1292,9 +1311,10 @@ pub const WriteWorker = struct {
             bind_idx += 1;
         }
 
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        const created_at = try self.claimCreatedAt(op.table_index, op.timestamp);
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, created_at) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, created_at) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
         if (rendered_guard) |rg| {
@@ -1327,6 +1347,7 @@ pub const WriteWorker = struct {
             bind_idx += 1;
         }
 
+        if (op.timestamp < 0 or op.timestamp > schema_system.max_safe_timestamp_us) return StorageError.InvalidOperation;
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 

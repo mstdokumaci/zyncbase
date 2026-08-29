@@ -456,7 +456,7 @@ pub const FilterPredicate = struct {
 
 pub const QueryFilter = struct {
     predicate: FilterPredicate = .{},
-    /// Canonical, non-empty sort order owned by this filter; always ends with the id field.
+    /// Canonical, non-empty sort order owned by this filter; always ends with a unique system field.
     order_by: []SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
