@@ -510,7 +510,7 @@ test "StoreService: query - orderBy and limit" {
     defer read_req.deinit(allocator);
 
     try testing.expectEqual(@as(?u32, 2), read_req.filter.limit);
-    // created_at DESC followed by hidden id ASC tie-breaker.
+    // created_at DESC is already a total order.
     const created_at_index = tbl_md.fieldIndex("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, read_req.filter.order_by[0].field_index);
     try testing.expectEqual(true, read_req.filter.order_by[0].desc);
@@ -571,12 +571,13 @@ test "StoreService: queryMore - pagination" {
     defer initial_req.deinit(allocator);
 
     // Encode a synthetic cursor for the load-more request.
-    // Canonical default order is [id ASC], so the single value must be a doc_id.
+    // Canonical default order is [created_at ASC].
+    const created_at_index = tbl_md.fieldIndex("created_at") orelse return error.UnknownField;
     const descriptors = [_]query_ast.SortDescriptor{
-        .{ .field_index = schema_system.id_field_index, .desc = false },
+        .{ .field_index = created_at_index, .desc = false },
     };
     const cursor_values = [_]typed.Value{
-        .{ .scalar = .{ .doc_id = typed_doc_id.zero } },
+        .{ .scalar = .{ .integer = 1 } },
     };
     const cursor_token = try query_parser.encodeCursorToken(allocator, table_index, &descriptors, &cursor_values);
     defer allocator.free(cursor_token);

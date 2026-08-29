@@ -20,7 +20,7 @@ ZyncBase exposes a purely cursor-driven pagination topology over offset-based eq
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `typed.Cursor` | ordered value list in canonical sort order | Represents the token state pointing directly after the last seen row; the final value is always the document id. |
+| `typed.Cursor` | ordered value list in canonical sort order | Represents the token state pointing directly after the last seen row; the final value belongs to a unique required system field. |
 | `QueryFilter.after` | `typed.Cursor` | Optional cursor boundary parsed from the request and tied to the active canonical `orderBy`. |
 
 ---
@@ -31,13 +31,13 @@ The `nextCursor` token returned in `StoreQuery` responses is an opaque Base64 li
 
 ```typescript
 const cursorTuple = [tableIndex, sortTuples, values];
-// sortTuples = [[field_index, desc_flag], ...]  — the canonical descriptor list (ends with id)
-// values     = [sort_value_0, ..., docIdBin16]  — one value per descriptor, count must match
+// sortTuples = [[field_index, desc_flag], ...]  — canonical descriptors ending in created_at or explicit id
+// values     = [sort_value_0, ..., uniqueValue] — one value per descriptor, count must match
 const nextCursor = base64(msgpackEncode(cursorTuple));
 ```
 
 - `tableIndex`: binds the token to one collection; reuse against another table is rejected.
-- `sortTuples`: the server's canonical order including the final `id` clause. A token whose embedded order differs from the active query fails deterministically instead of returning a plausible but incorrect page.
+- `sortTuples`: the server's canonical order including hidden/final `created_at`, or an explicit final `id`. A token whose embedded order differs from the active query fails deterministically instead of returning a plausible but incorrect page.
 - Sort values may be `nil` for optional fields only. Required/system fields reject null. The token remains opaque and unsigned: tampering can shift a page boundary but cannot alter authorization predicates, namespace scoping, selected table, or active order.
 
 ### Cursor Validation
@@ -62,19 +62,17 @@ Every canonical clause appears in `ORDER BY`; non-required fields get explicit `
 ```sql
 ORDER BY
   "priority" DESC NULLS LAST,
-  "created_at" ASC,
-  "id" ASC
+  "created_at" ASC
 ```
 
 SQLite row-value comparison cannot express independent per-key directions, so the cursor predicate compiles to a **lexicographic disjunction**: branch `i` requires equality on `k0..k(i-1)` and an after-comparison on `ki`. SQL fragment generation and bind-list generation live in the same loop to prevent positional drift.
 
-### Example: `priority DESC, created_at ASC, id ASC`
+### Example: `priority DESC, created_at ASC`
 
 ```sql
 AND (
   "priority" < ?
   OR ("priority" = ? AND "created_at" > ?)
-  OR ("priority" = ? AND "created_at" = ? AND "id" > ?)
 )
 ```
 
@@ -87,7 +85,7 @@ For an optional key with `NULLS LAST`, prefix equality becomes `"col" IS ?` and 
 (? IS NOT NULL AND ("col" IS NULL OR "col" < ?))   -- DESC
 ```
 
-The `? IS NOT NULL` guard makes the current-key branch false when the cursor value is null; a later branch still advances within the equal-null group via subsequent keys, ultimately reaching the unique non-null `id` tie-breaker.
+The `? IS NOT NULL` guard makes the current-key branch false when the cursor value is null; a later branch still advances within the equal-null group via subsequent keys, ultimately reaching the unique non-null `created_at` tie-breaker.
 
 ### Parameter Bind Array Order
 

@@ -5,7 +5,7 @@ import type {
 } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
-const IDS = ["sort-a", "sort-b", "sort-c", "sort-d", "sort-e"];
+const IDS = ["sort-z", "sort-a", "sort-c", "sort-d", "sort-e"];
 const OPTIONS: QueryOptions = {
 	where: { tags: { contains: "sort-proof" } },
 	orderBy: [{ priority: "desc" }, { "metrics.rank": "asc" }],

@@ -26,8 +26,8 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 | `QueryFilter` | `FilterPredicate`, owned `SortDescriptor` slice | Full read/subscription query contract after parsing; owns the canonical order slice. |
 | `FilterPredicate` | `PredicateState`, `Condition` | Logical predicate tree for SQL lowering and in-memory evaluation. |
 | `Condition` | `Operator`, typed operands | One field/operator/value comparison. |
-| `SortDescriptor` | schema field index, direction | Minimal sort identity; descriptor slices are canonical, non-empty, and end with `id`. |
-| `Cursor` | ordered owned values | Cursor values in canonical sort order; last value is always the document id. |
+| `SortDescriptor` | schema field index, direction | Minimal sort identity; descriptor slices are canonical, non-empty, and end with a unique required system field. |
+| `Cursor` | ordered owned values | Cursor values in canonical sort order; the last value is normally integer `created_at`, or document ID for an explicit final `id` sort. |
 | `ParserError` | wire/schema validation | Internal parser failure set mapped through public error taxonomy. |
 | `RenderedPredicate` | SQL fragment, bound values | Result of lowering AST predicates for SQLite. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Keeps active queries and evaluates committed changes. |
@@ -37,8 +37,8 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 ## Responsibilities
 
 - Decode wire query tuples into typed operators and operands.
-- Validate table/field names, operator compatibility, sort clauses (1..8, unique, sortable types, `id` final), and cursor shape.
-- Canonicalize every parsed order to a non-empty descriptor slice ending with the `id` field.
+- Validate table/field names, operator compatibility, sort clauses (1..8, unique, sortable types, unique system fields final), and cursor shape.
+- Canonicalize every parsed order to a non-empty descriptor slice ending with `created_at`, unless an explicit final `id` is already total.
 - Preserve one semantic model for storage reads and subscription filtering.
 - Generate stable multi-clause ordering and lexicographic, null-safe cursor predicates for paginated reads.
 - Apply authorization predicates before storage execution.

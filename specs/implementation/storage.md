@@ -68,6 +68,8 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 
 ## Write Path
 
+Document timestamps are server-generated Unix microseconds. Before worker threads start, storage loads one `last_created_at` per table using the covering `UNIQUE(created_at)` index. Every create path, including implicit `users` creation, claims `max(physical_time_us, last_created_at + 1)` on the sole writer and binds the result to both `created_at` and `updated_at`. Updates preserve `created_at` and update only `updated_at`. Rolled-back writes may leave sequence gaps; clocks are never rewound. Tables have independent clocks and may share timestamp values.
+
 1. Store service validates payload shape and authorization.
 2. Mutation is enqueued through the single-writer path (SPSC write queue).
 3. `WriteWorker` applies schema validation, ownership checks, and conflict semantics.
@@ -83,6 +85,8 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 - Same-row authorization guards should be expressed in the write SQL path when possible.
 - Reader statements/results are owned by their reader connection and allocator.
 - Batch writes are atomic at the storage boundary: either the accepted batch commits consistently or returns a failure.
+- `created_at` is required, immutable, JavaScript-safe, strictly increasing in writer order within one table, and enforced unique by SQLite.
+- Startup rejects persisted `created_at` values outside `0..Number.MAX_SAFE_INTEGER`; no global cross-table clock exists.
 - Transaction-local delta coalescing changes only subscription publication. Every SQL operation, guard, referential action, and write outcome still executes in its original order.
 - Document cache and primary-key-set mutations replay in committed operation order and must match SQLite's final state after repeated writes to one document.
 - Immediate foreign keys require parent-before-child ordering inside a batch. Optional references accept `null`; non-null values must resolve by table-wide document ID, including across namespace boundaries.

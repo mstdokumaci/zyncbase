@@ -194,6 +194,24 @@ describe("store_wire", () => {
 			});
 		});
 
+		test("orderBy requires an explicit created_at clause to be final", () => {
+			expect(() =>
+				encodeQueryOptions({
+					orderBy: [{ created_at: "asc" }, { name: "asc" }],
+				}),
+			).toThrow('orderBy field "created_at" must be the final clause');
+			expect(
+				encodeQueryOptions({
+					orderBy: [{ name: "asc" }, { created_at: "desc" }],
+				}),
+			).toEqual({
+				orderBy: [
+					["name", 0],
+					["created_at", 1],
+				],
+			});
+		});
+
 		test("where with direct equality", () => {
 			const result = encodeQueryOptions({ where: { status: "active" } });
 			expect(result).toEqual({

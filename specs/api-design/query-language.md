@@ -296,9 +296,9 @@ Each clause contains exactly one field and one direction. Nested fields use dot 
 
 ### Default Order
 
-Omitting `orderBy` sorts by document `id` ascending. This is identical to requesting `orderBy: [{ id: 'asc' }]`.
+Omitting `orderBy` sorts by immutable `created_at` ascending. This is identical to requesting `orderBy: [{ created_at: 'asc' }]`.
 
-`id` may be requested explicitly only as the final clause (`[{ priority: 'desc' }, { id: 'desc' }]`). If `id` is absent, the server appends a hidden `id ASC` tie-breaker so every result order is deterministic and stable for pagination.
+The unique system fields `id` and `created_at` may be requested explicitly only as the final clause. If neither is final, the server appends hidden `created_at ASC` so every result order is deterministic and stable for pagination. An explicit final `id` remains supported and does not receive a redundant hidden clause.
 
 ---
 

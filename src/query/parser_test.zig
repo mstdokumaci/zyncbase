@@ -13,12 +13,8 @@ const qth = @import("test_helpers.zig");
 
 const testing = std.testing;
 
-/// Builds a canonical [clause, hidden id ASC] descriptor pair for tests.
-fn twoClauseOrder(a: usize, a_desc: bool) [2]query_ast.SortDescriptor {
-    return .{
-        .{ .field_index = a, .desc = a_desc },
-        .{ .field_index = schema_system.id_field_index, .desc = false },
-    };
+fn singleClauseOrder(field_index: usize, desc: bool) [1]query_ast.SortDescriptor {
+    return .{.{ .field_index = field_index, .desc = desc }};
 }
 
 fn encodeRawCursorToken(allocator: std.mem.Allocator, payload: msgpack.Payload) ![]u8 {
@@ -108,11 +104,8 @@ test "query with orderBy and after" {
 
     const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
-    const descriptors = twoClauseOrder(created_at_index, true);
-    const cursor_values = [_]typed.Value{
-        .{ .scalar = .{ .integer = 42 } },
-        .{ .scalar = .{ .doc_id = 2 } },
-    };
+    const descriptors = singleClauseOrder(created_at_index, true);
+    const cursor_values = [_]typed.Value{.{ .scalar = .{ .integer = 42 } }};
     const after_token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &cursor_values);
     defer allocator.free(after_token);
 
@@ -127,12 +120,8 @@ test "query with orderBy and after" {
 
     try testing.expectEqual(created_at_index, filter.order_by[0].field_index);
     try testing.expectEqual(true, filter.order_by[0].desc);
-    // Hidden `id ASC` tie-breaker appended.
-    try testing.expectEqual(@as(usize, 2), filter.order_by.len);
-    try testing.expectEqual(schema_system.id_field_index, filter.order_by[1].field_index);
-    try testing.expectEqual(false, filter.order_by[1].desc);
+    try testing.expectEqual(@as(usize, 1), filter.order_by.len);
     try testing.expectEqual(@as(i64, 42), filter.after.?.values[0].scalar.integer);
-    try testing.expectEqual(@as(typed.DocId, 2), filter.after.?.values[1].scalar.doc_id);
 }
 
 test "query rejects invalid Base64 after cursor token" {
@@ -460,11 +449,8 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 
     const tbl_items = schema.table("items") orelse return error.TestExpectedValue;
     const created_at_index = tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue;
-    const descriptors = twoClauseOrder(created_at_index, true);
-    const cursor_values = [_]typed.Value{
-        .{ .scalar = .{ .integer = 42 } },
-        .{ .scalar = .{ .doc_id = 2 } },
-    };
+    const descriptors = singleClauseOrder(created_at_index, true);
+    const cursor_values = [_]typed.Value{.{ .scalar = .{ .integer = 42 } }};
     const after_token = try query_parser.encodeCursorToken(allocator, tbl_items.index, &descriptors, &cursor_values);
     defer allocator.free(after_token);
 
@@ -492,11 +478,8 @@ test "cursor token rejects wrong sort type" {
 
     const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
-    const descriptors = twoClauseOrder(created_at_index, false);
-    const values = [_]typed.Value{
-        .{ .scalar = .{ .text = "not-an-int" } }, // created_at is integer
-        .{ .scalar = .{ .doc_id = 2 } },
-    };
+    const descriptors = singleClauseOrder(created_at_index, false);
+    const values = [_]typed.Value{.{ .scalar = .{ .text = "not-an-int" } }}; // created_at is integer
     const token = try query_parser.encodeCursorToken(allocator, tbl.index, &descriptors, &values);
     defer allocator.free(token);
 
@@ -536,7 +519,7 @@ fn itemsSchema(allocator: std.mem.Allocator, field_names: []const []const u8, fi
     }});
 }
 
-test "canonical order: omitted becomes [id ASC]" {
+test "canonical order: omitted becomes [created_at ASC]" {
     const allocator = std.testing.allocator;
 
     var schema = try itemsSchema(allocator, &.{}, &.{});
@@ -550,23 +533,24 @@ test "canonical order: omitted becomes [id ASC]" {
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.order_by.len);
-    try testing.expectEqual(schema_system.id_field_index, filter.order_by[0].field_index);
+    try testing.expectEqual(tbl.fieldIndex("created_at").?, filter.order_by[0].field_index);
     try testing.expectEqual(false, filter.order_by[0].desc);
 }
 
-test "canonical order: mixed-direction clauses preserve order and end with hidden id ASC" {
+test "canonical order: mixed-direction clauses preserve order and end with hidden created_at ASC" {
     const allocator = std.testing.allocator;
 
     var schema = try itemsSchema(allocator, &.{ "priority", "score" }, &.{ .integer, .integer });
     defer schema.deinit();
     const tbl = schema.table("items") orelse return error.TestExpectedValue;
     const priority_index = tbl.fieldIndex("priority") orelse return error.UnknownField;
+    const score_index = tbl.fieldIndex("score") orelse return error.UnknownField;
     const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
 
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .orderBy = .{
             .{ "priority", @as(usize, 1) },
-            .{ "created_at", @as(usize, 0) },
+            .{ "score", @as(usize, 0) },
         },
     });
     defer root.free(allocator);
@@ -577,9 +561,9 @@ test "canonical order: mixed-direction clauses preserve order and end with hidde
     try testing.expectEqual(@as(usize, 3), filter.order_by.len);
     try testing.expectEqual(priority_index, filter.order_by[0].field_index);
     try testing.expect(filter.order_by[0].desc);
-    try testing.expectEqual(created_at_index, filter.order_by[1].field_index);
+    try testing.expectEqual(score_index, filter.order_by[1].field_index);
     try testing.expect(!filter.order_by[1].desc);
-    try testing.expectEqual(schema_system.id_field_index, filter.order_by[2].field_index);
+    try testing.expectEqual(created_at_index, filter.order_by[2].field_index);
     try testing.expect(!filter.order_by[2].desc);
 }
 
@@ -590,7 +574,7 @@ test "canonical order: explicit final id ASC is not duplicated; id DESC retained
     defer schema.deinit();
     const tbl = schema.table("items") orelse return error.TestExpectedValue;
 
-    // [{ id: 'asc' }] — identical canonical form to omitted order.
+    // [{ id: 'asc' }] — already total, so nothing is appended.
     {
         const root = try qth.createQueryFilterPayload(allocator, tbl, .{
             .orderBy = .{.{ "id", @as(usize, 0) }},
@@ -632,6 +616,22 @@ test "canonical order: id before another clause is rejected" {
     try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
+test "canonical order: created_at before another clause is rejected" {
+    const allocator = std.testing.allocator;
+
+    var schema = try itemsSchema(allocator, &.{"priority"}, &.{.integer});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const created_at_index = tbl.fieldIndex("created_at") orelse return error.UnknownField;
+    const priority_index = tbl.fieldIndex("priority") orelse return error.UnknownField;
+
+    var root = msgpack.Payload.mapPayload(allocator);
+    defer root.free(allocator);
+    try putOrderBy(allocator, &root, &.{ .{ created_at_index, 0 }, .{ priority_index, 0 } });
+
+    try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+}
+
 test "structural hash includes table and ordered SQL shape but not cursor values" {
     const allocator = std.testing.allocator;
 
@@ -658,8 +658,8 @@ test "structural hash includes table and ordered SQL shape but not cursor values
 
     var default_items = try Make.filter(allocator, &schema, items, .{});
     defer default_items.deinit(allocator);
-    var explicit_id = try Make.filter(allocator, &schema, items, .{ .orderBy = .{.{ "id", 0 }} });
-    defer explicit_id.deinit(allocator);
+    var explicit_created_at = try Make.filter(allocator, &schema, items, .{ .orderBy = .{.{ "created_at", 0 }} });
+    defer explicit_created_at.deinit(allocator);
     var default_archive = try Make.filter(allocator, &schema, archive, .{});
     defer default_archive.deinit(allocator);
     var priority_score = try Make.filter(allocator, &schema, items, .{
@@ -676,7 +676,7 @@ test "structural hash includes table and ordered SQL shape but not cursor values
     defer flipped.deinit(allocator);
 
     const default_hash = query_hasher.computeStructuralHash(items.index, &default_items);
-    try testing.expectEqual(default_hash, query_hasher.computeStructuralHash(items.index, &explicit_id));
+    try testing.expectEqual(default_hash, query_hasher.computeStructuralHash(items.index, &explicit_created_at));
     try testing.expect(default_hash != query_hasher.computeStructuralHash(archive.index, &default_archive));
     try testing.expect(
         query_hasher.computeStructuralHash(items.index, &priority_score) !=
@@ -692,7 +692,7 @@ test "structural hash includes table and ordered SQL shape but not cursor values
     const cursor_values = try allocator.alloc(typed.Value, with_values.order_by.len);
     cursor_values[0] = .{ .scalar = .{ .integer = 4 } };
     cursor_values[1] = .{ .scalar = .{ .integer = 9 } };
-    cursor_values[2] = .{ .scalar = .{ .doc_id = 2 } };
+    cursor_values[2] = .{ .scalar = .{ .integer = 10 } };
     with_values.after = .{ .values = cursor_values };
 
     var with_null = try priority_score.clone(allocator);

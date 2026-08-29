@@ -1,6 +1,5 @@
 // Subscription Tracker
 
-import { compareDocIds } from "./doc_id.js";
 import { joinFieldPath, unflatten } from "./path.js";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
@@ -80,7 +79,7 @@ export class SubscriptionTracker {
 			projection: null,
 			materializedView: {
 				records: new Map(),
-				comparator: comparator ?? createIdComparator(),
+				comparator: comparator ?? createCreatedAtComparator(),
 			},
 		});
 	}
@@ -434,15 +433,17 @@ export class SubscriptionTracker {
 }
 
 /**
- * Default total order: packed document-id ascending (matches the server's
- * hidden `id ASC` tie-breaker across short IDs and UUIDv7 IDs).
+ * Default total order: numeric `created_at` ascending.
  */
-export function createIdComparator(): (a: JsonValue, b: JsonValue) => number {
+export function createCreatedAtComparator(): (
+	a: JsonValue,
+	b: JsonValue,
+) => number {
 	return (a: JsonValue, b: JsonValue): number => {
-		const ia = (a as Record<string, JsonValue>)?.id;
-		const ib = (b as Record<string, JsonValue>)?.id;
-		if (typeof ia === "string" && typeof ib === "string") {
-			return compareDocIds(ia, ib);
+		const ta = (a as Record<string, JsonValue>)?.created_at;
+		const tb = (b as Record<string, JsonValue>)?.created_at;
+		if (typeof ta === "number" && typeof tb === "number") {
+			return ta < tb ? -1 : ta > tb ? 1 : 0;
 		}
 		return 0;
 	};

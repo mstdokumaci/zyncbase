@@ -17,6 +17,7 @@ test "schema_index: exposes field kinds and writable ranges" {
     try std.testing.expectEqual(schema_types.FieldKind.system, posts.fields[schema_system.id_field_index].kind);
     try std.testing.expectEqual(schema_types.FieldKind.user, posts.fields[schema_system.first_user_field_index].kind);
     try std.testing.expectEqual(schema_types.FieldKind.timestamp, posts.fields[posts.fields.len - 1].kind);
+    try std.testing.expect(posts.fields[posts.fieldIndex("created_at").?].indexed);
     try std.testing.expectEqual(@as(usize, 1), posts.userFields().len);
     try std.testing.expectEqual(@as(usize, posts.fields.len), posts.fields.len);
 }

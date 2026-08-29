@@ -40,6 +40,7 @@ test "ddl_generator: generate DDL for a known table" {
         \\);
         \\CREATE INDEX "idx__tasks__namespace" ON "tasks"("namespace_id");
         \\CREATE INDEX "idx__tasks__owner" ON "tasks"("owner_id");
+        \\CREATE UNIQUE INDEX "uidx__tasks__created_at" ON "tasks"("created_at");
         \\CREATE INDEX "idx__tasks__field__status" ON "tasks"("status");
     ;
 
@@ -563,12 +564,12 @@ test "ddl_generator: generateDDL contains exactly generateIndexesDDL definitions
     try std.testing.expectEqualStrings("\n", tail[0..1]);
     try std.testing.expectEqualStrings(indexes_only, tail[1..]);
 
-    // Managed iterator enumerates namespace, owner, users identity, field/ref, unique.
+    // Managed iterator enumerates namespace, owner, created_at, users identity, field/ref, unique.
     var iter = ddl_generator.ManagedIndexIterator.init(&table);
     var count: usize = 0;
     while (iter.next()) |managed_index| {
         count += 1;
         if (managed_index == .users_identity) return error.TestUnexpectedResult; // posts is not the users table
     }
-    try std.testing.expectEqual(@as(usize, 5), count); // ns, owner, slug(ref), status(indexed), unique
+    try std.testing.expectEqual(@as(usize, 6), count); // ns, owner, created_at, slug(ref), status(indexed), unique
 }

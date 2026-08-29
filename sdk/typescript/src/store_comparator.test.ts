@@ -13,14 +13,16 @@ import type {
 /**
  * Flags: 0b01 system, 0b10 doc-id/reference, 0b100 required.
  * Table "items": id(system+doc+req), name(req), score(req), ref(doc+req),
- * opt(optional), profile.rank(optional).
+ * opt(optional), profile.rank(optional), created_at(system+req).
  */
 async function makeReadySchema(): Promise<SchemaDictionary> {
 	const schema = new SchemaDictionary();
 	await schema.processSchemaSync({
 		tables: ["items"],
-		fields: [["id", "name", "score", "ref", "opt", "profile__rank"]],
-		fieldFlags: [[7, 4, 4, 6, 0, 0]],
+		fields: [
+			["id", "name", "score", "ref", "opt", "profile__rank", "created_at"],
+		],
+		fieldFlags: [[7, 4, 4, 6, 0, 0, 5]],
 	});
 	return schema;
 }
@@ -81,10 +83,29 @@ function idsOf(snapshot: JsonValue[]): string[] {
 }
 
 describe("materialized-view comparator", () => {
-	test("default subscription order matches packed id ASC across short and UUIDv7 IDs", async () => {
+	test("default subscription order uses numeric created_at ASC", async () => {
 		const schema = await makeReadySchema();
 		const { store, push } = makeStore(schema);
 		const snapshots = await subscribeAndCollect(store, {});
+
+		push(setOp("z-id", { created_at: 1_800_000_000_000_003 }));
+		push(setOp("a-id", { created_at: 1_800_000_000_000_001 }));
+		push(setOp("m-id", { created_at: 1_800_000_000_000_002 }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual([
+			"a-id",
+			"m-id",
+			"z-id",
+		]);
+	});
+
+	test("explicit id order still matches packed IDs", async () => {
+		const schema = await makeReadySchema();
+		const { store, push } = makeStore(schema);
+		const snapshots = await subscribeAndCollect(store, {
+			orderBy: [{ id: "asc" }],
+		});
 
 		// Short IDs pack below the UUIDv7 family tag bit, so they come first.
 		push(setOp("b-uuid-v7-doc", { name: "x" }));
@@ -104,6 +125,23 @@ describe("materialized-view comparator", () => {
 			"019c1e50-7d11-7abc-9def-0123456789ab",
 			"019c1e50-7d11-6abc-9def-0123456789ab",
 			"INVALID",
+		]);
+	});
+
+	test("equal public sort values use created_at ASC", async () => {
+		const schema = await makeReadySchema();
+		const { store, push } = makeStore(schema);
+		const snapshots = await subscribeAndCollect(store, {
+			orderBy: [{ name: "asc" }],
+		});
+
+		push(setOp("later", { name: "same", created_at: 20 }));
+		push(setOp("earlier", { name: "same", created_at: 10 }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(idsOf(snapshots.at(-1) as JsonValue[])).toEqual([
+			"earlier",
+			"later",
 		]);
 	});
 

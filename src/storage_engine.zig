@@ -2,6 +2,7 @@ const std = @import("std");
 
 const sqlite = @import("sqlite");
 
+const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const sql_build = @import("sql/build.zig");
 const storage_cache = @import("storage_engine/cache.zig");
@@ -67,6 +68,7 @@ pub const StorageEngine = struct {
     options: Options,
     write_worker: WriteWorker,
     pk_sets: []storage_cache.pk_set_type,
+    last_created_at: []i64,
 
     pub fn init(
         self: *StorageEngine,
@@ -145,6 +147,8 @@ pub const StorageEngine = struct {
                 .identity_cache = undefined,
                 // SAFETY: Set after pk_sets init below
                 .pk_sets = undefined,
+                // SAFETY: Set after last_created_at init below
+                .last_created_at = undefined,
                 .schema = schema,
                 .is_healthy = std.atomic.Value(bool).init(true),
                 // SAFETY: Initialized below via .write_queue.init().
@@ -159,6 +163,8 @@ pub const StorageEngine = struct {
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
             // SAFETY: Initialized below
             .pk_sets = undefined,
+            // SAFETY: Initialized below
+            .last_created_at = undefined,
         };
         errdefer self.read_request_queue.deinit();
 
@@ -189,6 +195,11 @@ pub const StorageEngine = struct {
         }
 
         self.write_worker.pk_sets = self.pk_sets;
+
+        self.last_created_at = try allocator.alloc(i64, num_tables);
+        errdefer allocator.free(self.last_created_at);
+        @memset(self.last_created_at, 0);
+        self.write_worker.last_created_at = self.last_created_at;
     }
 
     fn resolveDbPath(io: std.Io, allocator: Allocator, data_dir: []const u8, in_memory: bool) ![:0]const u8 {
@@ -309,6 +320,7 @@ pub const StorageEngine = struct {
             pk_set.deinit(gpa);
         }
         gpa.free(self.pk_sets);
+        gpa.free(self.last_created_at);
 
         // 7. Clean up readers
         for (self.reader_nodes) |*node| {
@@ -421,7 +433,7 @@ pub const StorageEngine = struct {
             try connection.verifyForeignKeys(&self.write_worker.conn);
         }
 
-        try self.bootstrapPrimaryKeySets();
+        try self.bootstrapRuntimeTableState();
 
         // ─── Prepare static stmts (schema is locked, threads not yet spawned) ───
         // Writer: per-table select_document + the two compile-time resolve stmts.
@@ -506,12 +518,28 @@ pub const StorageEngine = struct {
         std.log.info("Storage engine started (Runtime Phase)", .{});
     }
 
-    fn bootstrapPrimaryKeySets(self: *StorageEngine) !void {
-        // Reset sets populated by a previous failed bootstrap attempt.
+    fn bootstrapRuntimeTableState(self: *StorageEngine) !void {
+        // Reset state populated by a previous failed bootstrap attempt.
         self.reset_pk_sets();
+        @memset(self.last_created_at, 0);
 
         // These statements run once at startup and must not pollute stmt_cache.
         for (self.schema.tables, 0..) |table, table_index| {
+            const max_sql = try sql_build.buildSelectMaxCreatedAtSql(self.allocator, table.name_quoted);
+            defer self.allocator.free(max_sql);
+
+            var max_stmt = try self.write_worker.conn.prepareDynamic(max_sql);
+            defer max_stmt.deinit();
+
+            if (sqlite.c.sqlite3_step(max_stmt.stmt) != sqlite.c.SQLITE_ROW) {
+                return storage_errors.classifyStepError(&self.write_worker.conn);
+            }
+            if (sqlite.c.sqlite3_column_type(max_stmt.stmt, 0) != sqlite.c.SQLITE_NULL) {
+                const last = sqlite.c.sqlite3_column_int64(max_stmt.stmt, 0);
+                if (last < 0 or last > schema_system.max_safe_timestamp_us) return StorageError.InvalidOperation;
+                self.last_created_at[table_index] = last;
+            }
+
             const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
             defer self.allocator.free(sql_str);
 
@@ -583,7 +611,7 @@ pub const StorageEngine = struct {
                 .scope_seq = scope_seq,
                 .namespace = namespace_owned,
                 .external_user_id = external_user_id_owned,
-                .timestamp = std.Io.Clock.real.now(self.io).toSeconds(),
+                .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
                 .is_presence = is_presence,
             },
         };

@@ -19,6 +19,7 @@ pub const id_field_index: usize = 0;
 pub const namespace_id_field_index: usize = 1;
 pub const owner_id_field_index: usize = 2;
 pub const first_user_field_index: usize = 3;
+pub const max_safe_timestamp_us: i64 = 9_007_199_254_740_991;
 pub const leading_system_field_count: usize = 3;
 pub const trailing_system_field_count: usize = 2;
 
@@ -29,7 +30,7 @@ pub const leading_system_fields = [_]types.Field{
 };
 
 pub const trailing_system_fields = [_]types.Field{
-    .{ .name = "created_at", .name_quoted = quoted_created_at, .declared_type = .integer, .storage_type = .integer, .required = true, .indexed = false, .kind = .timestamp },
+    .{ .name = "created_at", .name_quoted = quoted_created_at, .declared_type = .integer, .storage_type = .integer, .required = true, .indexed = true, .kind = .timestamp },
     .{ .name = "updated_at", .name_quoted = quoted_updated_at, .declared_type = .integer, .storage_type = .integer, .required = true, .indexed = false, .kind = .timestamp },
 };
 

@@ -90,7 +90,7 @@ pub fn enqueueUpsert(
         .owner_doc_id = owner_doc_id,
         .columns = owned_columns,
         .guard_predicate = owned_guard,
-        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
         .conn_id = conn_id,
         .write_id = write_id,
     } });
@@ -121,7 +121,7 @@ pub fn enqueueUpdate(
         .namespace_id = namespace_id,
         .columns = owned_columns,
         .guard_predicate = owned_guard,
-        .timestamp = std.Io.Clock.real.now(std.testing.io).toSeconds(),
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
         .conn_id = conn_id,
         .write_id = write_id,
     } });

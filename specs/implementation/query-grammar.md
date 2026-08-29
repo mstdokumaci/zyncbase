@@ -55,20 +55,21 @@ The Zig parser is authoritative (wire clients are untrusted):
 
 | Input | Result |
 |:---|:---|
-| `orderBy` omitted | Canonical `[id ASC]` |
+| `orderBy` omitted | Canonical `[created_at ASC]` |
 | 0 or more than 8 clauses | `InvalidSortFormat` |
 | Malformed tuple, unknown field, invalid direction flag | `InvalidSortFormat` / `InvalidFieldName` |
 | Duplicate field across clauses | `InvalidSortFormat` |
 | Array-typed sort field | `UnsupportedSortFieldType` (`INVALID_MESSAGE`) |
-| `id` in any position except the final clause | `InvalidSortFormat` |
+| Unique system field (`id` or `created_at`) in any position except the final clause | `InvalidSortFormat` |
 
 ### Canonical Internal Order
 
-After parsing every `QueryFilter` owns a non-empty descriptor slice ending with the `id` field:
+After parsing every `QueryFilter` owns a non-empty descriptor slice ending with a unique required system field. Non-unique explicit orders receive hidden `created_at ASC`; explicit final `id` or `created_at` is already total:
 
 ```text
-[]                                  -> [id ASC]
-[priority DESC]                     -> [priority DESC, id ASC]
+[]                                  -> [created_at ASC]
+[priority DESC]                     -> [priority DESC, created_at ASC]
+[priority DESC, created_at DESC]    -> [priority DESC, created_at DESC]
 [priority DESC, id DESC]            -> [priority DESC, id DESC]
 ```
 
@@ -85,7 +86,7 @@ Canonicalization makes logically equivalent requests share subscription groups a
 | `{ deleted_at: { isNull: true } }` | `[[5, 11]]` | `deleted_at = index 5` |
 | `{ role: { in: ['admin', 'editor'] } }` | `[[6, 9, ["admin", "editor"]]]` | `role = index 6` |
 | `{ address: { city: { eq: 'NYC' } } }` | `[[7, 0, "NYC"]]` | Flat column: `address__city = index 7` |
-| `{ orderBy: [{ created_at: 'desc' }, { priority: 'asc' }], limit: 50, after: '...' }` | `{"orderBy": [[8, 1], [2, 0]], "limit": 50, "after": "..."}` | `created_at = index 8`, `priority = index 2` |
+| `{ orderBy: [{ priority: 'asc' }, { created_at: 'desc' }], limit: 50, after: '...' }` | `{"orderBy": [[2, 0], [8, 1]], "limit": 50, "after": "..."}` | `priority = index 2`, `created_at = index 8` |
 
 ### Full Wire Message Layout (`StoreQuery`)
 
@@ -96,7 +97,7 @@ Canonicalization makes logically equivalent requests share subscription groups a
   "table_index": 0,
   "conditions": [[3, 4, 18], [4, 0, "active"]],
   "orConditions": [[6, 0, "admin"], [6, 0, "editor"]],
-  "orderBy": [[8, 1], [2, 0]],
+  "orderBy": [[2, 0], [8, 1]],
   "limit": 50,
   "after": "eyJpZCI6..."
 }
