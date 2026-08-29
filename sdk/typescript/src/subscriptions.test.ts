@@ -80,6 +80,59 @@ describe("SubscriptionTracker", () => {
 });
 
 describe("SubscriptionTracker - materialized view set ops", () => {
+	test("reuses sorted order when an update keeps the same sort key", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+		let comparisons = 0;
+		const comparator = (a: JsonValue, b: JsonValue) => {
+			comparisons++;
+			return (
+				((a as Record<string, JsonValue>).rank as number) -
+				((b as Record<string, JsonValue>).rank as number)
+			);
+		};
+
+		tracker.registerCollection(
+			200,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+			comparator,
+		);
+		for (const [id, rank] of [
+			["a", 1],
+			["b", 2],
+			["c", 3],
+		] as const) {
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 200,
+				ops: [{ op: "set", path: ["items", id], value: { id, rank } }],
+			});
+		}
+		await flushTick();
+
+		comparisons = 0;
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 200,
+			ops: [
+				{
+					op: "set",
+					path: ["items", "b"],
+					value: { id: "b", rank: 2, updated: true },
+				},
+			],
+		});
+		await flushTick();
+
+		expect(comparisons).toBe(1);
+		expect(snapshots.at(-1)).toEqual([
+			{ id: "a", rank: 1 },
+			{ id: "b", rank: 2, updated: true },
+			{ id: "c", rank: 3 },
+		]);
+	});
+
 	test("decoded record set op stores the final value", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
