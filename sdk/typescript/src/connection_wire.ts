@@ -99,6 +99,19 @@ const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
 	[WireMessageType.SharedStateBroadcast]: "SharedStateBroadcast",
 } as const;
 
+function isDeltaRecordPairs(value: unknown): value is Array<[number, unknown]> {
+	return (
+		Array.isArray(value) &&
+		value.every(
+			(pair) =>
+				Array.isArray(pair) &&
+				pair.length === 2 &&
+				Number.isSafeInteger(pair[0]) &&
+				pair[0] >= 0,
+		)
+	);
+}
+
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
 export type OutboundRequest =
@@ -472,7 +485,11 @@ export class ConnectionWireCodec {
 			!Number.isSafeInteger(raw[1]) ||
 			(raw[2] !== 0 && raw[2] !== 1) ||
 			!Number.isSafeInteger(raw[3]) ||
-			!(typeof raw[4] === "string" || raw[4] instanceof Uint8Array)
+			!(
+				typeof raw[4] === "number" ||
+				typeof raw[4] === "string" ||
+				raw[4] instanceof Uint8Array
+			)
 		) {
 			return null;
 		}
@@ -482,7 +499,7 @@ export class ConnectionWireCodec {
 		if (subId < 0 || tableIndex < 0) return null;
 		const path = this.schema.decodePath([
 			tableIndex,
-			raw[4] as string | Uint8Array,
+			raw[4] as number | string | Uint8Array,
 		]);
 
 		if (raw[2] === 1) {
@@ -490,7 +507,7 @@ export class ConnectionWireCodec {
 				? { type: "StoreDelta", subId, ops: [{ op: "remove", path }] }
 				: null;
 		}
-		if (!Array.isArray(raw[5])) return null;
+		if (!isDeltaRecordPairs(raw[5])) return null;
 		return {
 			type: "StoreDelta",
 			subId,
@@ -498,11 +515,7 @@ export class ConnectionWireCodec {
 				{
 					op: "set",
 					path,
-					value: this.schema.decodeDeltaValue(
-						tableIndex,
-						raw[5] as Array<[number, unknown]>,
-						path[1],
-					),
+					value: this.schema.decodeDeltaValue(tableIndex, raw[5], path[1]),
 				},
 			],
 		};

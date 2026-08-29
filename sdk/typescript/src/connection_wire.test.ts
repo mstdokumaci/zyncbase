@@ -85,6 +85,22 @@ describe("ConnectionWireCodec", () => {
 		});
 	});
 
+	test("decodes numeric delta ids and rejects malformed set pairs", async () => {
+		const codec = await makeCodec();
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 1, 0, 42, null])),
+		).toEqual({
+			type: "StoreDelta",
+			subId: 1,
+			ops: [{ op: "remove", path: ["users", "42"] }],
+		});
+		expect(
+			codec.decode(
+				encode([WireMessageType.StoreDelta, 1, 0, 0, "u1", [[null]]]),
+			),
+		).toBeNull();
+	});
+
 	test("decodeMulti decodes all concatenated messages in a frame", async () => {
 		const codec = await makeCodec();
 		const ok = encodeToBuffer({ type: "ok", id: 7 });
