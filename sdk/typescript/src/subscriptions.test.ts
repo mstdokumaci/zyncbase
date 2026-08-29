@@ -80,6 +80,30 @@ describe("SubscriptionTracker", () => {
 });
 
 describe("SubscriptionTracker - materialized view set ops", () => {
+	test("clears cached materialized view state", () => {
+		const tracker = new SubscriptionTracker();
+		tracker.registerCollection(
+			204,
+			{ type: "StoreSubscribe", table_index: "items" },
+			() => {},
+		);
+		const view = tracker.get(204)?.materializedView;
+		if (!view) throw new Error("missing materialized view");
+
+		const record = { id: "doc-1" };
+		view.records.set(record.id, record);
+		view.snapshot = [record];
+		view.positions.set(record.id, 0);
+		view.orderDirty = true;
+
+		tracker.clearMaterializedViews();
+
+		expect(view.records.size).toBe(0);
+		expect(view.snapshot).toEqual([]);
+		expect(view.positions.size).toBe(0);
+		expect(view.orderDirty).toBe(false);
+	});
+
 	test("reuses sorted order when an update keeps the same sort key", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];

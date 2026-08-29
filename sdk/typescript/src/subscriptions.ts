@@ -285,6 +285,9 @@ export class SubscriptionTracker {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
+				entry.materializedView.snapshot = [];
+				entry.materializedView.positions.clear();
+				entry.materializedView.orderDirty = false;
 			}
 		}
 	}
