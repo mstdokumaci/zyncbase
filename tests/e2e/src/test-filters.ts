@@ -389,7 +389,9 @@ async function waitForAllFiredAndConverged(
 			);
 			return;
 		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) =>
+			setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))),
+		);
 	}
 }
 
