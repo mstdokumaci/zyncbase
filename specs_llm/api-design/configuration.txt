@@ -365,6 +365,7 @@ CREATE TABLE users (
 );
 
 CREATE UNIQUE INDEX uidx__users__identity ON users(namespace_id, external_id);
+CREATE UNIQUE INDEX uidx__users__created_at ON users(created_at);
 ````id` primary key unique collection/table `namespace_id` visibility identity-provider lookup permit duplicate document IDs namespaces Schema Structure ZyncBase schema format Define data store structure```json
 {
   "version": "1.0.0",
@@ -582,6 +583,7 @@ CREATE TABLE tasks (
 
 CREATE INDEX idx__tasks__field__status ON tasks(status);
 CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
+CREATE UNIQUE INDEX uidx__tasks__created_at ON tasks(created_at);
 ```primary key `id not Namespace-aware tables require document IDs references cursors caches SDK single-key Auto-Migration changes auto-migrate zero friction```json
 // Initial schema.json
 {

@@ -124,7 +124,7 @@ alternatives```typescript
     { 'profile.rank': 'asc' }   // Then by nested rank
   ]
 }
-```clause contains field direction Nested fields dot notation.rank Duplicate fields rejected 8 clauses allowed directions'asc Ascending-Z 0-9 oldest'desc Descending (Z-A 9-0 newest Default Order Omitting `orderBy sorts document `id` ascending identical requesting `orderBy id 'asc `id` requested final clause priority `id absent server appends `id ASC` tie-breaker result order deterministic stable Sort Semantics server SDK implement ordering contract| Value | Ascending order | Descending order |
+```clause contains field direction Nested fields dot notation.rank Duplicate fields rejected 8 clauses allowed directions'asc Ascending-Z 0-9 oldest'desc Descending (Z-A 9-0 newest Order Omitting `orderBy sorts `created_at` ascending identical requesting `orderBy created fields `id `created_at` requested final clause server appends hidden `created_at ASC result order deterministic stable explicit final `id` supported redundant hidden clause Sort Semantics server SDK implement ordering contract| Value | Ascending order | Descending order |
 |---|---|---|
 | null/missing | always last | always last |
 | integer/real | numeric | reverse numeric |
