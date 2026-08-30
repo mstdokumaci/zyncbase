@@ -34,6 +34,16 @@ describe("doc_id", () => {
 		);
 	});
 
+	test("handles short ID cache collisions without aliasing mutable buffers", () => {
+		const first = "cache_t";
+		const second = "cache_1e";
+		const packed = packDocId(first);
+		expect(unpackDocId(packed)).toBe(first);
+		packed.set(packDocId(second));
+		expect(unpackDocId(packed)).toBe(second);
+		expect(unpackDocId(packDocId(first))).toBe(first);
+	});
+
 	test("preserves lexicographic order among short IDs", () => {
 		const ordered = ["-", "0", "9", "_", "a", "aa", "ab", "b", "zz"];
 		for (let i = 0; i < ordered.length - 1; i += 1) {

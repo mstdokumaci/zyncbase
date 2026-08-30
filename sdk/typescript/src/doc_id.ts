@@ -10,7 +10,9 @@ const UUID_FAMILY_TAG = 1n << 127n;
 const UUID_V7_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DOC_ID_CACHE_LIMIT = 4096;
-const shortDocIdDecodeCache = new Map<bigint, string>();
+const shortDocIdHotCache: Array<
+	{ packed: Uint8Array; id: string } | undefined
+> = new Array(DOC_ID_CACHE_LIMIT);
 const docIdSortFamilyCache = new Map<string, 0 | 1 | 2>();
 const uuidDecodeCache: Array<{ packed: Uint8Array; id: string } | undefined> =
 	new Array(DOC_ID_CACHE_LIMIT);
@@ -233,16 +235,26 @@ export function unpackDocId(bytes: Uint8Array): string {
 		return decodeUuidV7DocId(bytes);
 	}
 
-	const value = bytesToBigInt(bytes);
-	const cached = shortDocIdDecodeCache.get(value);
-	if (cached !== undefined) return cached;
-
-	const id = decodeShortDocId(value);
-	if (shortDocIdDecodeCache.size >= DOC_ID_CACHE_LIMIT) {
-		const first = shortDocIdDecodeCache.keys().next().value;
-		if (first !== undefined) shortDocIdDecodeCache.delete(first);
+	const cacheIndex =
+		(((bytes[0] << 8) | bytes[1]) ^
+			((bytes[6] << 8) | bytes[7]) ^
+			((bytes[12] << 8) | bytes[13])) &
+		(DOC_ID_CACHE_LIMIT - 1);
+	const hot = shortDocIdHotCache[cacheIndex];
+	if (hot !== undefined) {
+		let matches = true;
+		for (let i = 0; i < DOC_ID_BYTE_LENGTH; i += 1) {
+			if (bytes[i] !== hot.packed[i]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return hot.id;
 	}
-	shortDocIdDecodeCache.set(value, id);
+
+	const value = bytesToBigInt(bytes);
+	const id = decodeShortDocId(value);
+	shortDocIdHotCache[cacheIndex] = { packed: bytes.slice(), id };
 	return id;
 }
 
