@@ -321,29 +321,8 @@ export class SchemaDictionary {
 		return result;
 	}
 
-	/** Decode a complete positional record into a flat string-keyed value map. */
+	/** Decode a complete positional record into its final nested SDK shape. */
 	decodeRecord(
-		tableIndex: number,
-		wireRecord: readonly unknown[],
-	): Record<string, unknown> {
-		const fields = this.getFields(tableIndex);
-		if (wireRecord.length !== fields.length) {
-			throw new Error(
-				`SchemaDictionary: record field count ${wireRecord.length} does not match schema field count ${fields.length} for table index ${tableIndex}`,
-			);
-		}
-
-		const result: Record<string, unknown> = {};
-		for (let fieldIndex = 0; fieldIndex < wireRecord.length; fieldIndex++) {
-			result[fields[fieldIndex]] = this.decodeFieldValueWithFlags(
-				this.fieldFlags[tableIndex][fieldIndex],
-				wireRecord[fieldIndex],
-			);
-		}
-		return result;
-	}
-
-	decodeDeltaRecord(
 		tableIndex: number,
 		wireRecord: readonly unknown[],
 	): Record<string, JsonValue> {

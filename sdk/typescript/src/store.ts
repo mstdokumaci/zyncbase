@@ -38,7 +38,10 @@ import { generateUUIDv7 } from "./uuid.js";
 
 /** The subset of ConnectionManager that StoreImpl depends on. */
 export interface StoreConnection {
-	dispatch(msg: OutboundRequest): Promise<OkResponse>;
+	dispatch(
+		msg: OutboundRequest,
+		responseTableIndex?: number,
+	): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	isSchemaReady(): boolean;
@@ -226,19 +229,18 @@ export class StoreImpl {
 				const subId = state.subId;
 				const nextCursor = state.nextCursor;
 				const promise = (async () => {
-					const ok = await this.conn.dispatch(buildLoadMore(subId, nextCursor));
-					const decoded = this.decodeLoadMoreRows(
-						ok.value as JsonValue,
-						collection,
+					const ok = await this.conn.dispatch(
+						buildLoadMore(subId, nextCursor),
+						this.conn.schemaDictionary.getTableIndex(collection),
 					);
 					state.nextCursor = ok.nextCursor ?? null;
 					state.hasMore = ok.hasMore ?? false;
 					handle.hasMore = state.hasMore;
-					if (state.subId !== null && decoded !== undefined) {
+					if (state.subId !== null && ok.value !== undefined) {
 						this.tracker.dispatchInitialSnapshot(
 							state.subId,
 							[collection],
-							decoded,
+							ok.value,
 						);
 					}
 				})();
@@ -407,16 +409,6 @@ export class StoreImpl {
 		} catch (err) {
 			this.emitAndThrow(err, fallbackMessage);
 		}
-	}
-
-	private decodeLoadMoreRows(value: JsonValue, collection: string): JsonValue {
-		if (!Array.isArray(value)) throw new Error("Invalid loadMore response");
-		const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
-		return value.map((row) => {
-			if (!Array.isArray(row))
-				throw new Error("Invalid positional store record");
-			return this.conn.schemaDictionary.decodeRecord(tableIndex, row);
-		}) as JsonValue;
 	}
 
 	private dispatchUnsubscribe(subId: number): void {

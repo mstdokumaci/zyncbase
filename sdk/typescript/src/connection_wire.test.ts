@@ -52,6 +52,30 @@ describe("ConnectionWireCodec", () => {
 		});
 	});
 
+	test("keeps load-more response table context off the wire", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{
+				type: "StoreLoadMore",
+				subId: 9,
+				nextCursor: "next",
+			},
+			8,
+			0,
+		);
+
+		expect(encoded.context).toEqual({
+			type: "StoreLoadMore",
+			responseTableIndex: 0,
+		});
+		expect(decode(encoded.bytes)).toEqual({
+			type: 0x17,
+			id: 8,
+			subId: 9,
+			nextCursor: "next",
+		});
+	});
+
 	test("decodes schema-aware deltas", async () => {
 		const codec = await makeCodec();
 		const msg = codec.decode(
@@ -161,19 +185,53 @@ describe("ConnectionWireCodec", () => {
 		expect(codec.decodeMulti(frame)).toEqual([{ type: "ok", id: 7 }]);
 	});
 
-	test("decodes query response rows using pending request context", async () => {
+	test("decodes every correlated store row through one nested record path", async () => {
 		const codec = await makeCodec();
-		const ok = codec.decodeOkResponse(
-			{
-				type: "ok",
-				id: 2,
-				value: [["u1", "Ada", "London"]] as never,
-			},
-			{ type: "StoreQuery", responseTableIndex: 0 },
-		);
+		for (const type of [
+			"StoreQuery",
+			"StoreSubscribe",
+			"StoreLoadMore",
+		] as const) {
+			const ok = codec.decodeOkResponse(
+				{
+					type: "ok",
+					id: 2,
+					value: [["u1", "Ada", "London"]] as never,
+				},
+				{ type, responseTableIndex: 0 },
+			);
 
-		expect(ok.value).toEqual([
-			{ id: "u1", name: "Ada", address__city: "London" },
-		]);
+			expect(ok.value).toEqual([
+				{ id: "u1", name: "Ada", address: { city: "London" } },
+			]);
+		}
+	});
+
+	test("rejects malformed correlated store rows", async () => {
+		const codec = await makeCodec();
+		for (const type of [
+			"StoreQuery",
+			"StoreSubscribe",
+			"StoreLoadMore",
+		] as const) {
+			expect(() =>
+				codec.decodeOkResponse(
+					{ type: "ok", id: 2, value: null },
+					{ type, responseTableIndex: 0 },
+				),
+			).toThrow("Invalid positional store response");
+			expect(() =>
+				codec.decodeOkResponse(
+					{ type: "ok", id: 2, value: [null] },
+					{ type, responseTableIndex: 0 },
+				),
+			).toThrow("Invalid positional store record");
+			expect(() =>
+				codec.decodeOkResponse(
+					{ type: "ok", id: 2, value: [["u1"]] as never },
+					{ type, responseTableIndex: 0 },
+				),
+			).toThrow("record field count 1 does not match schema field count 3");
+		}
 	});
 });

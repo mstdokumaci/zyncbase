@@ -152,7 +152,11 @@ export interface EncodedOutbound {
 export class ConnectionWireCodec {
 	readonly schema = new SchemaDictionary();
 
-	encode(message: OutboundRequest, id: number): EncodedOutbound {
+	encode(
+		message: OutboundRequest,
+		id: number,
+		localResponseTableIndex?: number,
+	): EncodedOutbound {
 		const debugMessage = { ...message, id } as OutboundMessage;
 		let wireMessage: Record<string, unknown>;
 		try {
@@ -171,9 +175,10 @@ export class ConnectionWireCodec {
 		}
 
 		const responseTableIndex: number | undefined =
-			typeof wireMessage.table_index === "number"
+			localResponseTableIndex ??
+			(typeof wireMessage.table_index === "number"
 				? wireMessage.table_index
-				: undefined;
+				: undefined);
 
 		return {
 			bytes: encode(wireMessage) as Uint8Array,
@@ -250,10 +255,14 @@ export class ConnectionWireCodec {
 		context?: PendingRequestContext,
 	): OkResponse {
 		if (
-			(context?.type === "StoreQuery" || context?.type === "StoreSubscribe") &&
-			typeof context.responseTableIndex === "number" &&
-			Array.isArray(ok.value)
+			(context?.type === "StoreQuery" ||
+				context?.type === "StoreSubscribe" ||
+				context?.type === "StoreLoadMore") &&
+			typeof context.responseTableIndex === "number"
 		) {
+			if (!Array.isArray(ok.value)) {
+				throw new Error("Invalid positional store response");
+			}
 			return {
 				...ok,
 				value: ok.value.map((row) =>
@@ -329,8 +338,12 @@ export class ConnectionWireCodec {
 			wire = this.encodeStoreSetRemove(wire, type);
 		} else if (type === "StoreBatch") {
 			wire = this.encodeStoreBatch(wire);
-		} else if (type === "StoreQuery" || type === "StoreSubscribe") {
-			wire = this.encodeStoreQuerySubscribe(wire);
+		} else if (
+			type === "StoreQuery" ||
+			type === "StoreSubscribe" ||
+			type === "StoreLoadMore"
+		) {
+			wire = this.encodeStoreRead(wire);
 		}
 		return wire;
 	}
@@ -422,7 +435,7 @@ export class ConnectionWireCodec {
 		return ["s", encodedPath, op[2]];
 	}
 
-	private encodeStoreQuerySubscribe(
+	private encodeStoreRead(
 		wire: Record<string, unknown>,
 	): Record<string, unknown> {
 		if (typeof wire.table_index === "string") {
@@ -499,7 +512,7 @@ export class ConnectionWireCodec {
 			}
 
 			if (!Array.isArray(raw[4])) return null;
-			const value = this.schema.decodeDeltaRecord(tableIndex, raw[4]);
+			const value = this.schema.decodeRecord(tableIndex, raw[4]);
 			if (typeof value.id !== "string") return null;
 			const path = this.schema.decodePath([tableIndex, value.id]);
 			return {
@@ -514,7 +527,7 @@ export class ConnectionWireCodec {
 
 	private decodeRow(tableIndex: number, row: JsonValue): JsonValue {
 		if (!Array.isArray(row)) throw new Error("Invalid positional store record");
-		return this.schema.decodeRecord(tableIndex, row) as JsonValue;
+		return this.schema.decodeRecord(tableIndex, row);
 	}
 
 	private decodePresenceBroadcast(msg: PresenceBroadcast): PresenceBroadcast {

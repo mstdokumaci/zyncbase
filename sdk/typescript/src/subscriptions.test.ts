@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
-import { SubscriptionTracker } from "./subscriptions";
+import {
+	createInitialSnapshotDelta,
+	SubscriptionTracker,
+} from "./subscriptions";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types";
 
 /**
@@ -80,6 +83,15 @@ describe("SubscriptionTracker", () => {
 });
 
 describe("SubscriptionTracker - materialized view set ops", () => {
+	test("initial snapshots reuse final nested records", () => {
+		const record = { id: "u1", address: { city: "London" } };
+		const delta = createInitialSnapshotDelta(200, ["users"], [record]);
+
+		expect(delta.ops).toHaveLength(1);
+		expect(delta.ops[0]?.op).toBe("set");
+		if (delta.ops[0]?.op === "set") expect(delta.ops[0].value).toBe(record);
+	});
+
 	test("decoded record set op stores the final value", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];

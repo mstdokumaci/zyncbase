@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { ZyncBaseError } from "./errors.js";
 import {
 	buildBatch,
+	buildLoadMore,
 	buildRemove,
 	buildSet,
 	encodeQueryOptions,
 	shapeGetResult,
+	shapeQueryResult,
 } from "./store_wire.js";
 import type { JsonValue } from "./types";
 
@@ -80,19 +82,37 @@ describe("store_wire", () => {
 		).toThrow(ZyncBaseError);
 	});
 
-	test("shapeGetResult returns collection, document, and field shapes", () => {
-		const rows = [{ name: "Ada", address__city: "London" }];
-
-		expect(shapeGetResult(["users"], rows)).toEqual([
-			{ name: "Ada", address: { city: "London" } },
-		]);
-		expect(shapeGetResult(["users", "u1"], rows)).toEqual({
-			name: "Ada",
-			address: { city: "London" },
+	test("buildLoadMore contains only server-required fields", () => {
+		expect(buildLoadMore(9, "next")).toEqual({
+			type: "StoreLoadMore",
+			subId: 9,
+			nextCursor: "next",
 		});
+	});
+
+	test("shapeGetResult reuses nested collection and document records", () => {
+		const record = { name: "Ada", address: { city: "London" } };
+		const rows = [record];
+
+		expect(shapeGetResult(["users"], rows)).toBe(rows);
+		expect(shapeGetResult(["users", "u1"], rows)).toBe(record);
 		expect(shapeGetResult(["users", "u1", "address", "city"], rows)).toBe(
 			"London",
 		);
+	});
+
+	test("shapeQueryResult reuses decoded records", () => {
+		const record = { id: "u1", address: { city: "London" } };
+		const value = [record];
+		const result = shapeQueryResult({
+			type: "ok",
+			id: 1,
+			value,
+			nextCursor: "next",
+		});
+
+		expect(result[0]).toBe(record);
+		expect(result.nextCursor).toBe("next");
 	});
 
 	describe("encodeQueryOptions — preservation property", () => {

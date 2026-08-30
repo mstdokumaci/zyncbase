@@ -47,6 +47,7 @@ function makeStore(
 	schemaDictionary?: SchemaDictionary,
 ) {
 	const messages: OutboundRequest[] = [];
+	const responseTableIndexes: Array<number | undefined> = [];
 	const errors: unknown[] = [];
 	const pendingResponses = [...responses];
 	let messageHandler: ((msg: InboundMessage) => void) | null = null;
@@ -55,8 +56,12 @@ function makeStore(
 	const schema = schemaDictionary ?? new SchemaDictionary();
 
 	const conn: StoreConnection = {
-		dispatch: async (msg: OutboundRequest): Promise<OkResponse> => {
+		dispatch: async (
+			msg: OutboundRequest,
+			responseTableIndex?: number,
+		): Promise<OkResponse> => {
 			messages.push(msg);
+			responseTableIndexes.push(responseTableIndex);
 			const response = pendingResponses.shift();
 			if (response instanceof Error) throw response;
 			return response ?? { type: "ok", id: messages.length };
@@ -82,7 +87,17 @@ function makeStore(
 		for (const h of disconnectHandlers) h();
 	};
 
-	return { store, tracker, messages, errors, conn, push, disconnect, schema };
+	return {
+		store,
+		tracker,
+		messages,
+		responseTableIndexes,
+		errors,
+		conn,
+		push,
+		disconnect,
+		schema,
+	};
 }
 
 async function flushPromises(): Promise<void> {
@@ -131,7 +146,7 @@ describe("StoreImpl", () => {
 			{
 				type: "ok",
 				id: 1,
-				value: [{ name: "Ada", address__city: "London" }],
+				value: [{ name: "Ada", address: { city: "London" } }],
 			},
 		]);
 
@@ -188,7 +203,7 @@ describe("StoreImpl", () => {
 	});
 
 	test("subscribe registers collection view and loadMore dispatches cursor request", async () => {
-		const { store, messages } = makeStore(
+		const { store, messages, responseTableIndexes } = makeStore(
 			[
 				{
 					type: "ok",
@@ -201,7 +216,7 @@ describe("StoreImpl", () => {
 				{
 					type: "ok",
 					id: 2,
-					value: [["u2", "Grace"]],
+					value: [{ id: "u2", name: "Grace" }],
 					hasMore: false,
 					nextCursor: null,
 				},
@@ -227,6 +242,7 @@ describe("StoreImpl", () => {
 			subId: 9,
 			nextCursor: "next",
 		});
+		expect(responseTableIndexes[1]).toBe(0);
 		expect(handle.hasMore).toBe(false);
 		expect(snapshots.at(-1)).toEqual([
 			{ id: "u1", name: "Ada" },
@@ -245,50 +261,7 @@ describe("StoreImpl", () => {
 		handle.unsubscribe();
 	});
 
-	test("loadMore decodes raw tuple rows via decodeLoadMoreRows", async () => {
-		const schema = await makeReadySchema();
-		const { store, messages } = makeStore(
-			[
-				{
-					type: "ok",
-					id: 1,
-					subId: 9,
-					value: [{ id: "u1", name: "Ada" }],
-					hasMore: true,
-					nextCursor: "next",
-				},
-				{
-					type: "ok",
-					id: 2,
-					value: [["u2", "Grace"]],
-					hasMore: false,
-					nextCursor: null,
-				},
-			],
-			schema,
-		);
-		const snapshots: JsonValue[][] = [];
-
-		const handle = store.subscribe("users", {}, (value) =>
-			snapshots.push(value),
-		);
-		await flushPromises();
-		await flushTimers();
-		await handle.loadMore();
-		await flushTimers();
-
-		expect(messages[1]).toEqual({
-			type: "StoreLoadMore",
-			subId: 9,
-			nextCursor: "next",
-		});
-		expect(snapshots.at(-1)).toEqual([
-			{ id: "u1", name: "Ada" },
-			{ id: "u2", name: "Grace" },
-		]);
-	});
-
-	test("loadMore rejects malformed positional rows without mutating state", async () => {
+	test("loadMore rejection does not mutate pagination state", async () => {
 		const schema = await makeReadySchema();
 		const { store } = makeStore(
 			[
@@ -300,13 +273,7 @@ describe("StoreImpl", () => {
 					hasMore: true,
 					nextCursor: "next",
 				},
-				{
-					type: "ok",
-					id: 2,
-					value: [["u2"]],
-					hasMore: false,
-					nextCursor: null,
-				},
+				new Error("Invalid positional store record"),
 			],
 			schema,
 		);
@@ -318,7 +285,7 @@ describe("StoreImpl", () => {
 		await flushTimers();
 
 		await expect(handle.loadMore()).rejects.toThrow(
-			"record field count 1 does not match schema field count 2",
+			"Invalid positional store record",
 		);
 		expect(handle.hasMore).toBe(true);
 		expect(snapshots).toEqual([[{ id: "u1", name: "Ada" }]]);

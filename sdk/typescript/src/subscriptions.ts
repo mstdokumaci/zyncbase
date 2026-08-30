@@ -494,6 +494,6 @@ function createInitialSnapshotOp(
 	return {
 		op: "set",
 		path: [collection, id],
-		value: unflatten(value),
+		value,
 	};
 }

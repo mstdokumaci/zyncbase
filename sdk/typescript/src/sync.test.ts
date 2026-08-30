@@ -75,14 +75,16 @@ describe("Store Synchronization Integration", () => {
 		unlisten();
 	});
 
-	test("should handle deep-path field retrieval with unflattening", async () => {
+	test("should handle deep-path field retrieval from decoded records", async () => {
 		const tracker = new SubscriptionTracker();
 		const mockConn = makeConn(
 			async () =>
 				({
 					type: "ok",
 					id: 1,
-					value: [{ id: "3", title: "Nested", must_be_complete__before: 100 }],
+					value: [
+						{ id: "3", title: "Nested", must_be_complete: { before: 100 } },
+					],
 				}) as unknown as OkResponse,
 		);
 
@@ -155,7 +157,7 @@ describe("Store Synchronization Integration", () => {
 });
 
 describe("Store Listen Reconstruction", () => {
-	test("should unflatten initial snapshot with complex flattened keys", async () => {
+	test("should preserve a complex nested initial snapshot", async () => {
 		const tracker = new SubscriptionTracker();
 		const mockConn = makeConn(async (msg) => {
 			const m = msg as Record<string, unknown>;
@@ -167,8 +169,7 @@ describe("Store Listen Reconstruction", () => {
 					{
 						id: "2",
 						title: "Complex Task",
-						meta__author: "Mustafa",
-						meta__priority: 1,
+						meta: { author: "Mustafa", priority: 1 },
 					},
 				],
 			} as unknown as OkResponse;
