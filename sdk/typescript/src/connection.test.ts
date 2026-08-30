@@ -18,6 +18,16 @@ afterEach(() => {
 	restoreFetch();
 });
 
+async function useCanonicalDeltaSchema(
+	manager: ConnectionManager,
+): Promise<void> {
+	await manager.schemaDictionary.processSchemaSync({
+		tables: ["users"],
+		fields: [["id", "name"]],
+		fieldFlags: [[0b10, 0]],
+	});
+}
+
 describe("ConnectionManager", () => {
 	describe("connect()", () => {
 		test("sets binaryType to arraybuffer on WebSocket creation", async () => {
@@ -138,6 +148,7 @@ describe("ConnectionManager", () => {
 		test("routes StoreDelta to registered delta handler by subId", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
+			await useCanonicalDeltaSchema(manager);
 
 			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
@@ -145,7 +156,7 @@ describe("ConnectionManager", () => {
 			const delta = {
 				type: "StoreDelta",
 				subId: 42,
-				ops: [{ op: "set", path: [1, "u1"], value: [[0, "Alice"]] }],
+				ops: [{ op: "set", path: [0, "u1"], value: ["u1", "Alice"] }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 			await (manager as unknown as { processingPromise: Promise<void> })
@@ -158,6 +169,7 @@ describe("ConnectionManager", () => {
 		test("routes multiple deltas from one concatenated frame in order", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
+			await useCanonicalDeltaSchema(manager);
 
 			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
@@ -165,12 +177,12 @@ describe("ConnectionManager", () => {
 			const delta1 = encodeToBuffer({
 				type: "StoreDelta",
 				subId: 1,
-				ops: [{ op: "set", path: [1, "u1"], value: [[0, "Alice"]] }],
+				ops: [{ op: "set", path: [0, "u1"], value: ["u1", "Alice"] }],
 			});
 			const delta2 = encodeToBuffer({
 				type: "StoreDelta",
 				subId: 2,
-				ops: [{ op: "set", path: [1, "u2"], value: [[0, "Bob"]] }],
+				ops: [{ op: "set", path: [0, "u2"], value: ["u2", "Bob"] }],
 			});
 			const frame = new Uint8Array(delta1.byteLength + delta2.byteLength);
 			frame.set(new Uint8Array(delta1), 0);
@@ -224,15 +236,15 @@ describe("ConnectionManager", () => {
 			const schema = {
 				type: "SchemaSync",
 				tables: ["users"],
-				fields: [["name", "age"]],
-				fieldFlags: [[0b00, 0b00]],
+				fields: [["id", "name", "age"]],
+				fieldFlags: [[0b10, 0b00, 0b00]],
 			};
 			mockWs.triggerMessage(encodeToBuffer(schema));
 
 			const delta = {
 				type: "StoreDelta",
 				subId: 1,
-				ops: [{ op: "set", path: [0, "u1"], value: [[0, "Alice"]] }],
+				ops: [{ op: "set", path: [0, "u1"], value: ["u1", "Alice", null] }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 

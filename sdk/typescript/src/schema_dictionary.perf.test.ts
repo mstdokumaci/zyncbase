@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { packDocId } from "./doc_id";
 import { SchemaDictionary } from "./schema_dictionary";
 
 describe("SchemaDictionary performance", () => {
@@ -9,29 +10,29 @@ describe("SchemaDictionary performance", () => {
 			fields: [["id", "name", "priority", "active", "metrics__rank", "tags"]],
 			fieldFlags: [[0b11, 0, 0, 0, 0, 0]],
 		});
-		const wireValue: Array<[number, unknown]> = [
-			[0, new Uint8Array(16)],
-			[1, "item"],
-			[2, 42],
-			[3, true],
-			[4, 7],
-			[5, ["a", "b"]],
+		const wireRecord: unknown[] = [
+			packDocId("task_1"),
+			"item",
+			42,
+			true,
+			7,
+			["a", "b"],
 		];
 
 		for (let i = 0; i < 20_000; i++) {
-			schema.decodeDeltaValue(0, wireValue, "task_1");
+			schema.decodeDeltaRecord(0, wireRecord);
 		}
 
 		const iterations = 250_000;
 		let last: unknown;
 		const t0 = performance.now();
 		for (let i = 0; i < iterations; i++) {
-			last = schema.decodeDeltaValue(0, wireValue, "task_1");
+			last = schema.decodeDeltaRecord(0, wireRecord);
 		}
 		const elapsedMs = performance.now() - t0;
 
 		console.log(
-			`decodeDeltaValue (${iterations} records) [ms]: ${elapsedMs.toFixed(1)}`,
+			`decodeDeltaRecord (${iterations} records) [ms]: ${elapsedMs.toFixed(1)}`,
 		);
 		expect(last).toEqual({
 			id: "task_1",

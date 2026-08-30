@@ -284,7 +284,6 @@ fn encodeDeltaSuffixes(
             set_suffix.* = wire_encode.encodeSetDeltaSuffix(
                 alloc,
                 table_metadata.index,
-                id_val_actual,
                 new_record,
                 table_metadata,
             ) catch |err| {

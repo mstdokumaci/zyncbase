@@ -43,8 +43,7 @@ function encodeStoreDeltaForTest(msg: object): unknown[] {
 		delta.subId,
 		op.op === "set" ? 0 : 1,
 		op.path[0],
-		op.path[1],
-		op.op === "set" ? op.value : null,
+		op.op === "set" ? op.value : op.path[1],
 	];
 }
 

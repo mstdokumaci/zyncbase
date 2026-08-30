@@ -99,16 +99,21 @@ const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
 	[WireMessageType.SharedStateBroadcast]: "SharedStateBroadcast",
 } as const;
 
-function isDeltaRecordPairs(value: unknown): value is Array<[number, unknown]> {
+function isWireDocId(value: unknown): value is number | string | Uint8Array {
 	return (
-		Array.isArray(value) &&
-		value.every(
-			(pair) =>
-				Array.isArray(pair) &&
-				pair.length === 2 &&
-				Number.isSafeInteger(pair[0]) &&
-				pair[0] >= 0,
-		)
+		typeof value === "string" ||
+		value instanceof Uint8Array ||
+		(Number.isSafeInteger(value) && (value as number) >= 0)
+	);
+}
+
+function hasValidStoreDeltaHeader(raw: unknown[]): boolean {
+	return (
+		raw.length === 5 &&
+		raw[0] === WireMessageType.StoreDelta &&
+		Number.isSafeInteger(raw[1]) &&
+		(raw[2] === 0 || raw[2] === 1) &&
+		Number.isSafeInteger(raw[3])
 	);
 }
 
@@ -479,56 +484,37 @@ export class ConnectionWireCodec {
 	}
 
 	private decodeStoreDelta(raw: unknown[]): StoreDelta | null {
-		if (
-			raw.length !== 6 ||
-			raw[0] !== WireMessageType.StoreDelta ||
-			!Number.isSafeInteger(raw[1]) ||
-			(raw[2] !== 0 && raw[2] !== 1) ||
-			!Number.isSafeInteger(raw[3]) ||
-			!(
-				typeof raw[4] === "number" ||
-				typeof raw[4] === "string" ||
-				raw[4] instanceof Uint8Array
-			)
-		) {
-			return null;
-		}
+		if (!hasValidStoreDeltaHeader(raw)) return null;
 
 		const subId = raw[1] as number;
 		const tableIndex = raw[3] as number;
 		if (subId < 0 || tableIndex < 0) return null;
-		const path = this.schema.decodePath([
-			tableIndex,
-			raw[4] as number | string | Uint8Array,
-		]);
 
-		if (raw[2] === 1) {
-			return raw[5] === null
-				? { type: "StoreDelta", subId, ops: [{ op: "remove", path }] }
-				: null;
+		try {
+			if (raw[2] === 1) {
+				const id = raw[4];
+				if (!isWireDocId(id)) return null;
+				const path = this.schema.decodePath([tableIndex, id]);
+				return { type: "StoreDelta", subId, ops: [{ op: "remove", path }] };
+			}
+
+			if (!Array.isArray(raw[4])) return null;
+			const value = this.schema.decodeDeltaRecord(tableIndex, raw[4]);
+			if (typeof value.id !== "string") return null;
+			const path = this.schema.decodePath([tableIndex, value.id]);
+			return {
+				type: "StoreDelta",
+				subId,
+				ops: [{ op: "set", path, value }],
+			};
+		} catch {
+			return null;
 		}
-		if (!isDeltaRecordPairs(raw[5])) return null;
-		return {
-			type: "StoreDelta",
-			subId,
-			ops: [
-				{
-					op: "set",
-					path,
-					value: this.schema.decodeDeltaValue(tableIndex, raw[5], path[1]),
-				},
-			],
-		};
 	}
 
 	private decodeRow(tableIndex: number, row: JsonValue): JsonValue {
-		if (row === null || typeof row !== "object" || !Array.isArray(row)) {
-			return row;
-		}
-		return this.schema.decodeValue(
-			tableIndex,
-			row as Array<[number, unknown]>,
-		) as JsonValue;
+		if (!Array.isArray(row)) throw new Error("Invalid positional store record");
+		return this.schema.decodeRecord(tableIndex, row) as JsonValue;
 	}
 
 	private decodePresenceBroadcast(msg: PresenceBroadcast): PresenceBroadcast {

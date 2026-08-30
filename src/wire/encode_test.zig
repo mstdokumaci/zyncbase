@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const msgpack_helpers = @import("../msgpack_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const query_ast = @import("../query/ast.zig");
 const query_parser = @import("../query/parser.zig");
@@ -136,7 +135,11 @@ test "encodeQuery: includes subscription pagination fields" {
     const rows_payload = (try parsed.mapGet("value")) orelse return error.MissingValue;
     try testing.expect(rows_payload == .arr);
     try testing.expectEqual(@as(usize, 1), rows_payload.arr.len);
-    const name = (try msgpack_helpers.getMapValueByName(rows_payload.arr[0], table_metadata, "name")) orelse return error.MissingName;
+    const row = rows_payload.arr[0];
+    try testing.expect(row == .arr);
+    try testing.expectEqual(table_metadata.fields.len, row.arr.len);
+    const name_index = table_metadata.fieldIndex("name") orelse return error.MissingName;
+    const name = row.arr[name_index];
     try testing.expectEqualStrings("Ada", name.str.value());
 
     const has_more = (try parsed.mapGet("hasMore")) orelse return error.MissingHasMore;
@@ -159,7 +162,7 @@ test "encodeSetDeltaSuffix: set operation" {
     const record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer record.deinit(allocator);
 
-    const suffix = try wire_encode.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), record, table_metadata);
+    const suffix = try wire_encode.encodeSetDeltaSuffix(allocator, table_metadata.index, record, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
@@ -169,14 +172,14 @@ test "encodeSetDeltaSuffix: set operation" {
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
-    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(usize, 5), p.arr.len);
     try testing.expectEqual(@as(u64, @intFromEnum(MessageType.store_delta)), p.arr[0].uint);
     try testing.expectEqual(@as(u64, 42), p.arr[1].uint);
     try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.DeltaOp.set)), p.arr[2].uint);
     try testing.expectEqual(@as(u64, 0), p.arr[3].uint);
-    try testing.expectEqualStrings("user-123", p.arr[4].str.value());
-    try testing.expect(p.arr[5] == .arr);
-    try testing.expectEqual(@as(usize, 6), p.arr[5].arr.len);
+    try testing.expect(p.arr[4] == .arr);
+    try testing.expectEqual(@as(usize, 6), p.arr[4].arr.len);
+    try testing.expectEqualStrings("user-123", p.arr[4].arr[schema_system.id_field_index].str.value());
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {
@@ -193,11 +196,40 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
-    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(usize, 5), p.arr.len);
     try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.DeltaOp.remove)), p.arr[2].uint);
     try testing.expectEqual(@as(u64, 0), p.arr[3].uint);
     try testing.expectEqual(@as(u64, 999), p.arr[4].uint);
-    try testing.expect(p.arr[5] == .nil);
+}
+
+test "encodeRecord: preserves nil positions and rejects wrong field count" {
+    const allocator = std.heap.smp_allocator;
+
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &.{"name"},
+    }});
+    defer schema.deinit();
+
+    const table_metadata = schema.table("users") orelse return error.UnknownTable;
+    var record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
+    defer record.deinit(allocator);
+    record.values[3].deinit(allocator);
+    record.values[3] = tth.valNil();
+
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try wire_encode.encodeRecord(&output.writer, record, table_metadata);
+
+    var reader: std.Io.Reader = .fixed(output.written());
+    const parsed = try msgpack.decodeTrusted(allocator, &reader);
+    defer parsed.free(allocator);
+    try testing.expect(parsed == .arr);
+    try testing.expectEqual(table_metadata.fields.len, parsed.arr.len);
+    try testing.expect(parsed.arr[3] == .nil);
+
+    var no_values: [0]typed.Value = .{};
+    try testing.expectError(error.InternalError, wire_encode.encodeRecord(&output.writer, .{ .values = &no_values }, table_metadata));
 }
 
 test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
@@ -260,14 +292,13 @@ test "store_delta_header: decodes to StoreDelta type" {
     try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(wire_encode.DeltaOp.remove)), writer);
     try msgpack.encode(msgpack.Payload.uintToPayload(0), writer);
     try msgpack.writeMsgPackStr(writer, "doc-1");
-    try writer.writeByte(0xc0);
 
     var reader: std.Io.Reader = .fixed(buf.written());
     const p = try msgpack.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
-    try testing.expectEqual(@as(usize, 6), p.arr.len);
+    try testing.expectEqual(@as(usize, 5), p.arr.len);
     try testing.expectEqual(@as(u64, @intFromEnum(MessageType.store_delta)), p.arr[0].uint);
     try testing.expectEqual(@as(u64, 42), p.arr[1].uint);
 }

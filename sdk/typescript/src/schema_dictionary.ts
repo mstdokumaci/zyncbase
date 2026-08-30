@@ -26,7 +26,7 @@ import type { JsonValue } from "./types.js";
  *  3. All subsequent Store operations encode paths/values through
  *     `encodePath` / `encodeValue` before transmission.
  *  4. All inbound responses/deltas decode through `decodePath` /
- *     `decodeValue` before exposing to user code.
+ *     `decodeRecord` before exposing to user code.
  *  5. On reconnect, the hash of the new SchemaSync is compared to
  *     the previous one; a mismatch triggers a `schemaChange` event.
  */
@@ -321,42 +321,47 @@ export class SchemaDictionary {
 		return result;
 	}
 
-	/**
-	 * Decode a pair-array wire format into a string-keyed value map.
-	 *
-	 * Example:
-	 *   [ [1, 100], [2, 200] ] → { "x": 100, "y": 200 }
-	 */
-	decodeValue(
+	/** Decode a complete positional record into a flat string-keyed value map. */
+	decodeRecord(
 		tableIndex: number,
-		wireValue: Array<[number, unknown]>,
+		wireRecord: readonly unknown[],
 	): Record<string, unknown> {
+		const fields = this.getFields(tableIndex);
+		if (wireRecord.length !== fields.length) {
+			throw new Error(
+				`SchemaDictionary: record field count ${wireRecord.length} does not match schema field count ${fields.length} for table index ${tableIndex}`,
+			);
+		}
+
 		const result: Record<string, unknown> = {};
-		for (const [fieldIndex, val] of wireValue) {
-			const fieldName = this.getFieldName(tableIndex, fieldIndex);
-			result[fieldName] = this.decodeFieldValue(tableIndex, fieldIndex, val);
+		for (let fieldIndex = 0; fieldIndex < wireRecord.length; fieldIndex++) {
+			result[fields[fieldIndex]] = this.decodeFieldValueWithFlags(
+				this.fieldFlags[tableIndex][fieldIndex],
+				wireRecord[fieldIndex],
+			);
 		}
 		return result;
 	}
 
-	decodeDeltaValue(
+	decodeDeltaRecord(
 		tableIndex: number,
-		wireValue: Array<[number, unknown]>,
-		id: string,
+		wireRecord: readonly unknown[],
 	): Record<string, JsonValue> {
-		const result: Record<string, JsonValue> = { id };
 		const fields = this.getFields(tableIndex);
+		if (wireRecord.length !== fields.length) {
+			throw new Error(
+				`SchemaDictionary: record field count ${wireRecord.length} does not match schema field count ${fields.length} for table index ${tableIndex}`,
+			);
+		}
+
+		const result: Record<string, JsonValue> = {};
 		const fieldFlags = this.fieldFlags[tableIndex];
 		const fieldPaths = this.fieldPaths[tableIndex];
-		for (let i = 0; i < wireValue.length; i++) {
-			const fieldIndex = wireValue[i][0];
-			const val = wireValue[i][1];
-			const fieldName =
-				fields[fieldIndex] ?? this.getFieldName(tableIndex, fieldIndex);
-			if (fieldName === "id") continue;
+		for (let fieldIndex = 0; fieldIndex < wireRecord.length; fieldIndex++) {
+			const fieldName = fields[fieldIndex];
 			const value = this.decodeFieldValueWithFlags(
 				fieldFlags[fieldIndex],
-				val,
+				wireRecord[fieldIndex],
 			) as JsonValue;
 			const fieldPath = fieldPaths[fieldIndex];
 			if (fieldPath !== undefined) {

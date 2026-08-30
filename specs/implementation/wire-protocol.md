@@ -50,16 +50,27 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
-| Value encoding | Integer-keyed field maps are encoded as pair-arrays: `[[field_index, value], ...]`. See [Value Encoding](#value-encoding). |
+| Value encoding | Sparse field maps use pair-arrays; complete store records use positional arrays. See [Value Encoding](#value-encoding). |
 
 ## Value Encoding
 
-All values that represent integer-keyed field maps (store documents, presence data, query result rows) are encoded as **pair-arrays** on the wire: a MessagePack array of 2-element arrays.
+Sparse field maps are encoded as **pair-arrays** so omitted fields retain their meaning.
 
-**Format:** `[[field_index, value], ...]`
+**Sparse format:** `[[field_index, value], ...]`
 
 - `field_index` — uint, the dense positional index within the table (from `SchemaSync`).
-- `value` — the typed MessagePack value, unchanged encoding (same doc-id bin packing, same type coercion). Only the container changes, not the values.
+- `value` — the typed MessagePack value, unchanged encoding.
+- Pairs are unordered, duplicate indices are processed in order with last-wins semantics, and empty `[]` means no fields.
+
+Complete server-to-client store records are encoded as **positional arrays**.
+
+**Complete-record format:** `[value_0, value_1, ...]`
+
+- Position `i` maps to `SchemaSync.fields[table_index][i]`.
+- Every schema field appears exactly once, including system fields.
+- The array length must exactly equal the schema field count.
+- Nullable fields are present as MessagePack `nil`; they are never omitted.
+- Typed value encoding is unchanged, including document-id packing and type coercion.
 
 **Affected locations:**
 
@@ -67,20 +78,14 @@ All values that represent integer-keyed field maps (store documents, presence da
 |----------|-----------|--------|
 | `StoreSet.value` | C→S | pair-array |
 | `StoreBatch` set-op `op[2]` | C→S | pair-array |
-| `StoreDelta` set-op `value` | S→C | pair-array |
-| Query result row (`ok.value[]`) | S→C | pair-array |
+| `StoreDelta` set payload | S→C | complete positional record |
+| Query/subscription/load-more result row (`ok.value[]`) | S→C | complete positional record |
 | `PresenceSet.data` | C→S | pair-array |
 | `PresenceSetShared.data` | C→S | pair-array |
 | `PresenceBroadcast` user `data` | S→C | pair-array |
 | `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
 | `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
 | `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
-
-**Semantics:**
-
-- Duplicate field index in one pair-array: processed in order, last-wins.
-- Ordering: pairs are unordered; server/SDK must not assume sorted-by-index.
-- Empty `[]`: valid; means no fields.
 
 ## Message Type Registry
 
@@ -195,7 +200,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 ## Push Payload Notes
 
-- `StoreDelta` uses the fixed six-element tuple `[0x18, subId, opTag, tableIndex, docId, value]`. `opTag` is `0` for `set` and `1` for `remove`. A `set` value is the full record pair-array; a `remove` value is MessagePack nil. Each push carries exactly one record operation. The SDK expands the tuple to the public `{ type: "StoreDelta", subId, ops: [...] }` shape. Map-form `StoreDelta` messages are invalid.
+- `StoreDelta` uses the fixed five-element tuple `[0x18, subId, opTag, tableIndex, payload]`. `opTag` is `0` for `set` and `1` for `remove`. A `set` payload is a complete positional record whose document ID is at position zero; a `remove` payload is the typed document ID. Each push carries exactly one record operation. The SDK expands the tuple to the public `{ type: "StoreDelta", subId, ops: [...] }` shape. Map-form messages, old six-element tuples, partial records, and records with the wrong field count are invalid.
 - `PresenceBroadcast.users` entries include `userId` and `event`. `join` includes `data` and `joinedAt`; `update` includes `data`; `leave` includes neither.
 - `SharedStateBroadcast.data` is one patch when a single update is flushed, or an array of patches when several updates are flushed together.
 - `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.

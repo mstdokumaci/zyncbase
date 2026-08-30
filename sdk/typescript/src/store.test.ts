@@ -201,7 +201,7 @@ describe("StoreImpl", () => {
 				{
 					type: "ok",
 					id: 2,
-					value: [{ id: "u2", name: "Grace" }],
+					value: [["u2", "Grace"]],
 					hasMore: false,
 					nextCursor: null,
 				},
@@ -260,12 +260,7 @@ describe("StoreImpl", () => {
 				{
 					type: "ok",
 					id: 2,
-					value: [
-						[
-							[0, "u2"],
-							[1, "Grace"],
-						],
-					],
+					value: [["u2", "Grace"]],
 					hasMore: false,
 					nextCursor: null,
 				},
@@ -291,6 +286,42 @@ describe("StoreImpl", () => {
 			{ id: "u1", name: "Ada" },
 			{ id: "u2", name: "Grace" },
 		]);
+	});
+
+	test("loadMore rejects malformed positional rows without mutating state", async () => {
+		const schema = await makeReadySchema();
+		const { store } = makeStore(
+			[
+				{
+					type: "ok",
+					id: 1,
+					subId: 9,
+					value: [{ id: "u1", name: "Ada" }],
+					hasMore: true,
+					nextCursor: "next",
+				},
+				{
+					type: "ok",
+					id: 2,
+					value: [["u2"]],
+					hasMore: false,
+					nextCursor: null,
+				},
+			],
+			schema,
+		);
+		const snapshots: JsonValue[][] = [];
+		const handle = store.subscribe("users", {}, (value) =>
+			snapshots.push(value),
+		);
+		await flushPromises();
+		await flushTimers();
+
+		await expect(handle.loadMore()).rejects.toThrow(
+			"record field count 1 does not match schema field count 2",
+		);
+		expect(handle.hasMore).toBe(true);
+		expect(snapshots).toEqual([[{ id: "u1", name: "Ada" }]]);
 	});
 
 	test("set with confirm committed returns a promise that resolves on WriteCommitted event", async () => {
