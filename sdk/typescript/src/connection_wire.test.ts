@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
-import { ConnectionWireCodec } from "./connection_wire.js";
+import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { StoreDelta } from "./types.js";
 
@@ -10,7 +10,7 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 		type: "SchemaSync",
 		tables: ["users"],
 		fields: [["id", "name", "address__city"]],
-		fieldFlags: [[0, 0, 0]],
+		fieldFlags: [[0b10, 0, 0]],
 	});
 	return codec;
 }
@@ -62,11 +62,7 @@ describe("ConnectionWireCodec", () => {
 					{
 						op: "set",
 						path: [0, "u1"],
-						value: [
-							[0, "duplicate-id"],
-							[1, "Ada"],
-							[2, "London"],
-						],
+						value: ["u1", "Ada", "London"],
 					},
 				],
 			}),
@@ -85,6 +81,29 @@ describe("ConnectionWireCodec", () => {
 		});
 	});
 
+	test("decodes numeric remove ids and rejects old or malformed deltas", async () => {
+		const codec = await makeCodec();
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 1, 0, 42])),
+		).toEqual({
+			type: "StoreDelta",
+			subId: 1,
+			ops: [{ op: "remove", path: ["users", "42"] }],
+		});
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, ["u1"]])),
+		).toBeNull();
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, "u1", null])),
+		).toBeNull();
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 1, 0, null])),
+		).toBeNull();
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 99, []])),
+		).toBeNull();
+	});
+
 	test("decodeMulti decodes all concatenated messages in a frame", async () => {
 		const codec = await makeCodec();
 		const ok = encodeToBuffer({ type: "ok", id: 7 });
@@ -95,11 +114,7 @@ describe("ConnectionWireCodec", () => {
 				{
 					op: "set",
 					path: [0, "u1"],
-					value: [
-						[0, "duplicate-id"],
-						[1, "Ada"],
-						[2, "London"],
-					],
+					value: ["u1", "Ada", "London"],
 				},
 			],
 		});
@@ -130,6 +145,20 @@ describe("ConnectionWireCodec", () => {
 		expect(single[0]).toEqual({ type: "ok", id: 1 });
 		expect(codec.decodeMulti(new ArrayBuffer(0))).toEqual([]);
 		expect(codec.decodeMulti(new Uint8Array([0xc1]))).toEqual([]);
+		expect(
+			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, null])),
+		).toBeNull();
+	});
+
+	test("decodeMulti drops a malformed delta and continues", async () => {
+		const codec = await makeCodec();
+		const malformed = encode([WireMessageType.StoreDelta, 1, 0, 0, ["u1"]]);
+		const ok = new Uint8Array(encodeToBuffer({ type: "ok", id: 7 }));
+		const frame = new Uint8Array(malformed.byteLength + ok.byteLength);
+		frame.set(malformed, 0);
+		frame.set(ok, malformed.byteLength);
+
+		expect(codec.decodeMulti(frame)).toEqual([{ type: "ok", id: 7 }]);
 	});
 
 	test("decodes query response rows using pending request context", async () => {
@@ -138,16 +167,13 @@ describe("ConnectionWireCodec", () => {
 			{
 				type: "ok",
 				id: 2,
-				value: [
-					[
-						[1, "Ada"],
-						[2, "London"],
-					],
-				] as never,
+				value: [["u1", "Ada", "London"]] as never,
 			},
 			{ type: "StoreQuery", responseTableIndex: 0 },
 		);
 
-		expect(ok.value).toEqual([{ name: "Ada", address__city: "London" }]);
+		expect(ok.value).toEqual([
+			{ id: "u1", name: "Ada", address__city: "London" },
+		]);
 	});
 });

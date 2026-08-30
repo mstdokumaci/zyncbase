@@ -2,7 +2,6 @@ const std = @import("std");
 
 const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
-const schema_system = @import("../schema/system.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -144,8 +143,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         const alloc = handle.allocator();
         const matches = try ctx.subscription_engine.handleRecordChange(change, alloc);
         try testing.expectEqual(@as(usize, 5000), matches.len);
-        const id_val = new_record.values[schema_system.id_field_index];
-        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, new_record, table);
         worker.dispatchDeltasToMatches(matches, set_suffix, null, handle);
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
         var unique_messages: std.AutoHashMapUnmanaged(usize, void) = .empty;
@@ -175,8 +173,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         total_a += @intCast(now_ns - last_ns);
         last_ns = now_ns;
 
-        const id_val = new_record.values[schema_system.id_field_index];
-        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, id_val, new_record, table);
+        const set_suffix = try wire_encode.encodeSetDeltaSuffix(alloc, table.index, new_record, table);
         now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
         total_b += @intCast(now_ns - last_ns);
         last_ns = now_ns;

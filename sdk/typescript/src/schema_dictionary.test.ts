@@ -35,13 +35,19 @@ describe("SchemaDictionary doc IDs", () => {
 		expect(ownerPair).toBeDefined();
 		expect(ownerPair?.[1]).toBeInstanceOf(Uint8Array);
 
-		const decoded = schema.decodeValue(0, [
-			[0, packDocId("task_1")],
-			[4, "hello"],
-			[5, packDocId("owner_1")],
+		const decoded = schema.decodeRecord(0, [
+			packDocId("task_1"),
+			1,
+			100,
+			200,
+			"hello",
+			packDocId("owner_1"),
 		]);
 		expect(decoded).toEqual({
 			id: "task_1",
+			namespace_id: 1,
+			created_at: 100,
+			updated_at: 200,
 			title: "hello",
 			owner_id: "owner_1",
 		});
@@ -56,23 +62,30 @@ describe("SchemaDictionary doc IDs", () => {
 		});
 
 		expect(
-			schema.decodeDeltaValue(
-				0,
-				[
-					[0, packDocId("ignored")],
-					[1, 7],
-					[2, packDocId("owner_1")],
-				],
-				"task_1",
-			),
+			schema.decodeDeltaRecord(0, [
+				packDocId("task_1"),
+				7,
+				packDocId("owner_1"),
+			]),
 		).toEqual({
 			id: "task_1",
 			metrics: { rank: 7 },
 			owner_id: "owner_1",
 		});
+		expect(() => schema.decodeDeltaRecord(0, [packDocId("task_1"), 7])).toThrow(
+			"record field count 2 does not match schema field count 3",
+		);
 		expect(() =>
-			schema.decodeDeltaValue(0, [[99, "invalid"]], "task_1"),
-		).toThrow("field index 99 out of range");
+			schema.decodeDeltaRecord(0, [
+				packDocId("task_1"),
+				7,
+				packDocId("owner_1"),
+				null,
+			]),
+		).toThrow("record field count 4 does not match schema field count 3");
+		expect(() => schema.decodeRecord(99, [])).toThrow(
+			"table index 99 out of range",
+		);
 	});
 
 	test("rejects missing fieldFlags", async () => {

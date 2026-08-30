@@ -110,12 +110,10 @@ const error_header_without_id = blk: {
 };
 
 pub const store_delta_header = blk: {
-    var buf: [1 + Keys.type.len + Values.store_delta.len + Keys.sub_id.len]u8 = undefined;
+    var buf: [2]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeByte(0x95) catch @panic("comptime: failed to write array header");
     w.writeAll(Values.store_delta) catch @panic("comptime: failed to write StoreDelta value");
-    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
     break :blk buf[0..w.end].*;
 };
 
@@ -409,71 +407,45 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema
 
 // === Delta encoding ===
 
-fn encodeDeltaOp(
-    allocator: Allocator,
-    comptime op: DeltaOp,
-    table_index: usize,
-    id_val: typed.Value,
-    maybe_value: ?struct { record: typed.Record, meta: *const schema_types.Table },
-) ![]const u8 {
-    var output: std.Io.Writer.Allocating = .init(allocator);
-    errdefer output.deinit();
-    const writer = &output.writer;
-
-    try writer.writeAll(Keys.ops);
-    try writer.writeByte(0x91); // fixarray(1)
-
-    const op_map_size: u8 = @as(u8, 2) + @intFromBool(maybe_value != null);
-    try writer.writeByte(0x80 | op_map_size);
-
-    try writer.writeAll(Keys.op);
-    try writer.writeAll(switch (op) {
-        .remove => Values.op_remove,
-        .set => Values.op_set,
-    });
-
-    try writer.writeAll(Keys.path);
-    try writer.writeByte(0x92); // fixarray(2)
-    try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
-    try typed_codec.writeMsgPack(id_val, writer);
-
-    if (maybe_value) |v| {
-        try writer.writeAll(Keys.value);
-        try encodeRecord(writer, v.record, v.meta);
-    }
-
-    return output.toOwnedSlice();
-}
-
-pub const DeltaOp = enum { remove, set };
+pub const DeltaOp = enum(u8) { set = 0, remove = 1 };
 
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
     id_val: typed.Value,
 ) ![]const u8 {
-    return encodeDeltaOp(allocator, .remove, table_index, id_val, null);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(DeltaOp.remove)), writer);
+    try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
+    try typed_codec.writeMsgPack(id_val, writer);
+
+    return output.toOwnedSlice();
 }
 
 pub fn encodeSetDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: typed.Value,
     new_record: typed.Record,
     table_metadata: *const schema_types.Table,
 ) ![]const u8 {
-    return encodeDeltaOp(allocator, .set, table_index, id_val, .{
-        .record = new_record,
-        .meta = table_metadata,
-    });
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(DeltaOp.set)), writer);
+    try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
+    try encodeRecord(writer, new_record, table_metadata);
+
+    return output.toOwnedSlice();
 }
 
 pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const schema_types.Table) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeArrayHeader(writer, record.values.len);
-    for (record.values, 0..) |typed_value, idx| {
-        try msgpack.encodeArrayHeader(writer, 2);
-        try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
+    for (record.values) |typed_value| {
         try typed_codec.writeMsgPack(typed_value, writer);
     }
 }

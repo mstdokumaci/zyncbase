@@ -1,14 +1,12 @@
 const std = @import("std");
 
 const msgpack_utils = @import("msgpack_utils.zig");
-const schema_types = @import("schema/types.zig");
 
 /// Wrapper for decode to maintain compatibility with zig-msgpack v0.0.16
 pub const Payload = msgpack_utils.Payload;
 pub const decode = msgpack_utils.decode;
 pub const encode = msgpack_utils.encode;
 pub const writeMsgPackStr = msgpack_utils.writeMsgPackStr;
-const TableMetadata = schema_types.Table;
 
 /// Helper to create a MessagePack map for testing
 /// Creates a simple map with string keys and values
@@ -75,22 +73,6 @@ pub fn createMessage(
 pub fn getMapValue(payload: Payload, key: []const u8) !?Payload {
     if (payload != .map) return null;
     return try payload.mapGet(key);
-}
-
-pub fn getMapValueByUint(payload: Payload, index: usize) !?Payload {
-    if (payload != .arr) return null;
-    for (payload.arr) |pair| {
-        if (pair != .arr or pair.arr.len != 2) continue;
-        const k = pair.arr[0];
-        const val = pair.arr[1];
-        if (k == .uint and k.uint == index) return val;
-    }
-    return null;
-}
-
-pub fn getMapValueByName(payload: Payload, tbl: *const TableMetadata, name: []const u8) !?Payload {
-    const index = tbl.fieldIndex(name) orelse return null;
-    return try getMapValueByUint(payload, index);
 }
 
 pub fn anyToPayload(allocator: std.mem.Allocator, val: anytype) !Payload {

@@ -439,7 +439,8 @@ export class ConnectionManager {
 			// A frame may carry one or more complete messages (the server
 			// concatenates per-connection deltas); dispatch each in order.
 			for (const msg of this.wire.decodeMulti(arr)) {
-				await this.dispatchInbound(msg);
+				const pending = this.dispatchInbound(msg);
+				if (pending) await pending;
 			}
 		} catch (err) {
 			if (this.options.debug) {
@@ -448,7 +449,7 @@ export class ConnectionManager {
 		}
 	}
 
-	private async dispatchInbound(msg: InboundMessage): Promise<void> {
+	private dispatchInbound(msg: InboundMessage): Promise<void> | undefined {
 		const id = "id" in msg ? msg.id : "push";
 		if (this.options.debug) {
 			console.log(`[SDK] << ${msg.type} (id=${id}):`, JSON.stringify(msg));
@@ -459,8 +460,7 @@ export class ConnectionManager {
 				this.handleConnected(msg);
 				return;
 			case "SchemaSync":
-				await this.handleSchemaSync(msg);
-				return;
+				return this.handleSchemaSync(msg);
 			case "ok":
 				this.handleOkResponse(msg);
 				break;

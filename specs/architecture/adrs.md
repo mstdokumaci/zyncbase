@@ -261,7 +261,8 @@ Immediately after connection, the server pushes a `SchemaSync` message containin
 From this point, all store operations over the wire use:
 - Collection names → integer table indices
 - Field names → integer field indices
-- Operation values → pair-arrays of `[field_index, value]` (e.g., `[[2, "Alice"]]` to update field index 2)
+- Sparse operation values → pair-arrays of `[field_index, value]` (e.g., `[[2, "Alice"]]` to update field index 2)
+- Complete server-to-client store records → positional value arrays in `SchemaSync` field order
 
 The SDK hashes the `SchemaSync` payload to detect schema changes across reconnects, guarding against catastrophic index shifting for any locally queued offline operations.
 
@@ -487,7 +488,7 @@ Change propagation never re-runs SQL. When a `RecordChange` event arrives, the e
 
 ### Record-Level Deltas
 
-The server pushes `set` (full record — covers both add and update) and `remove` (record ID only) at record granularity. No field-level patches from the server. The SDK handles field projection and local cache updates.
+The server pushes `set` (full record — covers both add and update) and `remove` (record ID only) at record granularity. No field-level patches from the server. The SDK handles field projection and local cache updates. Store deltas use `[StoreDelta, subId, opTag, tableIndex, payload]`: a set payload is the complete positional record, including its ID at field position zero, while a remove payload is the typed record ID.
 
 Record deltas describe committed state transitions, not individual mutation events. Within one successful writer transaction, repeated effects on the same canonical `(namespace_id, table_index, doc_id)` retain the record before the first effect and the record after the last effect, and publish at most one delta. A create-then-delete whose endpoints are both absent publishes nothing. SQL execution, guards, cascades, write outcomes, and atomic rollback remain operation-by-operation.
 

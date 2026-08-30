@@ -19,7 +19,10 @@ import {
 	shapeGetResult,
 	shapeQueryResult,
 } from "./store_wire.js";
-import type { SubscriptionTracker } from "./subscriptions.js";
+import {
+	createCreatedAtComparator,
+	type SubscriptionTracker,
+} from "./subscriptions.js";
 import type {
 	BatchOperation,
 	InboundMessage,
@@ -322,6 +325,8 @@ export class StoreImpl {
 		collection: string,
 		options: QueryOptions,
 	): (a: JsonValue, b: JsonValue) => number {
+		if (!options.orderBy?.length) return createCreatedAtComparator();
+
 		const schema = this.conn.schemaDictionary;
 		const tableIndex = schema.getTableIndex(collection);
 
@@ -405,26 +410,13 @@ export class StoreImpl {
 	}
 
 	private decodeLoadMoreRows(value: JsonValue, collection: string): JsonValue {
-		if (
-			!Array.isArray(value) ||
-			value.length === 0 ||
-			!Array.isArray(value[0])
-		) {
-			return value;
-		}
-		const isValid = (value as Array<unknown>).every(
-			(row) =>
-				Array.isArray(row) &&
-				row.length > 0 &&
-				(row as Array<unknown>).every(
-					(t) => Array.isArray(t) && t.length === 2 && typeof t[0] === "number",
-				),
-		);
-		if (!isValid) return value;
+		if (!Array.isArray(value)) throw new Error("Invalid loadMore response");
 		const tableIndex = this.conn.schemaDictionary.getTableIndex(collection);
-		return (value as Array<Array<[number, unknown]>>).map((row) =>
-			this.conn.schemaDictionary.decodeValue(tableIndex, row),
-		) as JsonValue;
+		return value.map((row) => {
+			if (!Array.isArray(row))
+				throw new Error("Invalid positional store record");
+			return this.conn.schemaDictionary.decodeRecord(tableIndex, row);
+		}) as JsonValue;
 	}
 
 	private dispatchUnsubscribe(subId: number): void {

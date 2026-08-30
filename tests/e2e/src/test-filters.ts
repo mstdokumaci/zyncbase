@@ -479,14 +479,14 @@ async function createInitialData(readWriteClients: ClientState[]): Promise<{
 			createPromises.push(
 				rwClient.store.create("items", createItemData(index)).then((id) => {
 					rtts.push(Date.now() - t);
-					createdItemIds.push(id);
+					createdItemIds[index] = id;
 				}),
 			);
 			const te = Date.now();
 			createPromises.push(
 				rwClient.store.create("events", createEventData(index)).then((id) => {
 					rtts.push(Date.now() - te);
-					createdEventIds.push(id);
+					createdEventIds[index] = id;
 				}),
 			);
 		}
@@ -498,6 +498,7 @@ async function createInitialData(readWriteClients: ClientState[]): Promise<{
 
 async function updateWriterRecords(
 	client: ZyncBaseClient,
+	writerIndex: number,
 	createdItemIds: string[],
 	createdEventIds: string[],
 	rtts: number[],
@@ -509,16 +510,22 @@ async function updateWriterRecords(
 	}
 	const promises: Promise<void>[] = [];
 	for (let j = 0; j < 4; j++) {
+		const seed = writerIndex * 32 + j * 8;
 		const randomItemId =
-			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
+			createdItemIds[
+				Math.floor(deterministicUnit(seed) * createdItemIds.length)
+			];
 		const t = Date.now();
 		promises.push(
 			client.store
 				.set(["items", randomItemId], {
 					name: "updated-item",
-					priority: Math.floor(Math.random() * 10) + 1,
-					active: Math.random() > 0.5,
-					tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
+					priority: Math.floor(deterministicUnit(seed + 1) * 10) + 1,
+					active: deterministicUnit(seed + 2) > 0.5,
+					tags:
+						deterministicUnit(seed + 3) > 0.5
+							? ["urgent", "updated"]
+							: ["updated"],
 				})
 				.then(() => {
 					rtts.push(Date.now() - t);
@@ -526,14 +533,16 @@ async function updateWriterRecords(
 		);
 
 		const randomEventId =
-			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
+			createdEventIds[
+				Math.floor(deterministicUnit(seed + 4) * createdEventIds.length)
+			];
 		const te = Date.now();
 		promises.push(
 			client.store
 				.set(["events", randomEventId], {
 					title: "updated-event",
-					score: Math.random() * 100,
-					ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
+					score: deterministicUnit(seed + 5) * 100,
+					ratings: deterministicUnit(seed + 6) > 0.5 ? [1, 5] : [2, 3],
 				})
 				.then(() => {
 					rtts.push(Date.now() - te);
@@ -541,6 +550,12 @@ async function updateWriterRecords(
 		);
 	}
 	await Promise.all(promises);
+}
+
+function deterministicUnit(seed: number): number {
+	let value = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+	value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
+	return ((value ^ (value >>> 16)) >>> 0) / 2 ** 32;
 }
 
 async function updateRandomRecords(
@@ -554,7 +569,7 @@ async function updateRandomRecords(
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 		updatePromises.push(
-			updateWriterRecords(rwClient, createdItemIds, createdEventIds, rtts),
+			updateWriterRecords(rwClient, i, createdItemIds, createdEventIds, rtts),
 		);
 	}
 
