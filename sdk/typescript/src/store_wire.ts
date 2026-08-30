@@ -1,5 +1,5 @@
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
-import { flatten, joinFieldPath, normalizePath, unflatten } from "./path.js";
+import { flatten, joinFieldPath, normalizePath } from "./path.js";
 import type {
 	BatchOperation,
 	JsonValue,
@@ -268,19 +268,15 @@ export function shapeGetResult(
 	rows: JsonValue[],
 ): JsonValue | null | undefined {
 	if (segments.length === 1) {
-		return rows.map(unflattenIfObject) as JsonValue;
+		return rows;
 	}
 
 	if (rows.length === 0) return segments.length === 2 ? null : undefined;
 
 	const row = rows[0];
-	if (segments.length === 2) return unflattenIfObject(row);
+	if (segments.length === 2) return row;
 
-	const record = unflatten(row as Record<string, JsonValue>) as Record<
-		string,
-		JsonValue
-	>;
-	let value: JsonValue | undefined = record as JsonValue;
+	let value: JsonValue | undefined = row;
 	for (const part of segments.slice(2)) {
 		if (
 			value === null ||
@@ -304,8 +300,9 @@ export function shapeGetResult(
 export function shapeQueryResult(
 	ok: OkResponse,
 ): JsonValue[] & { nextCursor: string | null } {
-	const rows = (ok.value ?? []).map(unflattenIfObject);
-	const result = rows as JsonValue[] & { nextCursor: string | null };
+	const result = (ok.value ?? []) as JsonValue[] & {
+		nextCursor: string | null;
+	};
 	result.nextCursor = ok.nextCursor ?? null;
 	return result;
 }
@@ -419,10 +416,6 @@ function encodeWriteValue(_segments: string[], value: JsonValue): JsonValue {
 		return flatten(value);
 	}
 	return value;
-}
-
-function unflattenIfObject(row: JsonValue): JsonValue {
-	return isObjectRecord(row) ? (unflatten(row) as JsonValue) : row;
 }
 
 function isObjectRecord(value: JsonValue): value is Record<string, JsonValue> {

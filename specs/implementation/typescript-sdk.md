@@ -59,6 +59,13 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
 7. Server pushes update subscription and presence listeners independently of mutation responses.
 
+## Complete Store Record Decoding
+
+- `SchemaDictionary.decodeRecord` is the single authority for complete positional records from `StoreQuery`, `StoreSubscribe`, `StoreLoadMore`, and `StoreDelta` set operations. It validates the schema field count, decodes typed fields, and constructs the final nested SDK record in one pass.
+- `ConnectionWireCodec` decodes correlated read rows before resolving their pending request. Query and subscribe requests provide the response table index directly; load-more keeps that index only in local pending-request context while the wire request contains just `subId` and `nextCursor`.
+- `StoreImpl` and `SubscriptionTracker` receive final nested records. They must not reinterpret positional rows or unflatten complete records.
+- A malformed correlated record rejects its pending request. A malformed delta push is dropped without preventing later complete messages in the same frame from being processed.
+
 ## Subscription Delivery Contract
 
 - `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load).

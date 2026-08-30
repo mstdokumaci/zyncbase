@@ -92,21 +92,24 @@ export function setDeepProperty(
 	parts: string[],
 	value: JsonValue,
 ): void {
+	if (parts.length === 0) return;
 	let current = obj;
-	for (let i = 0; i < parts.length; i++) {
+	const last = parts.length - 1;
+	for (let i = 0; i < last; i++) {
 		const part = parts[i];
-		if (i === parts.length - 1) {
-			current[part] = value;
+		const child = current[part];
+		if (
+			child === undefined ||
+			child === null ||
+			typeof child !== "object" ||
+			Array.isArray(child)
+		) {
+			const next: Record<string, JsonValue> = {};
+			current[part] = next;
+			current = next;
 		} else {
-			if (
-				current[part] === undefined ||
-				current[part] === null ||
-				typeof current[part] !== "object" ||
-				Array.isArray(current[part])
-			) {
-				current[part] = {};
-			}
-			current = current[part] as Record<string, JsonValue>;
+			current = child as Record<string, JsonValue>;
 		}
 	}
+	current[parts[last]] = value;
 }

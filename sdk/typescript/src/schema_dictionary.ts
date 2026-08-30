@@ -7,13 +7,7 @@
 import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
-import {
-	flatten,
-	joinFieldPath,
-	setDeepProperty,
-	splitFieldPath,
-	unflatten,
-} from "./path.js";
+import { flatten, joinFieldPath, splitFieldPath, unflatten } from "./path.js";
 import type { JsonValue } from "./types.js";
 
 /**
@@ -321,33 +315,13 @@ export class SchemaDictionary {
 		return result;
 	}
 
-	/** Decode a complete positional record into a flat string-keyed value map. */
+	/** Decode a complete positional record into its final nested SDK shape. */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keeping the hot decoder fused avoids per-field helper calls.
 	decodeRecord(
 		tableIndex: number,
 		wireRecord: readonly unknown[],
-	): Record<string, unknown> {
-		const fields = this.getFields(tableIndex);
-		if (wireRecord.length !== fields.length) {
-			throw new Error(
-				`SchemaDictionary: record field count ${wireRecord.length} does not match schema field count ${fields.length} for table index ${tableIndex}`,
-			);
-		}
-
-		const result: Record<string, unknown> = {};
-		for (let fieldIndex = 0; fieldIndex < wireRecord.length; fieldIndex++) {
-			result[fields[fieldIndex]] = this.decodeFieldValueWithFlags(
-				this.fieldFlags[tableIndex][fieldIndex],
-				wireRecord[fieldIndex],
-			);
-		}
-		return result;
-	}
-
-	decodeDeltaRecord(
-		tableIndex: number,
-		wireRecord: readonly unknown[],
 	): Record<string, JsonValue> {
-		const fields = this.getFields(tableIndex);
+		const fields = this.fields[tableIndex] ?? this.getFields(tableIndex);
 		if (wireRecord.length !== fields.length) {
 			throw new Error(
 				`SchemaDictionary: record field count ${wireRecord.length} does not match schema field count ${fields.length} for table index ${tableIndex}`,
@@ -357,17 +331,41 @@ export class SchemaDictionary {
 		const result: Record<string, JsonValue> = {};
 		const fieldFlags = this.fieldFlags[tableIndex];
 		const fieldPaths = this.fieldPaths[tableIndex];
-		for (let fieldIndex = 0; fieldIndex < wireRecord.length; fieldIndex++) {
-			const fieldName = fields[fieldIndex];
-			const value = this.decodeFieldValueWithFlags(
-				fieldFlags[fieldIndex],
-				wireRecord[fieldIndex],
-			) as JsonValue;
+		for (let fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+			const wireValue = wireRecord[fieldIndex];
+			let value = wireValue as JsonValue;
+			if ((fieldFlags[fieldIndex] & 0b10) !== 0) {
+				if (wireValue instanceof Uint8Array) {
+					value = unpackDocId(wireValue);
+				} else if (Array.isArray(wireValue)) {
+					value = wireValue.map((item) =>
+						item instanceof Uint8Array ? unpackDocId(item) : item,
+					) as JsonValue;
+				}
+			}
 			const fieldPath = fieldPaths[fieldIndex];
 			if (fieldPath !== undefined) {
-				setDeepProperty(result, fieldPath, value);
+				let current = result;
+				const last = fieldPath.length - 1;
+				for (let pathIndex = 0; pathIndex < last; pathIndex++) {
+					const part = fieldPath[pathIndex];
+					const child = current[part];
+					if (
+						child === undefined ||
+						child === null ||
+						typeof child !== "object" ||
+						Array.isArray(child)
+					) {
+						const next: Record<string, JsonValue> = {};
+						current[part] = next;
+						current = next;
+					} else {
+						current = child as Record<string, JsonValue>;
+					}
+				}
+				current[fieldPath[last]] = value;
 			} else {
-				result[fieldName] = value;
+				result[fields[fieldIndex]] = value;
 			}
 		}
 		return result;

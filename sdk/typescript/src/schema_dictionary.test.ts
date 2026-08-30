@@ -53,36 +53,42 @@ describe("SchemaDictionary doc IDs", () => {
 		});
 	});
 
-	test("decodes delta records with nested and document ID fields", async () => {
+	test("decodes complete records with nested, nullable, and document ID fields", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
 			tables: ["tasks"],
-			fields: [["id", "metrics__rank", "owner_id"]],
-			fieldFlags: [[0b11, 0b00, 0b10]],
+			fields: [["id", "metrics__rank", "owner_id", "member_ids", "note"]],
+			fieldFlags: [[0b11, 0b00, 0b10, 0b10, 0b00]],
 		});
 
 		expect(
-			schema.decodeDeltaRecord(0, [
+			schema.decodeRecord(0, [
 				packDocId("task_1"),
 				7,
 				packDocId("owner_1"),
+				[packDocId("member_1"), packDocId("member_2")],
+				null,
 			]),
 		).toEqual({
 			id: "task_1",
 			metrics: { rank: 7 },
 			owner_id: "owner_1",
+			member_ids: ["member_1", "member_2"],
+			note: null,
 		});
-		expect(() => schema.decodeDeltaRecord(0, [packDocId("task_1"), 7])).toThrow(
-			"record field count 2 does not match schema field count 3",
+		expect(() => schema.decodeRecord(0, [packDocId("task_1"), 7])).toThrow(
+			"record field count 2 does not match schema field count 5",
 		);
 		expect(() =>
-			schema.decodeDeltaRecord(0, [
+			schema.decodeRecord(0, [
 				packDocId("task_1"),
 				7,
 				packDocId("owner_1"),
+				[],
+				null,
 				null,
 			]),
-		).toThrow("record field count 4 does not match schema field count 3");
+		).toThrow("record field count 6 does not match schema field count 5");
 		expect(() => schema.decodeRecord(99, [])).toThrow(
 			"table index 99 out of range",
 		);

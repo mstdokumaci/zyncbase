@@ -217,17 +217,23 @@ export class ConnectionManager {
 		this.ws.send(data);
 	}
 
-	dispatch(msg: OutboundRequest): Promise<OkResponse> {
-		return this.dispatchWithRetry(msg, 0);
+	dispatch(
+		msg: OutboundRequest,
+		responseTableIndex?: number,
+	): Promise<OkResponse> {
+		return this.dispatchWithRetry(msg, 0, responseTableIndex);
 	}
 
-	private sendRequest(msg: OutboundRequest): {
+	private sendRequest(
+		msg: OutboundRequest,
+		responseTableIndex?: number,
+	): {
 		id: number;
 		result: Promise<OkResponse>;
 		debugType: string;
 	} {
 		const id = this.pending.nextId();
-		const encoded = this.wire.encode(msg, id);
+		const encoded = this.wire.encode(msg, id, responseTableIndex);
 
 		if (this.options.debug) {
 			console.log(
@@ -249,14 +255,21 @@ export class ConnectionManager {
 	private async dispatchWithRetry(
 		msg: OutboundRequest,
 		attempt: number,
+		responseTableIndex?: number,
 	): Promise<OkResponse> {
-		const { result, debugType } = this.sendRequest(msg);
+		const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
 		try {
 			return await result;
 		} catch (err) {
 			if (this.intentionalDisconnect) throw err;
-			return this.handleRetryOrThrow(msg, attempt, err, debugType);
+			return this.handleRetryOrThrow(
+				msg,
+				attempt,
+				err,
+				debugType,
+				responseTableIndex,
+			);
 		}
 	}
 
@@ -265,6 +278,7 @@ export class ConnectionManager {
 		attempt: number,
 		err: unknown,
 		debugType: string,
+		responseTableIndex?: number,
 	): Promise<OkResponse> {
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
@@ -276,7 +290,7 @@ export class ConnectionManager {
 		}
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
-		return this.dispatchWithRetry(msg, attempt + 1);
+		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
 	}
 
 	authRefresh(token: string): Promise<void> {

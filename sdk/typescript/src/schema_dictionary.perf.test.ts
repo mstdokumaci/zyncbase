@@ -3,7 +3,7 @@ import { packDocId } from "./doc_id";
 import { SchemaDictionary } from "./schema_dictionary";
 
 describe("SchemaDictionary performance", () => {
-	test("250k representative delta records decode within budget", async () => {
+	test("250k representative records decode within budget", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
 			tables: ["items"],
@@ -20,19 +20,19 @@ describe("SchemaDictionary performance", () => {
 		];
 
 		for (let i = 0; i < 20_000; i++) {
-			schema.decodeDeltaRecord(0, wireRecord);
+			schema.decodeRecord(0, wireRecord);
 		}
 
 		const iterations = 250_000;
 		let last: unknown;
 		const t0 = performance.now();
 		for (let i = 0; i < iterations; i++) {
-			last = schema.decodeDeltaRecord(0, wireRecord);
+			last = schema.decodeRecord(0, wireRecord);
 		}
 		const elapsedMs = performance.now() - t0;
 
 		console.log(
-			`decodeDeltaRecord (${iterations} records) [ms]: ${elapsedMs.toFixed(1)}`,
+			`decodeRecord (${iterations} records) [ms]: ${elapsedMs.toFixed(1)}`,
 		);
 		expect(last).toEqual({
 			id: "task_1",
