@@ -70,6 +70,16 @@ export class ZyncBaseClient {
 		return await this.client.store.get(path);
 	}
 
+	/** Test-only readiness check; subscribe handles do not expose registration. */
+	registeredSubscriptionCount(): number {
+		const tracker = (
+			this.client as unknown as {
+				tracker: { subscriptions: Map<number, unknown> };
+			}
+		).tracker;
+		return tracker.subscriptions.size;
+	}
+
 	close(): void {
 		this.client.disconnect();
 	}

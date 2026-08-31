@@ -38,6 +38,10 @@ interface ClientState {
 // generation gate + field compare avoid JSON.stringify per record
 let globalGeneration = 0;
 
+const CLIENTS_PER_PROCESS = 500;
+const READ_WRITE_CLIENTS_PER_PROCESS = 100;
+const SECOND_PROCESS_SEED_OFFSET = 1_000_000;
+
 function tagsEqual(a: string[], b: string[]): boolean {
 	if (a.length !== b.length) return false;
 	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -358,6 +362,27 @@ async function waitForFired(
 	return polls;
 }
 
+async function waitForSubscriptionsReady(
+	clients: ClientState[],
+	timeoutMs = 15_000,
+): Promise<number> {
+	const deadline = Date.now() + timeoutMs;
+	let polls = 0;
+	while (!clients.every((c) => c.client.registeredSubscriptionCount() === 2)) {
+		if (Date.now() > deadline) {
+			const pending = clients
+				.filter((c) => c.client.registeredSubscriptionCount() !== 2)
+				.map((c) => `${c.debugId}:${c.client.registeredSubscriptionCount()}`);
+			throw new Error(
+				`Timeout: ${pending.length} clients have pending subscriptions: ${pending.join(",")}`,
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		polls++;
+	}
+	return polls;
+}
+
 async function waitForAllFiredAndConverged(
 	clients: ClientState[],
 	timeoutMs = 15000,
@@ -502,6 +527,7 @@ async function updateWriterRecords(
 	createdItemIds: string[],
 	createdEventIds: string[],
 	rtts: number[],
+	seedOffset: number,
 ): Promise<void> {
 	if (createdItemIds.length === 0 || createdEventIds.length === 0) {
 		throw new Error(
@@ -510,7 +536,7 @@ async function updateWriterRecords(
 	}
 	const promises: Promise<void>[] = [];
 	for (let j = 0; j < 4; j++) {
-		const seed = writerIndex * 32 + j * 8;
+		const seed = seedOffset + writerIndex * 32 + j * 8;
 		const randomItemId =
 			createdItemIds[
 				Math.floor(deterministicUnit(seed) * createdItemIds.length)
@@ -562,6 +588,7 @@ async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
+	seedOffset: number,
 ): Promise<number[]> {
 	const updatePromises: Promise<void>[] = [];
 	const rtts: number[] = [];
@@ -569,7 +596,14 @@ async function updateRandomRecords(
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 		updatePromises.push(
-			updateWriterRecords(rwClient, i, createdItemIds, createdEventIds, rtts),
+			updateWriterRecords(
+				rwClient,
+				i,
+				createdItemIds,
+				createdEventIds,
+				rtts,
+				seedOffset,
+			),
 		);
 	}
 
@@ -577,16 +611,22 @@ async function updateRandomRecords(
 	return rtts;
 }
 
-export async function run(port: number = 3000) {
-	const TOTAL_CLIENTS = 1000;
-	const READ_WRITE_COUNT = 200;
+async function runHalf(
+	port: number,
+	seedOffset: number,
+	readyForWrites: () => Promise<void>,
+) {
 	const t0 = Date.now();
 	const phase = (label: string) =>
 		console.log(`[t+${Date.now() - t0}ms] ${label}`);
 
 	globalGeneration = 0;
-	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
-	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
+	console.log(`Creating ${CLIENTS_PER_PROCESS} clients...`);
+	const clients = await createClients(
+		CLIENTS_PER_PROCESS,
+		READ_WRITE_CLIENTS_PER_PROCESS,
+		port,
+	);
 	phase("All clients connected.");
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
@@ -597,6 +637,9 @@ export async function run(port: number = 3000) {
 	}
 	const subMs = Date.now() - subT0;
 	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
+	const readyPolls = await waitForSubscriptionsReady(clients);
+	phase(`All subscriptions ready (${readyPolls} polls).`);
+	await readyForWrites();
 
 	console.log("Creating initial data...");
 	const {
@@ -614,6 +657,7 @@ export async function run(port: number = 3000) {
 		readWriteClients,
 		createdItemIds,
 		createdEventIds,
+		seedOffset,
 	).then((rtts) => {
 		reportRtts("update", rtts);
 	});
@@ -647,5 +691,77 @@ export async function run(port: number = 3000) {
 	console.log("Final filter assertions passed.");
 
 	closeAllClients(clients);
-	console.log(`E2E Filters test passed — ${TOTAL_CLIENTS} clients.`);
+	console.log(`E2E Filters test passed — ${CLIENTS_PER_PROCESS} clients.`);
+}
+
+export async function run(port: number = 3000) {
+	const workerCommand = [process.execPath];
+	const profileDir = process.env.ZYNCBASE_FILTER_PROFILE_DIR;
+	if (profileDir) {
+		workerCommand.push(
+			"--cpu-prof",
+			"--cpu-prof-dir",
+			profileDir,
+			"--cpu-prof-name",
+			"client-2.cpuprofile",
+		);
+	}
+	workerCommand.push(import.meta.path, "--worker", String(port));
+
+	const started = performance.now();
+	const workerReady = Promise.withResolvers<void>();
+	const worker = Bun.spawn(workerCommand, {
+		stdio: ["ignore", profileDir ? "inherit" : "ignore", "inherit"],
+		ipc(message) {
+			if (message === "ready") workerReady.resolve();
+		},
+	});
+	const workerFinished = worker.exited.then((exitCode) => {
+		if (exitCode !== 0) {
+			throw new Error(`Filter client process 2 failed (${exitCode})`);
+		}
+	});
+	const [localResult, workerResult] = await Promise.allSettled([
+		runHalf(port, 0, async () => {
+			await Promise.race([workerReady.promise, workerFinished]);
+			worker.send("start");
+		}).catch((error) => {
+			worker.kill();
+			throw error;
+		}),
+		workerFinished,
+	]);
+
+	if (localResult.status === "rejected") throw localResult.reason;
+	if (workerResult.status === "rejected") throw workerResult.reason;
+	console.log(
+		`Both filter client processes completed in ${Math.round(performance.now() - started)}ms.`,
+	);
+}
+
+if (import.meta.main) {
+	const [mode, portArg] = Bun.argv.slice(2);
+	const port = Number(portArg);
+	if (
+		mode !== "--worker" ||
+		!Number.isInteger(port) ||
+		port < 1 ||
+		port > 65_535
+	) {
+		throw new Error("usage: test-filters.ts --worker <port>");
+	}
+	if (!process.send) throw new Error("Filter worker requires an IPC channel");
+	await runHalf(
+		port,
+		SECOND_PROCESS_SEED_OFFSET,
+		() =>
+			new Promise((resolve, reject) => {
+				process.once("message", (message) => {
+					if (message === "start") resolve();
+					else
+						reject(new Error(`Unexpected filter worker message: ${message}`));
+				});
+				process.send?.("ready");
+			}),
+	);
 }
