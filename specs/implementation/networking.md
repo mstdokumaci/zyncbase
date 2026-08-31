@@ -46,14 +46,15 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 1. `server.zig` registers HTTP `POST /auth/ticket`; successful requests create a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).
 2. WebSocket upgrade is accepted only for the configured endpoint, origin policy, and valid `ticket` query parameter.
 3. The bridge allocates/registers a `Connection` and attaches socket user data.
-4. The server sends connection/schema bootstrap pushes as required by the active protocol.
+4. The server sends the `SchemaSync` bootstrap push.
 5. Binary frames are delivered to `MessageHandler.handleMessage`.
 6. Close/error callbacks detach subscriptions, clear scoped session state, and remove connection-owned presence.
 
 ## Backpressure And Sends
 
-- Encoded responses are owned by the request arena or dispatcher buffer until handed to `Connection.send`.
-- Send failure closes the connection through the centralized close path.
+- Encoded responses are owned by the request arena or dispatcher buffer until handed to `Connection.send`; uWS copies accepted payloads synchronously.
+- `Connection.send` sends directly through uWS. `.success` and `.backpressure` are accepted outcomes; `.dropped` closes the connection through the centralized close path.
+- uWS preserves frame order and applies the configured 16 MiB byte-based buffer per connection; there is no additional Zig frame-count outbox.
 - Cross-connection fanout goes through `ConnectionManager`/dispatchers instead of storing raw sockets in domain services.
 - Large or repeated outbound failures should be treated as transport instability, not domain errors.
 
@@ -156,7 +157,6 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Outbox capacity | 16 slots | Per-connection bounded ring buffer for outgoing messages. |
 | Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on event loop. |
 
 ### MessagePack Parse Limits

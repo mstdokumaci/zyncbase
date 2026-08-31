@@ -37,8 +37,6 @@ pub const WebSocketServer = struct {
     is_closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     post_handler: ?*const fn (?*anyopaque) void = null,
     post_handler_ctx: ?*anyopaque = null,
-    drain_handler: ?*const fn (?*anyopaque, u64) void = null,
-    drain_handler_ctx: ?*anyopaque = null,
     verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror!Session = null,
     wakeup_pending_check: ?*const fn (?*anyopaque) bool = null,
     wakeup_pending_check_ctx: ?*anyopaque = null,
@@ -122,8 +120,6 @@ pub const WebSocketServer = struct {
         self.wakeup_pending_check = null;
         self.wakeup_pending_check_ctx = null;
         self.test_wakeup_count = null;
-        self.drain_handler = null;
-        self.drain_handler_ctx = null;
         self.verify_ticket_cb = null;
         self.on_loop_ready = null;
         self.on_loop_ready_ctx = null;
@@ -160,12 +156,10 @@ pub const WebSocketServer = struct {
             behavior.open = onOpenCallbackSSL;
             behavior.message = onMessageCallbackSSL;
             behavior.close = onCloseCallbackSSL;
-            behavior.drain = onDrainCallbackSSL;
         } else {
             behavior.open = onOpenCallbackNoSSL;
             behavior.message = onMessageCallbackNoSSL;
             behavior.close = onCloseCallbackNoSSL;
-            behavior.drain = onDrainCallbackNoSSL;
         }
 
         c.uws_ws(
@@ -240,6 +234,7 @@ pub const WebSocket = struct {
     /// production builds, where the invocation compiles out entirely.
     test_send_observer: if (builtin.is_test) ?*const fn (?*anyopaque, []const u8) void else void = if (builtin.is_test) null else {},
     test_send_observer_ctx: if (builtin.is_test) ?*anyopaque else void = if (builtin.is_test) null else {},
+    test_send_status: if (builtin.is_test) SendStatus else void = if (builtin.is_test) .success else {},
 
     /// Send a message and return the delivery status.
     /// Callers must inspect the result — never discard it silently.
@@ -248,7 +243,7 @@ pub const WebSocket = struct {
             if (self.test_send_observer) |observer| {
                 observer(self.test_send_observer_ctx, message);
             }
-            return .success;
+            return self.test_send_status;
         }
         if (self.ws == null) return .dropped;
         const opcode: c_uint = switch (msg_type) {
@@ -421,22 +416,6 @@ fn onCloseCallbackNoSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8,
 }
 fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, len: usize) callconv(.c) void {
     onClose(ws, code, msg, len, true);
-}
-
-fn onDrain(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
-    if (ws == null) return;
-    const socket_data = getSocketUserData(ws, is_ssl) orelse return;
-    const server = socket_data.server;
-    if (server.drain_handler) |handler| {
-        handler(server.drain_handler_ctx, @intFromPtr(ws.?));
-    }
-}
-
-fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
-    onDrain(ws, false);
-}
-fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
-    onDrain(ws, true);
 }
 
 fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, _: usize) callconv(.c) void {

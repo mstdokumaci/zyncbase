@@ -274,6 +274,8 @@ export type OutboundMessage =
 export interface OkResponse {
 	type: "ok";
 	id: number;
+	// PresenceSetNamespace response field (bin16 on wire):
+	userId?: Uint8Array;
 	// StoreQuery response fields:
 	value?: JsonValue[];
 	nextCursor?: string | null;
@@ -321,13 +323,6 @@ export interface SchemaSync {
 	fieldFlags: number[][];
 	presenceUserFields?: string[];
 	presenceSharedFields?: string[];
-}
-
-export interface ConnectedMessage {
-	type: "Connected";
-	userId: string | null;
-	storeNamespace?: string;
-	presenceNamespace?: string;
 }
 
 export interface WriteCommitted {
@@ -408,7 +403,6 @@ export type InboundMessage =
 	| ErrorResponse
 	| StoreDelta
 	| SchemaSync
-	| ConnectedMessage
 	| WriteCommitted
 	| WriteError
 	| PresenceBroadcast

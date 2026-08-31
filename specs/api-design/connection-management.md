@@ -82,10 +82,9 @@ Initiates the connection sequence:
 1. **Ticket exchange** (HTTP POST `/auth/ticket`) — obtains a single-use ticket from the external JWT
 2. **WebSocket upgrade** (`GET /ws?ticket=...`) — opens the WebSocket connection
 3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-009)
-4. **`Connected` push** — the server sends transport-level session context
-5. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
+4. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
 
-The SDK should wait for `SchemaSync`, `Connected`, and the initial required namespace acknowledgements before resolving the `connect()` promise.
+The SDK waits for WebSocket open, `SchemaSync`, and the initial required namespace acknowledgements before resolving the `connect()` promise. Presence scope acknowledgement installs the canonical internal user UUID before the `connected` lifecycle event replays subscriptions.
 
 ```typescript
 await client.connect()
@@ -104,7 +103,7 @@ client.disconnect()
 ```
 
 > [!NOTE]
-> For full wire-level details of the connection lifecycle (ticket format, `Connected` payload, heartbeat, graceful close), see the [Wire Protocol](../implementation/wire-protocol.md#connection-lifecycle).
+> For full wire-level details of the connection lifecycle (ticket format, scope acknowledgements, heartbeat, graceful close), see the [Wire Protocol](../implementation/wire-protocol.md#connection-lifecycle).
 
 ---
 

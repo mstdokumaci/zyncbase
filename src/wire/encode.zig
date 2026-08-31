@@ -52,7 +52,6 @@ const Keys = struct {
 const Values = struct {
     pub const ok = &[_]u8{@intFromEnum(MessageType.ok)};
     pub const @"error" = &[_]u8{@intFromEnum(MessageType.@"error")};
-    pub const connected = &[_]u8{@intFromEnum(MessageType.connected)};
     pub const schema_sync = &[_]u8{@intFromEnum(MessageType.schema_sync)};
     pub const store_delta = &[_]u8{@intFromEnum(MessageType.store_delta)};
     pub const op_remove = comptimeEncodeKey("remove");
@@ -206,6 +205,24 @@ pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     return output.toOwnedSlice();
 }
 
+pub fn encodePresenceScopeSuccess(
+    msgpack_allocator: Allocator,
+    msg_id: u64,
+    user_id: typed_doc_id.DocId,
+) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try msgpack.encodeMapHeader(writer, 3);
+    try writeOkResponseHeader(writer, msg_id);
+    try writer.writeAll(Keys.user_id);
+    const id_bytes = typed_doc_id.toBytes(user_id);
+    try msgpack.writeMsgPackBin(writer, &id_bytes);
+
+    return output.toOwnedSlice();
+}
+
 pub fn encodeOkWithSession(
     msgpack_allocator: Allocator,
     msg_id: u64,
@@ -225,29 +242,6 @@ pub fn encodeOkWithSession(
     while (it.next()) |entry| {
         try msgpack.writeMsgPackStr(writer, entry.key_ptr.*);
         try typed_codec.writeMsgPack(entry.value_ptr.*, writer);
-    }
-
-    return output.toOwnedSlice();
-}
-
-pub fn encodeConnected(
-    msgpack_allocator: Allocator,
-    user_id: ?[]const u8,
-) ![]const u8 {
-    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
-    errdefer output.deinit();
-    const writer = &output.writer;
-
-    try msgpack.encodeMapHeader(writer, 2);
-
-    try writer.writeAll(Keys.type);
-    try writer.writeAll(Values.connected);
-
-    try writer.writeAll(Keys.user_id);
-    if (user_id) |uid| {
-        try msgpack.writeMsgPackStr(writer, uid);
-    } else {
-        try msgpack.encode(.nil, writer);
     }
 
     return output.toOwnedSlice();

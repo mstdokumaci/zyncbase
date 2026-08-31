@@ -99,7 +99,7 @@ fixint. **Never reuse or renumber an assigned ID.**
 |----|------|-----------|---------|
 | `0x00` | `ok` | S→C | Successful correlated response. |
 | `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
-| `0x02` | `Connected` | S→C | Connection/session bootstrap. |
+| `0x02` | Reserved | — | Formerly `Connected`; must not be reused. |
 | `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
 | `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
 | `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
@@ -125,10 +125,10 @@ fixint. **Never reuse or renumber an assigned ID.**
 | `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
 | `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
 
-**Direction rules:** server-only IDs (`0x00`–`0x03`, `0x05`, `0x18`–`0x1a`,
-`0x28`–`0x29`) received as client requests are rejected with
-`INVALID_MESSAGE_TYPE`. `0x04` (`AuthRefresh`) is a client request; unknown or
-unassigned IDs are rejected the same way.
+**Direction rules:** server-only IDs (`0x00`–`0x01`, `0x03`, `0x05`,
+`0x18`–`0x1a`, `0x28`–`0x29`) received as client requests are rejected with
+`INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`) is a client
+request; unknown or unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
 only its value is numeric. `StoreDelta` is the fixed tuple exception described
@@ -177,6 +177,7 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 | Response | Fields | Meaning |
 |----------|--------|---------|
 | `ok` | `id` | Generic success. |
+| `ok` presence scope | `id`, `userId` | Successful `PresenceSetNamespace`; `userId` is the mandatory bin16 internal `users.id` used by presence snapshots and broadcasts. |
 | `ok` with `session` | `id`, `session` | Namespace or auth refresh resolved session claims. |
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
@@ -189,7 +190,6 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 | Push | Fields | Meaning |
 |------|--------|---------|
-| `Connected` | `userId` | Transport/session bootstrap push after connection setup. |
 | `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields` | Integer dictionaries used by store, query, and presence messages. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
@@ -210,6 +210,8 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - `StoreSetNamespace` and `PresenceSetNamespace` establish independent scoped sessions.
 - Store operations before store scope readiness return `SESSION_NOT_READY`.
 - Presence operations before presence scope readiness return `SESSION_NOT_READY`.
+- Every successful `PresenceSetNamespace` returns the active internal `users.id` as bin16; the SDK uses that canonical UUID for self filtering.
+- External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.
 - When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.
 

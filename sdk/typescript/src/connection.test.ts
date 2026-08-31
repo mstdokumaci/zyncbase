@@ -49,6 +49,77 @@ describe("ConnectionManager", () => {
 			expect(events).toContain("connected");
 		});
 
+		test("installs the internal presence user id before connected", async () => {
+			const { manager, mockWs } = makeManager();
+			const events: string[] = [];
+			manager.onPresenceUserId((userId) => events.push(`user:${userId}`));
+			manager.on("connected", () => events.push("connected"));
+
+			await connectManager(manager, mockWs);
+
+			expect(events).toEqual([
+				"user:01010101-0101-0101-0101-010101010101",
+				"connected",
+			]);
+		});
+
+		test("rejects a presence namespace response without a binary user id", async () => {
+			const { manager, mockWs } = makeManager();
+			const connected = manager.connect();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerOpen();
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+
+			await expect(connected).rejects.toThrow(
+				"PresenceSetNamespace response missing binary userId",
+			);
+		});
+
+		test("rejects a presence namespace response with a malformed user id", async () => {
+			const { manager, mockWs } = makeManager();
+			const connected = manager.connect();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerOpen();
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: 2,
+					userId: new Uint8Array(15),
+				}),
+			);
+
+			await expect(connected).rejects.toThrow(
+				"invalid userId binary length 15",
+			);
+		});
+
+		test("explicit presence namespace setup replaces the internal user id", async () => {
+			const { manager, mockWs } = makeManager();
+			const userIds: string[] = [];
+			manager.onPresenceUserId((userId) => userIds.push(userId));
+			await connectManager(manager, mockWs);
+
+			const switched = manager.setPresenceNamespace("other-room");
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: 3,
+					userId: new Uint8Array(16).fill(2),
+				}),
+			);
+			await switched;
+
+			expect(manager.getPresenceNamespace()).toBe("other-room");
+			expect(userIds).toEqual([
+				"01010101-0101-0101-0101-010101010101",
+				"02020202-0202-0202-0202-020202020202",
+			]);
+		});
+
 		test("emits 'statusChange' with 'connected' on open", async () => {
 			const { manager, mockWs } = makeManager();
 			const statuses: string[] = [];

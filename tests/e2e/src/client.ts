@@ -1,4 +1,5 @@
 import type {
+	AuthConfig,
 	BatchOperation,
 	JsonValue,
 	Presence,
@@ -28,11 +29,18 @@ export class ZyncBaseClient {
 	constructor(
 		urlOrOptions:
 			| string
-			| { url: string; debug?: boolean } = "ws://127.0.0.1:3000",
+			| {
+					url: string;
+					debug?: boolean;
+					auth?: AuthConfig;
+			  } = "ws://127.0.0.1:3000",
 	) {
 		const options =
 			typeof urlOrOptions === "string" ? { url: urlOrOptions } : urlOrOptions;
-		this.client = createClient({ ...options, auth: { anonymous: true } });
+		this.client = createClient({
+			...options,
+			auth: options.auth ?? { anonymous: true },
+		});
 		this.store = this.client.store;
 		this.presence = this.client.presence;
 	}

@@ -6,7 +6,7 @@ Two tiers of presence state exist:
 - **User state** (`presence.user` fields): one record per connected user, owned by that user, automatically cleaned up on disconnect.
 - **Shared state** (`presence.shared` fields): one record per namespace, writable by any authorized user, persists until all users leave (with a 5-second grace period for reconnects).
 
-Presence methods require a ready presence scope. `client.connect()` and `client.setPresenceNamespace(namespace)` resolve only after the server has resolved the namespace string and internal presence `users.id`. Calling presence methods before scope is ready fails with `SESSION_NOT_READY`.
+Presence methods require a ready presence scope. `client.connect()` and `client.setPresenceNamespace(namespace)` resolve only after the server has resolved the namespace string and returned the internal presence `users.id` as bin16. The SDK decodes that canonical UUID before replaying subscriptions. Calling presence methods before scope is ready fails with `SESSION_NOT_READY`.
 
 ## Table of Contents
 1. [Schema Definition](#schema-definition)
@@ -136,7 +136,7 @@ const alice = client.presence.get('018f3a...')
 
 ### `presence.getAll(options?)`
 
-Synchronous local lookup of all users' presence in the namespace. Excludes self by default.
+Synchronous local lookup of all users' presence in the namespace. Excludes self by default by comparing each entry's canonical internal UUID with the UUID returned by presence-scope setup.
 
 ```typescript
 const others   = client.presence.getAll()
@@ -212,7 +212,7 @@ const shared = client.presence.getShared()
 
 ## Presence Namespaces
 
-Presence is scoped to `presenceNamespace`. Only users in the same namespace see each other and share the same shared state record. When `users.namespaced = true`, the namespace also determines which internal `users.id` is used for presence identity.
+Presence is scoped to `presenceNamespace`. Only users in the same namespace see each other and share the same shared state record. When `users.namespaced = true`, the namespace also determines which internal `users.id` is used for presence identity. That ID is returned by `PresenceSetNamespace` and is the same canonical UUID used in snapshots and broadcasts.
 
 ```typescript
 const client = createClient({

@@ -8,6 +8,7 @@ import {
 import {
 	buildServerIfNeeded,
 	cleanupE2EArtifacts,
+	PRESENCE_E2E_JWT_SECRET,
 	resetE2ERoots,
 	runE2ETest,
 	withServer,
@@ -17,6 +18,7 @@ import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
+import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
@@ -100,9 +102,28 @@ describe("ZyncBase E2E", () => {
 					dataDir: ctx.dataPath("presence"),
 					configName: "zyncbase-config-presence.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
 				},
 				async ({ port }) => {
-					await runPresence(port);
+					await runPresence(port, PRESENCE_E2E_JWT_SECRET);
+				},
+			);
+		});
+	});
+
+	test("presence: 2,000 clients stay consistent under fan-out and churn", async () => {
+		await runE2ETest("Presence stress", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-presence.json"),
+					dataDir: ctx.dataPath("presence-stress"),
+					configName: "zyncbase-config-presence-stress.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+				},
+				async ({ port }) => {
+					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
 				},
 			);
 		});

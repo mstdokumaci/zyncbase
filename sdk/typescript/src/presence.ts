@@ -234,6 +234,7 @@ export class PresenceImpl implements Presence {
 	invalidate(): void {
 		this.userSubGen++;
 		this.sharedSubGen++;
+		this.localUserId = null;
 		this.userCache.clear();
 		this.sharedCache = null;
 		this.userSubId = null;

@@ -119,7 +119,11 @@ export class AutoMockWebSocket {
 	}
 
 	private _autoRespondOk(id: number): void {
-		const buf = encodeToBuffer({ type: "ok", id });
+		const buf = encodeToBuffer({
+			type: "ok",
+			id,
+			...(id === 2 ? { userId: new Uint8Array(16).fill(1) } : {}),
+		});
 		if (this.onmessage) {
 			this.onmessage({ data: buf });
 		}
@@ -229,7 +233,13 @@ export function makeManager(options?: Partial<ClientOptions>): {
 /** Trigger ok responses for initial StoreSetNamespace (id=1) and PresenceSetNamespace (id=2). */
 export function triggerNamespaceOk(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
-	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+	mockWs.triggerMessage(
+		encodeToBuffer({
+			type: "ok",
+			id: 2,
+			userId: new Uint8Array(16).fill(1),
+		}),
+	);
 }
 
 /** Full connect flow: acquire ticket + open + namespace ok. */

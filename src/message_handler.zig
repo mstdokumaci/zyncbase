@@ -210,7 +210,6 @@ pub const MessageHandler = struct {
             // Server response/push types must never be received as client requests.
             .ok,
             .@"error",
-            .connected,
             .schema_sync,
             .server_disconnect,
             .store_delta,
@@ -603,7 +602,7 @@ pub const MessageHandler = struct {
                 true,
             );
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, true)) {
-                return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+                return try wire_encode.encodePresenceScopeSuccess(arena_allocator, msg_id, scope.user_doc_id);
             }
             return error.RequestSuperseded;
         }

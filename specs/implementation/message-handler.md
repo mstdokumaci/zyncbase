@@ -11,7 +11,7 @@
 | `src/message_handler.zig` | Main request lifecycle, routing, scoped session gates, rate-limit enforcement, and response/error send path. |
 | `src/wire/decode.zig` | Zero/low-allocation envelope and payload extractors for supported message types. |
 | `src/wire/encode.zig` | Success, query, schema sync, write acknowledgement, presence, and error encoders. |
-| `src/connection/state.zig` | Per-connection state, send outbox, scoped session fields, and subscription ownership. |
+| `src/connection/state.zig` | Per-connection state, direct uWS send behavior, scoped session fields, and subscription ownership. |
 | `src/authorization/session_resolver.zig` | Background namespace/user resolution completion and stale-result protection. |
 | `src/store_service.zig` | Store mutations, queries, pagination, and scope lookup. |
 | `src/presence/service.zig` | Event-loop facade for enqueueing presence operations and disconnect cleanup. |
@@ -23,7 +23,7 @@
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `MessageHandler` | `MemoryStrategy`, `Connection`, `StoreService`, `PresenceService`, `SubscriptionEngine`, `AuthConfig`, `Schema`, `JwtValidator` | Owns request handling and all domain dispatch from a decoded wire envelope. |
-| `Connection` | `Outbox`, `Session`, `WebSocket`, allocator | Holds mutable per-client state, scoped namespace/user ids, pending namespace resolution, and connection subscriptions. |
+| `Connection` | `Session`, `WebSocket`, allocator | Holds mutable per-client state, scoped namespace/user ids, pending namespace resolution, and connection subscriptions. |
 | `ConnectionViolationTracker` | Security config | Counts malformed/security-sensitive messages and closes abusive connections. |
 | `wire.Envelope` | MessagePack extractor | Carries `type` and `id`, the only fields needed before routing. |
 | `StoreService` | `StorageEngine`, `Schema`, `Authorization` | Executes store reads/writes and resolves namespace/user scope. |
@@ -78,7 +78,7 @@ Errors flow through four distinct paths depending on when they occur:
 1. Error originates in `routeMessageFast` (validation, authorization, storage, etc.).
 2. `handleMessage` catches the error and calls `wire.getWireError(err)` to translate it.
 3. `wire.encodeError()` builds the MessagePack error response with the request `id`.
-4. `conn.send()` delivers the response; backpressure or drop closes the connection.
+4. `conn.send()` delivers the response; uWS backpressure is accepted/buffered, while a dropped send closes the connection.
 
 ### Asynchronous Write Errors
 

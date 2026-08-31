@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -18,6 +19,19 @@ const MAX_CAPTURED_LOG_LINES = 1000;
 const originalConsoleLog = console.log.bind(console);
 const capturedConsoleLogs: string[] = [];
 const capturedServerLogs: string[] = [];
+
+export const PRESENCE_E2E_JWT_SECRET = "e2e-presence-secret-at-least-32bytes";
+
+export function createTestJwt(secret: string, subject: string): string {
+	const now = Math.floor(Date.now() / 1000);
+	const encode = (value: unknown) =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: subject, iat: now, exp: now + 600 })}`;
+	const signature = createHmac("sha256", secret)
+		.update(unsigned)
+		.digest("base64url");
+	return `${unsigned}.${signature}`;
+}
 
 type RunningServer = {
 	process: Bun.Subprocess;
@@ -45,6 +59,7 @@ export type ServerOptions = {
 	dataDir: string;
 	configName?: string;
 	authPath?: string;
+	jwtSecret?: string;
 };
 
 export type ServerHandle = {
@@ -445,15 +460,19 @@ export async function withServer<T>(
 		server: { port: ctx.port },
 		dataDir: options.dataDir,
 		schema: options.schemaPath,
-		authentication: {
-			anonymous: { enabled: true },
-			ticket: { secret: "e2e-test-ticket-secret-32bytes!" },
-		},
+		authentication: options.jwtSecret
+			? {
+					jwt: { secret: options.jwtSecret, algorithm: "HS256" },
+					ticket: { secret: "e2e-test-ticket-secret-32bytes!" },
+				}
+			: {
+					anonymous: { enabled: true },
+					ticket: { secret: "e2e-test-ticket-secret-32bytes!" },
+				},
 	};
 	if (options.authPath) {
 		config.authorization = options.authPath;
 	}
-
 	fs.writeFileSync(configPath, JSON.stringify(config));
 
 	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);

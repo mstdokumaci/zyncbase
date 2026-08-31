@@ -48,9 +48,8 @@ export class ZyncBaseClient {
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
 
-		// When the server sends a Connected message, forward the userId to PresenceImpl
-		// so that presence.getAll() can filter out the local user by default.
-		this.conn.onConnectedWithUserId((userId) => {
+		// Presence scope resolution returns the same internal UUID used by entries.
+		this.conn.onPresenceUserId((userId) => {
 			this.presenceImpl.setLocalUserId(userId);
 		});
 
