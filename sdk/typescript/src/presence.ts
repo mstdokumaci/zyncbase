@@ -216,7 +216,8 @@ export class PresenceImpl implements Presence {
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[] {
 		const entries = Array.from(this.userCache.values());
 		if (!options?.includeSelf && this.localUserId) {
-			return entries.filter((e) => e.userId !== this.localUserId);
+			const self = this.userCache.get(this.localUserId);
+			if (self) entries.splice(entries.indexOf(self), 1);
 		}
 		return entries;
 	}

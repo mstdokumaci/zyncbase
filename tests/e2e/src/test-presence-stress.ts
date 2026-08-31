@@ -808,20 +808,29 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 		fail(new Error(`Presence worker ${processIndex} sent an unknown message`));
 	};
 
-	const worker = Bun.spawn(
-		[
-			process.execPath,
-			import.meta.path,
-			"--worker",
-			String(port),
-			String(processIndex),
-			jwtSecret,
-		],
-		{
-			stdio: ["ignore", "ignore", "inherit"],
-			ipc: handleMessage,
-		},
+	const workerCommand = [process.execPath];
+	const profileDir = process.env.ZYNCBASE_PRESENCE_PROFILE_DIR;
+	if (profileDir) {
+		workerCommand.push(
+			"--cpu-prof",
+			"--cpu-prof-dir",
+			profileDir,
+			"--cpu-prof-name",
+			`client-${processIndex + 1}.cpuprofile`,
+		);
+	}
+	workerCommand.push(
+		import.meta.path,
+		"--worker",
+		String(port),
+		String(processIndex),
+		jwtSecret,
 	);
+
+	const worker = Bun.spawn(workerCommand, {
+		stdio: ["ignore", profileDir ? "inherit" : "ignore", "inherit"],
+		ipc: handleMessage,
+	});
 
 	worker.exited.then((exitCode) => {
 		if (exitCode !== 0 || !resultReceived) {
