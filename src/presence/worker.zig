@@ -13,6 +13,8 @@ const PresenceManager = @import("manager.zig").PresenceManager;
 
 const Allocator = std.mem.Allocator;
 
+const batch_window_ns = 2 * std.time.ns_per_ms;
+
 /// A presence operation enqueued by the event loop for the dispatcher thread.
 /// The `allocator` field owns any heap-allocated data inside `op` (e.g. cloned
 /// patches) so that `deinit` can free them without external context.
@@ -131,30 +133,55 @@ pub const PresenceWorker = struct {
     }
 
     fn workerLoop(self: *PresenceWorker) void {
-        while (!self.thread.isRequested()) {
-            // Drain all available ops (non-blocking) — natural batching.
-            var processed = false;
-            while (self.work_queue.pop()) |op| {
-                self.processOp(op);
-                processed = true;
-            }
-            if (processed) self.flush();
+        var pending = false;
 
-            // Wait for more work (blocking via condvar).
-            self.thread.lockWork();
-            if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
-                self.thread.waitForWork();
+        while (!self.thread.isRequested()) {
+            const first = self.work_queue.pop() orelse {
+                self.thread.lockWork();
+                if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
+                    self.thread.waitForWork();
+                }
+                self.thread.unlockWork();
+                continue;
+            };
+
+            // Fixed, non-sliding window: later arrivals wake the worker but never
+            // extend this deadline. Checking it after every op also guarantees a
+            // flush under sustained input instead of waiting for the queue to empty.
+            const deadline_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds() + batch_window_ns;
+            self.processOp(first);
+            pending = true;
+
+            while (!self.thread.isRequested()) {
+                const now_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds();
+                if (now_ns >= deadline_ns) break;
+
+                if (self.work_queue.pop()) |op| {
+                    self.processOp(op);
+                    continue;
+                }
+
+                self.thread.lockWork();
+                if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
+                    const wait_now_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds();
+                    if (wait_now_ns < deadline_ns) {
+                        _ = self.thread.waitForWorkTimed(@intCast(deadline_ns - wait_now_ns));
+                    }
+                }
+                self.thread.unlockWork();
             }
-            self.thread.unlockWork();
+
+            if (self.thread.isRequested()) break;
+            self.flush();
+            pending = false;
         }
 
-        // Final drain + flush on shutdown.
-        var processed = false;
+        // Shutdown bypasses the window and publishes everything still pending.
         while (self.work_queue.pop()) |op| {
             self.processOp(op);
-            processed = true;
+            pending = true;
         }
-        if (processed) self.flush();
+        if (pending) self.flush();
     }
 
     fn processOp(self: *PresenceWorker, op: PresenceOp) void {

@@ -7,6 +7,7 @@ const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const PresenceManager = @import("manager.zig").PresenceManager;
+const PresenceOp = @import("worker.zig").PresenceOp;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 
 const testing = std.testing;
@@ -305,33 +306,68 @@ test "PresenceWorker: multiple ops batched into single flush" {
         allocator.destroy(worker);
     }
 
-    // Enqueue multiple set_user ops rapidly — they should coalesce in the
-    // PresenceManager's pending list and produce a single broadcast.
+    // Build first so enqueueing into the running worker stays well inside the
+    // fixed 2 ms window.
+    var ops: [5]PresenceOp = undefined;
+    var built: usize = 0;
+    var enqueued: usize = 0;
+    defer for (ops[enqueued..built]) |*op| op.deinit();
+
     for (0..5) |i| {
         const patch = try makePresencePatch(allocator, &.{
             .{ .idx = 0, .value = .{ .float = @floatFromInt(i) } },
         });
         defer patch.free(allocator);
-        const cloned = try patch.deepClone(allocator);
-        try worker.enqueue(.{
+        ops[built] = .{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
                 .user_id = user_id,
-                .patch = cloned,
+                .patch = try patch.deepClone(allocator),
             } },
             .allocator = allocator,
-        });
+        };
+        built += 1;
     }
 
-    // Start only after the final op is queued, so this notification acknowledges
-    // the single flush that drained the complete batch.
     try worker.spawn();
+    for (ops[0..built]) |op| {
+        try worker.enqueue(op);
+        enqueued += 1;
+    }
     try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
     var broadcast_count: usize = 0;
     while (send_queue.pop()) |entry| {
-        entry.deinit();
+        defer entry.deinit();
+        var reader: std.Io.Reader = .fixed(entry.data);
+        const decoded = try msgpack.decode(allocator, &reader);
+        defer decoded.free(allocator);
+        try testing.expectEqual(@as(f64, 4.0), decoded.arr[2].arr[0].arr[2].arr[0].arr[1].float);
         broadcast_count += 1;
     }
     try testing.expectEqual(@as(usize, 1), broadcast_count);
+    try testing.expectEqual(@as(u32, 1), notifier.called.load(.monotonic));
+
+    // Shutdown must bypass the window and publish the final pending mutation.
+    const final_patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 5.0 } },
+    });
+    defer final_patch.free(allocator);
+    try worker.enqueue(.{
+        .op = .{ .set_user = .{
+            .namespace_id = namespace_id,
+            .user_id = user_id,
+            .patch = try final_patch.deepClone(allocator),
+        } },
+        .allocator = allocator,
+    });
+    worker.stop();
+
+    const final_entry = send_queue.pop() orelse return error.MissingFinalBroadcast;
+    defer final_entry.deinit();
+    var final_reader: std.Io.Reader = .fixed(final_entry.data);
+    const final_decoded = try msgpack.decode(allocator, &final_reader);
+    defer final_decoded.free(allocator);
+    try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[0].arr[1].float);
+    try testing.expect(send_queue.pop() == null);
 }
