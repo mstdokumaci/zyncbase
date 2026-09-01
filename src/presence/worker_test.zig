@@ -329,11 +329,11 @@ test "PresenceWorker: multiple ops batched into single flush" {
         built += 1;
     }
 
-    try worker.spawn();
     for (ops[0..built]) |op| {
         try worker.enqueue(op);
         enqueued += 1;
     }
+    try worker.spawn();
     try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
     var broadcast_count: usize = 0;
