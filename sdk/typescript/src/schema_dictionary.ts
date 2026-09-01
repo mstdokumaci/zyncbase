@@ -5,7 +5,7 @@
 // Built from the SchemaSync message pushed by the server on connect.
 
 import xxhash from "xxhash-wasm";
-import { packDocId, unpackDocId } from "./doc_id.js";
+import { formatUuidBytes, packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
 	flatten,
@@ -517,17 +517,7 @@ export class SchemaDictionary {
 				`SchemaDictionary: invalid userId binary length ${bin.length}`,
 			);
 		}
-		const hexChars = "0123456789abcdef";
-		const uuid = new Array(36);
-		for (let i = 0, j = 0; i < 16; i++) {
-			const b = bin[i];
-			uuid[j++] = hexChars[b >> 4];
-			uuid[j++] = hexChars[b & 0x0f];
-			if (i === 3 || i === 5 || i === 7 || i === 9) {
-				uuid[j++] = "-";
-			}
-		}
-		return uuid.join("");
+		return formatUuidBytes(bin);
 	}
 
 	/**

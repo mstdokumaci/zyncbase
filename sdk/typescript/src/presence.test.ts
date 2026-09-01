@@ -94,6 +94,23 @@ describe("PresenceImpl", () => {
 		expect(conn.dispatched.length).toBe(2);
 	});
 
+	test("set() does not let an overdue throttle timer overwrite newer data", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		presence.set({ cursor: { x: 1, y: 1 } });
+		presence.set({ cursor: { x: 2, y: 2 } });
+		const deadline = performance.now() + 20;
+		while (performance.now() < deadline) {}
+		presence.set({ cursor: { x: 3, y: 3 } });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(conn.dispatched.length).toBe(2);
+		const data = conn.dispatched.at(-1)?.data as Array<[number, unknown]>;
+		expect(data.find(([index]) => index === 1)?.[1]).toBe(3);
+	});
+
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);

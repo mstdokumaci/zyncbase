@@ -60,8 +60,14 @@ export class PresenceImpl implements Presence {
 		const elapsed = now - this.lastSetTime;
 
 		if (elapsed >= THROTTLE_INTERVAL_MS) {
+			if (this.throttleTimer !== null) {
+				clearTimeout(this.throttleTimer);
+				this.throttleTimer = null;
+			}
+			const pending = this.pendingSetData;
+			this.pendingSetData = null;
 			this.lastSetTime = now;
-			this.sendSet(data);
+			this.sendSet(pending ? { ...pending, ...data } : data);
 		} else {
 			this.pendingSetData = { ...(this.pendingSetData ?? {}), ...data };
 			if (this.throttleTimer === null) {

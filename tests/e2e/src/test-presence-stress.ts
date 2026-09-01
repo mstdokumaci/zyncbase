@@ -23,6 +23,10 @@ const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE = "presence-stress";
 const NAME_PREFIX = "client-";
+const EXPECTED_NAMES = Array.from(
+	{ length: TOTAL_CLIENTS },
+	(_, globalId) => `${NAME_PREFIX}${globalId}`,
+);
 
 const BARRIER_PHASES = [
 	"ready",
@@ -261,11 +265,9 @@ function hasExpectedData(entry: PresenceEntry, globalId: number, y: number) {
 	const data = entry.data;
 	const cursor = data.cursor;
 	return (
-		Object.keys(data).length === 3 &&
-		data.name === `${NAME_PREFIX}${globalId}` &&
+		data.name === EXPECTED_NAMES[globalId] &&
 		data.status === "active" &&
 		isRecord(cursor) &&
-		Object.keys(cursor).length === 2 &&
 		cursor.x === globalId &&
 		cursor.y === y &&
 		typeof entry.userId === "string" &&
@@ -329,7 +331,9 @@ function scanEntries(
 		extra: 0,
 		stale: 0,
 	};
-	for (const entry of entries) scanEntry(entry, active, expectedY, scan);
+	for (const entry of entries) {
+		scanEntry(entry, active, expectedY, scan);
+	}
 	return scan;
 }
 
@@ -390,7 +394,7 @@ function verifyFullJoinSelfFilter(context: ProcessContext): string | null {
 	for (const state of context.clients) {
 		const all = state.client.presence.getAll({ includeSelf: true });
 		const others = state.client.presence.getAll();
-		const ownName = `${NAME_PREFIX}${state.globalId}`;
+		const ownName = EXPECTED_NAMES[state.globalId];
 		if (
 			all.length !== TOTAL_CLIENTS ||
 			others.length !== TOTAL_CLIENTS - 1 ||
@@ -498,7 +502,7 @@ async function waitForConvergence(
 
 function setFullPresence(state: ClientState, y: number) {
 	state.client.presence.set({
-		name: `${NAME_PREFIX}${state.globalId}`,
+		name: EXPECTED_NAMES[state.globalId],
 		status: "active",
 		cursor: { x: state.globalId, y },
 	});

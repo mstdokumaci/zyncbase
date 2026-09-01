@@ -64,7 +64,7 @@ const HEX2 = (() => {
 	return table;
 })();
 
-function formatUuidBytes(bytes: Uint8Array): string {
+export function formatUuidBytes(bytes: Uint8Array): string {
 	return (
 		HEX2[bytes[0]] +
 		HEX2[bytes[1]] +
