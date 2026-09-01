@@ -77,12 +77,14 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Flush cadence | Work-batch drain | The worker drains available queued ops when signaled, flushes generated snapshots/broadcasts after the drained batch, and performs a final drain on shutdown. |
+| Flush cadence | Fixed 2 ms window | The worker starts a non-sliding deadline when it dequeues the first op, coalesces mutations until that deadline, and flushes even when the input queue remains nonempty. |
 | Grace period | 5,000 ms | Time before an empty namespace's shared state is evicted after the last user leaves. |
 | Field limit | 500 per tier | Hard limit on flat presence fields per user/shared tier. |
 | Latency target | Sub-100 ms | Presence operations should complete within 100 ms end-to-end. |
 
 **Overflow policy**: Presence writes are fire-and-forget after authorization and schema validation. If enqueue/allocation fails at the service boundary, the failure is logged and that ephemeral operation is dropped rather than blocking the event loop indefinitely.
+
+New arrivals wake the worker so their state is applied immediately, but they never extend the active batch deadline. Subscription snapshots and errors keep their direct send path and are not held for the mutation flush. Shutdown bypasses the window, drains the remaining queue, and publishes one final batch.
 
 ## Threading Model
 
@@ -95,7 +97,8 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 **Key invariants**:
 - `PresenceWorker` is the sole consumer of its SPSC work queue and the sole mutator of `PresenceManager` state.
 - The event loop enqueues `PresenceOp` values via `PresenceWorker.enqueue()`, which holds `thread.mutex` during push and signals `thread.cond`.
-- `PresenceWorker` waits on `thread.cond` when the queue is empty and wakes on signal or shutdown request.
+- `PresenceWorker` waits indefinitely when idle and uses a timed wait only for the remainder of an active 2 ms batch; enqueue signals wake either wait without extending the batch deadline.
+- The active deadline is checked after every operation so sustained input cannot starve broadcasts; queued work after a flush begins a new window.
 - Presence broadcasts and snapshots are encoded by the `PresenceWorker` thread and delivered through `SendQueue`; the event loop does not directly call any presence send.
 - `SubscriberTable` is not thread-safe; `PresenceManager` provides synchronization via `data_mutex`.
 - Presence cleanup on disconnect must be idempotent and handled through `PresenceOp.remove_all_for_connection` enqueued by the event loop.

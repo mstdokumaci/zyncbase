@@ -29,6 +29,15 @@ const TestNotifier = struct {
     }
 };
 
+const LatencyNotifier = struct {
+    completion: std.Io.Event = .unset,
+
+    fn notify(ctx: ?*anyopaque) void {
+        const self: *LatencyNotifier = @ptrCast(@alignCast(ctx));
+        self.completion.set(testing.io);
+    }
+};
+
 const IterationResult = struct {
     update_ns: u64,
     batch_ns: u64,
@@ -240,4 +249,83 @@ test "PresenceWorker: batched user update fanout throughput" {
     try testing.expect(avg_dispatch < target_dispatch);
     try testing.expect(avg_drain < target_drain);
     try testing.expect(avg_total < target_total);
+}
+
+test "PresenceWorker: 2 ms coalescing window latency" {
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+    const allocator = memory_strategy.generalAllocator();
+
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedSingleField(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 16, null, null);
+    defer send_node_pool.deinit();
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
+
+    var snapshot = try manager.onSubscribeUser(namespace_id, 1, 1);
+    defer snapshot.deinit(allocator);
+
+    var notifier: LatencyNotifier = .{};
+    var worker: PresenceWorker = undefined;
+    try worker.init(allocator, &memory_strategy, &manager, &send_queue, LatencyNotifier.notify, &notifier);
+    try worker.spawn();
+    defer {
+        worker.stop();
+        worker.deinit();
+    }
+
+    const patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch.free(allocator);
+
+    const iterations: usize = if (builtin.sanitize_thread) 10 else if (builtin.mode == .Debug) 20 else 100;
+    var samples: [iterations]u64 = undefined;
+    const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(5) } };
+
+    for (&samples) |*sample| {
+        notifier.completion.reset();
+        const started_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
+        try worker.enqueue(.{
+            .op = .{ .set_user = .{
+                .namespace_id = namespace_id,
+                .user_id = 1,
+                .patch = try patch.deepClone(allocator),
+            } },
+            .allocator = allocator,
+        });
+        try notifier.completion.waitTimeout(testing.io, timeout);
+        sample.* = @intCast(std.Io.Clock.awake.now(testing.io).toNanoseconds() - started_ns);
+
+        var message_count: usize = 0;
+        while (send_queue.pop()) |entry| {
+            entry.deinit();
+            message_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), message_count);
+    }
+
+    std.mem.sort(u64, &samples, {}, comptime std.sort.asc(u64));
+    const median_ns = samples[iterations / 2];
+    const p95_ns = samples[(iterations * 95 - 1) / 100];
+    std.debug.print("Presence worker enqueue-to-broadcast [ms]: median={d:.3} p95={d:.3}\n", .{
+        @as(f64, @floatFromInt(median_ns)) / 1e6,
+        @as(f64, @floatFromInt(p95_ns)) / 1e6,
+    });
+
+    try testing.expect(median_ns >= std.time.ns_per_ms);
+    try testing.expect(p95_ns < 100 * std.time.ns_per_ms);
 }
