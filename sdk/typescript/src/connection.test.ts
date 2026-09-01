@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
+import { packDocId } from "./doc_id";
 import {
 	connectManager,
 	encodeToBuffer,
@@ -58,7 +59,7 @@ describe("ConnectionManager", () => {
 			await connectManager(manager, mockWs);
 
 			expect(events).toEqual([
-				"user:01010101-0101-0101-0101-010101010101",
+				"user:019c1e50-7d11-7000-8000-000000000001",
 				"connected",
 			]);
 		});
@@ -108,15 +109,15 @@ describe("ConnectionManager", () => {
 				encodeToBuffer({
 					type: "ok",
 					id: 3,
-					userId: new Uint8Array(16).fill(2),
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
 				}),
 			);
 			await switched;
 
 			expect(manager.getPresenceNamespace()).toBe("other-room");
 			expect(userIds).toEqual([
-				"01010101-0101-0101-0101-010101010101",
-				"02020202-0202-0202-0202-020202020202",
+				"019c1e50-7d11-7000-8000-000000000001",
+				"019c1e50-7d11-7000-8000-000000000002",
 			]);
 		});
 

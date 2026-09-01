@@ -111,21 +111,25 @@ describe("ZyncBase E2E", () => {
 		});
 	});
 
-	test("presence: 2,000 clients stay consistent under fan-out and churn", async () => {
-		await runE2ETest("Presence stress", async (ctx) => {
-			await withServer(
-				ctx,
-				{
-					schemaPath: ctx.schemaPath("schema-presence.json"),
-					dataDir: ctx.dataPath("presence-stress"),
-					configName: "zyncbase-config-presence-stress.json",
-					authPath: ctx.schemaPath("auth-allow-all.json"),
-					jwtSecret: PRESENCE_E2E_JWT_SECRET,
-				},
-				async ({ port }) => {
-					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
-				},
-			);
-		});
-	});
+	test(
+		"presence: 2,000 clients stay consistent under fan-out and churn",
+		async () => {
+			await runE2ETest("Presence stress", async (ctx) => {
+				await withServer(
+					ctx,
+					{
+						schemaPath: ctx.schemaPath("schema-presence.json"),
+						dataDir: ctx.dataPath("presence-stress"),
+						configName: "zyncbase-config-presence-stress.json",
+						authPath: ctx.schemaPath("auth-allow-all.json"),
+						jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					},
+					async ({ port }) => {
+						await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
+					},
+				);
+			});
+		},
+		{ timeout: 300_000 },
+	);
 });

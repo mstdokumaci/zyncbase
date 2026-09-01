@@ -93,7 +93,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 ## Invariants
 
 - All WebSocket sends via `Connection.send()` occur on the event loop thread; cross-thread producers use `SendQueue` to marshal messages.
-- uWS `.backpressure` means the frame was accepted and buffered; `.dropped` closes the connection so state-bearing messages are never silently discarded.
+- uWS `.backpressure` means the frame was accepted and buffered; `Connection.send()` returns `error.Dropped` without closing the WebSocket, and `ConnectionManager.sendOrClose()` closes the connection after receiving that error.
 - Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
 - Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
 - No request may publish subscription or write acknowledgements before the corresponding storage commit.

@@ -210,7 +210,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - `StoreSetNamespace` and `PresenceSetNamespace` establish independent scoped sessions.
 - Store operations before store scope readiness return `SESSION_NOT_READY`.
 - Presence operations before presence scope readiness return `SESSION_NOT_READY`.
-- Every successful `PresenceSetNamespace` returns the active internal `users.id` as bin16; the SDK uses that canonical UUID for self filtering.
+- Every successful `PresenceSetNamespace` returns the active internal `users.id` as bin16; the SDK uses that canonical UUID for self-filtering.
 - External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.
 - When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.

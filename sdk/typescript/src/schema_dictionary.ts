@@ -5,7 +5,7 @@
 // Built from the SchemaSync message pushed by the server on connect.
 
 import xxhash from "xxhash-wasm";
-import { formatUuidBytes, packDocId, unpackDocId } from "./doc_id.js";
+import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
 	flatten,
@@ -528,7 +528,7 @@ export class SchemaDictionary {
 				`SchemaDictionary: invalid userId binary length ${bin.length}`,
 			);
 		}
-		return formatUuidBytes(bin);
+		return unpackDocId(bin);
 	}
 
 	/**

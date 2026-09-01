@@ -190,7 +190,7 @@ function decodeUuidV7DocId(packed: Uint8Array): string {
 	bytes[15] = packed[15];
 
 	const id = formatUuidBytes(bytes);
-	// ponytail: direct-mapped cache; use set-associative slots if collisions matter.
+	// direct-mapped cache; use set-associative slots if collisions matter.
 	uuidDecodeCache[cacheIndex] = { packed: packed.slice(), id };
 	return id;
 }

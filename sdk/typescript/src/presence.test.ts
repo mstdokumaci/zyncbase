@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
+import { packDocId } from "./doc_id.js";
 import { PresenceImpl } from "./presence.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
@@ -94,21 +95,26 @@ describe("PresenceImpl", () => {
 		expect(conn.dispatched.length).toBe(2);
 	});
 
-	test("set() does not let an overdue throttle timer overwrite newer data", async () => {
+	test("set() does not let a throttle timer overwrite newer data", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
 
-		presence.set({ cursor: { x: 1, y: 1 } });
-		presence.set({ cursor: { x: 2, y: 2 } });
-		const deadline = performance.now() + 20;
-		while (performance.now() < deadline) {}
-		presence.set({ cursor: { x: 3, y: 3 } });
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		jest.useFakeTimers();
+		try {
+			jest.advanceTimersByTime(16);
+			presence.set({ cursor: { x: 1, y: 1 } });
+			presence.set({ cursor: { x: 2, y: 2 } });
+			jest.advanceTimersByTime(15);
+			presence.set({ cursor: { x: 3, y: 3 } });
+			jest.advanceTimersByTime(1);
 
-		expect(conn.dispatched.length).toBe(2);
-		const data = conn.dispatched.at(-1)?.data as Array<[number, unknown]>;
-		expect(data.find(([index]) => index === 1)?.[1]).toBe(3);
+			expect(conn.dispatched.length).toBe(2);
+			const data = conn.dispatched.at(-1)?.data as Array<[number, unknown]>;
+			expect(data.find(([index]) => index === 1)?.[1]).toBe(3);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
@@ -150,7 +156,7 @@ describe("PresenceImpl", () => {
 					subId: 100,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(1),
+							userId: packDocId("user_1"),
 							data: conn.schema.decodePresenceUserValue([
 								[0, 100],
 								[1, 200],
@@ -220,7 +226,7 @@ describe("PresenceImpl", () => {
 					subId: 100,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(1),
+							userId: packDocId("user_1"),
 							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234567890,
 						},
@@ -233,7 +239,7 @@ describe("PresenceImpl", () => {
 		presence.subscribe(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		const userId = conn.schema.decodePresenceUserId(new Uint8Array(16).fill(1));
+		const userId = conn.schema.decodePresenceUserId(packDocId("user_1"));
 		const entry = presence.get(userId);
 		expect(entry).toBeDefined();
 		expect(entry?.data.status).toBe("active");
@@ -244,7 +250,7 @@ describe("PresenceImpl", () => {
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
 		presence.setLocalUserId(
-			conn.schema.decodePresenceUserId(new Uint8Array(16).fill(1)),
+			conn.schema.decodePresenceUserId(packDocId("user_1")),
 		);
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
@@ -255,7 +261,7 @@ describe("PresenceImpl", () => {
 					subId: 100,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(1),
+							userId: packDocId("user_1"),
 							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234567890,
 						},
@@ -303,7 +309,7 @@ describe("PresenceImpl", () => {
 			subId: 100,
 			users: [
 				{
-					userId: new Uint8Array(16).fill(2),
+					userId: packDocId("user_2"),
 					event: "join",
 					data: conn.schema.decodePresenceUserValue([
 						[0, 50],
@@ -315,7 +321,7 @@ describe("PresenceImpl", () => {
 		} as PresenceBroadcast);
 
 		expect(callbackCount).toBe(2);
-		const userId = conn.schema.decodePresenceUserId(new Uint8Array(16).fill(2));
+		const userId = conn.schema.decodePresenceUserId(packDocId("user_2"));
 		const entry = presence.get(userId);
 		expect(entry?.data).toEqual({ cursor: { x: 50, y: 75 } });
 	});
@@ -333,7 +339,7 @@ describe("PresenceImpl", () => {
 					subId: 100,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(3),
+							userId: packDocId("user_3"),
 							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1111,
 						},
@@ -351,13 +357,13 @@ describe("PresenceImpl", () => {
 			subId: 100,
 			users: [
 				{
-					userId: new Uint8Array(16).fill(3),
+					userId: packDocId("user_3"),
 					event: "leave",
 				},
 			],
 		} as PresenceBroadcast);
 
-		const userId = conn.schema.decodePresenceUserId(new Uint8Array(16).fill(3));
+		const userId = conn.schema.decodePresenceUserId(packDocId("user_3"));
 		expect(presence.get(userId)).toBeUndefined();
 	});
 
@@ -463,7 +469,7 @@ describe("PresenceImpl", () => {
 					subId: 100,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(1),
+							userId: packDocId("user_1"),
 							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1234,
 						},
@@ -517,7 +523,7 @@ describe("PresenceImpl", () => {
 					subId: 200,
 					users: [
 						{
-							userId: new Uint8Array(16).fill(2),
+							userId: packDocId("user_2"),
 							data: conn.schema.decodePresenceUserValue([[2, "new_status"]]),
 							joinedAt: 5678,
 						},
@@ -545,7 +551,7 @@ describe("PresenceImpl", () => {
 			subId: 100,
 			users: [
 				{
-					userId: new Uint8Array(16).fill(1),
+					userId: packDocId("user_1"),
 					data: conn.schema.decodePresenceUserValue([[2, "stale_status"]]),
 					joinedAt: 1234,
 				},
@@ -555,13 +561,9 @@ describe("PresenceImpl", () => {
 
 		// Cache should NOT have stale data — still has the new namespace data
 		expect(presence.getAll().length).toBe(1);
-		const newUserId = conn.schema.decodePresenceUserId(
-			new Uint8Array(16).fill(2),
-		);
+		const newUserId = conn.schema.decodePresenceUserId(packDocId("user_2"));
 		expect(presence.get(newUserId)).toBeDefined();
-		const staleUserId = conn.schema.decodePresenceUserId(
-			new Uint8Array(16).fill(1),
-		);
+		const staleUserId = conn.schema.decodePresenceUserId(packDocId("user_1"));
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 
@@ -770,13 +772,10 @@ describe("SchemaDictionary presence encode/decode", () => {
 		const schema = new SchemaDictionary();
 		await setupSchema(schema);
 
-		const bin = new Uint8Array([
-			0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67,
-			0x89, 0xab, 0xcd, 0xef,
-		]);
+		const bin = packDocId("019c1e50-7d11-7abc-9def-0123456789ab");
 		const uuid = schema.decodePresenceUserId(bin);
 
-		expect(uuid).toBe("01234567-89ab-cdef-0123-456789abcdef");
+		expect(uuid).toBe("019c1e50-7d11-7abc-9def-0123456789ab");
 	});
 
 	test("encodePresenceUserValue throws on unknown field", async () => {

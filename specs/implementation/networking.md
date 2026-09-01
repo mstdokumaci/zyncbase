@@ -14,7 +14,7 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 | `src/uws_wrapper.h` | C ABI declarations shared by Zig and the C++ bridge. |
 | `src/uws_timer.zig` | uWS loop timer wrapper used for token sweeping, JWKS refresh, and graceful-shutdown timers. |
 | `src/connection/manager.zig` | Connection registry and targeted send helper. |
-| `src/connection/state.zig` | Per-connection WebSocket handle, outbox, session state, and send/close behavior. |
+| `src/connection/state.zig` | Per-connection WebSocket handle, session state, and send/close behavior. |
 | `src/message_handler.zig` | Message callback consumer and request router. |
 | `build.zig` | uWebSockets/usockets/OpenSSL/C++ link configuration. |
 | `vendor/uwebsockets`, `vendor/usockets` | Pinned upstream networking dependencies. |
@@ -39,7 +39,7 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 - Compression is disabled; MessagePack size/depth limits are enforced before domain routing.
 - TLS is provided by OpenSSL through usockets when configured.
 - The network layer does not authorize store/presence operations; it authenticates/initializes the connection and delegates authorization to `MessageHandler` and `authorization/*`.
-- A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. The server coalesces per-connection outbound messages (deltas, acks, broadcasts) into a single frame per drain pass; the SDK decodes frames with `decodeMulti`.
+- A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. `Connection.send` submits the provided bytes directly to uWS; the SDK decodes frames with `decodeMulti`.
 
 ## Connection Lifecycle
 

@@ -215,7 +215,7 @@ pub const WebSocketServer = struct {
 /// The result of a WebSocket send operation.
 pub const SendStatus = enum(c_uint) {
     /// The kernel send buffer is full; uWS has internally buffered the frame.
-    /// The drain callback will fire when the buffer clears.
+    /// uWS flushes the buffered frame when the socket becomes writable.
     backpressure = 0,
     /// Frame was handed to the kernel successfully.
     success = 1,
