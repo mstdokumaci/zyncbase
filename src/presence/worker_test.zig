@@ -5,6 +5,7 @@ const typed = @import("../typed/doc_id.zig");
 const th = @import("test_helpers.zig");
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
+const MessageType = @import("../wire/message_type.zig").MessageType;
 const PresenceManager = @import("manager.zig").PresenceManager;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 
@@ -125,13 +126,19 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
             conn_b => sub_b,
             else => return error.UnexpectedConnId,
         };
-        const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
-        try testing.expectEqual(expected_sub, sub_id_val.uint);
+        try testing.expect(decoded == .arr);
+        try testing.expectEqual(@as(usize, 3), decoded.arr.len);
+        try testing.expectEqual(@as(u64, @intFromEnum(MessageType.presence_broadcast)), decoded.arr[0].uint);
+        try testing.expectEqual(expected_sub, decoded.arr[1].uint);
 
-        const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
+        const users_val = decoded.arr[2];
         try testing.expect(users_val == .arr);
         try testing.expectEqual(@as(usize, 1), users_val.arr.len);
-        const data_val = (try users_val.arr[0].mapGet("data")) orelse return error.MissingData;
+        const user = users_val.arr[0];
+        try testing.expect(user == .arr);
+        try testing.expectEqual(@as(usize, 4), user.arr.len);
+        try testing.expectEqual(@as(u64, 0), user.arr[1].uint);
+        const data_val = user.arr[2];
         try testing.expect(data_val == .arr);
         try testing.expectEqual(@as(f64, 100.0), data_val.arr[0].arr[1].float);
 

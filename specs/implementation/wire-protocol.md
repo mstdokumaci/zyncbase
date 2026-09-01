@@ -46,7 +46,7 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 | Compression | Disabled. |
 | Request envelope | MessagePack map with `type: u8` (numeric message type ID, one-byte positive fixint) and `id: u64`. |
 | Response envelope | MessagePack map with `type: 0x00` (`ok`) or `type: 0x01` (`error`) and matching `id`. |
-| Push envelope | MessagePack map with a numeric push `type` ID; no request `id`. |
+| Push envelope | Message-specific MessagePack shape with a numeric push `type` ID; no request `id`. `StoreDelta`, `PresenceBroadcast`, and `SharedStateBroadcast` use compact tuples. |
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
@@ -85,7 +85,7 @@ Complete server-to-client store records are encoded as **positional arrays**.
 | `PresenceBroadcast` user `data` | S→C | pair-array |
 | `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
 | `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
-| `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
+| `SharedStateBroadcast patches` | S→C | always array of pair-array patches |
 
 ## Message Type Registry
 
@@ -131,8 +131,8 @@ fixint. **Never reuse or renumber an assigned ID.**
 request; unknown or unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
-only its value is numeric. `StoreDelta` is the fixed tuple exception described
-below.
+only its value is numeric. `StoreDelta`, `PresenceBroadcast`, and
+`SharedStateBroadcast` use the fixed tuples described below.
 
 ## Client Messages
 
@@ -195,14 +195,15 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
 | `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
-| `PresenceBroadcast` | `subId`, `users` | User presence join/update/leave events. |
-| `SharedStateBroadcast` | `subId`, `data` | Shared presence patch or batch of patches. |
+| `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
+| `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
 
 ## Push Payload Notes
 
 - `StoreDelta` uses the fixed five-element tuple `[0x18, subId, opTag, tableIndex, payload]`. `opTag` is `0` for `set` and `1` for `remove`. A `set` payload is a complete positional record whose document ID is at position zero; a `remove` payload is the typed document ID. Each push carries exactly one record operation. The SDK expands the tuple to the public `{ type: "StoreDelta", subId, ops: [...] }` shape. Map-form messages, old six-element tuples, partial records, and records with the wrong field count are invalid.
-- `PresenceBroadcast.users` entries include `userId` and `event`. `join` includes `data` and `joinedAt`; `update` includes `data`; `leave` includes neither.
-- `SharedStateBroadcast.data` is one patch when a single update is flushed, or an array of patches when several updates are flushed together.
+- `PresenceBroadcast` uses the exact three-element tuple `[0x28, subId, entries]`. Each entry is one exact variable-arity tuple: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, or leave `[userId, 2]`. Event tags `0`, `1`, and `2` are permanent protocol values. `userId` is MessagePack `bin16`; `data` is a pair-array; join `joinedAt` is a non-negative JavaScript-safe integer. Map-form presence broadcasts, string event names, extra fields, and tag/arity mismatches are invalid.
+- `SharedStateBroadcast` uses the exact three-element tuple `[0x29, subId, patches]`. Every element of `patches` is a pair-array patch, including when only one update is flushed. Map-form shared-state broadcasts are invalid.
+- Presence push `subId` values are non-negative JavaScript-safe integers. Empty `entries` and `patches` arrays are structurally valid.
 - `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.
 
 ## Scoped Session Rules
