@@ -63,7 +63,7 @@ describe("doc_id performance", () => {
 				`(${((elapsedMs / iterations) * 1000).toFixed(3)}µs/call)`,
 		);
 
-		expect(last).toBeDefined();
+		expect(last).toBe("019c1e50-7d11-7000-8000-07cf000036a9");
 		expect(elapsedMs).toBeLessThan(100);
 	});
 

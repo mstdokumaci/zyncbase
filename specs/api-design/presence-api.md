@@ -168,7 +168,7 @@ type PresenceChangeBatch =
 - **Initial and replacement snapshots**: The first notification emitted is always `{ type: 'snapshot', users }`. Reconnects and presence namespace switches emit another `snapshot`; consumers must replace their materialized state upon receiving it.
 - **Ordered per-server-batch notifications**: Subsequent notifications are `{ type: 'changes', changes }`, emitted once per accepted server broadcast batch with wire-order preservation and no extra client-side batching or timer.
 - **Complete merged entries**: `join` and `update` changes carry the complete post-merge `PresenceEntry` (including unflattened nested fields and `joinedAt`), not partial wire patches.
-- **Self exclusion**: Notifications exclude the local user by default, matching `subscribe()` behavior. A server batch containing only self-updates does not trigger delta callbacks.
+- **Self-exclusion**: Notifications exclude the local user by default, matching `subscribe()` behavior. A server batch containing only self-updates does not trigger delta callbacks.
 - **Shared subscription ownership**: Snapshot (`subscribe`) and delta (`subscribeChanges`) listeners share a single underlying server subscription (`PresenceSubscribe`). The server subscription is opened on the first listener of either kind and closed only when the last listener of either kind unsubscribes.
 - **Consumer responsibility**: Consumers are responsible for initializing/replacing their local data structures on `snapshot` and applying `join`, `update`, and `leave` events incrementally on `changes`.
 
@@ -178,10 +178,10 @@ type PresenceChangeBatch =
 
 ### `presence.get(userId)`
 
-Synchronous local lookup of a specific user's presence. Returns `undefined` if the user is not present or no active `subscribe()` exists.
+Synchronous local lookup of a specific user's presence. Returns `undefined` if the user is not present or no active `subscribe()` or `subscribeChanges()` exists.
 
 > [!NOTE]
-> Zero-latency — reads from the SDK's in-memory cache populated by `subscribe()`. You must call `subscribe()` before `get()` returns meaningful data.
+> Zero-latency — reads from the SDK's in-memory cache populated by `subscribe()` or `subscribeChanges()`. You must call `subscribe()` or `subscribeChanges()` before `get()` returns meaningful data.
 
 ```typescript
 const alice = client.presence.get('018f3a...')
@@ -201,7 +201,7 @@ const everyone = client.presence.getAll({ includeSelf: true })
 
 Each call returns a fresh array with unspecified entry order.
 
-Returns `[]` if no active `subscribe()` exists.
+Returns `[]` if no active `subscribe()` or `subscribeChanges()` exists.
 
 ---
 

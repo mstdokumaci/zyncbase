@@ -5,6 +5,7 @@ import type {
 	OkResponse,
 	Presence,
 	PresenceBroadcast,
+	PresenceBroadcastEntry,
 	PresenceChange,
 	PresenceChangeBatch,
 	PresenceEntry,
@@ -395,12 +396,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	private applyBroadcastEntry(
-		entry: {
-			userId: Uint8Array;
-			event: "join" | "update" | "leave";
-			data?: Record<string, unknown>;
-			joinedAt?: number;
-		},
+		entry: PresenceBroadcastEntry,
 		collectChange: boolean,
 	): PresenceChange | null {
 		const userId = this.conn.schemaDictionary.decodePresenceUserId(

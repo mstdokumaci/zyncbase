@@ -913,6 +913,7 @@ describe("PresenceImpl", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(batches.length).toBe(1);
+		expect(batches[0].type).toBe("snapshot");
 		if (batches[0].type === "snapshot") {
 			expect(batches[0].users.map((u) => u.userId)).toEqual([
 				conn.schema.decodePresenceUserId(packDocId("user_other")),
@@ -951,6 +952,7 @@ describe("PresenceImpl", () => {
 			],
 		} as PresenceBroadcast);
 		expect(batches.length).toBe(2);
+		expect(batches[1].type).toBe("changes");
 		if (batches[1].type === "changes") {
 			expect(batches[1].changes.length).toBe(1);
 			expect(batches[1].changes[0].type).toBe("update");
