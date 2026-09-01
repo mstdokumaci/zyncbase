@@ -6,7 +6,7 @@ Networking [ADR-007-uwebsockets-008 [Auth Exchange Protocol [Security ZyncBase u
 | `src/uws_wrapper.h` | C ABI declarations shared by Zig and the C++ bridge. |
 | `src/uws_timer.zig` | uWS loop timer wrapper used for token sweeping, JWKS refresh, and graceful-shutdown timers. |
 | `src/connection/manager.zig` | Connection registry and targeted send helper. |
-| `src/connection/state.zig` | Per-connection WebSocket handle, outbox, session state, and send/close behavior. |
+| `src/connection/state.zig` | Per-connection WebSocket handle, session state, and send/close behavior. |
 | `src/message_handler.zig` | Message callback consumer and request router. |
 | `build.zig` | uWebSockets/usockets/OpenSSL/C++ link configuration. |
 | `vendor/uwebsockets`, `vendor/usockets` | Pinned upstream networking dependencies. |
@@ -22,7 +22,7 @@ Networking [ADR-007-uwebsockets-008 [Auth Exchange Protocol [Security ZyncBase u
 | `SocketUserData` | `Connection` id/state pointer | Binds transport callbacks to ZyncBase connection state. |
 | `ConnectionManager` | allocator, registry | Registers, looks up, and removes live connections. |
 | `MessageHandler` | `Connection`, `wire`, services | Consumes binary payloads after the network layer accepts the frame. |
-Transport Contract WebSocket client transport database Production payloads binary MessagePack not JSON Text frames rejected Compression disabled MessagePack size/depth limits enforced before domain routing TLS provided OpenSSL usockets network layer authorize store/presence authenticates delegates authorization to `MessageHandler `authorization/ binary frame carries MessagePack messages back-to-back split across frames server coalesces messages single frame SDK decodes frames `decodeMulti` Connection Lifecycle registers HTTP `POST /auth/ticket successful requests create short-lived connection ticket WebSocket upgrade accepted configured endpoint origin policy valid `ticket query parameter allocates/registers `Connection attaches socket user data server sends connection bootstrap pushes Binary frames delivered to `MessageHandler Close/error callbacks detach subscriptions session state remove connection presence Encoded responses owned by request arena dispatcher buffer until `Connection.send Send failure closes connection Cross-connection fanout `ConnectionManager/dispatchers outbound failures transport instability not domain errorsSecurity Boundaries Origin frame type checks before domain routing Parser limit violations tracked `ConnectionViolationTracker malformed-sensitive messages close connection Namespace store presence server-side fail error codes owned Taxonomy uWebSockets C ABI Interface library_bridge.cpp implements C functions/uws_wrapper.h imported Zig```c
+Transport Contract WebSocket transport database Production payloads binary MessagePack not JSON Text frames rejected Compression disabled MessagePack size/depth limits enforced before domain routing TLS provided OpenSSL usockets network layer authorize store/presence authenticates delegates authorization `MessageHandler `authorization binary frame carries MessagePack messages-back split across frames.send submits bytes uWS SDK decodes frames `decodeMulti` Connection Lifecycle registers HTTP /auth/ticket successful requests create short connection ticket WebSocket upgrade accepted configured endpoint origin policy `ticket query parameter allocates `Connection attaches socket user data server sends `SchemaSync bootstrap push Binary frames delivered `MessageHandler Close/error callbacks detach subscriptions session state remove connection presence Encoded responses owned request arena dispatcher buffer until.send copies payloads.send sends uWS.success.backpressure accepted.dropped closes connection uWS preserves frame order applies 16 MiB buffer per connection no additional Zig frame-count outbox.Cross-connection fanout sockets services Large outbound failures transport instability not domain errors Security Boundaries Origin validation frame type checks before domain routing Parser limit violations tracked Repeated malformed messages close connection Namespace store presence server-side only fail closed Public error codes Taxonomy uWebSockets C ABI Interface C++ library_bridge.cpp implements C functions/uws_wrapper.h imported Zig```c
 // App lifecycle
 uws_app_t* uws_create_app(int ssl, struct us_socket_context_options_t options);
 void       uws_destroy_app(int ssl, uws_app_t* app);
@@ -89,7 +89,6 @@ behavior.sendPingsAutomatically = true;
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Outbox capacity | 16 slots | Per-connection bounded ring buffer for outgoing messages. |
 | Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on event loop. |
 Limits| Property | Value | Notes |
 |----------|-------|-------|

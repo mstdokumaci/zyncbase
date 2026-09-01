@@ -44,12 +44,12 @@ const client = createClient({
   storeNamespace: 'tenant:acme:workspace:ws-1',
   presenceNamespace: 'tenant:acme:workspace:ws-1:document:doc-123'
 })
-```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary ADR-009`Connected server sends transport-level session context SDK sends store namespace selections server resolves namespace `users.id SDK for `SchemaSync `Connected` namespace acknowledgements before resolving `connect()```typescript
+```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary SDK sends store/presence namespace selections server resolves namespace `users.id SDK waits WebSocket open `SchemaSync namespace acknowledgements before `connect() Presence scope acknowledgement installs user UUID lifecycle replays subscriptions```typescript
 await client.connect()
 // Required store and presence scopes are ready.
 ````Promise<void> `ZyncBaseError `AUTH_FAILED `CONNECTION_FAILED `client.disconnect() closes connection clears active namespace```typescript
 client.disconnect()
-```wire-level details connection lifecycle format `Connected payload heartbeat see [Wire Protocol#connection Namespace Switching.setStoreNamespace(namespace Switch active store namespace runtime returned promise resolves server resolves namespace ID store user ID store subscriptions invalidated client re-subscribe```typescript
+```wire-level details connection lifecycle format acknowledgements heartbeat see [Wire Protocol Namespace Switching.setStoreNamespace(namespace Switch active store namespace runtime returned promise resolves server resolves namespace ID store user ID Active store subscriptions invalidated client re-subscribe```typescript
 await client.setStoreNamespace('tenant:acme:workspace:ws-2')
 ````namespace `Promise<void> `ZyncBaseError` `NAMESPACE_UNAUTHORIZED `NAMESPACE_SWITCH_REJECTED.namespaced enabled `client.setPresenceNamespace(namespace) Switch active presence namespace returned promise resolves server resolves namespace ID user ID clears presence old namespace joins new```typescript
 await client.setPresenceNamespace('tenant:acme:document:doc-456')

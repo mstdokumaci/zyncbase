@@ -28,7 +28,7 @@ Transport Encoding| Property | Contract |
 | Compression | Disabled. |
 | Request envelope | MessagePack map with `type: u8` (numeric message type ID, one-byte positive fixint) and `id: u64`. |
 | Response envelope | MessagePack map with `type: 0x00` (`ok`) or `type: 0x01` (`error`) and matching `id`. |
-| Push envelope | MessagePack map with a numeric push `type` ID; no request `id`. |
+| Push envelope | Message-specific MessagePack shape with a numeric push `type` ID; no request `id`. `StoreDelta`, `PresenceBroadcast`, and `SharedStateBroadcast` use compact tuples. |
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
@@ -44,12 +44,12 @@ Value Encoding field maps encoded omitted fields retain meaning format_index val
 | `PresenceBroadcast` user `data` | S→C | pair-array |
 | `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
 | `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
-| `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
+| `SharedStateBroadcast patches` | S→C | always array of pair-array patches |
 Message Type Registry top-level message fixed numeric ID registry source truth Zig enum/message_type SDK registry/connection_wire spec IDs ≤ `0x7f` MessagePack encodes one-byte positive fixint reuse renumber assigned ID| ID | Name | Direction | Purpose |
 |----|------|-----------|---------|
 | `0x00` | `ok` | S→C | Successful correlated response. |
 | `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
-| `0x02` | `Connected` | S→C | Connection/session bootstrap. |
+| `0x02` | Reserved | — | Formerly `Connected`; must not be reused. |
 | `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
 | `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
 | `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
@@ -74,7 +74,7 @@ Message Type Registry top-level message fixed numeric ID registry source truth Z
 | `0x27` | `PresenceRemove` | C→S | Remove user presence. |
 | `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
 | `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
-rules server-only IDs`0x00`0x03`0x1a`0x29 client requests `INVALID_MESSAGE_TYPE` `0x04``AuthRefresh client request unknown unassigned IDs Legacy string `type values fail decoding `INVALID_MESSAGE_FORMAT Map-form messages retain"type" key value numeric `StoreDelta fixed tuple exception Client Messages include `type` `id` fields message-specific fields| Message | Fields | Scope/session rule | Responsibility |
+rules server-only IDs`0x00`0x1a`0x29 client requests `INVALID_MESSAGE_TYPE` `0x02` reserved `0x04``AuthRefresh client request unknown unassigned IDs Legacy `type values fail decoding `INVALID_MESSAGE_FORMAT` Map-form messages retain"type" key value numeric `StoreDelta `PresenceBroadcast `SharedStateBroadcast use fixed tuples Client Messages include `type` `id` fields message-specific fields| Message | Fields | Scope/session rule | Responsibility |
 |---------|--------|--------------------|----------------|
 | `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
 | `StoreSet` | `path`, `value`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path. |
@@ -103,6 +103,7 @@ Query fields `StoreQuery Grammar `orderBy ordered array positional sort tuples_i
 Store subscription updated not optimistic mutation responses Server Responses| Response | Fields | Meaning |
 |----------|--------|---------|
 | `ok` | `id` | Generic success. |
+| `ok` presence scope | `id`, `userId` | Successful `PresenceSetNamespace`; `userId` is the mandatory bin16 internal `users.id` used by presence snapshots and broadcasts. |
 | `ok` with `session` | `id`, `session` | Namespace or auth refresh resolved session claims. |
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
@@ -110,12 +111,11 @@ Store subscription updated not optimistic mutation responses Server Responses| R
 | `error` | `id`, `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome. |
 error codes retry categories owned Taxonomy Server Pushes| Push | Fields | Meaning |
 |------|--------|---------|
-| `Connected` | `userId` | Transport/session bootstrap push after connection setup. |
 | `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields` | Integer dictionaries used by store, query, and presence messages. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
 | `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
-| `PresenceBroadcast` | `subId`, `users` | User presence join/update/leave events. |
-| `SharedStateBroadcast` | `subId`, `data` | Shared presence patch or batch of patches. |
-Push Payload Notes `StoreDelta uses five-element tuple[0x18 subId opTag tableIndex payload `opTag `0 `1 `remove `set payload complete positional record document ID zero `remove typed document ID Each push carries one record operation SDK expands tuple subId shape Map-form messages old six-element tuples partial records wrong field count invalid `PresenceBroadcast.users entries include `userId `event `join includes `update `leave neither `SharedStateBroadcast.data patch array patches `SchemaSync dictionaries source table/field integer ids repeat generated dictionary contents Scoped Session Rules `StoreSetNamespace `PresenceSetNamespace establish independent scoped sessions Store before readiness return `SESSION_NOT_READY Presence before return `SESSION_NOT_READY superseded namespace resolution activate older scope.namespaced forbids cross-namespace switching server returns `NAMESPACE_SWITCH_REJECTED` Extensibility Additive fields allowed older decoders ignore New message types `MessageType/message_handler` SDK registry/typescript/src/connection_wire.ts file [Message Type Registry same change New public errors added `src/wire/errors.zig`/typescript/src/errors.ts` [Error Taxonomy]-taxonomy Breaking wire changes acceptable green-field stage docs SDK move same commit Related Specifications [Message Handler [Query Grammar [Schema Grammar [Presence Internals [TypeScript SDK]-sdk.md
+| `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
+| `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
+Push Payload `StoreDelta uses five-element tuple[0x18 subId opTag tableIndex payload `1 `remove payload record ID zero `remove typed document ID push carries record operation SDK expands tuple subId Map-form messages six-element tuples partial records wrong field count invalid `PresenceBroadcast uses three-element tuple[0x28 subId entries Each entry variable-arity tuple join 0 data joinedAt update 1 leave 2 Event tags `0 `1 permanent protocol values `userId MessagePack `bin16 `data pair-array `joinedAt non JavaScript-safe integer Map-form broadcasts event names extra fields tag/arity mismatches invalid `SharedStateBroadcast uses three-element tuple[0x29 subId patches pair-array patch Map-form shared-state broadcasts invalid Presence `subId` values non-negative JavaScript-safe integers Empty `entries `patches arrays valid `SchemaSync dictionaries table/field integer ids repeat generated dictionary contentsScoped Session Rules `StoreSetNamespace `PresenceSetNamespace establish independent scoped sessions Store operations before readiness return `SESSION_NOT_READY` Presence before return `SESSION_NOT_READY` successful `PresenceSetNamespace returns `users.id as bin16 SDK uses canonical UUID for self-filtering External JWT anonymous subjects remain server-internal after ticket exchange not sent over WebSocket superseded namespace resolution activate older forbids cross-namespace switching server returns `NAMESPACE_SWITCH_REJECTED` Extensibility Additive fields allowed when older decoders ignore New message types added to `MessageType` routing switch SDK registry [Message Type Registry New public errors added to/errors Taxonomy Breaking wire changes acceptable during green-field stage docs SDK move same commit Related Specifications [Message Handler [Query Grammar [Presence Internals [TypeScript SDK

@@ -1,4 +1,4 @@
-Presence API Reference tracks ephemeral state real-time Presence data typed against schema in.json stored in-memory never persisted to SQLite Two tiers of presence state **User state** one record per user cleaned on disconnect **Shared state** one record per namespace writable by authorized user persists until users leave 5-second grace period for reconnects). Presence methods require ready presence `client.connect() `client.setPresenceNamespace(namespace)` resolve after server resolved namespace string internal presence `users.id` Calling presence methods before ready fails with `SESSION_NOT_READY` Table of Contents [Schema Definition [User Presence Methods].set(data.subscribe(callback.get(userId(options.remove [Shared State Methods].setShared(data.subscribeShared(callbackgetShared 4. [Namespaces-namespaces [Authorization 6. Cases Examples 7. Practices Schema Definition Presence fields defined `schema top-level `presence key parallel `store```json
+Presence API Reference tracks ephemeral state real Presence data typed against schema in.json stored in-memory never persisted to SQLite Two tiers of presence state **User state** one record per connected user cleaned on disconnect **Shared state** one record per namespace writable by authorized user persists until users leave 5-second grace period for reconnects). methods require ready presence `client.connect() `client.setPresenceNamespace(namespace)` resolve after server resolved namespace string returned internal presence `users.id` as bin16 SDK decodes canonical UUID before replaying subscriptions Calling presence methods before ready fails with `SESSION_NOT_READY` Table of Contents [Schema Definition [User Presence Methods].set(data.subscribe(callback.get(userId.getAll(options.remove [Shared State Methods.setShared(data.subscribeShared(callbackgetShared 4. [Namespaces-namespaces [Authorization 6. Cases Examples 7. Practices Schema Definition Presence fields defined `schema top-level `presence key parallel `store```json
 {
   "version": "1.0.0",
   "store": { ... },
@@ -44,13 +44,48 @@ interface PresenceEntry {
   }
   joinedAt: number  // Unix timestamp ms of when the user joined
 }
-```unsubscribe function sends `PresenceUnsubscribe server `presence.get(userId) lookup user presence Returns `undefined if not present no active `subscribe()` Zero-latency reads SDK-memory cache `subscribe() call `subscribe( before `get( returns data```typescript
+```callback fresh snapshot array Presence entries unordered array order stable unsubscribe function sends `PresenceUnsubscribe server `presence.subscribeChanges user presence change deltas full presence snapshot array broadcast high-throughput consumers large rooms local stores incremental updates```typescript
+const unsubscribe = client.presence.subscribeChanges((batch) => {
+  if (batch.type === 'snapshot') {
+    // Initial connection, reconnect, or namespace switch: replace entire local state
+    presenceMap.clear()
+    for (const user of batch.users) {
+      presenceMap.set(user.userId, user)
+    }
+  } else {
+    // Incremental changes from server broadcast batch
+    for (const change of batch.changes) {
+      switch (change.type) {
+        case 'join':
+        case 'update':
+          presenceMap.set(change.entry.userId, change.entry)
+          break
+        case 'leave':
+          presenceMap.delete(change.userId)
+          break
+      }
+    }
+  }
+})
+```
+
+**Types**:
+```typescript
+type PresenceChange =
+  | { type: 'join'; entry: PresenceEntry }
+  | { type: 'update'; entry: PresenceEntry }
+  | { type: 'leave'; userId: string }
+
+type PresenceChangeBatch =
+  | { type: 'snapshot'; users: PresenceEntry[] }
+  | { type: 'changes'; changes: PresenceChange[] }
+```**Initial replacement snapshots** first notification 'snapshot users Reconnects presence namespace switches emit another `snapshot replace state **Ordered per-server-batch notifications 'changes once per server batch wire-order preservation no extra client-side batching timer merged `join `update changes carry complete post-merge `PresenceEntry fields not partial wire patches-exclusion** Notifications exclude local user `subscribe() behavior server batch self-updates trigger delta callbacks subscription Snapshot delta listeners share single server subscription`PresenceSubscribe subscription opened first listener closed last listener unsubscribes **Consumer Consumers initializing/replacing local data structures on `snapshot applying `join `update `leave events incrementally on `changes` unsubscribe function `presence.get(userId)` lookup user presence Returns `undefined if user not present no active `subscribe() `subscribeChanges()` Zero-latency reads from SDK's in-memory cache `subscribe()(call `subscribe or( before `get()` returns```typescript
 const alice = client.presence.get('018f3a...')
 // { cursor: { x: 100, y: 200 }, status: 'active', joinedAt: 1234567890 }
-````presence.getAll Synchronous lookup users presence namespace Excludes self```typescript
+````presence.getAll` Synchronous local lookup users presence namespace Excludes self comparing entry UUID returned presence-scope setup```typescript
 const others   = client.presence.getAll()
 const everyone = client.presence.getAll({ includeSelf: true })
-```Returns `[]` no active `subscribe() `presence.remove( broadcast `leave event subscribers Called automatically disconnect invoke manually "invisible without disconnecting```typescript
+```call returns fresh array unspecified entry order Returns `[]` no active `subscribe `presence.remove( presence record broadcast `leave event subscribers Called automatically disconnect invoke manually "invisible without```typescript
 client.presence.remove()
 ```Shared State Methods single merged record namespace authorized user write Last-writer-wins field granularity record persists until users leave 5-second grace period before `presence.setShared(data) Merge fields namespace-level shared state Fire-and-forget Fields preserved unchanged fields subscribers```typescript
 client.presence.setShared({ slide: 5 })
@@ -64,7 +99,7 @@ const unsubscribe = client.presence.subscribeShared((shared) => {
 ```unsubscribe function sends `PresenceUnsubscribeShared server `subscribe()() independent calls hold active simultaneously prerequisite `presence.getShared() Synchronous local lookup shared state Returns `null no active `subscribeShared() or no shared state set Zero-latency reads SDK in-memory cache `subscribeShared() call `subscribeShared() before `getShared() returns data```typescript
 const shared = client.presence.getShared()
 // { slide: 5, playing: true }
-```Presence Namespaces scoped `presenceNamespace` users same namespace see share state record `users.namespaced = true namespace determines `users.id` presence identity```typescript
+```Presence Namespaces scoped to users same namespace see share state record `users.namespaced = true namespace determines `users.id for presence identity ID returned by `PresenceSetNamespace same UUID snapshots broadcasts```typescript
 const client = createClient({
   presenceNamespace: 'workspace:acme:doc:123'
 })
@@ -198,6 +233,6 @@ client.presence.subscribeShared(({ playing, timestamp }) => {
 |---|---|---|
 | `presence.set()` | Client-side | SDK throttles to ~60fps (16ms intervals). |
 | `presence.setShared()` | Client-side | Not throttled — shared state changes are infrequent by design. |
-| User presence broadcasts | Server-side | Batched every 50ms. Multiple updates within the window are merged into one `PresenceBroadcast` per subscriber. |
-| Shared state broadcasts | Server-side | Batched every 50ms. Multiple `setShared` calls within the window are merged into one `SharedStateBroadcast` per subscriber. |
+| User presence broadcasts | Server-side | Batched every 2ms. Multiple updates within the window are merged into one `PresenceBroadcast` per subscriber. |
+| Shared state broadcasts | Server-side | Batched every 2ms. Multiple `setShared` calls within the window are merged into one `SharedStateBroadcast` per subscriber. |
 Best Practices user fields include transient state Move stable data like `name to `users collection store persist queried **Send only what Merge semantics pay for what send Cursor-only updates include status name granularity** Use specific`doc:123 reduce fan-out avoid leaking presence across contexts `subscribeShared for room-level use store for ephemeral room state shared faster cleaned on disconnect shared state for LWW** two users write shared state last-writer-wins server Shared state fields self-describing values remain meaningful under concurrent writes Related Specifications API Reference persistent state management [Configuration presence store schemas [Authorization auth rules [Error Handling Error types handling strategies
