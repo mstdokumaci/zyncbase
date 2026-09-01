@@ -5,6 +5,9 @@ import type {
 	OkResponse,
 	Presence,
 	PresenceBroadcast,
+	PresenceBroadcastEntry,
+	PresenceChange,
+	PresenceChangeBatch,
 	PresenceEntry,
 	PresenceGetAllOptions,
 	SharedStateBroadcast,
@@ -32,6 +35,7 @@ export class PresenceImpl implements Presence {
 	private userSubGen = 0;
 	private sharedSubGen = 0;
 	private userCallbacks = new Set<(users: PresenceEntry[]) => void>();
+	private userChangeCallbacks = new Set<(batch: PresenceChangeBatch) => void>();
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
 	>();
@@ -90,50 +94,78 @@ export class PresenceImpl implements Presence {
 		});
 	}
 
+	private hasUserSubscribers(): boolean {
+		return this.userCallbacks.size > 0 || this.userChangeCallbacks.size > 0;
+	}
+
+	private ensureUserSubscription(): void {
+		if (this.userSubId !== null || this.userSubPromise !== null) return;
+		const gen = this.userSubGen;
+		this.userSubPromise = this.conn
+			.dispatch({ type: "PresenceSubscribe" })
+			.then((ok) => {
+				this.handleUserSubscribeResponse(gen, ok);
+			})
+			.catch((err) => {
+				if (gen !== this.userSubGen) return;
+				this.userSubPromise = null;
+				this.emitError(this.normalizeError(err, "Presence subscribe failed"));
+			});
+	}
+
+	private cleanupUserSubscription(): void {
+		if (
+			!this.hasUserSubscribers() &&
+			(this.userSubId !== null || this.userSubPromise !== null)
+		) {
+			const subId = this.userSubId;
+			this.userSubId = null;
+			this.clearUserCache();
+			if (subId !== null) {
+				this.conn
+					.dispatch({
+						type: "PresenceUnsubscribe",
+						subId,
+					})
+					.catch(() => {});
+			}
+		}
+	}
+
 	subscribe(callback: (users: PresenceEntry[]) => void): () => void {
 		this.userCallbacks.add(callback);
 
 		if (this.userSubId !== null) {
 			callback(this.getAll());
-		} else if (!this.userSubPromise) {
-			const gen = this.userSubGen;
-			this.userSubPromise = this.conn
-				.dispatch({ type: "PresenceSubscribe" })
-				.then((ok) => {
-					this.handleUserSubscribeResponse(gen, ok);
-				})
-				.catch((err) => {
-					if (gen !== this.userSubGen) return;
-					this.userSubPromise = null;
-					this.emitError(this.normalizeError(err, "Presence subscribe failed"));
-				});
+		} else {
+			this.ensureUserSubscription();
 		}
 
 		return () => {
 			this.userCallbacks.delete(callback);
-			if (
-				this.userCallbacks.size === 0 &&
-				(this.userSubId !== null || this.userSubPromise !== null)
-			) {
-				const subId = this.userSubId;
-				this.userSubId = null;
-				this.clearUserCache();
-				if (subId !== null) {
-					this.conn
-						.dispatch({
-							type: "PresenceUnsubscribe",
-							subId,
-						})
-						.catch(() => {});
-				}
-			}
+			this.cleanupUserSubscription();
+		};
+	}
+
+	subscribeChanges(callback: (batch: PresenceChangeBatch) => void): () => void {
+		this.userChangeCallbacks.add(callback);
+
+		if (this.userSubId !== null) {
+			callback({ type: "snapshot", users: this.getAll() });
+		} else {
+			this.ensureUserSubscription();
+		}
+
+		return () => {
+			this.userChangeCallbacks.delete(callback);
+			this.cleanupUserSubscription();
 		};
 	}
 
 	private handleUserSubscribeResponse(gen: number, ok: OkResponse): void {
 		if (gen !== this.userSubGen) return;
 		this.userSubPromise = null;
-		if (this.userCallbacks.size === 0) {
+		if (!this.hasUserSubscribers()) {
 			if (ok.subId !== undefined) {
 				this.conn
 					.dispatch({
@@ -146,7 +178,22 @@ export class PresenceImpl implements Presence {
 		}
 		this.userSubId = ok.subId ?? null;
 		this.populateUserCacheFromSnapshot(ok);
-		this.fireUserCallbacks();
+		this.fireUserSubscribersOnInitialSnapshot();
+	}
+
+	private fireUserSubscribersOnInitialSnapshot(): void {
+		if (this.userCallbacks.size > 0) {
+			this.fireUserCallbacks();
+		}
+		if (this.userChangeCallbacks.size > 0) {
+			const snapshotBatch: PresenceChangeBatch = {
+				type: "snapshot",
+				users: this.getAll(),
+			};
+			for (const cb of this.userChangeCallbacks) {
+				cb(snapshotBatch);
+			}
+		}
 	}
 
 	subscribeShared(
@@ -258,7 +305,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	replaySubscriptions(): void {
-		if (this.userCallbacks.size > 0 && !this.userSubPromise) {
+		if (this.hasUserSubscribers() && !this.userSubPromise) {
 			this.userSubId = null;
 			const gen = this.userSubGen;
 			this.userSubPromise = this.conn
@@ -309,54 +356,103 @@ export class PresenceImpl implements Presence {
 		}
 	}
 
+	private shouldIncludeChange(change: PresenceChange): boolean {
+		if (this.localUserId === null) return true;
+		const changeUserId =
+			change.type === "leave" ? change.userId : change.entry.userId;
+		return changeUserId !== this.localUserId;
+	}
+
+	private fireUserChangeCallbacks(batch: PresenceChangeBatch): void {
+		for (const cb of this.userChangeCallbacks) {
+			cb(batch);
+		}
+	}
+
 	private handlePresenceBroadcast(msg: PresenceBroadcast): void {
 		if (msg.subId !== this.userSubId) return;
 
+		const hasDelta = this.userChangeCallbacks.size > 0;
+		const changes: PresenceChange[] | null = hasDelta ? [] : null;
+
 		for (const entry of msg.users) {
-			this.applyBroadcastEntry(entry);
+			const change = this.applyBroadcastEntry(entry, hasDelta);
+			if (
+				change !== null &&
+				changes !== null &&
+				this.shouldIncludeChange(change)
+			) {
+				changes.push(change);
+			}
 		}
 
-		this.fireUserCallbacks();
+		if (this.userCallbacks.size > 0) {
+			this.fireUserCallbacks();
+		}
+
+		if (changes !== null && changes.length > 0) {
+			this.fireUserChangeCallbacks({ type: "changes", changes });
+		}
 	}
 
-	private applyBroadcastEntry(entry: {
-		userId: Uint8Array;
-		event: "join" | "update" | "leave";
-		data?: Record<string, unknown>;
-		joinedAt?: number;
-	}): void {
+	private applyBroadcastEntry(
+		entry: PresenceBroadcastEntry,
+		collectChange: boolean,
+	): PresenceChange | null {
 		const userId = this.conn.schemaDictionary.decodePresenceUserId(
 			entry.userId,
 		);
 
 		if (entry.event === "leave") {
 			this.removeUserEntry(userId);
-			return;
+			return collectChange ? { type: "leave", userId } : null;
 		}
 
 		if (entry.event === "join") {
-			this.setUserEntry({
-				userId,
-				data: entry.data ?? {},
-				joinedAt: entry.joinedAt ?? 0,
-			});
-			return;
+			return this.applyBroadcastJoin(userId, entry, collectChange);
 		}
 
-		const existing = this.get(userId);
-		if (existing) {
-			this.setUserEntry({
+		return this.applyBroadcastUpdate(userId, entry, collectChange);
+	}
+
+	private applyBroadcastJoin(
+		userId: string,
+		entry: { data?: Record<string, unknown>; joinedAt?: number },
+		collectChange: boolean,
+	): PresenceChange | null {
+		const newEntry: PresenceEntry = {
+			userId,
+			data: entry.data ?? {},
+			joinedAt: entry.joinedAt ?? 0,
+		};
+		this.setUserEntry(newEntry);
+		return collectChange ? { type: "join", entry: newEntry } : null;
+	}
+
+	private applyBroadcastUpdate(
+		userId: string,
+		entry: { data?: Record<string, unknown>; joinedAt?: number },
+		collectChange: boolean,
+	): PresenceChange | null {
+		const index = this.userIndexes.get(userId);
+		if (index !== undefined) {
+			const existing = this.userEntries[index];
+			const updatedEntry: PresenceEntry = {
 				userId,
 				joinedAt: existing.joinedAt,
 				data: { ...existing.data, ...(entry.data ?? {}) },
-			});
-		} else {
-			this.setUserEntry({
-				userId,
-				data: entry.data ?? {},
-				joinedAt: entry.joinedAt ?? 0,
-			});
+			};
+			this.userEntries[index] = updatedEntry;
+			return collectChange ? { type: "update", entry: updatedEntry } : null;
 		}
+
+		const fallbackEntry: PresenceEntry = {
+			userId,
+			data: entry.data ?? {},
+			joinedAt: entry.joinedAt ?? 0,
+		};
+		this.setUserEntry(fallbackEntry);
+		return collectChange ? { type: "update", entry: fallbackEntry } : null;
 	}
 
 	private handleSharedStateBroadcast(msg: SharedStateBroadcast): void {

@@ -1,4 +1,4 @@
-import type { PresenceEntry } from "@zyncbase/client";
+import type { PresenceChangeBatch, PresenceEntry } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 import { createTestJwt } from "./harness";
 
@@ -50,9 +50,55 @@ async function waitForShared(
 	});
 }
 
+function verifyIncludeSelf(clientB: ZyncBaseClient): void {
+	const allUsersIncludingSelf = clientB.presence.getAll({ includeSelf: true });
+	const namesIncludingSelf = new Set(
+		allUsersIncludingSelf.map((user) => user.data.name),
+	);
+	if (
+		allUsersIncludingSelf.length !== 2 ||
+		!namesIncludingSelf.has("Alice") ||
+		!namesIncludingSelf.has("Bob")
+	) {
+		throw new Error(
+			`Expected includeSelf view to contain Alice and Bob, got ${JSON.stringify([...namesIncludingSelf])}`,
+		);
+	}
+}
+
+function verifyDeltaUpdate(bChanges: PresenceChangeBatch[]): void {
+	const updateBatch = bChanges.find(
+		(batch) =>
+			batch.type === "changes" &&
+			batch.changes.some(
+				(c) => c.type === "update" && c.entry.data.name === "Alice",
+			),
+	);
+	if (!updateBatch || updateBatch.type !== "changes") {
+		throw new Error("Expected update change batch for Alice in delta stream");
+	}
+	const aliceUpdate = updateBatch.changes.find(
+		(c) => c.type === "update" && c.entry.data.name === "Alice",
+	);
+	if (!aliceUpdate || aliceUpdate.type !== "update") {
+		throw new Error("Expected update change for Alice in delta stream");
+	}
+	if (
+		aliceUpdate.entry.data.status !== "active" ||
+		(aliceUpdate.entry.data.cursor as { x: number; y: number })?.x !== 100 ||
+		(aliceUpdate.entry.data.cursor as { x: number; y: number })?.y !== 200
+	) {
+		throw new Error(
+			`Expected fully merged update entry in delta stream, got ${JSON.stringify(aliceUpdate.entry.data)}`,
+		);
+	}
+	console.log("  Delta subscription received fully merged update entry.");
+}
+
 async function testUserPresence(
 	clientA: ZyncBaseClient,
 	clientB: ZyncBaseClient,
+	bChanges: PresenceChangeBatch[],
 ): Promise<() => void> {
 	console.log("Test 1: User presence set + subscribe...");
 
@@ -74,26 +120,16 @@ async function testUserPresence(
 	);
 	console.log("  Client B received Client A's presence.");
 
+	if (bChanges.length === 0 || bChanges[0].type !== "snapshot") {
+		throw new Error("Expected initial delta snapshot batch on client B");
+	}
+	console.log("  Client B received initial delta snapshot.");
+
 	const allUsers = clientB.presence.getAll();
-	if (allUsers.length !== 1) {
-		throw new Error(`Expected 1 user, got ${allUsers.length}`);
+	if (allUsers.length !== 1 || allUsers[0].data.name !== "Alice") {
+		throw new Error(`Expected name 'Alice', got '${allUsers[0]?.data?.name}'`);
 	}
-	if (allUsers[0].data.name !== "Alice") {
-		throw new Error(`Expected name 'Alice', got '${allUsers[0].data.name}'`);
-	}
-	const allUsersIncludingSelf = clientB.presence.getAll({ includeSelf: true });
-	const namesIncludingSelf = new Set(
-		allUsersIncludingSelf.map((user) => user.data.name),
-	);
-	if (
-		allUsersIncludingSelf.length !== 2 ||
-		!namesIncludingSelf.has("Alice") ||
-		!namesIncludingSelf.has("Bob")
-	) {
-		throw new Error(
-			`Expected includeSelf view to contain Alice and Bob, got ${JSON.stringify([...namesIncludingSelf])}`,
-		);
-	}
+	verifyIncludeSelf(clientB);
 	console.log("  getAll() excludes Bob; includeSelf contains Alice and Bob.");
 
 	console.log("Test 2: Merge semantics...");
@@ -109,13 +145,14 @@ async function testUserPresence(
 	const aliceEntry = clientB.presence
 		.getAll()
 		.find((u) => u.data.name === "Alice");
-	if (!aliceEntry) throw new Error("Alice not found");
-	if (aliceEntry.data.status !== "active") {
+	if (!aliceEntry || aliceEntry.data.status !== "active") {
 		throw new Error(
-			`Expected status 'active' after cursor update, got '${aliceEntry.data.status}'`,
+			`Expected status 'active' after cursor update, got '${aliceEntry?.data?.status}'`,
 		);
 	}
 	console.log("  Merge semantics verified.");
+
+	verifyDeltaUpdate(bChanges);
 
 	console.log("Test 3: Nested field unflattening...");
 	const cursor = aliceEntry.data.cursor as { x: number; y: number };
@@ -181,6 +218,7 @@ async function testRemoveAndThrottle(
 	clientA: ZyncBaseClient,
 	clientB: ZyncBaseClient,
 	bUsers: PresenceEntry[][],
+	bChanges: PresenceChangeBatch[],
 ): Promise<void> {
 	console.log("Test 6: Presence remove...");
 	clientA.presence.remove();
@@ -194,6 +232,15 @@ async function testRemoveAndThrottle(
 	console.log(
 		"  Client B default state is empty after Alice left; includeSelf retains Bob.",
 	);
+
+	const leaveBatch = bChanges.find(
+		(batch) =>
+			batch.type === "changes" && batch.changes.some((c) => c.type === "leave"),
+	);
+	if (!leaveBatch || leaveBatch.type !== "changes") {
+		throw new Error("Expected leave change batch in delta stream");
+	}
+	console.log("  Delta subscription received leave notification.");
 
 	console.log("Test 7: Throttle (~60fps)...");
 	const beforeCount = bUsers.length;
@@ -217,10 +264,22 @@ async function testRemoveAndThrottle(
 async function testNamespaceSwitch(
 	clientA: ZyncBaseClient,
 	clientB: ZyncBaseClient,
+	bChanges: PresenceChangeBatch[],
 ): Promise<void> {
 	console.log("Test 8: Namespace switch...");
+	const initialLen = bChanges.length;
 	await clientA.setPresenceNamespace("other-room");
 	await clientB.setPresenceNamespace("other-room");
+
+	for (let i = 0; i < 20; i++) {
+		if (
+			bChanges.length > initialLen &&
+			bChanges[bChanges.length - 1].type === "snapshot"
+		) {
+			break;
+		}
+		await sleep(50);
+	}
 
 	const afterSwitch = clientB.presence.getAll();
 	if (afterSwitch.length !== 0) {
@@ -229,6 +288,20 @@ async function testNamespaceSwitch(
 		);
 	}
 	console.log("  Namespace switch clears presence cache.");
+
+	const lastBatch = bChanges[bChanges.length - 1];
+	if (
+		!lastBatch ||
+		lastBatch.type !== "snapshot" ||
+		lastBatch.users.length !== 0
+	) {
+		throw new Error(
+			`Expected replacement snapshot batch after namespace switch, got ${JSON.stringify(lastBatch)}`,
+		);
+	}
+	console.log(
+		"  Delta subscription received replacement snapshot after namespace switch.",
+	);
 }
 
 export async function run(port: number, jwtSecret: string) {
@@ -250,16 +323,22 @@ export async function run(port: number, jwtSecret: string) {
 		await clientA.setPresenceNamespace("public");
 		await clientB.setPresenceNamespace("public");
 
-		const unsubB = await testUserPresence(clientA, clientB);
+		const bChanges: PresenceChangeBatch[] = [];
+		const unsubDeltaB = clientB.presence.subscribeChanges((batch) => {
+			bChanges.push(batch);
+		});
+
+		const unsubB = await testUserPresence(clientA, clientB, bChanges);
 		const unsubShared = await testSharedState(clientA, clientB);
 
 		const bUsers: PresenceEntry[][] = [];
 		clientB.presence.subscribe((users) => bUsers.push(users));
 
-		await testRemoveAndThrottle(clientA, clientB, bUsers);
-		await testNamespaceSwitch(clientA, clientB);
+		await testRemoveAndThrottle(clientA, clientB, bUsers, bChanges);
+		await testNamespaceSwitch(clientA, clientB, bChanges);
 
 		unsubB();
+		unsubDeltaB();
 		unsubShared();
 
 		console.log("All presence tests passed!");

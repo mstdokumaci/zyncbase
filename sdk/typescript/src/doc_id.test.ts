@@ -24,6 +24,16 @@ describe("doc_id", () => {
 		packed.set(packDocId(second));
 		expect(unpackDocId(packed)).toBe(second);
 		expect(unpackDocId(packDocId(first))).toBe(first);
+
+		const firstPacked = packDocId(first);
+		const secondPacked = packDocId(second);
+		const scratch = new Uint8Array(16);
+		for (let i = 0; i < 20; i += 1) {
+			scratch.set(firstPacked);
+			expect(unpackDocId(scratch)).toBe(first);
+			scratch.set(secondPacked);
+			expect(unpackDocId(scratch)).toBe(second);
+		}
 	});
 
 	test("round-trips short IDs", () => {

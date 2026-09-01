@@ -37,6 +37,36 @@ describe("doc_id performance", () => {
 		expect(elapsedMs).toBeLessThan(50);
 	});
 
+	test("200k unpackDocId calls across 2,000 UUIDs stay within budget", () => {
+		const ids: Uint8Array[] = [];
+		for (let i = 0; i < 2000; i += 1) {
+			const hexIndex = i.toString(16).padStart(4, "0");
+			const suffix = (i * 7).toString(16).padStart(8, "0");
+			ids.push(packDocId(`019c1e50-7d11-7000-8000-${hexIndex}${suffix}`));
+		}
+
+		const warmup = 20_000;
+		for (let i = 0; i < warmup; i += 1) {
+			unpackDocId(ids[i % ids.length]);
+		}
+
+		const iterations = 200_000;
+		const t0 = performance.now();
+		let last = "";
+		for (let i = 0; i < iterations; i += 1) {
+			last = unpackDocId(ids[i % ids.length]);
+		}
+		const elapsedMs = performance.now() - t0;
+
+		console.log(
+			`2,000-ID unpackDocId (${iterations} calls) [ms]: ${elapsedMs.toFixed(1)}  ` +
+				`(${((elapsedMs / iterations) * 1000).toFixed(3)}µs/call)`,
+		);
+
+		expect(last).toBe("019c1e50-7d11-7000-8000-07cf000036a9");
+		expect(elapsedMs).toBeLessThan(100);
+	});
+
 	test("100k repeated short-ID decodes stay within budget", () => {
 		const ids = Array.from({ length: 100 }, (_, i) => packDocId(`task_${i}`));
 

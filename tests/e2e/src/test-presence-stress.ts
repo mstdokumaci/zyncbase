@@ -226,7 +226,7 @@ async function prepareClients(
 			}
 
 			for (const state of context.clients) {
-				state.unsubscribeUsers = state.client.presence.subscribe(() => {
+				state.unsubscribeUsers = state.client.presence.subscribeChanges(() => {
 					state.userCallbacks++;
 					state.userReady = true;
 					context.generation++;

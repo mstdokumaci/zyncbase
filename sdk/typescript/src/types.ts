@@ -370,6 +370,17 @@ export interface PresenceEntry {
 	joinedAt: number; // Unix timestamp ms
 }
 
+/** Single user change delta in a PresenceChangeBatch. */
+export type PresenceChange =
+	| { type: "join"; entry: PresenceEntry }
+	| { type: "update"; entry: PresenceEntry }
+	| { type: "leave"; userId: string };
+
+/** Batch of presence changes or a full replacement snapshot. */
+export type PresenceChangeBatch =
+	| { type: "snapshot"; users: PresenceEntry[] }
+	| { type: "changes"; changes: PresenceChange[] };
+
 /** Options for presence.getAll(). */
 export interface PresenceGetAllOptions {
 	includeSelf?: boolean;
@@ -383,6 +394,8 @@ export interface Presence {
 	setShared(data: Record<string, unknown>): void;
 	/** Subscribe to unordered user presence snapshots. Returns unsubscribe function. */
 	subscribe(callback: (users: PresenceEntry[]) => void): () => void;
+	/** Subscribe to user presence change deltas. Returns unsubscribe function. */
+	subscribeChanges(callback: (batch: PresenceChangeBatch) => void): () => void;
 	/** Subscribe to shared state changes. Returns unsubscribe function. */
 	subscribeShared(
 		callback: (shared: Record<string, unknown> | null) => void,

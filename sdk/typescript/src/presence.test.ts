@@ -5,6 +5,7 @@ import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	OkResponse,
 	PresenceBroadcast,
+	PresenceChangeBatch,
 	SharedStateBroadcast,
 } from "./types.js";
 
@@ -399,6 +400,45 @@ describe("PresenceImpl", () => {
 		expect(initialSnapshot[1].data.status).toBe("active");
 	});
 
+	test("PresenceBroadcast update for unknown user inserts entry with fallback joinedAt 0", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribe(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_5"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "online"]]),
+				},
+			],
+		} as PresenceBroadcast);
+
+		const unknownId = conn.schema.decodePresenceUserId(packDocId("user_5"));
+		const entry = presence.get(unknownId);
+		expect(entry).toBeDefined();
+		expect(entry?.joinedAt).toBe(0);
+		expect(entry?.data.status).toBe("online");
+	});
+
 	test("subscribeShared() dispatches PresenceSubscribeShared and populates cache", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
@@ -737,6 +777,416 @@ describe("PresenceImpl", () => {
 		);
 		expect(unsubMsgs.length).toBe(1);
 		expect(unsubMsgs[0].subId).toBe(200);
+	});
+
+	test("subscribeChanges receives initial snapshot followed by ordered join, update, leave batch", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [
+						{
+							userId: packDocId("user_1"),
+							data: conn.schema.decodePresenceUserValue([
+								[0, 10],
+								[1, 20],
+								[2, "online"],
+							]),
+							joinedAt: 1000,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const batches: PresenceChangeBatch[] = [];
+		presence.subscribeChanges((batch) => {
+			batches.push(batch);
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(batches.length).toBe(1);
+		expect(batches[0].type).toBe("snapshot");
+		if (batches[0].type === "snapshot") {
+			expect(batches[0].users.length).toBe(1);
+			expect(batches[0].users[0].data).toEqual({
+				cursor: { x: 10, y: 20 },
+				status: "online",
+			});
+		}
+
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_2"),
+					event: "join",
+					data: conn.schema.decodePresenceUserValue([
+						[0, 30],
+						[1, 40],
+						[2, "active"],
+					]),
+					joinedAt: 2000,
+				},
+				{
+					userId: packDocId("user_1"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "away"]]),
+				},
+				{
+					userId: packDocId("user_2"),
+					event: "leave",
+				},
+			],
+		} as PresenceBroadcast);
+
+		expect(batches.length).toBe(2);
+		expect(batches[1].type).toBe("changes");
+		if (batches[1].type === "changes") {
+			expect(batches[1].changes.length).toBe(3);
+			expect(batches[1].changes[0]).toEqual({
+				type: "join",
+				entry: {
+					userId: conn.schema.decodePresenceUserId(packDocId("user_2")),
+					data: { cursor: { x: 30, y: 40 }, status: "active" },
+					joinedAt: 2000,
+				},
+			});
+			expect(batches[1].changes[1]).toEqual({
+				type: "update",
+				entry: {
+					userId: conn.schema.decodePresenceUserId(packDocId("user_1")),
+					data: { cursor: { x: 10, y: 20 }, status: "away" },
+					joinedAt: 1000,
+				},
+			});
+			expect(batches[1].changes[2]).toEqual({
+				type: "leave",
+				userId: conn.schema.decodePresenceUserId(packDocId("user_2")),
+			});
+		}
+	});
+
+	test("subscribeChanges excludes self from snapshot and delta changes", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		const selfId = conn.schema.decodePresenceUserId(packDocId("user_self"));
+		presence.setLocalUserId(selfId);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [
+						{
+							userId: packDocId("user_self"),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							joinedAt: 1000,
+						},
+						{
+							userId: packDocId("user_other"),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							joinedAt: 2000,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const batches: PresenceChangeBatch[] = [];
+		presence.subscribeChanges((batch) => {
+			batches.push(batch);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(batches.length).toBe(1);
+		expect(batches[0].type).toBe("snapshot");
+		if (batches[0].type === "snapshot") {
+			expect(batches[0].users.map((u) => u.userId)).toEqual([
+				conn.schema.decodePresenceUserId(packDocId("user_other")),
+			]);
+		}
+
+		// Self-only broadcast does not fire delta callbacks
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_self"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+				},
+			],
+		} as PresenceBroadcast);
+		expect(batches.length).toBe(1);
+
+		// Mixed broadcast includes only other user's changes
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_self"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "away"]]),
+				},
+				{
+					userId: packDocId("user_other"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+				},
+			],
+		} as PresenceBroadcast);
+		expect(batches.length).toBe(2);
+		expect(batches[1].type).toBe("changes");
+		if (batches[1].type === "changes") {
+			expect(batches[1].changes.length).toBe(1);
+			expect(batches[1].changes[0].type).toBe("update");
+			if (batches[1].changes[0].type === "update") {
+				expect(batches[1].changes[0].entry.userId).toBe(
+					conn.schema.decodePresenceUserId(packDocId("user_other")),
+				);
+			}
+		}
+	});
+
+	test("delta-only subscription does not invoke getAll() on broadcast", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribeChanges(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		let getAllCalled = 0;
+		const originalGetAll = presence.getAll.bind(presence);
+		presence.getAll = (...args) => {
+			getAllCalled++;
+			return originalGetAll(...args);
+		};
+
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_1"),
+					event: "join",
+					data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+					joinedAt: 1234,
+				},
+			],
+		} as PresenceBroadcast);
+
+		expect(getAllCalled).toBe(0);
+	});
+
+	test("snapshot and delta listeners share one server subscription and lifecycle", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			conn.dispatched.push(msg);
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [
+						{
+							userId: packDocId("user_1"),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							joinedAt: 1000,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const unsubSnapshot = presence.subscribe(() => {});
+		const unsubDelta = presence.subscribeChanges(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(
+			conn.dispatched.filter((m) => m.type === "PresenceSubscribe").length,
+		).toBe(1);
+
+		// Remove snapshot listener: delta listener keeps server subscription alive
+		unsubSnapshot();
+		expect(
+			conn.dispatched.filter((m) => m.type === "PresenceUnsubscribe").length,
+		).toBe(0);
+		expect(presence.getAll().length).toBe(1);
+
+		// Remove delta listener: now no subscribers remain, so unsubscribe and clear cache
+		unsubDelta();
+		expect(
+			conn.dispatched.filter((m) => m.type === "PresenceUnsubscribe").length,
+		).toBe(1);
+		expect(presence.getAll().length).toBe(0);
+	});
+
+	test("delta-only listener survives invalidate and receives replacement snapshot on replay", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [
+						{
+							userId: packDocId("user_1"),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							joinedAt: 1000,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const batches: PresenceChangeBatch[] = [];
+		presence.subscribeChanges((batch) => {
+			batches.push(batch);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(batches.length).toBe(1);
+		expect(batches[0].type).toBe("snapshot");
+
+		presence.invalidate();
+		expect(presence.getAll().length).toBe(0);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 200,
+					users: [
+						{
+							userId: packDocId("user_2"),
+							data: conn.schema.decodePresenceUserValue([[2, "online"]]),
+							joinedAt: 2000,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.replaySubscriptions();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(batches.length).toBe(2);
+		expect(batches[1].type).toBe("snapshot");
+		if (batches[1].type === "snapshot") {
+			expect(batches[1].users.length).toBe(1);
+			expect(batches[1].users[0].userId).toBe(
+				conn.schema.decodePresenceUserId(packDocId("user_2")),
+			);
+		}
+	});
+
+	test("stale subscribe promise does not notify or overwrite delta-only listener after invalidate", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		let resolveStale: (value: OkResponse) => void = () => {};
+		const stalePromise = new Promise<OkResponse>((resolve) => {
+			resolveStale = resolve;
+		});
+
+		let isFirstSubscribe = true;
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				if (isFirstSubscribe) {
+					isFirstSubscribe = false;
+					return stalePromise;
+				}
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 200,
+					users: [
+						{
+							userId: packDocId("user_2"),
+							data: conn.schema.decodePresenceUserValue([[2, "new_status"]]),
+							joinedAt: 5678,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const batches: PresenceChangeBatch[] = [];
+		presence.subscribeChanges((batch) => {
+			batches.push(batch);
+		});
+
+		presence.invalidate();
+		presence.replaySubscriptions();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(batches.length).toBe(1);
+		expect(batches[0].type).toBe("snapshot");
+		if (batches[0].type === "snapshot") {
+			expect(batches[0].users[0].userId).toBe(
+				conn.schema.decodePresenceUserId(packDocId("user_2")),
+			);
+		}
+
+		resolveStale({
+			type: "ok",
+			id: 0,
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_1"),
+					data: conn.schema.decodePresenceUserValue([[2, "stale_status"]]),
+					joinedAt: 1234,
+				},
+			],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// Still only 1 snapshot batch received, cache unchanged
+		expect(batches.length).toBe(1);
+		const staleUserId = conn.schema.decodePresenceUserId(packDocId("user_1"));
+		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 });
 
