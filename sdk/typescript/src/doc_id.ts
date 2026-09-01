@@ -14,8 +14,12 @@ const shortDocIdHotCache: Array<
 	{ packed: Uint8Array; id: string } | undefined
 > = new Array(DOC_ID_CACHE_LIMIT);
 const docIdSortFamilyCache = new Map<string, 0 | 1 | 2>();
-const uuidDecodeCache: Array<{ packed: Uint8Array; id: string } | undefined> =
-	new Array(DOC_ID_CACHE_LIMIT);
+const uuidDecodeCachePrimary: Array<
+	{ packed: Uint8Array; id: string } | undefined
+> = new Array(DOC_ID_CACHE_LIMIT);
+const uuidDecodeCacheSecondary: Array<
+	{ packed: Uint8Array; id: string } | undefined
+> = new Array(DOC_ID_CACHE_LIMIT);
 
 const shortCharToDigit = new Map<string, number>(
 	Array.from(SHORT_ID_ALPHABET, (char, index) => [char, index + 1]),
@@ -147,6 +151,17 @@ function encodeUuidV7DocId(uuid: string): Uint8Array {
 	return bigIntToBytes(UUID_FAMILY_TAG | payload);
 }
 
+function lookupCachedUuid(
+	packed: Uint8Array,
+	entry: { packed: Uint8Array; id: string } | undefined,
+): string | undefined {
+	if (entry === undefined) return undefined;
+	for (let i = 0; i < DOC_ID_BYTE_LENGTH; i += 1) {
+		if (packed[i] !== entry.packed[i]) return undefined;
+	}
+	return entry.id;
+}
+
 function decodeUuidV7DocId(packed: Uint8Array): string {
 	// Reserved bits 122..126 (packed[0] bits 2..6) must be zero.
 	if ((packed[0] & 0x7c) !== 0) {
@@ -157,17 +172,13 @@ function decodeUuidV7DocId(packed: Uint8Array): string {
 	}
 	const cacheIndex =
 		((packed[14] << 8) | packed[15]) & (DOC_ID_CACHE_LIMIT - 1);
-	const cached = uuidDecodeCache[cacheIndex];
-	if (cached !== undefined) {
-		let matches = true;
-		for (let i = 0; i < DOC_ID_BYTE_LENGTH; i += 1) {
-			if (packed[i] !== cached.packed[i]) {
-				matches = false;
-				break;
-			}
-		}
-		if (matches) return cached.id;
-	}
+	const primary = uuidDecodeCachePrimary[cacheIndex];
+	const primaryHit = lookupCachedUuid(packed, primary);
+	if (primaryHit !== undefined) return primaryHit;
+
+	const secondary = uuidDecodeCacheSecondary[cacheIndex];
+	const secondaryHit = lookupCachedUuid(packed, secondary);
+	if (secondaryHit !== undefined) return secondaryHit;
 
 	// Inverse of packUuidV7Bytes: the 122-bit payload is packed as
 	// [B0..B5 (48b)] [B6&0x0f (4b)] [B7 (8b)] [B8&0x3f (6b)] [B9..B15 (56b)].
@@ -190,8 +201,9 @@ function decodeUuidV7DocId(packed: Uint8Array): string {
 	bytes[15] = packed[15];
 
 	const id = formatUuidBytes(bytes);
-	// direct-mapped cache; use set-associative slots if collisions matter.
-	uuidDecodeCache[cacheIndex] = { packed: packed.slice(), id };
+	// Two-way set-associative cache; move previous primary to secondary on miss.
+	uuidDecodeCacheSecondary[cacheIndex] = primary;
+	uuidDecodeCachePrimary[cacheIndex] = { packed: packed.slice(), id };
 	return id;
 }
 
