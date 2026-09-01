@@ -85,7 +85,7 @@ Complete server-to-client store records are encoded as **positional arrays**.
 | `PresenceBroadcast` user `data` | S→C | pair-array |
 | `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
 | `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
-| `SharedStateBroadcast.data` | S→C | always array of pair-array patches |
+| `SharedStateBroadcast patches` | S→C | always array of pair-array patches |
 
 ## Message Type Registry
 
