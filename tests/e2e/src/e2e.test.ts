@@ -22,14 +22,14 @@ import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
-setDefaultTimeout(100_000);
+setDefaultTimeout(60_000);
 
 beforeAll(
 	() => {
 		buildServerIfNeeded();
 		resetE2ERoots();
 	},
-	{ timeout: 600_000 },
+	{ timeout: 300_000 },
 );
 
 afterAll(() => {
@@ -111,25 +111,21 @@ describe("ZyncBase E2E", () => {
 		});
 	});
 
-	test(
-		"presence: 2,000 clients stay consistent under fan-out and churn",
-		async () => {
-			await runE2ETest("Presence stress", async (ctx) => {
-				await withServer(
-					ctx,
-					{
-						schemaPath: ctx.schemaPath("schema-presence.json"),
-						dataDir: ctx.dataPath("presence-stress"),
-						configName: "zyncbase-config-presence-stress.json",
-						authPath: ctx.schemaPath("auth-allow-all.json"),
-						jwtSecret: PRESENCE_E2E_JWT_SECRET,
-					},
-					async ({ port }) => {
-						await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
-					},
-				);
-			});
-		},
-		{ timeout: 300_000 },
-	);
+	test("presence: 2,000 clients stay consistent under fan-out and churn", async () => {
+		await runE2ETest("Presence stress", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-presence.json"),
+					dataDir: ctx.dataPath("presence-stress"),
+					configName: "zyncbase-config-presence-stress.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+				},
+				async ({ port }) => {
+					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
+				},
+			);
+		});
+	});
 });
