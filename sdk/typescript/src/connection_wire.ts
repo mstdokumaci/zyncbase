@@ -116,6 +116,40 @@ function hasValidStoreDeltaHeader(raw: unknown[]): boolean {
 	);
 }
 
+const PRESENCE_EVENT_NAMES = ["join", "update", "leave"] as const;
+const PRESENCE_EVENT_ARITIES = [4, 3, 2] as const;
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isPresencePairArray(
+	value: unknown,
+): value is Array<[number, unknown]> {
+	return (
+		Array.isArray(value) &&
+		value.every(
+			(pair) =>
+				Array.isArray(pair) &&
+				pair.length === 2 &&
+				isNonNegativeSafeInteger(pair[0]),
+		)
+	);
+}
+
+function isPresenceEntryHeader(
+	value: unknown,
+): value is [Uint8Array, 0 | 1 | 2, ...unknown[]] {
+	return (
+		Array.isArray(value) &&
+		value.length >= 2 &&
+		value[0] instanceof Uint8Array &&
+		value[0].length === 16 &&
+		isNonNegativeSafeInteger(value[1]) &&
+		value[1] < PRESENCE_EVENT_NAMES.length
+	);
+}
+
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
 export type OutboundRequest =
@@ -218,7 +252,18 @@ export class ConnectionWireCodec {
 	}
 
 	decodeMessage(raw: unknown): InboundMessage | null {
-		if (Array.isArray(raw)) return this.decodeStoreDelta(raw);
+		if (Array.isArray(raw)) {
+			switch (raw[0]) {
+				case WireMessageType.StoreDelta:
+					return this.decodeStoreDelta(raw);
+				case WireMessageType.PresenceBroadcast:
+					return this.decodePresenceBroadcast(raw);
+				case WireMessageType.SharedStateBroadcast:
+					return this.decodeSharedStateBroadcast(raw);
+				default:
+					return null;
+			}
+		}
 		if (!raw || typeof raw !== "object" || !("type" in raw)) return null;
 		const name = this.inboundTypeName(raw);
 		if (!name) return null;
@@ -226,13 +271,9 @@ export class ConnectionWireCodec {
 		msg.type = name;
 		switch (msg.type) {
 			case "StoreDelta":
-				return null;
 			case "PresenceBroadcast":
-				if (!Array.isArray(msg.users)) return null;
-				return this.decodePresenceBroadcast(msg);
 			case "SharedStateBroadcast":
-				if (!Array.isArray(msg.data)) return null;
-				return this.decodeSharedStateBroadcast(msg);
+				return null;
 		}
 		return msg;
 	}
@@ -529,41 +570,71 @@ export class ConnectionWireCodec {
 		return this.schema.decodeRecord(tableIndex, row);
 	}
 
-	private decodePresenceBroadcast(msg: PresenceBroadcast): PresenceBroadcast {
-		return {
-			...msg,
-			users: msg.users.map((entry) => {
-				const decoded: {
-					userId: Uint8Array;
-					event: "join" | "update" | "leave";
-					data?: Record<string, unknown>;
-					joinedAt?: number;
-				} = {
-					userId: entry.userId,
-					event: entry.event,
-				};
-				if (entry.data != null) {
-					decoded.data = this.schema.decodePresenceUserValue(
-						entry.data as unknown as Array<[number, unknown]>,
-					);
-				}
-				if (entry.joinedAt != null) {
-					decoded.joinedAt = entry.joinedAt;
-				}
-				return decoded;
-			}),
-		} as PresenceBroadcast;
+	private decodePresenceBroadcast(raw: unknown[]): PresenceBroadcast | null {
+		if (
+			raw.length !== 3 ||
+			raw[0] !== WireMessageType.PresenceBroadcast ||
+			!isNonNegativeSafeInteger(raw[1]) ||
+			!Array.isArray(raw[2])
+		) {
+			return null;
+		}
+
+		try {
+			const users: PresenceBroadcast["users"] = [];
+			for (const entry of raw[2]) {
+				const decoded = this.decodePresenceEntry(entry);
+				if (!decoded) return null;
+				users.push(decoded);
+			}
+			return { type: "PresenceBroadcast", subId: raw[1], users };
+		} catch {
+			return null;
+		}
+	}
+
+	private decodePresenceEntry(
+		entry: unknown,
+	): PresenceBroadcast["users"][number] | null {
+		if (!isPresenceEntryHeader(entry)) return null;
+		const [userId, tag] = entry;
+		if (entry.length !== PRESENCE_EVENT_ARITIES[tag]) return null;
+
+		const event = PRESENCE_EVENT_NAMES[tag];
+		const decoded: PresenceBroadcast["users"][number] = { userId, event };
+		if (event !== "leave") {
+			if (!isPresencePairArray(entry[2])) return null;
+			decoded.data = this.schema.decodePresenceUserValue(entry[2]);
+		}
+		if (event === "join") {
+			if (!isNonNegativeSafeInteger(entry[3])) return null;
+			decoded.joinedAt = entry[3];
+		}
+		return decoded;
 	}
 
 	private decodeSharedStateBroadcast(
-		msg: SharedStateBroadcast,
-	): SharedStateBroadcast {
-		return {
-			...msg,
-			data: (msg.data as unknown as Array<Array<[number, unknown]>>).map(
-				(patch) => this.schema.decodePresenceSharedValue(patch),
-			),
-		} as SharedStateBroadcast;
+		raw: unknown[],
+	): SharedStateBroadcast | null {
+		if (
+			raw.length !== 3 ||
+			raw[0] !== WireMessageType.SharedStateBroadcast ||
+			!isNonNegativeSafeInteger(raw[1]) ||
+			!Array.isArray(raw[2])
+		) {
+			return null;
+		}
+
+		try {
+			const data: SharedStateBroadcast["data"] = [];
+			for (const patch of raw[2]) {
+				if (!isPresencePairArray(patch)) return null;
+				data.push(this.schema.decodePresenceSharedValue(patch));
+			}
+			return { type: "SharedStateBroadcast", subId: raw[1], data };
+		} catch {
+			return null;
+		}
 	}
 
 	private mapSchemaEncodingError(err: unknown): ZyncBaseError {

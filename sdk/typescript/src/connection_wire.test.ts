@@ -11,6 +11,8 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 		tables: ["users"],
 		fields: [["id", "name", "address__city"]],
 		fieldFlags: [[0b10, 0, 0]],
+		presenceUserFields: ["cursor__x", "cursor__y", "status"],
+		presenceSharedFields: ["slide", "playing"],
 	});
 	return codec;
 }
@@ -126,6 +128,156 @@ describe("ConnectionWireCodec", () => {
 		expect(
 			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 99, []])),
 		).toBeNull();
+	});
+
+	test("decodes compact presence and shared-state broadcasts", async () => {
+		const codec = await makeCodec();
+		const joinId = new Uint8Array(16).fill(1);
+		const updateId = new Uint8Array(16).fill(2);
+		const leaveId = new Uint8Array(16).fill(3);
+
+		expect(
+			codec.decode(
+				encode([
+					WireMessageType.PresenceBroadcast,
+					7,
+					[
+						[
+							joinId,
+							0,
+							[
+								[0, 10],
+								[1, 20],
+								[2, "active"],
+							],
+							1234,
+						],
+						[updateId, 1, [[0, 11]]],
+						[leaveId, 2],
+					],
+				]),
+			),
+		).toEqual({
+			type: "PresenceBroadcast",
+			subId: 7,
+			users: [
+				{
+					userId: joinId,
+					event: "join",
+					data: { cursor: { x: 10, y: 20 }, status: "active" },
+					joinedAt: 1234,
+				},
+				{
+					userId: updateId,
+					event: "update",
+					data: { cursor: { x: 11 } },
+				},
+				{ userId: leaveId, event: "leave" },
+			],
+		});
+
+		expect(
+			codec.decode(
+				encode([
+					WireMessageType.SharedStateBroadcast,
+					8,
+					[[[0, 4]], [[1, true]]],
+				]),
+			),
+		).toEqual({
+			type: "SharedStateBroadcast",
+			subId: 8,
+			data: [{ slide: 4 }, { playing: true }],
+		});
+	});
+
+	test("rejects malformed compact presence pushes and old map forms", async () => {
+		const codec = await makeCodec();
+		const id = new Uint8Array(16);
+		const presence = WireMessageType.PresenceBroadcast;
+		const shared = WireMessageType.SharedStateBroadcast;
+		const malformed: Array<[string, unknown]> = [
+			["unknown array type", [0x7f, 1, []]],
+			["short top level", [presence, 1]],
+			["long top level", [presence, 1, [], null]],
+			["negative subId", [presence, -1, []]],
+			["fractional subId", [presence, 1.5, []]],
+			["unsafe subId", [presence, Number.MAX_SAFE_INTEGER + 1, []]],
+			["non-array payload", [presence, 1, null]],
+			["non-array entry", [presence, 1, [null]]],
+			["short entry", [presence, 1, [[id]]]],
+			["invalid tag", [presence, 1, [[id, 3]]]],
+			["fractional tag", [presence, 1, [[id, 1.5, []]]]],
+			["string event", [presence, 1, [[id, "join", [], 1]]]],
+			["join arity mismatch", [presence, 1, [[id, 0, []]]]],
+			["leave arity mismatch", [presence, 1, [[id, 2, null]]]],
+			["non-binary userId", [presence, 1, [["id", 2]]]],
+			["wrong userId length", [presence, 1, [[new Uint8Array(15), 2]]]],
+			["non-array data", [presence, 1, [[id, 1, null]]]],
+			["malformed data pair", [presence, 1, [[id, 1, [[0]]]]]],
+			["negative field index", [presence, 1, [[id, 1, [[-1, 1]]]]]],
+			["fractional field index", [presence, 1, [[id, 1, [[0.5, 1]]]]]],
+			["unknown user field", [presence, 1, [[id, 1, [[99, 1]]]]]],
+			["negative joinedAt", [presence, 1, [[id, 0, [], -1]]]],
+			["fractional joinedAt", [presence, 1, [[id, 0, [], 1.5]]]],
+			[
+				"unsafe joinedAt",
+				[presence, 1, [[id, 0, [], Number.MAX_SAFE_INTEGER + 1]]],
+			],
+			["shared top-level arity", [shared, 1, [], null]],
+			["shared non-array payload", [shared, 1, null]],
+			["shared non-array patch", [shared, 1, [null]]],
+			["shared malformed pair", [shared, 1, [[[0]]]]],
+			["shared invalid field index", [shared, 1, [[[99, 1]]]]],
+		];
+
+		for (const [name, raw] of malformed) {
+			expect(codec.decode(encode(raw)), name).toBeNull();
+		}
+		expect(
+			codec.decode(encode({ type: presence, subId: 1, users: [] })),
+		).toBeNull();
+		expect(
+			codec.decode(encode({ type: shared, subId: 1, data: [] })),
+		).toBeNull();
+	});
+
+	test("decodeMulti decodes compact presence and shared pushes", async () => {
+		const codec = await makeCodec();
+		const id = new Uint8Array(16);
+		const frame = new Uint8Array([
+			...encode([WireMessageType.PresenceBroadcast, 1, [[id, 2]]]),
+			...encode([WireMessageType.SharedStateBroadcast, 2, [[[0, 3]]]]),
+			...new Uint8Array(encodeToBuffer({ type: "ok", id: 7 })),
+		]);
+
+		expect(codec.decodeMulti(frame)).toEqual([
+			{
+				type: "PresenceBroadcast",
+				subId: 1,
+				users: [{ userId: id, event: "leave" }],
+			},
+			{ type: "SharedStateBroadcast", subId: 2, data: [{ slide: 3 }] },
+			{ type: "ok", id: 7 },
+		]);
+	});
+
+	test("decodeMulti drops malformed compact presence between valid messages", async () => {
+		const codec = await makeCodec();
+		const frame = new Uint8Array([
+			...new Uint8Array(encodeToBuffer({ type: "ok", id: 1 })),
+			...encode([
+				WireMessageType.PresenceBroadcast,
+				1,
+				[[new Uint8Array(15), 2]],
+			]),
+			...new Uint8Array(encodeToBuffer({ type: "ok", id: 2 })),
+		]);
+
+		expect(codec.decodeMulti(frame)).toEqual([
+			{ type: "ok", id: 1 },
+			{ type: "ok", id: 2 },
+		]);
 	});
 
 	test("decodeMulti decodes all concatenated messages in a frame", async () => {

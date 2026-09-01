@@ -40,7 +40,6 @@ const Keys = struct {
     pub const session = comptimeEncodeKey("session");
     pub const presence_user_fields = comptimeEncodeKey("presenceUserFields");
     pub const presence_shared_fields = comptimeEncodeKey("presenceSharedFields");
-    pub const event = comptimeEncodeKey("event");
     pub const data = comptimeEncodeKey("data");
     pub const users = comptimeEncodeKey("users");
     pub const shared = comptimeEncodeKey("shared");
@@ -48,7 +47,7 @@ const Keys = struct {
 };
 
 // Top-level message names encode as one-byte positive fixints; nested
-// operation/event/phase values stay strings.
+// operation and phase values stay strings.
 const Values = struct {
     pub const ok = &[_]u8{@intFromEnum(MessageType.ok)};
     pub const @"error" = &[_]u8{@intFromEnum(MessageType.@"error")};
@@ -57,14 +56,9 @@ const Values = struct {
     pub const op_remove = comptimeEncodeKey("remove");
     pub const op_set = comptimeEncodeKey("set");
     pub const write_committed = &[_]u8{@intFromEnum(MessageType.write_committed)};
-    pub const presence_broadcast = &[_]u8{@intFromEnum(MessageType.presence_broadcast)};
-    pub const shared_state_broadcast = &[_]u8{@intFromEnum(MessageType.shared_state_broadcast)};
     pub const write_error = &[_]u8{@intFromEnum(MessageType.write_error)};
     pub const phase_write = comptimeEncodeKey("write");
     pub const server_disconnect = &[_]u8{@intFromEnum(MessageType.server_disconnect)};
-    pub const event_join = comptimeEncodeKey("join");
-    pub const event_update = comptimeEncodeKey("update");
-    pub const event_leave = comptimeEncodeKey("leave");
 };
 
 // === Comptime-encoded hot-path headers ===
@@ -116,25 +110,9 @@ pub const store_delta_header = blk: {
     break :blk buf[0..w.end].*;
 };
 
-pub const presence_broadcast_header = blk: {
-    var buf: [1 + Keys.type.len + Values.presence_broadcast.len + Keys.sub_id.len]u8 = undefined;
-    var w = std.Io.Writer.fixed(&buf);
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
-    w.writeAll(Values.presence_broadcast) catch @panic("comptime: failed to write presence_broadcast value");
-    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
-    break :blk buf[0..w.end].*;
-};
+pub const presence_broadcast_header = [2]u8{ 0x93, @intFromEnum(MessageType.presence_broadcast) };
 
-pub const shared_state_broadcast_header = blk: {
-    var buf: [1 + Keys.type.len + Values.shared_state_broadcast.len + Keys.sub_id.len]u8 = undefined;
-    var w = std.Io.Writer.fixed(&buf);
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
-    w.writeAll(Values.shared_state_broadcast) catch @panic("comptime: failed to write shared_state_broadcast value");
-    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
-    break :blk buf[0..w.end].*;
-};
+pub const shared_state_broadcast_header = [2]u8{ 0x93, @intFromEnum(MessageType.shared_state_broadcast) };
 
 const write_committed_header = blk: {
     var buf: [1 + Keys.type.len + Values.write_committed.len + Keys.write_id.len]u8 = undefined;
@@ -510,32 +488,31 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
 
 // === Presence encoding ===
 
-fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
-    const is_leave = update.is_leave;
-    const is_join = update.is_new_user and update.patch != .nil;
-    const map_size: usize = @as(usize, 2) + @intFromBool(update.patch != .nil) + @intFromBool(is_join);
-    try msgpack.encodeMapHeader(writer, map_size);
+pub const PresenceEventTag = enum(u8) { join = 0, update = 1, leave = 2 };
 
-    try writer.writeAll(Keys.user_id);
+fn encodeUserUpdate(writer: anytype, update: PresenceManager.PendingUserUpdate) !void {
+    const event: PresenceEventTag = if (update.is_leave) .leave else if (update.is_new_user) .join else .update;
+    try msgpack.encodeArrayHeader(writer, switch (event) {
+        .join => 4,
+        .update => 3,
+        .leave => 2,
+    });
+
     const id_bytes = typed_doc_id.toBytes(update.user_id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
+    try msgpack.encode(msgpack.Payload.uintToPayload(@intFromEnum(event)), writer);
 
-    try writer.writeAll(Keys.event);
-    try writer.writeAll(if (is_leave) Values.event_leave else if (is_join) Values.event_join else Values.event_update);
-
-    if (update.patch != .nil) {
-        try writer.writeAll(Keys.data);
+    if (event != .leave) {
         try msgpack.encode(update.patch, writer);
 
-        if (is_join) {
-            try writer.writeAll(Keys.joined_at);
+        if (event == .join) {
             try msgpack.encode(msgpack.Payload{ .int = update.joined_at }, writer);
         }
     }
 }
 
 /// Encode the recipient-independent suffix of a PresenceBroadcast message:
-/// the `users` key plus all encoded user updates. Assemble per recipient as
+/// the array of encoded user updates. Assemble per recipient as
 /// `presence_broadcast_header` + encoded subId + this suffix.
 pub fn encodePresenceBroadcastSuffix(
     allocator: Allocator,
@@ -545,7 +522,6 @@ pub fn encodePresenceBroadcastSuffix(
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try writer.writeAll(Keys.users);
     try msgpack.encodeArrayHeader(writer, updates.len);
 
     for (updates) |update| {
@@ -556,7 +532,7 @@ pub fn encodePresenceBroadcastSuffix(
 }
 
 /// Encode the recipient-independent suffix of a SharedStateBroadcast message:
-/// the `data` key plus all encoded shared patches. Assemble per recipient as
+/// the array of encoded shared patches. Assemble per recipient as
 /// `shared_state_broadcast_header` + encoded subId + this suffix.
 pub fn encodeSharedStateBroadcastSuffix(
     allocator: Allocator,
@@ -566,7 +542,6 @@ pub fn encodeSharedStateBroadcastSuffix(
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try writer.writeAll(Keys.data);
     try msgpack.encodeArrayHeader(writer, updates.len);
     for (updates) |update| {
         try msgpack.encode(update.patch, writer);

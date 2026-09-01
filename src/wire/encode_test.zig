@@ -338,33 +338,31 @@ fn assembleBroadcast(
     return buf.toOwnedSlice();
 }
 
-fn expectTopLevelFieldCount(parsed: msgpack.Payload, expected: usize) !void {
-    var key_count: usize = 0;
-    var it = parsed.map.iterator();
-    while (it.next()) |_| key_count += 1;
-    try testing.expectEqual(expected, key_count);
-}
-
-test "encodePresenceBroadcast - update event round-trips with correct map size" {
+test "encodePresenceBroadcast - compact tuples preserve mixed entry order" {
     const allocator = std.heap.smp_allocator;
 
-    var patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
-    defer patch.free(allocator);
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = msgpack.Payload{ .float = 100.5 };
-    patch.arr[0] = .{ .arr = pair };
+    var join_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer join_patch.free(allocator);
+    var join_pair = try allocator.alloc(msgpack.Payload, 2);
+    join_pair[0] = msgpack.Payload.uintToPayload(0);
+    join_pair[1] = msgpack.Payload{ .float = 100.5 };
+    join_patch.arr[0] = .{ .arr = join_pair };
 
-    const update = PendingUserUpdate{
-        .namespace_id = 1,
-        .user_id = typed_doc_id.zero,
-        .patch = patch,
-        .is_new_user = false,
-        .joined_at = 0,
-        .is_leave = false,
+    var update_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer update_patch.free(allocator);
+    var update_pair = try allocator.alloc(msgpack.Payload, 2);
+    update_pair[0] = msgpack.Payload.uintToPayload(1);
+    update_pair[1] = msgpack.Payload.uintToPayload(7);
+    update_patch.arr[0] = .{ .arr = update_pair };
+
+    const user_ids = [_]typed_doc_id.DocId{ 1, 2, 3 };
+    const updates = [_]PendingUserUpdate{
+        .{ .namespace_id = 1, .user_id = user_ids[0], .patch = join_patch, .is_new_user = true, .joined_at = 1_700_000_000_123, .is_leave = false },
+        .{ .namespace_id = 1, .user_id = user_ids[1], .patch = update_patch, .is_new_user = false, .joined_at = 0, .is_leave = false },
+        .{ .namespace_id = 1, .user_id = user_ids[2], .patch = .nil, .is_new_user = false, .joined_at = 0, .is_leave = true },
     };
 
-    const suffix = try wire_encode.encodePresenceBroadcastSuffix(allocator, &.{update});
+    const suffix = try wire_encode.encodePresenceBroadcastSuffix(allocator, &updates);
     defer allocator.free(suffix);
     const bytes = try assembleBroadcast(allocator, &wire_encode.presence_broadcast_header, 42, suffix);
     defer allocator.free(bytes);
@@ -373,85 +371,71 @@ test "encodePresenceBroadcast - update event round-trips with correct map size" 
     const decoded = try msgpack.decode(allocator, &reader);
     defer decoded.free(allocator);
 
-    try testing.expect(decoded == .map);
-    try expectType(bytes, decoded, .presence_broadcast);
-    try expectTopLevelFieldCount(decoded, 3);
-    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
-    try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
-    const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
-    try testing.expect(users_val == .arr);
-    try testing.expectEqual(@as(usize, 1), users_val.arr.len);
+    try testing.expect(decoded == .arr);
+    try testing.expectEqual(@as(usize, 3), decoded.arr.len);
+    try testing.expectEqual(@as(u64, @intFromEnum(MessageType.presence_broadcast)), decoded.arr[0].uint);
+    try testing.expectEqual(@as(u64, 42), decoded.arr[1].uint);
+    const entries = decoded.arr[2];
+    try testing.expect(entries == .arr);
+    try testing.expectEqual(@as(usize, 3), entries.arr.len);
 
-    const user_entry = users_val.arr[0];
-    try testing.expect(user_entry == .map);
-    var key_count: usize = 0;
-    var it = user_entry.map.iterator();
-    while (it.next()) |_| key_count += 1;
-    try testing.expectEqual(@as(usize, 3), key_count);
+    const join = entries.arr[0];
+    try testing.expect(join == .arr);
+    try testing.expectEqual(@as(usize, 4), join.arr.len);
+    try testing.expect(join.arr[0] == .bin);
+    try testing.expectEqual(@as(usize, 16), join.arr[0].bin.value().len);
+    const join_id = typed_doc_id.toBytes(user_ids[0]);
+    try testing.expectEqualSlices(u8, &join_id, join.arr[0].bin.value());
+    try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.PresenceEventTag.join)), join.arr[1].uint);
+    try testing.expectEqual(@as(usize, 1), join.arr[2].arr.len);
+    try testing.expectEqual(@as(u64, 0), join.arr[2].arr[0].arr[0].uint);
+    try testing.expectEqual(@as(f64, 100.5), join.arr[2].arr[0].arr[1].float);
+    try testing.expectEqual(@as(i64, 1_700_000_000_123), try msgpack.payloadToInt(join.arr[3]));
 
-    const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
-    try testing.expectEqualStrings("update", event_val.str.value());
-    const data_val = (try user_entry.mapGet("data")) orelse return error.MissingData;
-    try testing.expect(data_val == .arr);
-    try testing.expectEqual(@as(usize, 1), data_val.arr.len);
+    const update = entries.arr[1];
+    try testing.expect(update == .arr);
+    try testing.expectEqual(@as(usize, 3), update.arr.len);
+    try testing.expect(update.arr[0] == .bin);
+    try testing.expectEqual(@as(usize, 16), update.arr[0].bin.value().len);
+    const update_id = typed_doc_id.toBytes(user_ids[1]);
+    try testing.expectEqualSlices(u8, &update_id, update.arr[0].bin.value());
+    try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.PresenceEventTag.update)), update.arr[1].uint);
+    try testing.expectEqual(@as(u64, 1), update.arr[2].arr[0].arr[0].uint);
+    try testing.expectEqual(@as(u64, 7), update.arr[2].arr[0].arr[1].uint);
+
+    const leave = entries.arr[2];
+    try testing.expect(leave == .arr);
+    try testing.expectEqual(@as(usize, 2), leave.arr.len);
+    try testing.expect(leave.arr[0] == .bin);
+    try testing.expectEqual(@as(usize, 16), leave.arr[0].bin.value().len);
+    const leave_id = typed_doc_id.toBytes(user_ids[2]);
+    try testing.expectEqualSlices(u8, &leave_id, leave.arr[0].bin.value());
+    try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.PresenceEventTag.leave)), leave.arr[1].uint);
 }
 
-test "encodePresenceBroadcast - leave event round-trips with correct map size" {
+test "encodeSharedStateBroadcast - compact tuple preserves patch order" {
     const allocator = std.heap.smp_allocator;
 
-    const update = PendingUserUpdate{
-        .namespace_id = 1,
-        .user_id = typed_doc_id.zero,
-        .patch = .nil,
-        .is_new_user = false,
-        .joined_at = 0,
-        .is_leave = true,
+    var first_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer first_patch.free(allocator);
+    var first_pair = try allocator.alloc(msgpack.Payload, 2);
+    first_pair[0] = msgpack.Payload.uintToPayload(0);
+    first_pair[1] = msgpack.Payload{ .float = 7.25 };
+    first_patch.arr[0] = .{ .arr = first_pair };
+
+    var second_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer second_patch.free(allocator);
+    var second_pair = try allocator.alloc(msgpack.Payload, 2);
+    second_pair[0] = msgpack.Payload.uintToPayload(1);
+    second_pair[1] = msgpack.Payload.uintToPayload(9);
+    second_patch.arr[0] = .{ .arr = second_pair };
+
+    const updates = [_]PendingSharedUpdate{
+        .{ .namespace_id = 1, .patch = first_patch, .source_conn = 999 },
+        .{ .namespace_id = 1, .patch = second_patch, .source_conn = 999 },
     };
 
-    const suffix = try wire_encode.encodePresenceBroadcastSuffix(allocator, &.{update});
-    defer allocator.free(suffix);
-    const bytes = try assembleBroadcast(allocator, &wire_encode.presence_broadcast_header, 7, suffix);
-    defer allocator.free(bytes);
-
-    var reader: std.Io.Reader = .fixed(bytes);
-    const decoded = try msgpack.decode(allocator, &reader);
-    defer decoded.free(allocator);
-
-    try testing.expect(decoded == .map);
-    try expectType(bytes, decoded, .presence_broadcast);
-    try expectTopLevelFieldCount(decoded, 3);
-    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
-    try testing.expectEqual(@as(u64, 7), sub_id_val.uint);
-    const users_val = (try decoded.mapGet("users")) orelse return error.MissingUsers;
-    const user_entry = users_val.arr[0];
-
-    var key_count: usize = 0;
-    var it = user_entry.map.iterator();
-    while (it.next()) |_| key_count += 1;
-    try testing.expectEqual(@as(usize, 2), key_count);
-
-    const event_val = (try user_entry.mapGet("event")) orelse return error.MissingEvent;
-    try testing.expectEqualStrings("leave", event_val.str.value());
-    try testing.expect((try user_entry.mapGet("data")) == null);
-}
-
-test "encodeSharedStateBroadcast - patches round-trip with correct map size" {
-    const allocator = std.heap.smp_allocator;
-
-    var patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
-    defer patch.free(allocator);
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = msgpack.Payload{ .float = 7.25 };
-    patch.arr[0] = .{ .arr = pair };
-
-    const update = PendingSharedUpdate{
-        .namespace_id = 1,
-        .patch = patch,
-        .source_conn = 999,
-    };
-
-    const suffix = try wire_encode.encodeSharedStateBroadcastSuffix(allocator, &.{update});
+    const suffix = try wire_encode.encodeSharedStateBroadcastSuffix(allocator, &updates);
     defer allocator.free(suffix);
     const bytes = try assembleBroadcast(allocator, &wire_encode.shared_state_broadcast_header, 13, suffix);
     defer allocator.free(bytes);
@@ -460,21 +444,17 @@ test "encodeSharedStateBroadcast - patches round-trip with correct map size" {
     const decoded = try msgpack.decode(allocator, &reader);
     defer decoded.free(allocator);
 
-    try testing.expect(decoded == .map);
-    try expectType(bytes, decoded, .shared_state_broadcast);
-    try expectTopLevelFieldCount(decoded, 3);
-    const sub_id_val = (try decoded.mapGet("subId")) orelse return error.MissingSubId;
-    try testing.expectEqual(@as(u64, 13), sub_id_val.uint);
-    const data_val = (try decoded.mapGet("data")) orelse return error.MissingData;
-    try testing.expect(data_val == .arr);
-    try testing.expectEqual(@as(usize, 1), data_val.arr.len);
-    const entry_patch = data_val.arr[0];
-    try testing.expect(entry_patch == .arr);
-    try testing.expectEqual(@as(usize, 1), entry_patch.arr.len);
-    const decoded_pair = entry_patch.arr[0];
-    try testing.expect(decoded_pair == .arr);
-    try testing.expectEqual(@as(u64, 0), decoded_pair.arr[0].uint);
-    try testing.expectEqual(@as(f64, 7.25), decoded_pair.arr[1].float);
+    try testing.expect(decoded == .arr);
+    try testing.expectEqual(@as(usize, 3), decoded.arr.len);
+    try testing.expectEqual(@as(u64, @intFromEnum(MessageType.shared_state_broadcast)), decoded.arr[0].uint);
+    try testing.expectEqual(@as(u64, 13), decoded.arr[1].uint);
+    const patches = decoded.arr[2];
+    try testing.expect(patches == .arr);
+    try testing.expectEqual(@as(usize, 2), patches.arr.len);
+    try testing.expectEqual(@as(u64, 0), patches.arr[0].arr[0].arr[0].uint);
+    try testing.expectEqual(@as(f64, 7.25), patches.arr[0].arr[0].arr[1].float);
+    try testing.expectEqual(@as(u64, 1), patches.arr[1].arr[0].arr[0].uint);
+    try testing.expectEqual(@as(u64, 9), patches.arr[1].arr[0].arr[1].uint);
 }
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {

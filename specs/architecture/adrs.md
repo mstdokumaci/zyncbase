@@ -776,7 +776,7 @@ Nested presence fields are flattened using the `__` separator convention, consis
 - `presenceUserFields: string[]` — flattened user field names in index order
 - `presenceSharedFields: string[]` — flattened shared field names in index order
 
-`PresenceSet` and `PresenceSetShared` send pair-arrays of `[field_index, value]`. `PresenceBroadcast` and `SharedStateBroadcast` deliver pair-array data. `SharedStateBroadcast.data` is always an array of pair-array patches. A hard limit of 500 flat fields per presence tier is enforced at server startup.
+`PresenceSet` and `PresenceSetShared` send pair-arrays of `[field_index, value]`. Server pushes use compact top-level tuples: `PresenceBroadcast` is `[0x28, subId, entries]` and `SharedStateBroadcast` is `[0x29, subId, patches]`. User entries use permanent integer event tags and exact variable arities: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, and leave `[userId, 2]`. `userId` remains `bin16`; user data and every shared patch remain pair-arrays. A hard limit of 500 flat fields per presence tier is enforced at server startup.
 
 Payload savings are substantial at high frequency: a cursor update with status shrinks from ~50 bytes to ~22 bytes. At 60fps from many users fan-outing to many subscribers, this difference compounds dramatically across the broadcast path.
 
@@ -814,8 +814,8 @@ Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presen
 | `PresenceSet` | C→S; `data` is pair-array merge delta for user fields |
 | `PresenceSetShared` | C→S; pair-array merge delta for shared fields |
 | `PresenceSubscribe` ok | Returns current user presence snapshot for the namespace |
-| `PresenceBroadcast` | S→C; `data` is pair-array; `userId` encoded as `bin16` |
-| `SharedStateBroadcast` | S→C; always array of pair-array patches |
+| `PresenceBroadcast` | S→C; `[0x28, subId, entries]`; entries use join/update/leave tags `0`/`1`/`2`, pair-array data, and `bin16` user IDs |
+| `SharedStateBroadcast` | S→C; `[0x29, subId, patches]`; every patch is a pair-array |
 
 **Consequences**:
 - Full integer wire compression for all presence messages — same performance profile as store operations.
