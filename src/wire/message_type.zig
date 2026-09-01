@@ -7,7 +7,7 @@ pub const MessageType = enum(u8) {
     // Protocol and session (0x0x)
     ok = 0x00, // S->C successful correlated response
     @"error" = 0x01, // S->C failed correlated or uncorrelated response
-    connected = 0x02, // S->C connection/session bootstrap
+    // 0x02 reserved (formerly Connected)
     schema_sync = 0x03, // S->C schema dictionary bootstrap
     auth_refresh = 0x04, // C->S refresh connection authentication
     server_disconnect = 0x05, // S->C structured disconnect reason

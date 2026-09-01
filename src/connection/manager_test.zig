@@ -304,7 +304,7 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
     defer app.connection_manager.onClose(&dummy_ws);
-    // onOpen sends connected + schema-sync setup messages — ignore them.
+    // onOpen sends schema sync — ignore it.
     recorder.reset();
 
     const conn_id = dummy_ws.getConnId();

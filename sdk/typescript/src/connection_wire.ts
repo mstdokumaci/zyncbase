@@ -38,7 +38,7 @@ import type {
 export const WireMessageType = {
 	ok: 0x00,
 	error: 0x01,
-	Connected: 0x02,
+	// 0x02 reserved (formerly Connected)
 	SchemaSync: 0x03,
 	AuthRefresh: 0x04,
 	ServerDisconnect: 0x05,
@@ -90,7 +90,6 @@ const OUTBOUND_WIRE_TYPES = {
 const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
 	[WireMessageType.ok]: "ok",
 	[WireMessageType.error]: "error",
-	[WireMessageType.Connected]: "Connected",
 	[WireMessageType.SchemaSync]: "SchemaSync",
 	[WireMessageType.StoreDelta]: "StoreDelta",
 	[WireMessageType.WriteCommitted]: "WriteCommitted",

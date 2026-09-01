@@ -137,19 +137,11 @@ pub const ConnectionManager = struct {
         conn.setSession(sess);
         sess_transferred = true;
 
-        const connected_msg = try wire_encode.encodeConnected(self.allocator, conn.getExternalUserId());
-        defer self.allocator.free(connected_msg);
-
         try self.map.put(self.allocator, conn_id, conn);
         inserted = true;
         _ = self.active_connection_count.fetchAdd(1, .acq_rel);
         std.log.info("Client connected: id={}", .{conn_id});
 
-        conn.send(connected_msg) catch {
-            std.log.warn("Connection {}: dropped on connected message, closing", .{conn_id});
-            conn.ws.close();
-            return;
-        };
         conn.send(self.schema_sync_msg) catch {
             std.log.warn("Connection {}: dropped on schema_sync message, closing", .{conn_id});
             conn.ws.close();
@@ -242,28 +234,6 @@ pub const ConnectionManager = struct {
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
         sendOrClose(conn, data);
-    }
-
-    /// Called by the uWS drain callback. Flushes queued delta messages for the given connection.
-    /// Closes the connection if uWS signals it is dead (DROPPED).
-    pub fn flushOutbox(self: *ConnectionManager, conn_id: u64) void {
-        self.mutex.lockUncancelable(self.io);
-        const conn = self.map.get(conn_id) orelse {
-            self.mutex.unlock(self.io);
-            return;
-        };
-        conn.acquire();
-        self.mutex.unlock(self.io);
-
-        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-
-        switch (conn.flushOutbox()) {
-            .success, .backpressure => {},
-            .dropped => {
-                std.log.warn("Connection {}: dropped during drain flush, closing", .{conn_id});
-                conn.ws.close();
-            },
-        }
     }
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.

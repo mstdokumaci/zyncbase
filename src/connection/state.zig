@@ -10,151 +10,6 @@ const WebSocket = uws.WebSocket;
 
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 
-// Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
-const outbox_capacity = 16;
-
-pub const FlushResult = enum { success, backpressure, dropped };
-
-/// Per-connection bounded ring buffer for outgoing messages.
-///
-/// Send contract:
-///   SUCCESS     → frame delivered; advance and continue.
-///   BACKPRESSURE → uWS owns the frame; advance and stop until drain fires.
-///   DROPPED     → connection dead; free remaining entries and signal close.
-///
-/// All queued entries are concatenated into ONE frame per flush (complete
-/// msgpack messages back-to-back; the client decodes multiple messages per
-/// frame). On backpressure uWS buffers the whole frame internally.
-pub const Outbox = struct {
-    entries: [outbox_capacity][]u8,
-    head: usize,
-    tail: usize,
-
-    pub const empty: Outbox = .{
-        .entries = std.mem.zeroes([outbox_capacity][]u8),
-        .head = 0,
-        .tail = 0,
-    };
-
-    pub fn enqueue(self: *Outbox, allocator: Allocator, data: []const u8) !void {
-        const next = (self.head + 1) % outbox_capacity;
-        if (next == self.tail) return error.Full;
-        self.entries[self.head] = try allocator.dupe(u8, data);
-        self.head = next;
-    }
-
-    pub fn flush(self: *Outbox, ws: *WebSocket, allocator: Allocator) FlushResult {
-        var result: FlushResult = .success;
-        var ctx = OutboxFlushCtx{
-            .outbox = self,
-            .ws = ws,
-            .allocator = allocator,
-            .result = &result,
-        };
-        flushEntries(&ctx);
-        return result;
-    }
-
-    pub fn deinit(self: *Outbox, allocator: Allocator) void {
-        while (self.tail != self.head) {
-            allocator.free(self.entries[self.tail]);
-            self.tail = (self.tail + 1) % outbox_capacity;
-        }
-    }
-
-    pub fn isFull(self: Outbox) bool {
-        return (self.head + 1) % outbox_capacity == self.tail;
-    }
-};
-
-const OutboxFlushCtx = struct {
-    outbox: *Outbox,
-    ws: *WebSocket,
-    allocator: Allocator,
-    result: *FlushResult,
-};
-
-fn flushEntries(c: *OutboxFlushCtx) void {
-    const outbox = c.outbox;
-    const count = (outbox.head + outbox_capacity - outbox.tail) % outbox_capacity;
-    if (count == 0) return;
-
-    // SAFETY: assigned before any use — count==1 takes the direct entry,
-    // otherwise the concat buffer; the alloc-failure path returns early.
-    var data: []const u8 = undefined;
-    var owned = false;
-    if (count == 1) {
-        data = outbox.entries[outbox.tail];
-    } else {
-        var total: usize = 0;
-        var i = outbox.tail;
-        var n: usize = 0;
-        while (n < count) : (n += 1) {
-            total += outbox.entries[i].len;
-            i = (i + 1) % outbox_capacity;
-        }
-        const buf = c.allocator.alloc(u8, total) catch {
-            // Fall back to per-entry sends when the concat buffer cannot be
-            // allocated (graceful degradation).
-            flushEntriesOneByOne(c);
-            return;
-        };
-        var offset: usize = 0;
-        i = outbox.tail;
-        n = 0;
-        while (n < count) : (n += 1) {
-            const entry = outbox.entries[i];
-            @memcpy(buf[offset .. offset + entry.len], entry);
-            offset += entry.len;
-            i = (i + 1) % outbox_capacity;
-        }
-        data = buf;
-        owned = true;
-    }
-
-    const status = c.ws.send(data, .binary);
-
-    // Free every entry regardless of status: uWS owns the frame after send.
-    var i = outbox.tail;
-    var n: usize = 0;
-    while (n < count) : (n += 1) {
-        c.allocator.free(outbox.entries[i]);
-        i = (i + 1) % outbox_capacity;
-    }
-    outbox.tail = i;
-    if (owned) c.allocator.free(data);
-
-    switch (status) {
-        .success => {},
-        .backpressure => c.result.* = .backpressure,
-        .dropped => {
-            // tail already advanced past everything; nothing left to free.
-            c.result.* = .dropped;
-        },
-    }
-}
-
-fn flushEntriesOneByOne(c: *OutboxFlushCtx) void {
-    while (c.outbox.tail != c.outbox.head) {
-        const data = c.outbox.entries[c.outbox.tail];
-        const status = c.ws.send(data, .binary);
-        c.allocator.free(data);
-        c.outbox.tail = (c.outbox.tail + 1) % outbox_capacity;
-        switch (status) {
-            .success => {},
-            .backpressure => {
-                c.result.* = .backpressure;
-                return;
-            },
-            .dropped => {
-                c.outbox.deinit(c.allocator);
-                c.result.* = .dropped;
-                return;
-            },
-        }
-    }
-}
-
 pub const unset_namespace_id: i64 = -1;
 
 pub const Connection = struct {
@@ -181,8 +36,6 @@ pub const Connection = struct {
     subscription_ids: std.ArrayListUnmanaged(u64),
     next_subscription_id: u64,
     ws: WebSocket,
-    outbox: Outbox = Outbox.empty,
-    is_backpressured: bool = false,
     ref_count: std.atomic.Value(usize),
     created_at: i64,
     request_tokens: u64,
@@ -205,8 +58,6 @@ pub const Connection = struct {
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
         self.ref_count = std.atomic.Value(usize).init(0);
-        self.outbox = Outbox.empty;
-        self.is_backpressured = false;
     }
 
     /// Activate a pooled connection for a new client session.
@@ -227,8 +78,6 @@ pub const Connection = struct {
         self.resetPresenceScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
-        self.outbox.deinit(self.allocator);
-        self.is_backpressured = false;
     }
 
     pub fn setSession(self: *Connection, sess: Session) void {
@@ -428,34 +277,13 @@ pub const Connection = struct {
         if (self.presence_namespace) |ns| self.allocator.free(ns);
         if (self.pending_presence_namespace) |ns| self.allocator.free(ns);
         self.subscription_ids.deinit(self.allocator);
-        self.outbox.deinit(self.allocator);
     }
 
     /// Send a message to the client. Must be called from the event loop thread.
-    ///
-    /// Fast path: direct send when not backpressured. On BACKPRESSURE, sets the flag
-    /// and enqueues subsequent messages to preserve ordering until drain clears it.
-    /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
     pub fn send(self: *Connection, data: []const u8) !void {
-        if (!self.is_backpressured) {
-            switch (self.ws.send(data, .binary)) {
-                .success => return,
-                .backpressure => {
-                    self.is_backpressured = true;
-                    return;
-                },
-                .dropped => return error.Dropped,
-            }
+        switch (self.ws.send(data, .binary)) {
+            .success, .backpressure => {},
+            .dropped => return error.Dropped,
         }
-        if (self.outbox.isFull()) return error.Full;
-        try self.outbox.enqueue(self.allocator, data);
-    }
-
-    /// Flush queued messages after uWS signals the send buffer has cleared.
-    /// Must be called from the event loop thread. Clears is_backpressured on full drain.
-    pub fn flushOutbox(self: *Connection) FlushResult {
-        const result = self.outbox.flush(&self.ws, self.allocator);
-        if (result == .success) self.is_backpressured = false;
-        return result;
     }
 };

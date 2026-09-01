@@ -12,7 +12,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `src/server.zig` | Server composition and lifecycle for networking, storage, subscriptions, notifications, and `SendQueue` draining. |
 | `src/uwebsockets_wrapper.zig` | C ABI wrapper around uWebSockets callbacks and send/close primitives. |
 | `src/connection/manager.zig` | Connection registry and cross-thread send helper. |
-| `src/connection/state.zig` | Per-connection mutable state, outbox, scoped session fields, and send behavior. |
+| `src/connection/state.zig` | Per-connection mutable state, scoped session fields, subscription ownership, and direct uWS send behavior. |
 | `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
 | `src/connection/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
 | `src/subscription/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
@@ -39,7 +39,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `ThreadBudget` | CPU count | Computes deterministic thread allocation from CPU core count. |
 | `ZyncBaseServer` | `WebSocketServer`, `StorageEngine`, `MessageHandler`, workers | Owns subsystem wiring and start/stop lifecycle. |
 | `ConnectionManager` | `Connection`, uWebSockets wrapper | Tracks live connections and supports targeted sends. |
-| `Connection` | `Outbox`, `Session`, `WebSocket` | Serializes connection-local scope/subscription state and buffers outbound messages. |
+| `Connection` | `Session`, `WebSocket` | Serializes connection-local scope/subscription state and sends directly through uWS on the event loop. |
 | `SendQueue` | `Allocator` | Lock-free MPSC queue for owned cross-thread message delivery to connections. |
 | `ChangeQueue` | `Allocator`, `spmcBlockingQueue(ChangeJob)`, shard count | Sharded SPMC blocking queue. Writer thread pushes `ChangeJob` entries; each `SubscriptionWorker` drains one shard. Sharding is by `(namespace_id, table_index, doc_id)` hash. |
 | `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its allocator. |
@@ -84,7 +84,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 | `read_request_queue` | SPMC blocking queue (mutex + CV). Single producer: event loop via `StorageEngine.enqueueRead()`. Multiple consumers: reader threads via `pop()` / `popTimed()`. Readers sleep on CV when empty. |
 | `ChangeQueue` | Sharded SPMC blocking queue. Single producer: writer thread via `ChangeQueue.push()` (non-blocking, logs and drops on alloc failure). Multiple consumers: one `SubscriptionWorker` per shard, blocking via `shard.pop()`. |
 | Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. For async StoreSubscribe, registration occurs in `MessageHandler` before the read request is enqueued. |
-| WebSocket sends | Same-thread sends use `ConnectionManager.sendToConnection()` directly. Cross-thread sends push to `SendQueue`; the event loop drains in `notifyPostHandler`. `Connection.send()` is always called from the event loop thread. |
+| WebSocket sends | Same-thread sends use `ConnectionManager.sendToConnection()` directly. Cross-thread sends push to `SendQueue`; the event loop drains in `notifyPostHandler`. `Connection.send()` is always called from the event loop thread and relies on uWS's ordered 16 MiB per-connection buffer. |
 | `SendQueue` | Lock-free MPSC queue of owned `{ conn_id, encoded_message }` entries. Producers may be reader, writer, subscription, or presence worker threads. The single consumer is the event loop, which drains via `ConnectionManager.drainSendQueue()`. Producers call `Notifier.notify()` after a successful push. `deinit()` requires all producers stopped. |
 | `PresenceWorker` input queue | SPSC queue (`spscQueue(PresenceOp, AllocPool)`). Single producer: event loop via `PresenceWorker.enqueue()`, which holds `thread.mutex` during push and signals `thread.cond`. Single consumer: `PresenceWorker` thread, which waits on `thread.cond` when the queue is empty. |
 | Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
@@ -93,6 +93,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 ## Invariants
 
 - All WebSocket sends via `Connection.send()` occur on the event loop thread; cross-thread producers use `SendQueue` to marshal messages.
+- uWS `.backpressure` means the frame was accepted and buffered; `Connection.send()` returns `error.Dropped` without closing the WebSocket, and `ConnectionManager.sendOrClose()` closes the connection after receiving that error.
 - Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
 - Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
 - No request may publish subscription or write acknowledgements before the corresponding storage commit.

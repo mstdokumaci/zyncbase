@@ -1,6 +1,7 @@
 import { encode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
 import { WireMessageType } from "./connection_wire";
+import { packDocId } from "./doc_id";
 import type { AuthConfig, ClientOptions } from "./types";
 
 /**
@@ -119,7 +120,13 @@ export class AutoMockWebSocket {
 	}
 
 	private _autoRespondOk(id: number): void {
-		const buf = encodeToBuffer({ type: "ok", id });
+		const buf = encodeToBuffer({
+			type: "ok",
+			id,
+			...(id === 2
+				? { userId: packDocId("019c1e50-7d11-7000-8000-000000000001") }
+				: {}),
+		});
 		if (this.onmessage) {
 			this.onmessage({ data: buf });
 		}
@@ -229,7 +236,13 @@ export function makeManager(options?: Partial<ClientOptions>): {
 /** Trigger ok responses for initial StoreSetNamespace (id=1) and PresenceSetNamespace (id=2). */
 export function triggerNamespaceOk(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
-	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+	mockWs.triggerMessage(
+		encodeToBuffer({
+			type: "ok",
+			id: 2,
+			userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
+		}),
+	);
 }
 
 /** Full connect flow: acquire ticket + open + namespace ok. */

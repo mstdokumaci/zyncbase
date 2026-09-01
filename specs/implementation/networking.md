@@ -14,7 +14,7 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 | `src/uws_wrapper.h` | C ABI declarations shared by Zig and the C++ bridge. |
 | `src/uws_timer.zig` | uWS loop timer wrapper used for token sweeping, JWKS refresh, and graceful-shutdown timers. |
 | `src/connection/manager.zig` | Connection registry and targeted send helper. |
-| `src/connection/state.zig` | Per-connection WebSocket handle, outbox, session state, and send/close behavior. |
+| `src/connection/state.zig` | Per-connection WebSocket handle, session state, and send/close behavior. |
 | `src/message_handler.zig` | Message callback consumer and request router. |
 | `build.zig` | uWebSockets/usockets/OpenSSL/C++ link configuration. |
 | `vendor/uwebsockets`, `vendor/usockets` | Pinned upstream networking dependencies. |
@@ -39,21 +39,22 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 - Compression is disabled; MessagePack size/depth limits are enforced before domain routing.
 - TLS is provided by OpenSSL through usockets when configured.
 - The network layer does not authorize store/presence operations; it authenticates/initializes the connection and delegates authorization to `MessageHandler` and `authorization/*`.
-- A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. The server coalesces per-connection outbound messages (deltas, acks, broadcasts) into a single frame per drain pass; the SDK decodes frames with `decodeMulti`.
+- A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. `Connection.send` submits the provided bytes directly to uWS; the SDK decodes frames with `decodeMulti`.
 
 ## Connection Lifecycle
 
 1. `server.zig` registers HTTP `POST /auth/ticket`; successful requests create a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).
 2. WebSocket upgrade is accepted only for the configured endpoint, origin policy, and valid `ticket` query parameter.
 3. The bridge allocates/registers a `Connection` and attaches socket user data.
-4. The server sends connection/schema bootstrap pushes as required by the active protocol.
+4. The server sends the `SchemaSync` bootstrap push.
 5. Binary frames are delivered to `MessageHandler.handleMessage`.
 6. Close/error callbacks detach subscriptions, clear scoped session state, and remove connection-owned presence.
 
 ## Backpressure And Sends
 
-- Encoded responses are owned by the request arena or dispatcher buffer until handed to `Connection.send`.
-- Send failure closes the connection through the centralized close path.
+- Encoded responses are owned by the request arena or dispatcher buffer until handed to `Connection.send`; uWS copies accepted payloads synchronously.
+- `Connection.send` sends directly through uWS. `.success` and `.backpressure` are accepted outcomes; `.dropped` closes the connection through the centralized close path.
+- uWS preserves frame order and applies the configured 16 MiB byte-based buffer per connection; there is no additional Zig frame-count outbox.
 - Cross-connection fanout goes through `ConnectionManager`/dispatchers instead of storing raw sockets in domain services.
 - Large or repeated outbound failures should be treated as transport instability, not domain errors.
 
@@ -156,7 +157,6 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Outbox capacity | 16 slots | Per-connection bounded ring buffer for outgoing messages. |
 | Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on event loop. |
 
 ### MessagePack Parse Limits

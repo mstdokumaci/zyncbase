@@ -212,8 +212,6 @@ pub const ZyncBaseServer = struct {
         // Wire Subscription Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
-        self.websocket_server.drain_handler = drainHandler;
-        self.websocket_server.drain_handler_ctx = self;
         self.websocket_server.wakeup_pending_check = takePendingWakeup;
         self.websocket_server.wakeup_pending_check_ctx = self;
 
@@ -828,12 +826,6 @@ pub const ZyncBaseServer = struct {
         self.finishGracefulShutdown() catch |err| {
             std.log.err("Shutdown timeout timer finishGracefulShutdown failed: {}", .{err});
         };
-    }
-
-    fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {
-        if (ctx == null) return;
-        const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-        self.connection_manager.flushOutbox(conn_id);
     }
 
     fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror!Session {

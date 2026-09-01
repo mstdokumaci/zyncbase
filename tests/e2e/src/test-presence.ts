@@ -1,5 +1,6 @@
 import type { PresenceEntry } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
+import { createTestJwt } from "./harness";
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,10 +61,16 @@ async function testUserPresence(
 		bUsers.push(users);
 	});
 
+	clientB.presence.set({ status: "active", name: "Bob" });
 	clientA.presence.set({ status: "active", name: "Alice" });
 
-	await waitForPresence(clientB, (users) =>
-		users.some((u) => u.data.name === "Alice"),
+	await waitForPresence(
+		clientB,
+		(users) =>
+			users.some((u) => u.data.name === "Alice") &&
+			clientB.presence
+				.getAll({ includeSelf: true })
+				.some((u) => u.data.name === "Bob"),
 	);
 	console.log("  Client B received Client A's presence.");
 
@@ -74,7 +81,20 @@ async function testUserPresence(
 	if (allUsers[0].data.name !== "Alice") {
 		throw new Error(`Expected name 'Alice', got '${allUsers[0].data.name}'`);
 	}
-	console.log("  getAll() returns correct user.");
+	const allUsersIncludingSelf = clientB.presence.getAll({ includeSelf: true });
+	const namesIncludingSelf = new Set(
+		allUsersIncludingSelf.map((user) => user.data.name),
+	);
+	if (
+		allUsersIncludingSelf.length !== 2 ||
+		!namesIncludingSelf.has("Alice") ||
+		!namesIncludingSelf.has("Bob")
+	) {
+		throw new Error(
+			`Expected includeSelf view to contain Alice and Bob, got ${JSON.stringify([...namesIncludingSelf])}`,
+		);
+	}
+	console.log("  getAll() excludes Bob; includeSelf contains Alice and Bob.");
 
 	console.log("Test 2: Merge semantics...");
 	clientA.presence.set({ cursor: { x: 100, y: 200 } });
@@ -165,8 +185,14 @@ async function testRemoveAndThrottle(
 	console.log("Test 6: Presence remove...");
 	clientA.presence.remove();
 	await waitForPresence(clientB, (users) => users.length === 0);
+	const includingSelf = clientB.presence.getAll({ includeSelf: true });
+	if (includingSelf.length !== 1 || includingSelf[0].data.name !== "Bob") {
+		throw new Error(
+			`Expected only Bob in includeSelf view after Alice left, got ${JSON.stringify(includingSelf)}`,
+		);
+	}
 	console.log(
-		"  Client B received leave event after Client A removed presence.",
+		"  Client B default state is empty after Alice left; includeSelf retains Bob.",
 	);
 
 	console.log("Test 7: Throttle (~60fps)...");
@@ -205,9 +231,16 @@ async function testNamespaceSwitch(
 	console.log("  Namespace switch clears presence cache.");
 }
 
-export async function run(port: number = 3000) {
-	const clientA = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
-	const clientB = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
+export async function run(port: number, jwtSecret: string) {
+	const url = `ws://127.0.0.1:${port}`;
+	const clientA = new ZyncBaseClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "presence-alice") },
+	});
+	const clientB = new ZyncBaseClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "presence-bob") },
+	});
 
 	try {
 		console.log("Connecting clients...");

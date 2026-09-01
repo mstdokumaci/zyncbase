@@ -2,7 +2,6 @@ const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
-const FlushResult = @import("state.zig").FlushResult;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -255,10 +254,10 @@ test "connection: state deallocation edge cases" {
     }
 }
 
-test "connection: outbox flush sends one concatenated frame" {
+test "connection: uWS backpressure is accepted and dropped is terminal" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
-    try app.init(allocator, "state-outbox-flush", &.{});
+    try app.init(allocator, "state-send-backpressure", &.{});
     defer app.deinit();
 
     var sent_buf: [256]u8 = undefined;
@@ -267,26 +266,18 @@ test "connection: outbox flush sends one concatenated frame" {
     dummy_ws.test_send_observer = helpers.sendRecorderObserver;
     dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
-    // onOpen sends connected + schema-sync setup messages — ignore them.
+    // onOpen sends schema sync — ignore it.
     recorder.reset();
 
     const conn = try app.connection_manager.acquireConnection(dummy_ws.getConnId());
     defer if (conn.release()) app.releaseConnection(conn);
 
-    try conn.outbox.enqueue(conn.allocator, "entry-one");
-    try conn.outbox.enqueue(conn.allocator, "entry-two");
-    try conn.outbox.enqueue(conn.allocator, "entry-three");
-    conn.is_backpressured = true;
+    conn.ws.test_send_status = .backpressure;
+    for (0..100) |_| try conn.send("buffered");
+    try testing.expectEqual(@as(u64, 100), recorder.send_count.load(.monotonic));
 
-    const result = conn.flushOutbox();
-    try testing.expectEqual(FlushResult.success, result);
-
-    // All entries sent as ONE concatenated frame in queue order, outbox
-    // drained, flag cleared.
-    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
-    try testing.expectEqualSlices(u8, "entry-oneentry-twoentry-three", recorder.bytes());
-    try testing.expectEqual(conn.outbox.head, conn.outbox.tail);
-    try testing.expectEqual(false, conn.is_backpressured);
+    conn.ws.test_send_status = .dropped;
+    try testing.expectError(error.Dropped, conn.send("dropped"));
 
     app.connection_manager.onClose(&dummy_ws);
 }

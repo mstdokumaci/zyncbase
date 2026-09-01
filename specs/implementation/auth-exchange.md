@@ -34,6 +34,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 - **JWT source**: Configured claim projection from a validated external JWT.
 - **Anonymous source**: SDK-generated high-entropy subject with `isAnonymous = true`.
 - **Identity**: `$session.userId` is always the internal `users.id` resolved through SQLite, never a raw JWT subject or anonymous subject.
+- **Subject boundary**: The external JWT or anonymous subject remains server-internal after ticket exchange and is never sent over WebSocket.
 - **Persistence**: Fixed for a resolved scope until auth refresh or namespace switching requires re-resolution.
 
 ---
@@ -45,7 +46,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 | **1. Ticket Request (JWT)** | `POST /auth/ticket` | `Authorization: Bearer <external_jwt>` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Validates JWT (signature, issuer, aud, exp, algorithms). Projects claims. |
 | **1. Ticket Request (Anon)** | `POST /auth/ticket` | `{"anonymousSubject": "anon:6c6f8b0d..."}` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Checks if anonymous auth is enabled. Validates subject entropy. |
 | **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state. Hydrates base session. |
-| **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | Scoped `ok` with store/presence session mappings | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). |
+| **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | Store: generic `ok`; presence: `ok` with bin16 `userId` | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). The presence acknowledgement exposes that internal ID for canonical self filtering. |
 
 ---
 
