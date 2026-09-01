@@ -33,7 +33,7 @@ pub const PresenceManager = struct {
     // Grace period tracking: namespace_id → timestamp_ms when it became empty
     namespace_empty_at: std.AutoHashMapUnmanaged(i64, i64),
 
-    // Batch pending: user presence updates queued for the 50ms flush
+    // Batch pending: user presence updates queued for the 2ms flush
     pending_user_updates: std.ArrayListUnmanaged(PendingUserUpdate),
     pending_shared_updates: std.ArrayListUnmanaged(PendingSharedUpdate),
 

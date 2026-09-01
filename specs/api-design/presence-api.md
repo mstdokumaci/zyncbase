@@ -389,8 +389,8 @@ client.presence.subscribeShared(({ playing, timestamp }) => {
 |---|---|---|
 | `presence.set()` | Client-side | SDK throttles to ~60fps (16ms intervals). |
 | `presence.setShared()` | Client-side | Not throttled — shared state changes are infrequent by design. |
-| User presence broadcasts | Server-side | Batched every 50ms. Multiple updates within the window are merged into one `PresenceBroadcast` per subscriber. |
-| Shared state broadcasts | Server-side | Batched every 50ms. Multiple `setShared` calls within the window are merged into one `SharedStateBroadcast` per subscriber. |
+| User presence broadcasts | Server-side | Batched every 2ms. Multiple updates within the window are merged into one `PresenceBroadcast` per subscriber. |
+| Shared state broadcasts | Server-side | Batched every 2ms. Multiple `setShared` calls within the window are merged into one `SharedStateBroadcast` per subscriber. |
 
 ---
 
