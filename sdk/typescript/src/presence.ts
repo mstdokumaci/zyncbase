@@ -22,7 +22,8 @@ export interface PresenceConnection {
 }
 
 export class PresenceImpl implements Presence {
-	private userCache = new Map<string, PresenceEntry>();
+	private userEntries: PresenceEntry[] = [];
+	private userIndexes = new Map<string, number>();
 	private sharedCache: Record<string, unknown> | null = null;
 	private userSubId: number | null = null;
 	private sharedSubId: number | null = null;
@@ -116,7 +117,7 @@ export class PresenceImpl implements Presence {
 			) {
 				const subId = this.userSubId;
 				this.userSubId = null;
-				this.userCache.clear();
+				this.clearUserCache();
 				if (subId !== null) {
 					this.conn
 						.dispatch({
@@ -216,14 +217,19 @@ export class PresenceImpl implements Presence {
 	}
 
 	get(userId: string): PresenceEntry | undefined {
-		return this.userCache.get(userId);
+		const index = this.userIndexes.get(userId);
+		return index === undefined ? undefined : this.userEntries[index];
 	}
 
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[] {
-		const entries = Array.from(this.userCache.values());
+		// ponytail: snapshots stay O(n); add a delta API only if copying profiles hot again.
+		const entries = this.userEntries.slice();
 		if (!options?.includeSelf && this.localUserId) {
-			const self = this.userCache.get(this.localUserId);
-			if (self) entries.splice(entries.indexOf(self), 1);
+			const selfIndex = this.userIndexes.get(this.localUserId);
+			if (selfIndex !== undefined) {
+				entries[selfIndex] = entries[entries.length - 1];
+				entries.pop();
+			}
 		}
 		return entries;
 	}
@@ -242,7 +248,7 @@ export class PresenceImpl implements Presence {
 		this.userSubGen++;
 		this.sharedSubGen++;
 		this.localUserId = null;
-		this.userCache.clear();
+		this.clearUserCache();
 		this.sharedCache = null;
 		this.userSubId = null;
 		this.sharedSubId = null;
@@ -324,12 +330,12 @@ export class PresenceImpl implements Presence {
 		);
 
 		if (entry.event === "leave") {
-			this.userCache.delete(userId);
+			this.removeUserEntry(userId);
 			return;
 		}
 
 		if (entry.event === "join") {
-			this.userCache.set(userId, {
+			this.setUserEntry({
 				userId,
 				data: entry.data ?? {},
 				joinedAt: entry.joinedAt ?? 0,
@@ -337,15 +343,15 @@ export class PresenceImpl implements Presence {
 			return;
 		}
 
-		const existing = this.userCache.get(userId);
+		const existing = this.get(userId);
 		if (existing) {
-			this.userCache.set(userId, {
+			this.setUserEntry({
 				userId,
 				joinedAt: existing.joinedAt,
 				data: { ...existing.data, ...(entry.data ?? {}) },
 			});
 		} else {
-			this.userCache.set(userId, {
+			this.setUserEntry({
 				userId,
 				data: entry.data ?? {},
 				joinedAt: entry.joinedAt ?? 0,
@@ -364,19 +370,48 @@ export class PresenceImpl implements Presence {
 	}
 
 	private populateUserCacheFromSnapshot(ok: OkResponse): void {
-		this.userCache.clear();
+		this.clearUserCache();
 		if (!Array.isArray(ok.users)) return;
 
 		for (const user of ok.users) {
 			const userId = this.conn.schemaDictionary.decodePresenceUserId(
 				user.userId,
 			);
-			this.userCache.set(userId, {
+			this.setUserEntry({
 				userId,
 				data: user.data as Record<string, unknown>,
 				joinedAt: user.joinedAt ?? 0,
 			});
 		}
+	}
+
+	private setUserEntry(entry: PresenceEntry): void {
+		const index = this.userIndexes.get(entry.userId);
+		if (index === undefined) {
+			this.userIndexes.set(entry.userId, this.userEntries.length);
+			this.userEntries.push(entry);
+		} else {
+			this.userEntries[index] = entry;
+		}
+	}
+
+	private removeUserEntry(userId: string): void {
+		const index = this.userIndexes.get(userId);
+		if (index === undefined) return;
+
+		const lastIndex = this.userEntries.length - 1;
+		if (index !== lastIndex) {
+			const lastEntry = this.userEntries[lastIndex];
+			this.userEntries[index] = lastEntry;
+			this.userIndexes.set(lastEntry.userId, index);
+		}
+		this.userEntries.pop();
+		this.userIndexes.delete(userId);
+	}
+
+	private clearUserCache(): void {
+		this.userEntries.length = 0;
+		this.userIndexes.clear();
 	}
 
 	private fireUserCallbacks(): void {

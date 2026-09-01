@@ -381,7 +381,7 @@ export interface Presence {
 	set(data: Record<string, unknown>): void;
 	/** Merge fields into namespace-level shared state. Fire-and-forget. */
 	setShared(data: Record<string, unknown>): void;
-	/** Subscribe to user presence changes. Returns unsubscribe function. */
+	/** Subscribe to unordered user presence snapshots. Returns unsubscribe function. */
 	subscribe(callback: (users: PresenceEntry[]) => void): () => void;
 	/** Subscribe to shared state changes. Returns unsubscribe function. */
 	subscribeShared(
@@ -389,7 +389,7 @@ export interface Presence {
 	): () => void;
 	/** Synchronous local lookup of a specific user's presence. */
 	get(userId: string): PresenceEntry | undefined;
-	/** Synchronous local lookup of all users' presence. */
+	/** Synchronous local lookup of all users' presence. Result order is unspecified. */
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[];
 	/** Synchronous local lookup of current shared state. */
 	getShared(): Record<string, unknown> | null;

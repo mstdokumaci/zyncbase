@@ -326,7 +326,7 @@ describe("PresenceImpl", () => {
 		expect(entry?.data).toEqual({ cursor: { x: 50, y: 75 } });
 	});
 
-	test("PresenceBroadcast leave removes user from cache", async () => {
+	test("PresenceBroadcast removal preserves lookups and older snapshots", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
@@ -343,14 +343,21 @@ describe("PresenceImpl", () => {
 							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
 							joinedAt: 1111,
 						},
+						{
+							userId: packDocId("user_4"),
+							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							joinedAt: 2222,
+						},
 					],
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
 		};
 
-		presence.subscribe(() => {});
+		const snapshots: Array<ReturnType<typeof presence.getAll>> = [];
+		presence.subscribe((users) => snapshots.push(users));
 		await new Promise((resolve) => setTimeout(resolve, 10));
+		const initialSnapshot = snapshots[0];
 
 		conn.fireBroadcast({
 			type: "PresenceBroadcast",
@@ -363,8 +370,33 @@ describe("PresenceImpl", () => {
 			],
 		} as PresenceBroadcast);
 
-		const userId = conn.schema.decodePresenceUserId(packDocId("user_3"));
-		expect(presence.get(userId)).toBeUndefined();
+		const removedId = conn.schema.decodePresenceUserId(packDocId("user_3"));
+		const retainedId = conn.schema.decodePresenceUserId(packDocId("user_4"));
+		expect(presence.get(removedId)).toBeUndefined();
+		expect(presence.get(retainedId)?.data.status).toBe("active");
+		expect(presence.getAll().map((entry) => entry.userId)).toEqual([
+			retainedId,
+		]);
+		expect(snapshots[1]).not.toBe(initialSnapshot);
+		expect(initialSnapshot.map((entry) => entry.userId)).toEqual([
+			removedId,
+			retainedId,
+		]);
+
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packDocId("user_4"),
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+				},
+			],
+		} as PresenceBroadcast);
+
+		expect(presence.get(retainedId)?.data.status).toBe("idle");
+		expect(initialSnapshot[1].data.status).toBe("active");
 	});
 
 	test("subscribeShared() dispatches PresenceSubscribeShared and populates cache", async () => {

@@ -116,6 +116,8 @@ interface PresenceEntry {
 }
 ```
 
+Each callback receives a fresh snapshot array. Presence entries are unordered; array order is not stable across updates.
+
 **Returns**: An unsubscribe function. Calling it sends `PresenceUnsubscribe` to the server.
 
 ---
@@ -142,6 +144,8 @@ Synchronous local lookup of all users' presence in the namespace. Excludes self 
 const others   = client.presence.getAll()
 const everyone = client.presence.getAll({ includeSelf: true })
 ```
+
+Each call returns a fresh array with unspecified entry order.
 
 Returns `[]` if no active `subscribe()` exists.
 
