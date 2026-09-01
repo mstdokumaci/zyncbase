@@ -12,7 +12,6 @@ import {
 	joinFieldPath,
 	setDeepProperty,
 	splitFieldPath,
-	unflatten,
 } from "./path.js";
 import type { JsonValue } from "./types.js";
 
@@ -40,6 +39,8 @@ export class SchemaDictionary {
 	// ─── Presence field arrays (from SchemaSync) ──────────────────────────
 	private presenceUserFields: string[] = [];
 	private presenceSharedFields: string[] = [];
+	private presenceUserFieldPaths: Array<string[] | undefined> = [];
+	private presenceSharedFieldPaths: Array<string[] | undefined> = [];
 
 	// ─── Bidirectional maps ────────────────────────────────────────────────
 	private tableToIndex = new Map<string, number>();
@@ -140,6 +141,12 @@ export class SchemaDictionary {
 	}): void {
 		this.presenceUserFields = payload.presenceUserFields ?? [];
 		this.presenceSharedFields = payload.presenceSharedFields ?? [];
+		this.presenceUserFieldPaths = this.presenceUserFields.map((field) =>
+			field.includes("__") ? splitFieldPath(field) : undefined,
+		);
+		this.presenceSharedFieldPaths = this.presenceSharedFields.map((field) =>
+			field.includes("__") ? splitFieldPath(field) : undefined,
+		);
 
 		this.presenceUserFieldToIndex.clear();
 		for (let i = 0; i < this.presenceUserFields.length; i++) {
@@ -474,7 +481,7 @@ export class SchemaDictionary {
 	decodePresenceUserValue(
 		wireData: Array<[number, unknown]>,
 	): Record<string, JsonValue> {
-		const flat: Record<string, JsonValue> = {};
+		const result: Record<string, JsonValue> = {};
 		for (const [index, value] of wireData) {
 			const fieldName = this.presenceUserFields[index];
 			if (fieldName === undefined) {
@@ -483,9 +490,11 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			flat[fieldName] = value as JsonValue;
+			const fieldPath = this.presenceUserFieldPaths[index];
+			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
+			else result[fieldName] = value as JsonValue;
 		}
-		return unflatten(flat);
+		return result;
 	}
 
 	/**
@@ -494,7 +503,7 @@ export class SchemaDictionary {
 	decodePresenceSharedValue(
 		wireData: Array<[number, unknown]>,
 	): Record<string, JsonValue> {
-		const flat: Record<string, JsonValue> = {};
+		const result: Record<string, JsonValue> = {};
 		for (const [index, value] of wireData) {
 			const fieldName = this.presenceSharedFields[index];
 			if (fieldName === undefined) {
@@ -503,9 +512,11 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			flat[fieldName] = value as JsonValue;
+			const fieldPath = this.presenceSharedFieldPaths[index];
+			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
+			else result[fieldName] = value as JsonValue;
 		}
-		return unflatten(flat);
+		return result;
 	}
 
 	/**

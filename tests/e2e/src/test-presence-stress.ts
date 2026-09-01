@@ -246,15 +246,14 @@ async function prepareClients(
 }
 
 function parseGlobalId(entry: PresenceEntry): number | null {
-	const name = entry.data.name;
-	if (typeof name !== "string" || !name.startsWith(NAME_PREFIX)) return null;
-	const idText = name.slice(NAME_PREFIX.length);
-	const id = Number(idText);
+	const cursor = entry.data.cursor;
+	if (!isRecord(cursor)) return null;
+	const id = cursor.x;
 	if (
+		typeof id !== "number" ||
 		!Number.isInteger(id) ||
 		id < 0 ||
-		id >= TOTAL_CLIENTS ||
-		String(id) !== idText
+		id >= TOTAL_CLIENTS
 	) {
 		return null;
 	}
@@ -299,7 +298,7 @@ function scanEntry(
 	const globalId = parseGlobalId(entry);
 	if (globalId === null) {
 		scan.invalid++;
-		addSample(scan, `invalid name ${String(entry.data.name)}`);
+		addSample(scan, `invalid cursor identity ${String(entry.data.cursor)}`);
 		return;
 	}
 
