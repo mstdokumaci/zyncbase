@@ -5,23 +5,26 @@ import {
 } from "@zyncbase/client";
 import { createTestJwt } from "./harness";
 
-const PROCESS_COUNT = 4;
+const ROOM_COUNT = 2;
+const PROCESSES_PER_ROOM = 2;
 const CLIENTS_PER_PROCESS = 500;
+const CLIENTS_PER_ROOM = PROCESSES_PER_ROOM * CLIENTS_PER_PROCESS;
+const PROCESS_COUNT = ROOM_COUNT * PROCESSES_PER_ROOM;
 const TOTAL_CLIENTS = PROCESS_COUNT * CLIENTS_PER_PROCESS;
 const CONNECT_BATCH_SIZE = 50;
 const PROCESS_MUTATION_STAGGER_MS = 250;
 
-const MOVERS_PER_PROCESS = 10;
-const CURSOR_TICKS = 120;
+const CURSOR_GROUP_SIZE = 10;
+const FIRST_CURSOR_TICKS = 40;
+const SECOND_CURSOR_TICKS = 80;
 const CURSOR_INTERVAL_MS = 8;
 
-const SHARED_TICKS = 80;
 const SHARED_INTERVAL_MS = 20;
 
 const QUIET_WINDOW_MS = 100;
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
-const PRESENCE_NAMESPACE = "presence-stress";
+const PRESENCE_NAMESPACE_PREFIX = "presence-stress";
 const NAME_PREFIX = "client-";
 const EXPECTED_NAMES = Array.from(
 	{ length: TOTAL_CLIENTS },
@@ -32,9 +35,10 @@ const BARRIER_PHASES = [
 	"ready",
 	"join",
 	"cursor",
-	"shared",
+	"shared-before-remove",
 	"remove",
 	"rejoin",
+	"shared-after-rejoin",
 	"disconnect",
 ] as const;
 
@@ -57,6 +61,7 @@ type ClientState = {
 
 type ProcessContext = {
 	processIndex: number;
+	roomIndex: number;
 	clients: ClientState[];
 	generation: number;
 };
@@ -139,7 +144,7 @@ function makeClientState(
 		auth: {
 			token: createTestJwt(jwtSecret, `presence-stress-${globalId}`),
 		},
-		presenceNamespace: PRESENCE_NAMESPACE,
+		presenceNamespace: `${PRESENCE_NAMESPACE_PREFIX}-${context.roomIndex}`,
 		retryRateLimits: false,
 	});
 	const state: ClientState = {
@@ -156,6 +161,8 @@ function makeClientState(
 	};
 
 	client.on("error", (error) => {
+		if (state.expectedDisconnect && formatError(error) === "Disconnected")
+			return;
 		state.errorCount++;
 		if (state.errorSamples.length < 3) {
 			state.errorSamples.push(formatError(error));
@@ -395,28 +402,36 @@ function verifyFullJoinSelfFilter(context: ProcessContext): string | null {
 		const others = state.client.presence.getAll();
 		const ownName = EXPECTED_NAMES[state.globalId];
 		if (
-			all.length !== TOTAL_CLIENTS ||
-			others.length !== TOTAL_CLIENTS - 1 ||
+			all.length !== CLIENTS_PER_ROOM ||
+			others.length !== CLIENTS_PER_ROOM - 1 ||
 			!all.some((entry) => entry.data.name === ownName) ||
 			others.some((entry) => entry.data.name === ownName)
 		) {
-			return `observer ${state.globalId}: self filter expected ${TOTAL_CLIENTS}/${TOTAL_CLIENTS - 1} include/default entries and own marker only in include-self view; got ${all.length}/${others.length}`;
+			return `observer ${state.globalId}: self filter expected ${CLIENTS_PER_ROOM}/${CLIENTS_PER_ROOM - 1} include/default entries and own marker only in include-self view; got ${all.length}/${others.length}`;
 		}
 	}
 	return null;
 }
 
-function verifyShared(context: ProcessContext): string | null {
+function sharedState(context: ProcessContext, round: number) {
+	return {
+		slide: context.roomIndex * 100 + round,
+		playing: round % 2 === 1,
+	};
+}
+
+function verifyShared(context: ProcessContext, round: number): string | null {
+	const expected = sharedState(context, round);
 	for (const state of context.clients) {
 		if (state.expectedDisconnect) continue;
 		const shared = state.client.presence.getShared();
 		if (
 			shared === null ||
 			Object.keys(shared).length !== 2 ||
-			shared.slide !== SHARED_TICKS - 1 ||
-			shared.playing !== false
+			shared.slide !== expected.slide ||
+			shared.playing !== expected.playing
 		) {
-			return `observer ${state.globalId}: expected shared slide=${SHARED_TICKS - 1}, playing=false; got ${JSON.stringify(shared)}`;
+			return `observer ${state.globalId}: expected shared slide=${expected.slide}, playing=${expected.playing}; got ${JSON.stringify(shared)}`;
 		}
 	}
 	return null;
@@ -507,11 +522,18 @@ function setFullPresence(state: ClientState, y: number) {
 	});
 }
 
-function markMovers(expectedY: Int32Array) {
-	for (let processIndex = 0; processIndex < PROCESS_COUNT; processIndex++) {
-		for (let localId = 0; localId < MOVERS_PER_PROCESS; localId++) {
-			expectedY[processIndex * CLIENTS_PER_PROCESS + localId] =
-				CURSOR_TICKS - 1;
+function markMovers(context: ProcessContext, expectedY: Int32Array) {
+	const firstProcess = context.roomIndex * PROCESSES_PER_ROOM;
+	for (
+		let processIndex = firstProcess;
+		processIndex < firstProcess + PROCESSES_PER_ROOM;
+		processIndex++
+	) {
+		const firstClient = processIndex * CLIENTS_PER_PROCESS;
+		for (let localId = 0; localId < CURSOR_GROUP_SIZE; localId++) {
+			expectedY[firstClient + localId] = FIRST_CURSOR_TICKS - 1;
+			expectedY[firstClient + CURSOR_GROUP_SIZE + localId] =
+				SECOND_CURSOR_TICKS - 1;
 		}
 	}
 }
@@ -528,8 +550,15 @@ async function cleanupClients(clients: ClientState[]) {
 	await delay(0);
 }
 
-function setActiveEvery(active: Uint8Array, step: number, value: 0 | 1) {
-	for (let globalId = 0; globalId < TOTAL_CLIENTS; globalId += step) {
+function setActiveEvery(
+	context: ProcessContext,
+	active: Uint8Array,
+	step: number,
+	value: 0 | 1,
+) {
+	const firstClient = context.roomIndex * CLIENTS_PER_ROOM;
+	const end = firstClient + CLIENTS_PER_ROOM;
+	for (let globalId = firstClient; globalId < end; globalId += step) {
 		active[globalId] = value;
 	}
 }
@@ -539,7 +568,9 @@ async function mutateAfterProcessStagger(
 	clients: ClientState[],
 	mutate: (state: ClientState) => void,
 ) {
-	await delay(context.processIndex * PROCESS_MUTATION_STAGGER_MS);
+	await delay(
+		(context.processIndex % PROCESSES_PER_ROOM) * PROCESS_MUTATION_STAGGER_MS,
+	);
 	for (const state of clients) mutate(state);
 }
 
@@ -553,7 +584,7 @@ async function runJoinPhase(
 		setFullPresence(state, 0),
 	);
 	await waitForConvergence(context, "join", () =>
-		verifyUsers(context, active, TOTAL_CLIENTS, expectedY),
+		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
 	);
 	await waitForConvergence(context, "join self filter", () =>
 		verifyFullJoinSelfFilter(context),
@@ -566,44 +597,60 @@ async function runCursorPhase(
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): Promise<{ writeMs: number; convergeMs: number }> {
-	const movers = context.clients.slice(0, MOVERS_PER_PROCESS);
+	const firstGroup = context.clients.slice(0, CURSOR_GROUP_SIZE);
+	const secondGroup = context.clients.slice(
+		CURSOR_GROUP_SIZE,
+		CURSOR_GROUP_SIZE * 2,
+	);
 	const started = performance.now();
-	for (let tick = 0; tick < CURSOR_TICKS; tick++) {
-		for (const state of movers) {
+	for (let tick = 0; tick < SECOND_CURSOR_TICKS; tick++) {
+		if (tick < FIRST_CURSOR_TICKS) {
+			for (const state of firstGroup) {
+				state.client.presence.set({
+					cursor: { x: state.globalId, y: tick },
+				});
+			}
+		}
+		for (const state of secondGroup) {
 			state.client.presence.set({
 				cursor: { x: state.globalId, y: tick },
 			});
 		}
-		if (tick + 1 < CURSOR_TICKS) await delay(CURSOR_INTERVAL_MS);
+		if (tick + 1 < SECOND_CURSOR_TICKS) await delay(CURSOR_INTERVAL_MS);
 	}
 	const writeMs = performance.now() - started;
-	markMovers(expectedY);
+	markMovers(context, expectedY);
 	const convergeMs = await waitForConvergence(context, "cursor flood", () =>
-		verifyUsers(context, active, TOTAL_CLIENTS, expectedY),
+		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
 	);
 	return { writeMs, convergeMs };
 }
 
-async function writeSharedFields(context: ProcessContext): Promise<number> {
+async function writeSharedRounds(
+	context: ProcessContext,
+	firstRound: number,
+	roundCount: number,
+): Promise<number> {
+	const writers = context.clients.filter((state) => state.globalId % 2 === 0);
 	const started = performance.now();
-	if (context.processIndex > 1) return performance.now() - started;
-	for (let tick = 0; tick < SHARED_TICKS; tick++) {
-		const update =
-			context.processIndex === 0
-				? { slide: tick }
-				: { playing: tick % 2 === 0 };
-		context.clients[0].client.presence.setShared(update);
-		if (tick + 1 < SHARED_TICKS) await delay(SHARED_INTERVAL_MS);
+	for (let offset = 0; offset < roundCount; offset++) {
+		const update = sharedState(context, firstRound + offset);
+		for (const state of writers) state.client.presence.setShared(update);
+		if (offset + 1 < roundCount) await delay(SHARED_INTERVAL_MS);
 	}
 	return performance.now() - started;
 }
 
 async function runSharedPhase(
 	context: ProcessContext,
+	firstRound: number,
+	roundCount: number,
+	label: string,
 ): Promise<{ writeMs: number; convergeMs: number }> {
-	const writeMs = await writeSharedFields(context);
-	const convergeMs = await waitForConvergence(context, "shared flood", () =>
-		verifyShared(context),
+	const writeMs = await writeSharedRounds(context, firstRound, roundCount);
+	const finalRound = firstRound + roundCount - 1;
+	const convergeMs = await waitForConvergence(context, label, () =>
+		verifyShared(context, finalRound),
 	);
 	return { writeMs, convergeMs };
 }
@@ -613,15 +660,19 @@ async function runRemovePhase(
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): Promise<number> {
-	setActiveEvery(active, 2, 0);
+	setActiveEvery(context, active, 2, 0);
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
 		context.clients.filter((state) => state.globalId % 2 === 0),
 		(state) => state.client.presence.remove(),
 	);
-	await waitForConvergence(context, "remove half", () =>
-		verifyUsers(context, active, TOTAL_CLIENTS / 2, expectedY),
+	await waitForConvergence(
+		context,
+		"remove half",
+		() =>
+			verifyUsers(context, active, CLIENTS_PER_ROOM / 2, expectedY) ??
+			verifyShared(context, 0),
 	);
 	return performance.now() - started;
 }
@@ -631,15 +682,19 @@ async function runRejoinPhase(
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): Promise<number> {
-	setActiveEvery(active, 2, 1);
+	setActiveEvery(context, active, 2, 1);
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
 		context.clients.filter((state) => state.globalId % 2 === 0),
 		(state) => setFullPresence(state, expectedY[state.globalId]),
 	);
-	await waitForConvergence(context, "rejoin half", () =>
-		verifyUsers(context, active, TOTAL_CLIENTS, expectedY),
+	await waitForConvergence(
+		context,
+		"rejoin half",
+		() =>
+			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY) ??
+			verifyShared(context, 0),
 	);
 	return performance.now() - started;
 }
@@ -649,7 +704,7 @@ async function runDisconnectPhase(
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): Promise<number> {
-	setActiveEvery(active, 4, 0);
+	setActiveEvery(context, active, 4, 0);
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
@@ -659,8 +714,16 @@ async function runDisconnectPhase(
 			state.client.disconnect();
 		},
 	);
-	await waitForConvergence(context, "disconnect quarter", () =>
-		verifyUsers(context, active, TOTAL_CLIENTS - TOTAL_CLIENTS / 4, expectedY),
+	await waitForConvergence(
+		context,
+		"disconnect quarter",
+		() =>
+			verifyUsers(
+				context,
+				active,
+				CLIENTS_PER_ROOM - CLIENTS_PER_ROOM / 4,
+				expectedY,
+			) ?? verifyShared(context, 2),
 	);
 	return performance.now() - started;
 }
@@ -671,13 +734,16 @@ async function runProcess(
 	jwtSecret: string,
 	barrier: (phase: BarrierPhase) => Promise<void>,
 ): Promise<ProcessMetrics> {
+	const roomIndex = Math.floor(processIndex / PROCESSES_PER_ROOM);
 	const context: ProcessContext = {
 		processIndex,
+		roomIndex,
 		clients: [],
 		generation: 0,
 	};
 	const active = new Uint8Array(TOTAL_CLIENTS);
-	active.fill(1);
+	const firstRoomClient = roomIndex * CLIENTS_PER_ROOM;
+	active.fill(1, firstRoomClient, firstRoomClient + CLIENTS_PER_ROOM);
 	const expectedY = new Int32Array(TOTAL_CLIENTS);
 	const metrics: ProcessMetrics = {
 		processIndex,
@@ -708,16 +774,31 @@ async function runProcess(
 		metrics.cursorConvergeMs = cursor.convergeMs;
 		await barrier("cursor");
 
-		const shared = await runSharedPhase(context);
-		metrics.sharedWriteMs = shared.writeMs;
-		metrics.sharedConvergeMs = shared.convergeMs;
-		await barrier("shared");
+		const sharedBeforeRemove = await runSharedPhase(
+			context,
+			0,
+			1,
+			"shared before remove",
+		);
+		metrics.sharedWriteMs += sharedBeforeRemove.writeMs;
+		metrics.sharedConvergeMs += sharedBeforeRemove.convergeMs;
+		await barrier("shared-before-remove");
 
 		metrics.removeMs = await runRemovePhase(context, active, expectedY);
 		await barrier("remove");
 
 		metrics.rejoinMs = await runRejoinPhase(context, active, expectedY);
 		await barrier("rejoin");
+
+		const sharedAfterRejoin = await runSharedPhase(
+			context,
+			1,
+			2,
+			"shared after rejoin",
+		);
+		metrics.sharedWriteMs += sharedAfterRejoin.writeMs;
+		metrics.sharedConvergeMs += sharedAfterRejoin.convergeMs;
+		await barrier("shared-after-rejoin");
 
 		metrics.disconnectMs = await runDisconnectPhase(context, active, expectedY);
 		await barrier("disconnect");
@@ -868,7 +949,7 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const userCallbacks = results.flatMap((result) => result.userCallbacks);
 	const sharedCallbacks = results.flatMap((result) => result.sharedCallbacks);
 	console.log(
-		`Presence stress passed: ${TOTAL_CLIENTS} clients in ${Math.round(elapsedMs)}ms; ` +
+		`Presence stress passed: ${TOTAL_CLIENTS} clients across ${ROOM_COUNT} rooms in ${Math.round(elapsedMs)}ms; ` +
 			`phase max ms connect=${max("connectMs")}, join=${max("joinMs")}, ` +
 			`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
 			`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
