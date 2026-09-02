@@ -372,30 +372,55 @@ pub const PresenceWorker = struct {
                 continue;
             };
 
+            var message_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty;
+            defer message_cache.deinit(alloc);
+
+            var last_sub_id: ?u64 = null;
+            var last_msg: []const u8 = &.{};
+
             for (batch.subscribers.items) |subscriber| {
-                out.clearRetainingCapacity();
-                const writer = &out.writer;
+                const maybe_cached = if (last_sub_id != null and last_sub_id.? == subscriber.sub_id)
+                    last_msg
+                else
+                    message_cache.get(subscriber.sub_id);
 
-                writer.writeAll(header) catch |err| {
-                    std.log.err("PresenceWorker write {s} broadcast header failed: {}", .{ log_label, err });
-                    continue;
-                };
+                const owned_msg = if (maybe_cached) |cached| blk: {
+                    last_sub_id = subscriber.sub_id;
+                    last_msg = cached;
+                    break :blk cached;
+                } else blk: {
+                    out.clearRetainingCapacity();
+                    const writer = &out.writer;
 
-                msgpack.encode(msgpack.Payload.uintToPayload(subscriber.sub_id), writer) catch |err| {
-                    std.log.err("PresenceWorker encode {s} broadcast subId {} failed: {}", .{ log_label, subscriber.sub_id, err });
-                    continue;
-                };
+                    writer.writeAll(header) catch |err| {
+                        std.log.err("PresenceWorker write {s} broadcast header failed: {}", .{ log_label, err });
+                        continue;
+                    };
 
-                writer.writeAll(suffix) catch |err| {
-                    std.log.err("PresenceWorker append {s} broadcast suffix failed: {}", .{ log_label, err });
-                    continue;
-                };
+                    msgpack.encode(msgpack.Payload.uintToPayload(subscriber.sub_id), writer) catch |err| {
+                        std.log.err("PresenceWorker encode {s} broadcast subId {} failed: {}", .{ log_label, subscriber.sub_id, err });
+                        continue;
+                    };
 
-                // Duplicate before reusing the scratch writer; queueing the
-                // scratch slice directly would alias later recipients.
-                const owned_msg = alloc.dupe(u8, out.written()) catch |err| {
-                    std.log.err("PresenceWorker dupe {s} broadcast failed: {}", .{ log_label, err });
-                    continue;
+                    writer.writeAll(suffix) catch |err| {
+                        std.log.err("PresenceWorker append {s} broadcast suffix failed: {}", .{ log_label, err });
+                        continue;
+                    };
+
+                    // Duplicate before reusing the scratch writer; queueing the
+                    // scratch slice directly would alias later recipients.
+                    const msg = alloc.dupe(u8, out.written()) catch |err| {
+                        std.log.err("PresenceWorker dupe {s} broadcast failed: {}", .{ log_label, err });
+                        continue;
+                    };
+
+                    message_cache.put(alloc, subscriber.sub_id, msg) catch |err| {
+                        std.log.warn("PresenceWorker failed to cache {s} broadcast: {}", .{ log_label, err });
+                    };
+
+                    last_sub_id = subscriber.sub_id;
+                    last_msg = msg;
+                    break :blk msg;
                 };
 
                 // Reserve a ref for this entry BEFORE pushing so the consumer can never

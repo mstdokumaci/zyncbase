@@ -371,3 +371,109 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[0].arr[1].float);
     try testing.expect(send_queue.pop() == null);
 }
+
+test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+    const allocator = memory_strategy.generalAllocator();
+
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedSingleField(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
+    try send_node_pool.init(allocator, 64, null, null);
+    defer send_node_pool.deinit();
+    var send_queue = try send_queue_type.init(&send_node_pool);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
+
+    var notifier: TestNotifier = .{};
+    const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
+    defer {
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
+    }
+
+    const namespace_id: i64 = 1;
+
+    // 3 subscribers: two share sub_id=1, one has sub_id=2
+    var s1 = try presence_manager.onSubscribeUser(namespace_id, 10, 1);
+    defer s1.deinit(allocator);
+    var s2 = try presence_manager.onSubscribeUser(namespace_id, 20, 1);
+    defer s2.deinit(allocator);
+    var s3 = try presence_manager.onSubscribeUser(namespace_id, 30, 2);
+    defer s3.deinit(allocator);
+
+    const patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 42.0 } },
+    });
+    defer patch.free(allocator);
+
+    try worker.enqueue(.{
+        .op = .{ .set_user = .{
+            .namespace_id = namespace_id,
+            .user_id = 99,
+            .patch = try patch.deepClone(allocator),
+        } },
+        .allocator = allocator,
+    });
+
+    try notifier.completion.waitTimeout(testing.io, completion_timeout);
+
+    const SendQueueEntry = @import("../connection/send_queue.zig").Entry;
+    var entry_1: ?SendQueueEntry = null;
+    var entry_2: ?SendQueueEntry = null;
+    var entry_3: ?SendQueueEntry = null;
+
+    while (send_queue.pop()) |entry| {
+        switch (entry.conn_id) {
+            10 => entry_1 = entry,
+            20 => entry_2 = entry,
+            30 => entry_3 = entry,
+            else => {
+                entry.deinit();
+                return error.UnexpectedConnId;
+            },
+        }
+    }
+
+    defer if (entry_1) |e| e.deinit();
+    defer if (entry_2) |e| e.deinit();
+    defer if (entry_3) |e| e.deinit();
+
+    try testing.expect(entry_1 != null);
+    try testing.expect(entry_2 != null);
+    try testing.expect(entry_3 != null);
+
+    const e1 = entry_1.?;
+    const e2 = entry_2.?;
+    const e3 = entry_3.?;
+
+    // Conn 10 and 20 share sub_id=1, so their data slices must point to the EXACT same memory!
+    try testing.expectEqual(@intFromPtr(e1.data.ptr), @intFromPtr(e2.data.ptr));
+    try testing.expectEqual(e1.data.len, e2.data.len);
+
+    // Conn 30 has sub_id=2, so its data slice must be a different allocation.
+    try testing.expect(@intFromPtr(e1.data.ptr) != @intFromPtr(e3.data.ptr));
+
+    // Verify wire payloads
+    var r1: std.Io.Reader = .fixed(e1.data);
+    const d1 = try msgpack.decode(allocator, &r1);
+    defer d1.free(allocator);
+    try testing.expectEqual(@as(u64, 1), d1.arr[1].uint);
+
+    var r3: std.Io.Reader = .fixed(e3.data);
+    const d3 = try msgpack.decode(allocator, &r3);
+    defer d3.free(allocator);
+    try testing.expectEqual(@as(u64, 2), d3.arr[1].uint);
+}
