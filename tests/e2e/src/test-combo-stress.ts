@@ -299,9 +299,9 @@ function getClientRole(localId: number): ClientRole {
 	if (
 		localId <
 		STORE_CREATORS +
-		STORE_UPDATERS +
-		PRESENCE_USER_WRITERS +
-		PRESENCE_SHARED_WRITERS
+			STORE_UPDATERS +
+			PRESENCE_USER_WRITERS +
+			PRESENCE_SHARED_WRITERS
 	)
 		return "presence-shared";
 	return "passive";
@@ -590,32 +590,32 @@ function verifyStore(
 
 	const errA = isItems
 		? verifyFilterGroup<ItemRecord>(
-			filterAClients,
-			"A",
-			matchesItemFilterA,
-			itemsEqual,
-		)
+				filterAClients,
+				"A",
+				matchesItemFilterA,
+				itemsEqual,
+			)
 		: verifyFilterGroup<EventRecord>(
-			filterAClients,
-			"A",
-			matchesEventFilterA,
-			eventsEqual,
-		);
+				filterAClients,
+				"A",
+				matchesEventFilterA,
+				eventsEqual,
+			);
 	if (errA) return errA;
 
 	const errB = isItems
 		? verifyFilterGroup<ItemRecord>(
-			filterBClients,
-			"B",
-			matchesItemFilterB,
-			itemsEqual,
-		)
+				filterBClients,
+				"B",
+				matchesItemFilterB,
+				itemsEqual,
+			)
 		: verifyFilterGroup<EventRecord>(
-			filterBClients,
-			"B",
-			matchesEventFilterB,
-			eventsEqual,
-		);
+				filterBClients,
+				"B",
+				matchesEventFilterB,
+				eventsEqual,
+			);
 	if (errB) return errB;
 
 	return null;
@@ -891,9 +891,9 @@ async function executePresenceSharedWrites(
 	const sharedWriters = context.clients.slice(
 		STORE_CREATORS + STORE_UPDATERS + PRESENCE_USER_WRITERS,
 		STORE_CREATORS +
-		STORE_UPDATERS +
-		PRESENCE_USER_WRITERS +
-		PRESENCE_SHARED_WRITERS,
+			STORE_UPDATERS +
+			PRESENCE_USER_WRITERS +
+			PRESENCE_SHARED_WRITERS,
 	);
 	for (let tick = 0; tick < 3; tick++) {
 		for (const state of sharedWriters) {
@@ -1124,10 +1124,10 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 		Math.round(Math.max(...results.map((r) => r[key] as number)));
 	console.log(
 		`Combo stress passed: ${TOTAL_CLIENTS} clients across 4 processes (${ROOM_COUNT} rooms, 2 tables) in ${Math.round(elapsedMs)}ms; ` +
-		`phase max ms connect=${max("connectMs")}, ` +
-		`store-create=${max("storeCreateMs")}, store-update=${max("storeUpdateMs")}, ` +
-		`presence-user=${max("presenceUserMs")}, presence-shared=${max("presenceSharedMs")}, ` +
-		`store-converge=${max("storeConvergeMs")}, presence-converge=${max("presenceConvergeMs")}`,
+			`phase max ms connect=${max("connectMs")}, ` +
+			`store-create=${max("storeCreateMs")}, store-update=${max("storeUpdateMs")}, ` +
+			`presence-user=${max("presenceUserMs")}, presence-shared=${max("presenceSharedMs")}, ` +
+			`store-converge=${max("storeConvergeMs")}, presence-converge=${max("presenceConvergeMs")}`,
 	);
 }
 
@@ -1209,7 +1209,7 @@ export async function run(port: number, jwtSecret: string) {
 	} finally {
 		for (const { worker } of workers) worker.kill();
 		await Promise.all(
-			workers.map(({ worker }) => worker.exited.catch(() => { })),
+			workers.map(({ worker }) => worker.exited.catch(() => {})),
 		);
 	}
 }
