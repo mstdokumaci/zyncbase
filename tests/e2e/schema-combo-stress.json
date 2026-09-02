@@ -1,0 +1,65 @@
+{
+	"version": "0.0.1",
+	"store": {
+		"items": {
+			"fields": {
+				"name": {
+					"type": "string"
+				},
+				"priority": {
+					"type": "integer",
+					"indexed": true
+				},
+				"active": {
+					"type": "boolean",
+					"indexed": true
+				},
+				"tags": {
+					"type": "array",
+					"items": "string"
+				}
+			}
+		},
+		"events": {
+			"fields": {
+				"title": {
+					"type": "string"
+				},
+				"score": {
+					"type": "number",
+					"indexed": true
+				},
+				"ratings": {
+					"type": "array",
+					"items": "integer"
+				}
+			}
+		}
+	},
+	"presence": {
+		"user": {
+			"cursor": {
+				"type": "object",
+				"fields": {
+					"x": { "type": "number" },
+					"y": { "type": "number" }
+				}
+			},
+			"status": {
+				"type": "string",
+				"enum": ["active", "idle", "away"]
+			},
+			"name": {
+				"type": "string"
+			}
+		},
+		"shared": {
+			"slide": {
+				"type": "integer"
+			},
+			"playing": {
+				"type": "boolean"
+			}
+		}
+	}
+}
