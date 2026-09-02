@@ -269,7 +269,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[] {
-		// ponytail: snapshots stay O(n); add a delta API only if copying profiles hot again.
+		// snapshots stay O(n); add a delta API only if copying profiles hot again.
 		const entries = this.userEntries.slice();
 		if (!options?.includeSelf && this.localUserId) {
 			const selfIndex = this.userIndexes.get(this.localUserId);
