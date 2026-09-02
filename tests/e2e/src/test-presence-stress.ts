@@ -47,8 +47,6 @@ type BarrierPhase = (typeof BARRIER_PHASES)[number];
 type ClientState = {
 	client: ZyncBaseClient;
 	globalId: number;
-	unsubscribeUsers?: () => void;
-	unsubscribeShared?: () => void;
 	userReady: boolean;
 	sharedReady: boolean;
 	userCallbacks: number;
@@ -233,12 +231,12 @@ async function prepareClients(
 			}
 
 			for (const state of context.clients) {
-				state.unsubscribeUsers = state.client.presence.subscribeChanges(() => {
+				state.client.presence.subscribeChanges(() => {
 					state.userCallbacks++;
 					state.userReady = true;
 					context.generation++;
 				});
-				state.unsubscribeShared = state.client.presence.subscribeShared(() => {
+				state.client.presence.subscribeShared(() => {
 					state.sharedCallbacks++;
 					state.sharedReady = true;
 					context.generation++;
@@ -539,10 +537,6 @@ function markMovers(context: ProcessContext, expectedY: Int32Array) {
 }
 
 async function cleanupClients(clients: ClientState[]) {
-	for (const state of clients) {
-		state.unsubscribeUsers?.();
-		state.unsubscribeShared?.();
-	}
 	for (const state of clients) {
 		state.expectedDisconnect = true;
 		state.client.disconnect();
