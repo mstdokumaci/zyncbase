@@ -14,6 +14,7 @@ import {
 	withServer,
 } from "./harness";
 import { run as runBatch } from "./test-batch";
+import { run as runComboStress } from "./test-combo-stress";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
@@ -111,7 +112,7 @@ describe("ZyncBase E2E", () => {
 		});
 	});
 
-	test("presence: 2,000 clients across two rooms stay consistent under fan-out and churn", async () => {
+	test("presence: 2,000 clients across two rooms stay consistent", async () => {
 		await runE2ETest("Presence stress", async (ctx) => {
 			await withServer(
 				ctx,
@@ -124,6 +125,24 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
+				},
+			);
+		});
+	});
+
+	test("combo stress: 10k clients with filtered store + presence across 4 processes", async () => {
+		await runE2ETest("Combo stress", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-combo-stress.json"),
+					dataDir: ctx.dataPath("combo-stress"),
+					configName: "zyncbase-config-combo-stress.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+				},
+				async ({ port }) => {
+					await runComboStress(port, PRESENCE_E2E_JWT_SECRET);
 				},
 			);
 		});
