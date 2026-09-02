@@ -343,7 +343,7 @@ pub const MigrationExecutor = struct {
         );
         try self.execSingleStatement("DELETE FROM schema_meta");
 
-        const now = std.Io.Clock.real.now(self.io).toSeconds();
+        const now = std.Io.Clock.real.now(self.io).toMilliseconds();
         const insert_sql = try std.fmt.allocPrint(
             self.allocator,
             "INSERT INTO schema_meta (version, applied_at) VALUES ('{s}', {d})",
