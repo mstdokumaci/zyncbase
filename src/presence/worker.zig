@@ -342,6 +342,14 @@ pub const PresenceWorker = struct {
         batches.deinit(allocator);
     }
 
+    inline fn encodedUintSize(v: u64) usize {
+        if (v <= 0x7F) return 1;
+        if (v <= 0xFF) return 2;
+        if (v <= 0xFFFF) return 3;
+        if (v <= 0xFFFFFFFF) return 5;
+        return 9;
+    }
+
     pub fn dispatchBatches(
         self: *PresenceWorker,
         batches: anytype,
@@ -358,8 +366,6 @@ pub const PresenceWorker = struct {
         defer handle.release();
 
         const alloc = handle.allocator();
-        var out = std.Io.Writer.Allocating.init(alloc);
-        defer out.deinit();
 
         for (batches) |batch| {
             if (batch.subscribers.items.len == 0) continue;
@@ -389,30 +395,26 @@ pub const PresenceWorker = struct {
                     last_msg = cached;
                     break :blk cached;
                 } else blk: {
-                    out.clearRetainingCapacity();
-                    const writer = &out.writer;
-
-                    writer.writeAll(header) catch |err| {
+                    const total = header.len + encodedUintSize(subscriber.sub_id) + suffix.len;
+                    const buf = alloc.alloc(u8, total) catch |err| {
+                        std.log.err("PresenceWorker alloc {s} broadcast failed: {}", .{ log_label, err });
+                        continue;
+                    };
+                    var fixed: std.Io.Writer = .fixed(buf);
+                    fixed.writeAll(header) catch |err| {
                         std.log.err("PresenceWorker write {s} broadcast header failed: {}", .{ log_label, err });
                         continue;
                     };
-
-                    msgpack.encode(msgpack.Payload.uintToPayload(subscriber.sub_id), writer) catch |err| {
+                    msgpack.encode(msgpack.Payload.uintToPayload(subscriber.sub_id), &fixed) catch |err| {
                         std.log.err("PresenceWorker encode {s} broadcast subId {} failed: {}", .{ log_label, subscriber.sub_id, err });
                         continue;
                     };
-
-                    writer.writeAll(suffix) catch |err| {
+                    fixed.writeAll(suffix) catch |err| {
                         std.log.err("PresenceWorker append {s} broadcast suffix failed: {}", .{ log_label, err });
                         continue;
                     };
-
-                    // Duplicate before reusing the scratch writer; queueing the
-                    // scratch slice directly would alias later recipients.
-                    const msg = alloc.dupe(u8, out.written()) catch |err| {
-                        std.log.err("PresenceWorker dupe {s} broadcast failed: {}", .{ log_label, err });
-                        continue;
-                    };
+                    std.debug.assert(fixed.end == total);
+                    const msg: []const u8 = buf[0..fixed.end];
 
                     message_cache.put(alloc, subscriber.sub_id, msg) catch |err| {
                         std.log.warn("PresenceWorker failed to cache {s} broadcast: {}", .{ log_label, err });
