@@ -111,7 +111,7 @@ describe("ZyncBase E2E", () => {
 		});
 	});
 
-	test("presence: 2,000 clients stay consistent under fan-out and churn", async () => {
+	test("presence: 2,000 clients across two rooms stay consistent under fan-out and churn", async () => {
 		await runE2ETest("Presence stress", async (ctx) => {
 			await withServer(
 				ctx,
