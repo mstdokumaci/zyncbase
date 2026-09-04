@@ -46,20 +46,11 @@ jobs:
             "--prefix" "release-out"
             "--summary" "all"
           )
-          
+
           if [[ "${{ matrix.target }}" == "x86_64"* ]]; then
             ZIG_FLAGS+=("-Dcpu=x86_64_v2")
           fi
-          
-          if [[ "${{ matrix.target }}" == *"macos"* ]]; then
-            MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
-            if [ -n "$MACOS_SDK" ]; then
-              ZIG_FLAGS+=("--sysroot" "$MACOS_SDK")
-              ZIG_FLAGS+=("-Dsysroot=$MACOS_SDK")
-              export SDKROOT="$MACOS_SDK"
-            fi
-          fi
-          
+
           zig "${ZIG_FLAGS[@]}"
 
       - name: Package Release
