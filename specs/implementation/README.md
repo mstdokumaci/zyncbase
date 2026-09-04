@@ -37,7 +37,6 @@ Canonical catalogs:
 - Every implementation spec should name the source files/types it describes. A code change that renames, removes, or changes one of those types should update the matching doc in the same change.
 - Public contracts should be documented as tables or bullets. Use code fences only for stable external examples such as JSON config, wire payload examples, SQL shape, or command lines.
 - Public error codes must be added to `src/wire/errors.zig`, `sdk/typescript/src/errors.ts`, and [Error Taxonomy](./error-taxonomy.md) together.
-- After editing Markdown under `specs/`, run `npm run specs:compress` so `specs_llm/` stays aligned.
 
 ## Cross-Cutting Ownership
 

@@ -9,7 +9,6 @@ Important: Project is still in early development stage. Give no consideration to
 - **Database:** SQLite (integrated with WAL mode)
 - **Networking:** uWebSockets, OpenSSL
 - **Serialization:** MessagePack (`zig-msgpack`)
-- **Infrastructure:** Python (for spec compression)
 
 ## Codebase Structure
 - `src/`: Core Zig source code.
@@ -19,8 +18,7 @@ Important: Project is still in early development stage. Give no consideration to
     - `message_handler.zig`: Protocol and message processing logic.
     - `uwebsockets_wrapper.zig`: Integration with the uWebSockets C library.
 - `tests/`: End-to-end and integration tests.
-- `specs/`: Human-readable architectural and implementation specifications.
-- `specs_llm/`: Compressed/TXT versions of specs used as the source of truth for architectural decisions.
+- `specs/`: Architectural and implementation specifications — source of truth for design decisions.
 - `vendor/`: Third-party dependencies (uWebSockets, µSockets).
 - `scripts/`: Build, patch, and utility scripts.
 - `patches/`: Custom patches applied to vendor code.
@@ -29,8 +27,7 @@ Important: Project is still in early development stage. Give no consideration to
 # Code Style and Conventions
 
 ## Architectural Source of Truth
-- The `specs_llm/` directory contains the authoritative architectural design decisions and implementation specs.
-- When updating design, modify the Markdown files in `specs/`, then run `npm run specs:compress` to update `specs_llm/`.
+- The `specs/` directory contains the authoritative architectural design decisions and implementation specs.
 
 ## Zig Coding Style
 - Follow standard Zig conventions (CamelCase for types, snake_case for functions and variables).
@@ -58,9 +55,6 @@ Important: Project is still in early development stage. Give no consideration to
 - **Thread Safety:** `bun run test:tsan` (Run after every set of zig code changes to ensure thread safety is still ensured)
 - **Safe Mode:** `bun run test:safe` (Run after every set of zig code changes to ensure memory safety is still ensured)
 - **SDK Tests:** `bun test sdk`
-
-## Maintenance & Setup
-- **Compress Specs:** `npm run specs:compress` (Syncs `specs/` to `specs_llm/`)
 
 ## Linting
 - **Run Linter:** `bun run lint`
