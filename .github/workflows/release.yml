@@ -19,7 +19,7 @@ jobs:
             os: macos-latest
             suffix: macos-aarch64
           - target: x86_64-macos
-            os: macos-latest
+            os: macos-15-intel
             suffix: macos-x86_64
           - target: aarch64-linux-gnu
             os: ubuntu-24.04-arm
@@ -36,42 +36,6 @@ jobs:
       - name: Setup project
         uses: ./.github/actions/setup-project
 
-      - name: Install macOS OpenSSL for cross
-        if: matrix.target == 'x86_64-macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f /usr/local/opt/openssl/lib/libssl.dylib ]; then
-            echo "x86_64 openssl already present at /usr/local/opt/openssl"
-            exit 0
-          fi
-          if [ -f /usr/local/Cellar/openssl@3/3.6.3/lib/libssl.dylib ]; then
-            echo "x86_64 openssl already present at Cellar"
-            mkdir -p /usr/local/opt
-            ln -sf /usr/local/Cellar/openssl@3/3.6.3 /usr/local/opt/openssl 2>/dev/null || true
-            ln -sf /usr/local/Cellar/openssl@3/3.6.3 /usr/local/opt/openssl@3 2>/dev/null || true
-            exit 0
-          fi
-          echo "Installing Intel Homebrew + x86_64 openssl for cross (bottle only)"
-          if [ ! -x /usr/local/bin/brew ]; then
-            echo "Installing Intel brew at /usr/local"
-            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          fi
-          # Prefer bottle, avoid source build under Rosetta which crashes (perl Configure linker)
-          arch -x86_64 /usr/local/bin/brew update || true
-          if ! arch -x86_64 /usr/local/bin/brew fetch --force-bottle openssl@3 2>&1 | tail -n 20; then
-            echo "No bottle for x86_64 openssl, trying install --force-bottle"
-          fi
-          if ! arch -x86_64 /usr/local/bin/brew install --force-bottle openssl@3 2>&1 | tail -n 30; then
-            echo "force-bottle failed, try reinstall"
-            arch -x86_64 /usr/local/bin/brew reinstall --force-bottle openssl@3 2>&1 | tail -n 30 || \
-              arch -x86_64 /usr/local/bin/brew install openssl@3 2>&1 | tail -n 30
-          fi
-          ls -l /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
-          file /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
-          # Fallback check Cellar versioned path
-          ls -l /usr/local/Cellar/openssl@3/*/lib/libssl.dylib 2>&1 | head
-
       - name: Build ZyncBase
         shell: bash
         run: |
@@ -81,15 +45,6 @@ jobs:
             "--prefix" "release-out"
             "--summary" "all"
           )
-
-          # Only cross-compile when host arch != target arch (like CI: no -Dtarget for native)
-          HOST_ARCH=$(uname -m)
-          if [[ "$HOST_ARCH" == "arm64" ]]; then HOST_ARCH="aarch64"; fi
-          TARGET_ARCH="${{ matrix.target }}"
-          TARGET_ARCH="${TARGET_ARCH%%-*}"
-          if [[ "$HOST_ARCH" != "$TARGET_ARCH" ]]; then
-            ZIG_FLAGS+=("-Dtarget=${{ matrix.target }}")
-          fi
 
           if [[ "${{ matrix.target }}" == "x86_64"* ]]; then
             ZIG_FLAGS+=("-Dcpu=x86_64_v2")
@@ -111,7 +66,7 @@ jobs:
           mkdir -p dist
           cp release-out/bin/zyncbase dist/zyncbase-${{ matrix.suffix }}
           cd dist
-          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+          if [[ "${{ matrix.target }}" == *"macos"* ]]; then
             zip zyncbase-${{ matrix.suffix }}.zip zyncbase-${{ matrix.suffix }}
           else
             tar -czf zyncbase-${{ matrix.suffix }}.tar.gz zyncbase-${{ matrix.suffix }}
