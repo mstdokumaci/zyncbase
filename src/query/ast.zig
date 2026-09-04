@@ -152,11 +152,11 @@ pub fn operatorExpectsValueShape(
             else => return error.UnsupportedOperatorForFieldType,
         },
         .in, .notIn => {
-            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+            if (field_type == .array or field_type == .bytes) return error.UnsupportedOperatorForFieldType;
             return .array_membership;
         },
         .gt, .gte, .lt, .lte => {
-            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+            if (field_type == .array or field_type == .bytes) return error.UnsupportedOperatorForFieldType;
             return .scalar;
         },
         .eq, .ne => {

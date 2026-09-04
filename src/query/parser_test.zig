@@ -784,6 +784,80 @@ test "sort rejects: empty array, duplicates, ninth clause, unknown field, array 
     }
 }
 
+test "bytes field query conditions and ordering" {
+    const allocator = std.testing.allocator;
+
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "blobs",
+        .fields = &[_][]const u8{ "raw", "tag" },
+        .types = &[_]schema_types.FieldType{ .bytes, .text },
+    }});
+    defer schema.deinit();
+
+    const tbl = schema.table("blobs") orelse return error.TestExpectedValue;
+    const raw_index = tbl.fieldIndex("raw") orelse return error.UnknownField;
+
+    // 1. OrderBy rejects bytes field
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try putOrderBy(allocator, &root, &.{.{ raw_index, 0 }});
+        try testing.expectError(error.UnsupportedSortFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // 2. eq / ne / isNull / isNotNull with bytes succeed
+    {
+        const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+            .conditions = .{
+                .{ "raw", 0, "test_bytes" }, // eq
+                .{ "raw", 1, "other_bytes" }, // ne
+                .{ "raw", 11 }, // isNull
+                .{ "raw", 12 }, // isNotNull
+            },
+        });
+        defer root.free(allocator);
+
+        var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+        defer filter.deinit(allocator);
+
+        const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
+        try testing.expectEqual(@as(usize, 4), conds.len);
+        try testing.expectEqualStrings("test_bytes", conds[0].value.?.scalar.binary);
+        try testing.expectEqualStrings("other_bytes", conds[1].value.?.scalar.binary);
+        try testing.expect(conds[2].value == null);
+        try testing.expect(conds[3].value == null);
+    }
+
+    // 3. gt / gte / lt / lte on bytes field are rejected
+    {
+        const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+            .conditions = .{
+                .{ "raw", 2, "test_bytes" }, // gt
+            },
+        });
+        defer root.free(allocator);
+
+        try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+
+    // 4. in condition on bytes field is rejected
+    {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        var cond = try allocator.alloc(msgpack.Payload, 3);
+        cond[0] = msgpack.Payload.uintToPayload(raw_index);
+        cond[1] = msgpack.Payload.uintToPayload(9); // in
+        var in_arr = try allocator.alloc(msgpack.Payload, 1);
+        in_arr[0] = try msgpack.Payload.binToPayload("item", allocator);
+        cond[2] = msgpack.Payload{ .arr = in_arr };
+        var conds = try allocator.alloc(msgpack.Payload, 1);
+        conds[0] = msgpack.Payload{ .arr = cond };
+        try root.mapPut("conditions", msgpack.Payload{ .arr = conds });
+
+        try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+    }
+}
+
 test "cursor round-trip with mixed text, integer, null, reference values" {
     const allocator = std.testing.allocator;
 
@@ -1103,6 +1177,11 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
             errdefer allocator.free(arr);
             arr[0] = try msgpack.Payload.strToPayload("v", allocator);
             break :blk .{ .arr = arr };
+        },
+        .bytes => blk: {
+            var bytes = [_]u8{0} ** 8;
+            for (&bytes) |*byte| byte.* = random.int(u8);
+            break :blk try msgpack.Payload.binToPayload(&bytes, allocator);
         },
     };
 }

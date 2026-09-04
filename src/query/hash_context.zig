@@ -26,6 +26,7 @@ pub fn hashScalarValue(hasher: *std.hash.Wyhash, s: ScalarValue) void {
         .integer => |i| std.hash.autoHash(hasher, i),
         .real => |r| std.hash.autoHash(hasher, @as(u64, @bitCast(if (r == 0.0) 0.0 else r))),
         .boolean => |b| std.hash.autoHash(hasher, b),
+        .binary => |b| hasher.update(b),
     }
 }
 

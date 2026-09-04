@@ -335,6 +335,7 @@ fn encodeFieldFlagsArray(writer: anytype, schema: *const schema_types.Schema, ta
             if (field.isSystem()) flags |= 0b01;
             if (field.storage_type == .doc_id) flags |= 0b10;
             if (field.required) flags |= 0b100;
+            if (field.storage_type == .bytes) flags |= 0b1000;
             try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
     }

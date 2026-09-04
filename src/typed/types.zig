@@ -39,10 +39,12 @@ pub const ScalarValue = union(enum) {
     real: f64,
     text: []const u8, // Owned
     boolean: bool,
+    binary: []const u8, // Owned
 
     pub fn clone(self: ScalarValue, allocator: Allocator) !ScalarValue {
         return switch (self) {
             .text => |s| .{ .text = try allocator.dupe(u8, s) },
+            .binary => |b| .{ .binary = try allocator.dupe(u8, b) },
             else => self,
         };
     }
@@ -50,6 +52,7 @@ pub const ScalarValue = union(enum) {
     pub fn deinit(self: ScalarValue, allocator: Allocator) void {
         switch (self) {
             .text => |s| allocator.free(s),
+            .binary => |b| allocator.free(b),
             else => {},
         }
     }
@@ -68,6 +71,7 @@ pub const ScalarValue = union(enum) {
             .real => std.math.order(self.real, other.real),
             .text => std.mem.order(u8, self.text, other.text),
             .boolean => std.math.order(@intFromBool(self.boolean), @intFromBool(other.boolean)),
+            .binary => std.mem.order(u8, self.binary, other.binary),
         };
     }
 };

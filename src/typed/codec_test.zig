@@ -135,6 +135,14 @@ test "writeJsonToBuf: scalars and nil" {
         try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .real = 100.0 } });
         try testing.expectEqualStrings("100.0", buf.items);
     }
+
+    // binary
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try typed.writeJsonToBuf(&buf, allocator, .{ .scalar = .{ .binary = "\x01\x23\xab\xcd" } });
+        try testing.expectEqualStrings("\"0123abcd\"", buf.items);
+    }
 }
 
 test "writeJsonToBuf: buffer reuse retains capacity" {
@@ -545,4 +553,29 @@ test "Value: array dedup" {
     try testing.expect(tv == .array);
     try testing.expectEqual(@as(usize, 1), tv.array.len);
     try testing.expectEqual(@as(i64, 5), tv.array[0].integer);
+}
+
+test "fromPayload and writeMsgPack: bytes field" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const raw_data = "\xde\xad\xbe\xef\x00\x01\x02\x03";
+    const bin_payload = try msgpack.Payload.binToPayload(raw_data, allocator);
+
+    const val = try typed.fromPayload(allocator, .bytes, null, bin_payload);
+    try testing.expect(val == .scalar);
+    try testing.expect(val.scalar == .binary);
+    try testing.expectEqualStrings(raw_data, val.scalar.binary);
+
+    // Roundtrip back to msgpack
+    var out_list = std.Io.Writer.Allocating.init(allocator);
+    defer out_list.deinit();
+    try typed.writeMsgPack(val, &out_list.writer);
+    const encoded = out_list.written();
+
+    var reader: std.Io.Reader = .fixed(encoded);
+    const decoded_payload = try msgpack.decode(allocator, &reader);
+    try testing.expect(decoded_payload == .bin);
+    try testing.expectEqualStrings(raw_data, decoded_payload.bin.value());
 }

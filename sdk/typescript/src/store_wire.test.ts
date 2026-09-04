@@ -290,6 +290,24 @@ describe("store_wire", () => {
 			});
 		});
 
+		test("where with Uint8Array value and eq/ne operators", () => {
+			const bytes = new Uint8Array([1, 2, 3]);
+			const direct = encodeQueryOptions({ where: { data: bytes } });
+			expect(direct).toEqual({
+				conditions: [["data", 0, bytes]],
+			});
+
+			const eq = encodeQueryOptions({ where: { data: { eq: bytes } } });
+			expect(eq).toEqual({
+				conditions: [["data", 0, bytes]],
+			});
+
+			const ne = encodeQueryOptions({ where: { data: { ne: bytes } } });
+			expect(ne).toEqual({
+				conditions: [["data", 1, bytes]],
+			});
+		});
+
 		test("where with contains operator", () => {
 			const result = encodeQueryOptions({
 				where: { name: { contains: "Alice" } },

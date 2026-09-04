@@ -9,6 +9,7 @@ export type JsonValue =
 	| number
 	| boolean
 	| null
+	| Uint8Array
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 

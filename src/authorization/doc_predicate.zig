@@ -444,6 +444,7 @@ fn validateScalarType(field_type: schema_types.FieldType, scalar: typed.ScalarVa
         .real => if (scalar != .real) return error.InvalidValue,
         .boolean => if (scalar != .boolean) return error.InvalidValue,
         .doc_id => if (scalar != .doc_id) return error.InvalidValue,
+        .bytes => if (scalar != .binary) return error.InvalidValue,
         .array => return error.InvalidValue,
     }
 }

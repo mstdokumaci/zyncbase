@@ -118,7 +118,19 @@ pub fn validate(
         .text => try validateTextConstraints(constraints, value, allocator),
         .integer => try validateIntegerRange(constraints, value),
         .real => try validateRealRange(constraints, value),
+        .bytes => try validateBinaryConstraints(constraints, value),
         else => {},
+    }
+}
+
+inline fn validateBinaryConstraints(constraints: types.Constraints, value: msgpack.Payload) !void {
+    if (value != .bin) return error.TypeMismatch;
+    const bytes = value.bin.value();
+    if (constraints.min_length) |min_l| {
+        if (bytes.len < min_l) return error.LengthViolation;
+    }
+    if (constraints.max_length) |max_l| {
+        if (bytes.len > max_l) return error.LengthViolation;
     }
 }
 

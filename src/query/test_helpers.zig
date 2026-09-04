@@ -211,5 +211,15 @@ fn anyToFieldPayload(allocator: std.mem.Allocator, field_type: FieldType, value:
             else => {},
         }
     }
+    if (field_type == .bytes) {
+        switch (@typeInfo(@TypeOf(value))) {
+            .pointer => |ptr| {
+                if (ptr.child == u8 or (@typeInfo(ptr.child) == .array and @typeInfo(ptr.child).array.child == u8)) {
+                    return Payload.binToPayload(value, allocator);
+                }
+            },
+            else => {},
+        }
+    }
     return mth.anyToPayload(allocator, value);
 }
