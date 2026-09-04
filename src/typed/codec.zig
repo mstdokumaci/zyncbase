@@ -214,6 +214,17 @@ fn scalarFromJson(allocator: Allocator, ft: schema_types.FieldType, value: std.j
             .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
             else => error.TypeMismatch,
         },
+        .bytes => switch (value) {
+            .string => |s| {
+                if (s.len % 2 != 0) return error.TypeMismatch;
+                const byte_len = s.len / 2;
+                const buf = try allocator.alloc(u8, byte_len);
+                errdefer allocator.free(buf);
+                _ = std.fmt.hexToBytes(buf, s) catch return error.TypeMismatch;
+                return ScalarValue{ .binary = buf };
+            },
+            else => error.TypeMismatch,
+        },
         .integer => ScalarValue{ .integer = try jsonAsInt(value) },
         .real => ScalarValue{ .real = try jsonAsFloat(value) },
         .boolean => ScalarValue{ .boolean = try jsonAsBool(value) },

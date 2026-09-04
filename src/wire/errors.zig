@@ -29,7 +29,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "EnumViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value not in allowed enum values") },
     .{ "PatternViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value does not match required pattern") },
     .{ "FormatViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value does not match required format") },
-    .{ "LengthViolation", wireError("SCHEMA_VALIDATION_FAILED", "String length outside allowed range") },
+    .{ "LengthViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value length outside allowed range") },
     .{ "RangeViolation", wireError("SCHEMA_VALIDATION_FAILED", "Numeric value outside allowed range") },
     .{ "InvalidArrayElement", wireError("INVALID_ARRAY_ELEMENT", "Array field contains non-literal value") },
     .{ "InvalidFieldName", wireError("INVALID_FIELD_NAME", "Field name contains forbidden characters") },

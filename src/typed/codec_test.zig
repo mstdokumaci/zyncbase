@@ -254,6 +254,63 @@ test "Value: payload -> json array -> payload roundtrip" {
         const expected_bytes = doc_id.toBytes(original_id);
         try testing.expectEqualSlices(u8, &expected_bytes, result.bin.value());
     }
+
+    // 6. bytes scalar — stringified as hex and parsed back
+    {
+        const raw_bytes = "\x00\x01\x02\xfe\xff\x42";
+        const tv = Value{ .scalar = .{ .binary = raw_bytes } };
+        const result = try roundtripJsonValue(allocator, .bytes, null, tv);
+
+        try testing.expect(result == .bin);
+        try testing.expectEqualStrings(raw_bytes, result.bin.value());
+    }
+}
+
+test "fromJson: bytes validation and hex decoding" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Valid hex decode
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "\"000102feff42\"", .{});
+        defer parsed.deinit();
+        const v = try typed.fromJson(allocator, .bytes, null, parsed.value);
+        try testing.expect(v == .scalar);
+        try testing.expect(v.scalar == .binary);
+        try testing.expectEqualStrings("\x00\x01\x02\xfe\xff\x42", v.scalar.binary);
+    }
+
+    // Empty hex decode
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "\"\"", .{});
+        defer parsed.deinit();
+        const v = try typed.fromJson(allocator, .bytes, null, parsed.value);
+        try testing.expect(v == .scalar);
+        try testing.expect(v.scalar == .binary);
+        try testing.expectEqualStrings("", v.scalar.binary);
+    }
+
+    // Odd-length hex string -> TypeMismatch
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "\"abc\"", .{});
+        defer parsed.deinit();
+        try testing.expectError(error.TypeMismatch, typed.fromJson(allocator, .bytes, null, parsed.value));
+    }
+
+    // Invalid hex chars -> TypeMismatch
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "\"zzzz\"", .{});
+        defer parsed.deinit();
+        try testing.expectError(error.TypeMismatch, typed.fromJson(allocator, .bytes, null, parsed.value));
+    }
+
+    // Non-string JSON value -> TypeMismatch
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "1234", .{});
+        defer parsed.deinit();
+        try testing.expectError(error.TypeMismatch, typed.fromJson(allocator, .bytes, null, parsed.value));
+    }
 }
 
 test "validateValue: exhaustive type matrix" {

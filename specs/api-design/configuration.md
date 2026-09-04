@@ -885,6 +885,14 @@ await zyncbase.remove(projects.proj-1')
 }
 ```
 
+**Use `bytes` for raw binary data:**
+```json
+{
+  "avatar": { "type": "bytes", "maxLength": 65536 }
+}
+```
+*Note: `bytes` fields store binary data as SQLite `BLOB` and map to `Uint8Array` in the TypeScript SDK. Constraints `minLength` and `maxLength` enforce byte length. `bytes` cannot be indexed (`indexed: true`), cannot be part of `unique` constraints, cannot be used inside `array` items, and cannot be used in `presence` schemas.*
+
 ---
 
 ## Schema Migrations

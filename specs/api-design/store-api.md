@@ -57,6 +57,7 @@ Write a value or upsert a document.
 **Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
 **Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required.
 **Typed Arrays**: For schema fields with `type: "array"`, values are normalized to canonical sorted unique form before persistence and returned in canonical form on reads.
+**Binary Data**: For schema fields with `type: "bytes"`, values are provided and returned as `Uint8Array` in TypeScript, serialized as MessagePack `bin` on the wire, and stored as `BLOB` in SQLite.
 
 ```typescript
 // Upsert a full document. ID is extracted from path if needed.
@@ -64,6 +65,9 @@ await client.store.set('users.u1', { name: 'Alice', status: 'active' })
 
 // Update a specific field
 await client.store.set('users.u1.status', 'offline')
+
+// Write binary data
+await client.store.set('files.f1', { data: new Uint8Array([1, 2, 3, 4]) })
 
 // Clear an optional field (instead of remove)
 await client.store.set('users.u1.address', null)
