@@ -41,14 +41,24 @@ jobs:
         run: |
           ZIG_FLAGS=(
             "build"
-            "-Dtarget=${{ matrix.target }}"
             "-Doptimize=ReleaseFast"
             "--prefix" "release-out"
             "--summary" "all"
           )
 
+          # Only cross-compile when host arch != target arch (like CI: no -Dtarget for native)
+          HOST_ARCH=$(uname -m)
+          if [[ "$HOST_ARCH" == "arm64" ]]; then HOST_ARCH="aarch64"; fi
+          TARGET_ARCH="${{ matrix.target }}"
+          TARGET_ARCH="${TARGET_ARCH%%-*}"
+          if [[ "$HOST_ARCH" != "$TARGET_ARCH" ]]; then
+            ZIG_FLAGS+=("-Dtarget=${{ matrix.target }}")
+          fi
+
           if [[ "${{ matrix.target }}" == "x86_64"* ]]; then
             ZIG_FLAGS+=("-Dcpu=x86_64_v2")
+          elif [[ "${{ matrix.target }}" == "aarch64"* ]]; then
+            ZIG_FLAGS+=("-Dcpu=baseline")
           fi
 
           if [[ "${{ matrix.target }}" == *"macos"* ]]; then

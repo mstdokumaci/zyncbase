@@ -153,6 +153,8 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     if (target.os.tag == .macos) {
         step.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
         step.root_module.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
+        step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
+        step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
     }
     step.root_module.linkSystemLibrary("ssl", .{});
     step.root_module.linkSystemLibrary("crypto", .{});
