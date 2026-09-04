@@ -22,7 +22,7 @@ jobs:
             os: macos-latest
             suffix: macos-x86_64
           - target: aarch64-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             suffix: linux-aarch64
           - target: x86_64-linux-gnu
             os: ubuntu-latest
@@ -49,6 +49,12 @@ jobs:
 
           if [[ "${{ matrix.target }}" == "x86_64"* ]]; then
             ZIG_FLAGS+=("-Dcpu=x86_64_v2")
+          fi
+
+          if [[ "${{ matrix.target }}" == *"macos"* ]]; then
+            if SDK=$(xcrun --show-sdk-path 2>/dev/null); then
+              ZIG_FLAGS+=("-Dsysroot=$SDK")
+            fi
           fi
 
           zig "${ZIG_FLAGS[@]}"

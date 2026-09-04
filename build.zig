@@ -10,11 +10,9 @@ pub fn build(b: *std.Build) void {
         "sanitize",
         "Enable sanitizer: address, leak, or thread",
     );
-    // Sysroot option for cross-compiling (especially macOS frameworks)
+    // Sysroot for macOS frameworks tbd path only — not b.sysroot (which
+    // would remap Homebrew -L/opt/... under SDK and break ssl/crypto).
     const sysroot = b.option([]const u8, "sysroot", "Path to sysroot");
-    if (sysroot) |s| {
-        b.sysroot = s;
-    }
 
     // Add SQLite dependency
     const sqlite_dep = b.dependency("sqlite", .{
