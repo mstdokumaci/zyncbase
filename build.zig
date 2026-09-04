@@ -149,12 +149,18 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.root_module.addIncludePath(b.path("vendor/usockets"));
     step.root_module.addIncludePath(b.path("src"));
 
-    // System OpenSSL
+    // System OpenSSL — arch-gated lib path (headers are arch-agnostic)
     if (target.os.tag == .macos) {
         step.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
         step.root_module.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
-        step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
-        step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
+        if (target.cpu.arch == .aarch64) {
+            step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
+        } else if (target.cpu.arch == .x86_64) {
+            step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
+        } else {
+            step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
+            step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
+        }
     }
     step.root_module.linkSystemLibrary("ssl", .{});
     step.root_module.linkSystemLibrary("crypto", .{});
