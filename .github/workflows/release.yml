@@ -41,18 +41,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f /usr/local/opt/openssl/lib/libssl.dylib ] || [ -f /usr/local/Cellar/openssl@3/3.6.3/lib/libssl.dylib ]; then
-            echo "x86_64 openssl already present"
+          if [ -f /usr/local/opt/openssl/lib/libssl.dylib ]; then
+            echo "x86_64 openssl already present at /usr/local/opt/openssl"
             exit 0
           fi
-          echo "Installing x86_64 openssl for cross"
-          if [ -x /usr/local/bin/brew ]; then
-            arch -x86_64 /usr/local/bin/brew install openssl@3 || brew install openssl@3
-          else
-            # Fallback: ARM brew can still fetch x86_64 bottle via arch
-            arch -x86_64 brew install openssl@3 || brew install openssl@3
+          if [ -f /usr/local/Cellar/openssl@3/3.6.3/lib/libssl.dylib ]; then
+            echo "x86_64 openssl already present at Cellar"
+            mkdir -p /usr/local/opt
+            ln -sf /usr/local/Cellar/openssl@3/3.6.3 /usr/local/opt/openssl 2>/dev/null || true
+            ln -sf /usr/local/Cellar/openssl@3/3.6.3 /usr/local/opt/openssl@3 2>/dev/null || true
+            exit 0
           fi
+          echo "Installing Intel Homebrew + x86_64 openssl for cross"
+          if [ ! -x /usr/local/bin/brew ]; then
+            echo "Installing Intel brew at /usr/local"
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+          arch -x86_64 /usr/local/bin/brew update
+          arch -x86_64 /usr/local/bin/brew install openssl@3
           ls -l /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
+          file /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
 
       - name: Build ZyncBase
         shell: bash
