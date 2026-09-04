@@ -52,15 +52,25 @@ jobs:
             ln -sf /usr/local/Cellar/openssl@3/3.6.3 /usr/local/opt/openssl@3 2>/dev/null || true
             exit 0
           fi
-          echo "Installing Intel Homebrew + x86_64 openssl for cross"
+          echo "Installing Intel Homebrew + x86_64 openssl for cross (bottle only)"
           if [ ! -x /usr/local/bin/brew ]; then
             echo "Installing Intel brew at /usr/local"
             NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           fi
-          arch -x86_64 /usr/local/bin/brew update
-          arch -x86_64 /usr/local/bin/brew install openssl@3
+          # Prefer bottle, avoid source build under Rosetta which crashes (perl Configure linker)
+          arch -x86_64 /usr/local/bin/brew update || true
+          if ! arch -x86_64 /usr/local/bin/brew fetch --force-bottle openssl@3 2>&1 | tail -n 20; then
+            echo "No bottle for x86_64 openssl, trying install --force-bottle"
+          fi
+          if ! arch -x86_64 /usr/local/bin/brew install --force-bottle openssl@3 2>&1 | tail -n 30; then
+            echo "force-bottle failed, try reinstall"
+            arch -x86_64 /usr/local/bin/brew reinstall --force-bottle openssl@3 2>&1 | tail -n 30 || \
+              arch -x86_64 /usr/local/bin/brew install openssl@3 2>&1 | tail -n 30
+          fi
           ls -l /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
           file /usr/local/opt/openssl/lib/libssl.dylib 2>&1 | head
+          # Fallback check Cellar versioned path
+          ls -l /usr/local/Cellar/openssl@3/*/lib/libssl.dylib 2>&1 | head
 
       - name: Build ZyncBase
         shell: bash
