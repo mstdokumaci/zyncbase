@@ -215,6 +215,7 @@ fn validateConstraintApplicability(declared_type: types.FieldType, field_obj: st
     switch (declared_type) {
         .text => if (hasAnyKey(field_obj, &.{ "minimum", "maximum" })) return error.InvalidConstraint,
         .integer, .real => if (hasAnyKey(field_obj, &.{ "pattern", "format", "minLength", "maxLength" })) return error.InvalidConstraint,
+        .bytes => if (hasAnyKey(field_obj, &.{ "pattern", "format", "enum", "minimum", "maximum" })) return error.InvalidConstraint,
         else => return error.InvalidConstraint,
     }
 }
@@ -382,6 +383,7 @@ const StoreFieldContext = struct {
 
         const items_type = try extractArrayItemsType(declared_type, field_def);
         const indexed = (json_read.getBool(field_def.object, "indexed") catch return error.InvalidFieldDefinition) orelse false;
+        if (declared_type == .bytes and indexed) return error.InvalidFieldDefinition;
         const references = try extractReferences(allocator, field_def.object);
         errdefer if (references) |ref| allocator.free(ref);
 
@@ -816,6 +818,7 @@ fn parseUniqueConstraint(
         defer allocator.free(normalized);
 
         const field_index = findDeclaredFieldIndex(declared_fields, normalized) orelse return error.InvalidUniqueConstraint;
+        if (declared_fields[field_index].declared_type == .bytes) return error.InvalidUniqueConstraint;
         if (std.mem.indexOfScalar(usize, indexes[0..component_index], field_index) != null) return error.InvalidUniqueConstraint;
         indexes[component_index] = field_index;
     }
@@ -992,6 +995,7 @@ const primitive_type_kvs = .{
 
 const field_type_map = std.StaticStringMap(types.FieldType).initComptime(primitive_type_kvs ++ .{
     .{ "array", types.FieldType.array },
+    .{ "bytes", types.FieldType.bytes },
 });
 
 const array_item_type_map = std.StaticStringMap(types.FieldType).initComptime(primitive_type_kvs);

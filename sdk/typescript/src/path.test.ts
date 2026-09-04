@@ -119,4 +119,15 @@ describe("flatten / unflatten", () => {
 			cursor: { x: 100 },
 		});
 	});
+
+	test("flatten does not decompose Uint8Array into indexed properties", () => {
+		const bytes = new Uint8Array([1, 2, 3, 4]);
+		const obj = { data: bytes, nested: { payload: bytes } };
+		const flattened = flatten(obj);
+		expect(flattened).toEqual({
+			data: bytes,
+			nested__payload: bytes,
+		});
+		expect(unflatten(flattened)).toEqual(obj);
+	});
 });

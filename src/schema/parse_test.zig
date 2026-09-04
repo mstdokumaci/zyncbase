@@ -740,3 +740,57 @@ test "schema_property: parse cleanup survives allocation failures with unique co
         }
     }
 }
+
+test "schema_parse: bytes field parses with minLength/maxLength, rejects indexed and presence" {
+    const allocator = std.testing.allocator;
+
+    const valid_schema =
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{
+        \\    "files":{
+        \\      "fields":{
+        \\        "data":{"type":"bytes"},
+        \\        "thumb":{"type":"bytes","minLength":10,"maxLength":65536}
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    var parsed = try schema_parse.initFromJson(allocator, valid_schema);
+    defer parsed.deinit();
+
+    const files = parsed.table("files") orelse return error.TestExpectedValue;
+    const data_f = files.field("data") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(schema_types.FieldType.bytes, data_f.declared_type);
+    try std.testing.expectEqual(schema_types.FieldType.bytes, data_f.storage_type);
+    try std.testing.expectEqualStrings("BLOB", data_f.storage_type.toSqlType());
+
+    const thumb_f = files.field("thumb") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(?u64, 10), thumb_f.constraints.?.min_length);
+    try std.testing.expectEqual(@as(?u64, 65536), thumb_f.constraints.?.max_length);
+
+    // Rejects indexed: true on bytes
+    const indexed_bytes_schema =
+        \\{"version":"1.0.0","store":{"files":{"fields":{"data":{"type":"bytes","indexed":true}}}}}
+    ;
+    try std.testing.expectError(error.InvalidFieldDefinition, schema_parse.initFromJson(allocator, indexed_bytes_schema));
+
+    // Rejects presence bytes
+    const presence_bytes_schema =
+        \\{"version":"1.0.0","store":{},"presence":{"user":{"data":{"type":"bytes"}}}}
+    ;
+    try std.testing.expectError(error.UnknownFieldType, schema_parse.initFromJson(allocator, presence_bytes_schema));
+
+    // Rejects table-level unique constraint on bytes
+    const unique_bytes_schema =
+        \\{"version":"1.0.0","store":{"files":{"fields":{"data":{"type":"bytes"}},"unique":[["data"]]}}}
+    ;
+    try std.testing.expectError(error.InvalidUniqueConstraint, schema_parse.initFromJson(allocator, unique_bytes_schema));
+
+    // Rejects disallowed constraints on bytes (pattern, format, enum, minimum, maximum)
+    const pattern_bytes_schema =
+        \\{"version":"1.0.0","store":{"files":{"fields":{"data":{"type":"bytes","pattern":"^[a-z]+$"}}}}}
+    ;
+    try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator, pattern_bytes_schema));
+}

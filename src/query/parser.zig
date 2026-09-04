@@ -561,7 +561,7 @@ fn parseSortDescriptor(
     const field_index = msgpack.extractPayloadUsize(arr[0]) orelse return error.InvalidFieldName;
     if (field_index >= table_metadata.fields.len) return error.UnknownField;
     const field = table_metadata.fields[field_index];
-    if (field.storage_type == .array) return error.UnsupportedSortFieldType;
+    if (field.storage_type == .array or field.storage_type == .bytes) return error.UnsupportedSortFieldType;
 
     const desc = try parseSortDirection(arr[1]);
 

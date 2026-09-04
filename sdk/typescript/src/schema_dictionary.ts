@@ -411,6 +411,10 @@ export class SchemaDictionary {
 		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
 	}
 
+	isBytesField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b1000) !== 0;
+	}
+
 	isRequiredField(tableIndex: number, fieldIndex: number): boolean {
 		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b100) !== 0;
 	}

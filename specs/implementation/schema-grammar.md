@@ -62,14 +62,14 @@ Schema configuration is rooted, not a bare table map:
 
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
-| `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `array`, `object`. |
-| `indexed` | `boolean` | `false` | Creates a database index for this column. Reference fields are indexed regardless of this setting. |
+| `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `bytes`, `array`, `object`. |
+| `indexed` | `boolean` | `false` | Creates a database index for this column. Prohibited on `bytes` fields (`error.InvalidFieldDefinition`). Reference fields are indexed regardless of this setting. |
 | `references` | `string` | `null` | Target table name for an immediately enforced foreign key to that table's `id`. Stored as `BLOB(16)` internally. |
 | `onDelete` | `string` | `"restrict"` | Enforced delete rule: `set_null`, `cascade`, or `restrict`. `set_null` is invalid for required fields. |
-| `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). |
+| `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). Cannot be `bytes` or `array`. |
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
 | `metadata` | `object` | `null` | Preserved field metadata for tooling and generated clients. |
-| `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum` | mixed | `null` | Accepted as reserved validation keywords by the parser, but not represented in runtime `Field` state or enforced on writes. |
+| `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum` | mixed | `null` | Validation constraints. `minLength` and `maxLength` apply to `string` (codepoint count) and `bytes` (byte count). Incompatible constraints are rejected at parse time. |
 
 ### Unique Constraint Validation Rules
 
@@ -81,7 +81,7 @@ Schema configuration is rooted, not a bare table map:
 - A field may not repeat within one constraint.
 - The same field set may not appear in two constraints, even in a different order.
 - Field order within a constraint is preserved because it controls SQLite index prefix usability.
-- Constraints are allowed on optional, reference, and array fields. There is no field-level `"unique": true` alias.
+- Constraints are allowed on optional, reference, and array fields. `bytes` fields are prohibited (`error.InvalidUniqueConstraint`). There is no field-level `"unique": true` alias.
 - Malformed definitions fail schema startup with an internal error; no wire code is involved.
 
 ### Unique Equality Semantics
@@ -98,6 +98,7 @@ Equality is SQLite equality over the stored column representation: text stays ca
 | `integer` | `INTEGER` | Flat column | 64-bit signed integer value. |
 | `number` | `REAL` | Flat column | 64-bit floating point value. |
 | `boolean` | `INTEGER` | Flat column | Boolean value (stored as 0 or 1). |
+| `bytes` | `BLOB` | Flat column | Raw binary data (MessagePack `bin`, `Uint8Array`). Constraints `minLength`/`maxLength` apply to byte count. Cannot be indexed or used in unique constraints. Store-only (prohibited in presence). |
 | `array` | `BLOB` | Flat column | Persistent canonical sorted-set representation. |
 | `object` | (None) | Flat columns | Parser-only container. Nested leaves are flattened using `__` separator. |
 

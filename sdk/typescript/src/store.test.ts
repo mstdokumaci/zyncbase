@@ -577,5 +577,21 @@ describe("StoreImpl", () => {
 			expect(id).toBeDefined();
 			expect(messages).toHaveLength(1);
 		});
+
+		test("set preserves Uint8Array payload without flattening", async () => {
+			const { store, messages } = makeStore();
+			const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+
+			await store.set("files.f1", { data: bytes, nested: { blob: bytes } });
+			expect(messages).toHaveLength(1);
+			expect(messages[0]).toMatchObject({
+				type: "StoreSet",
+				path: ["files", "f1"],
+				value: {
+					data: bytes,
+					nested__blob: bytes,
+				},
+			});
+		});
 	});
 });

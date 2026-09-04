@@ -419,7 +419,12 @@ function encodeWriteValue(_segments: string[], value: JsonValue): JsonValue {
 }
 
 function isObjectRecord(value: JsonValue): value is Record<string, JsonValue> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		!(value instanceof Uint8Array)
+	);
 }
 
 function encodeOperatorObject(
@@ -447,7 +452,12 @@ function encodeConditionObject(
 	for (const [key, val] of Object.entries(obj)) {
 		const fieldKey = prefix ? joinFieldPath(prefix, key) : key;
 
-		if (val === null || typeof val !== "object" || Array.isArray(val)) {
+		if (
+			val === null ||
+			typeof val !== "object" ||
+			Array.isArray(val) ||
+			val instanceof Uint8Array
+		) {
 			conditions.push([fieldKey, OP_CODES.eq, val as JsonValue]);
 			continue;
 		}

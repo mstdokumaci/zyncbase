@@ -226,6 +226,7 @@ pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlit
             .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
             .text => |s_val| bindTextTransient(stmt, index, s_val),
             .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+            .binary => |bytes| bindBlobTransient(stmt, index, bytes),
         },
         .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         .array => |items| blk: {
@@ -255,11 +256,15 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     return switch (col_type) {
         sqlite.c.SQLITE_BLOB => blk: {
-            if (field.storage_type != .doc_id) break :blk .nil;
             const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-            break :blk typed.Value{ .scalar = .{ .doc_id = try typed_doc_id.fromBytes(bytes) } };
+            if (field.storage_type == .doc_id) {
+                break :blk typed.Value{ .scalar = .{ .doc_id = try typed_doc_id.fromBytes(bytes) } };
+            } else if (field.storage_type == .bytes) {
+                break :blk typed.Value{ .scalar = .{ .binary = try allocator.dupe(u8, bytes) } };
+            }
+            break :blk .nil;
         },
         sqlite.c.SQLITE_INTEGER => {
             const val = sqlite.c.sqlite3_column_int64(stmt, i);

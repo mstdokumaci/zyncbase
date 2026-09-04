@@ -39,6 +39,7 @@ fn writeScalarMsgPack(value: ScalarValue, writer: anytype) !void {
         .real => |rv| try msgpack.encode(msgpack.Payload{ .float = rv }, writer),
         .text => |tv| try msgpack.writeMsgPackStr(writer, tv),
         .boolean => |bv| try msgpack.encode(msgpack.Payload{ .bool = bv }, writer),
+        .binary => |bv| try msgpack.writeMsgPackBin(writer, bv),
     }
 }
 
@@ -68,6 +69,16 @@ fn writeScalarJsonToBuf(w: *json_write.Writer, value: ScalarValue) !void {
         .real => |v| try w.floatValue(v),
         .text => |s| try w.stringValue(s),
         .boolean => |b| try w.boolValue(b),
+        .binary => |b| {
+            const hex = try w.allocator.alloc(u8, b.len * 2);
+            defer w.allocator.free(hex);
+            const digits = "0123456789abcdef";
+            for (b, 0..) |byte, i| {
+                hex[i * 2] = digits[byte >> 4];
+                hex[i * 2 + 1] = digits[byte & 0x0f];
+            }
+            try w.stringValue(hex);
+        },
     }
 }
 
@@ -79,6 +90,7 @@ pub fn validateValue(ft: schema_types.FieldType, value: msgpack.Payload) !void {
         .real => value == .float or value == .uint or value == .int,
         .boolean => value == .bool,
         .array => value == .arr,
+        .bytes => value == .bin,
     };
     if (!match) return error.TypeMismatch;
 }
@@ -184,6 +196,10 @@ fn scalarFromPayload(allocator: Allocator, ft: schema_types.FieldType, value: ms
         .integer => ScalarValue{ .integer = try msgpack.payloadToInt(value) },
         .real => ScalarValue{ .real = try msgpack.payloadToFloat(value) },
         .boolean => ScalarValue{ .boolean = try msgpack.payloadToBool(value) },
+        .bytes => switch (value) {
+            .bin => |b| ScalarValue{ .binary = try allocator.dupe(u8, b.value()) },
+            else => error.TypeMismatch,
+        },
         else => error.InvalidArrayElement,
     };
 }
@@ -196,6 +212,17 @@ fn scalarFromJson(allocator: Allocator, ft: schema_types.FieldType, value: std.j
         },
         .text => switch (value) {
             .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
+            else => error.TypeMismatch,
+        },
+        .bytes => switch (value) {
+            .string => |s| {
+                if (s.len % 2 != 0) return error.TypeMismatch;
+                const byte_len = s.len / 2;
+                const buf = try allocator.alloc(u8, byte_len);
+                errdefer allocator.free(buf);
+                _ = std.fmt.hexToBytes(buf, s) catch return error.TypeMismatch;
+                return ScalarValue{ .binary = buf };
+            },
             else => error.TypeMismatch,
         },
         .integer => ScalarValue{ .integer = try jsonAsInt(value) },

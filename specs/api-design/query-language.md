@@ -170,6 +170,36 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ---
 
+### Bytes Field Operators
+
+```typescript
+// Equal
+{ where: { avatar: { eq: new Uint8Array([1, 2, 3]) } } }
+
+// Not equal
+{ where: { avatar: { ne: new Uint8Array([4, 5, 6]) } } }
+
+// Is null
+{ where: { avatar: { isNull: true } } }
+
+// Is not null
+{ where: { avatar: { isNotNull: true } } }
+```
+
+**Allowed operators for `bytes` fields:**
+- `eq` - Exact byte match
+- `ne` - Byte mismatch
+- `isNull` - Missing or null
+- `isNotNull` - Value exists
+
+**Prohibited operations on `bytes` fields:**
+- Comparison operators (`gt`, `gte`, `lt`, `lte`)
+- Membership operators (`in`, `notIn`)
+- String matching (`contains`, `startsWith`, `endsWith`)
+- Sorting (`orderBy`)
+
+---
+
 ## Combining Conditions
 
 ### Implicit AND

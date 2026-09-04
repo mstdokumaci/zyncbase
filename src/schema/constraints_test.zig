@@ -259,3 +259,28 @@ test "constraints: pattern rejects embedded NUL bytes" {
     const with_nul = "abc\x00extra";
     try std.testing.expect(!try constraints.matchPattern(regex, allocator, with_nul));
 }
+
+test "constraints: binary length bounds" {
+    const allocator = std.testing.allocator;
+
+    const c = types.Constraints{
+        .min_length = 3,
+        .max_length = 5,
+    };
+
+    const bin_ok = try msgpack.Payload.binToPayload("abcd", allocator);
+    defer bin_ok.free(allocator);
+    try constraints.validate(c, .bytes, bin_ok, allocator);
+
+    const bin_too_short = try msgpack.Payload.binToPayload("ab", allocator);
+    defer bin_too_short.free(allocator);
+    try std.testing.expectError(error.LengthViolation, constraints.validate(c, .bytes, bin_too_short, allocator));
+
+    const bin_too_long = try msgpack.Payload.binToPayload("abcdef", allocator);
+    defer bin_too_long.free(allocator);
+    try std.testing.expectError(error.LengthViolation, constraints.validate(c, .bytes, bin_too_long, allocator));
+
+    const not_bin = try msgpack.Payload.strToPayload("abcd", allocator);
+    defer not_bin.free(allocator);
+    try std.testing.expectError(error.TypeMismatch, constraints.validate(c, .bytes, not_bin, allocator));
+}

@@ -112,4 +112,23 @@ describe("SchemaDictionary doc IDs", () => {
 			}),
 		).rejects.toThrow("missing fieldFlags");
 	});
+
+	test("identifies bytes fields and preserves Uint8Array values without docId decoding", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["files"],
+			fields: [["id", "data"]],
+			fieldFlags: [[0b11, 0b1000]],
+		});
+
+		expect(schema.isBytesField(0, 1)).toBe(true);
+		expect(schema.isBytesField(0, 0)).toBe(false);
+
+		const raw = new Uint8Array([10, 20, 30, 40]);
+		const decoded = schema.decodeRecord(0, [packDocId("file_1"), raw]);
+		expect(decoded).toEqual({
+			id: "file_1",
+			data: raw,
+		});
+	});
 });

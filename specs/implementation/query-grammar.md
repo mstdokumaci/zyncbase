@@ -59,7 +59,7 @@ The Zig parser is authoritative (wire clients are untrusted):
 | 0 or more than 8 clauses | `InvalidSortFormat` |
 | Malformed tuple, unknown field, invalid direction flag | `InvalidSortFormat` / `InvalidFieldName` |
 | Duplicate field across clauses | `InvalidSortFormat` |
-| Array-typed sort field | `UnsupportedSortFieldType` (`INVALID_MESSAGE`) |
+| Array-typed or bytes-typed sort field | `UnsupportedSortFieldType` (`INVALID_MESSAGE`) |
 | Unique system field (`id` or `created_at`) in any position except the final clause | `InvalidSortFormat` |
 
 ### Canonical Internal Order
@@ -146,6 +146,19 @@ Because array fields are persisted in JSONB representation, they use subqueries 
 | `eq`     | Canonical array equality | `column_name = ?` (exact comparison against canonicalized value) |
 | `isNull` | Undefined/Missing array | `column_name IS NULL` |
 | `isNotNull`| Exists | `column_name IS NOT NULL` |
+
+### Bytes Fields
+
+Bytes fields (`BLOB`) support exact equality and nullability operators:
+
+| AST Operator | SQLite WHERE Clause Fragment |
+|--------------|------------------------------|
+| `eq`         | `column_name = ?` |
+| `ne`         | `column_name != ?` |
+| `isNull`     | `column_name IS NULL` |
+| `isNotNull`  | `column_name IS NOT NULL` |
+
+Relational ordering (`gt`, `gte`, `lt`, `lte`), membership (`in`, `notIn`), string pattern matching (`contains`, `startsWith`, `endsWith`), and sorting (`orderBy`) are prohibited for `bytes` fields.
 
 ---
 

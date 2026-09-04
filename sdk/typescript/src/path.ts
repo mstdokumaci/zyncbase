@@ -59,7 +59,12 @@ export function flatten(
 	for (const key of Object.keys(obj)) {
 		const fullKey = prefix ? joinFieldPath(prefix, key) : key;
 		const value = obj[key];
-		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			!Array.isArray(value) &&
+			!(value instanceof Uint8Array)
+		) {
 			const nested = flatten(value as Record<string, JsonValue>, fullKey);
 			for (const nestedKey of Object.keys(nested)) {
 				result[nestedKey] = nested[nestedKey];

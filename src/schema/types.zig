@@ -23,6 +23,7 @@ pub const FieldType = enum {
     real,
     boolean,
     array,
+    bytes,
 
     pub fn toSqlType(self: FieldType) []const u8 {
         return switch (self) {
@@ -32,6 +33,7 @@ pub const FieldType = enum {
             .real => "REAL",
             .boolean => "INTEGER",
             .array => "BLOB",
+            .bytes => "BLOB",
         };
     }
 
@@ -43,6 +45,7 @@ pub const FieldType = enum {
             .real => "number",
             .boolean => "boolean",
             .array => "array",
+            .bytes => "bytes",
         };
     }
 };
