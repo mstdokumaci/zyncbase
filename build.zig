@@ -10,9 +10,6 @@ pub fn build(b: *std.Build) void {
         "sanitize",
         "Enable sanitizer: address, leak, or thread",
     );
-    // Sysroot for macOS frameworks tbd path only — not b.sysroot (which
-    // would remap Homebrew -L/opt/... under SDK and break ssl/crypto).
-    const sysroot = b.option([]const u8, "sysroot", "Path to sysroot");
 
     // Add SQLite dependency
     const sqlite_dep = b.dependency("sqlite", .{
@@ -52,7 +49,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, exe, sysroot, sanitize);
+    linkUWS(b, exe, sanitize);
     b.installArtifact(exe);
 
     // Setup Test Targets
@@ -60,12 +57,12 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, false);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
     const test_slowest_step = b.step("test-slowest", "Run all tests and report the slowest ones");
-    const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
+    const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, true);
     const run_slow_tests = b.addRunArtifact(slow_tests);
     test_slowest_step.dependOn(&run_slow_tests.step);
 
@@ -83,10 +80,10 @@ pub fn build(b: *std.Build) void {
     exe_check.root_module.addImport("sqlite", sqlite_module);
     exe_check.root_module.addImport("msgpack", msgpack_module);
     exe_check.root_module.addImport("httpx", httpx_module);
-    linkUWS(b, exe_check, sysroot, sanitize);
+    linkUWS(b, exe_check, sanitize);
     check_step.dependOn(&exe_check.step);
 
-    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
+    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, httpx_module, "src/test_all.zig", sanitize, test_filter, false);
     check_step.dependOn(&test_check.step);
 }
 
@@ -100,7 +97,6 @@ fn setupTest(
     root_file: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
-    sysroot: ?[]const u8,
     use_timed_runner: bool,
 ) *std.Build.Step.Compile {
     const t = b.addTest(.{
@@ -127,11 +123,11 @@ fn setupTest(
             t.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, t, sysroot, sanitize);
+    linkUWS(b, t, sanitize);
     return t;
 }
 
-fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sanitize: ?[]const u8) void {
     const target = step.root_module.resolved_target.?.result;
     step.root_module.link_libcpp = true;
     step.root_module.linkSystemLibrary("pthread", .{});
@@ -149,16 +145,13 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.root_module.addIncludePath(b.path("vendor/usockets"));
     step.root_module.addIncludePath(b.path("src"));
 
-    // System OpenSSL — arch-gated lib path (headers are arch-agnostic)
+    // System OpenSSL — arch-gated (native: ARM /opt/homebrew, Intel /usr/local)
     if (target.os.tag == .macos) {
-        step.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
-        step.root_module.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
         if (target.cpu.arch == .aarch64) {
+            step.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
             step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
-        } else if (target.cpu.arch == .x86_64) {
-            step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
         } else {
-            step.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/lib" });
+            step.root_module.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
             step.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl/lib" });
         }
     }
@@ -232,12 +225,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     step.root_module.link_libc = true;
     if (target.os.tag == .macos) {
-        if (sysroot) |s| {
-            step.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd", .{s}) });
-            step.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/Security.framework/Security.tbd", .{s}) });
-        } else {
-            step.root_module.linkFramework("CoreFoundation", .{});
-            step.root_module.linkFramework("Security", .{});
-        }
+        step.root_module.linkFramework("CoreFoundation", .{});
+        step.root_module.linkFramework("Security", .{});
     }
 }

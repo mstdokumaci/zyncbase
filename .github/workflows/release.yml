@@ -52,12 +52,6 @@ jobs:
             ZIG_FLAGS+=("-Dcpu=baseline")
           fi
 
-          if [[ "${{ matrix.target }}" == *"macos"* ]]; then
-            if SDK=$(xcrun --show-sdk-path 2>/dev/null); then
-              ZIG_FLAGS+=("-Dsysroot=$SDK")
-            fi
-          fi
-
           zig "${ZIG_FLAGS[@]}"
 
       - name: Package Release

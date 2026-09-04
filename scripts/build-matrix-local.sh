@@ -27,16 +27,7 @@ TARGETS=(
     "x86_64-linux-gnu|Linux x86_64|linux-x86_64"
 )
 
-# 1. Determine macOS SDK path once
-MACOS_SDK=""
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
-    if [ -n "$MACOS_SDK" ]; then
-        echo -e "${GREEN}✓ Found macOS SDK at: $MACOS_SDK${NC}"
-    else
-        echo -e "${YELLOW}⚠️  macOS SDK not found via xcrun. Framework linking may fail.${NC}"
-    fi
-fi
+# Native builds — no sysroot needed (linkFramework finds SDK)
 
 # 2. Iterate through matrix
 for ENTRY in "${TARGETS[@]}"; do
@@ -63,14 +54,7 @@ for ENTRY in "${TARGETS[@]}"; do
         ZIG_FLAGS+=("-Dcpu=x86_64_v2")
     fi
     
-    # Pass SDK path to zig build if targeting macOS
-    if [[ $TARGET == *"macos"* ]] && [[ -n "$MACOS_SDK" ]]; then
-        ZIG_FLAGS+=("--sysroot" "$MACOS_SDK")
-        ZIG_FLAGS+=("-Dsysroot=$MACOS_SDK")
-        export SDKROOT="$MACOS_SDK"
-    else
-        unset SDKROOT
-    fi
+    # Native — no sysroot
     
     zig "${ZIG_FLAGS[@]}" > build_zig_error.log 2>&1 || {
         echo -e "${YELLOW}Build failed. Error log:${NC}"
