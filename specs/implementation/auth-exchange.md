@@ -84,6 +84,7 @@ During the connection lifecycle and handshake upgrade, authentication and valida
 
 - JWTs must never be placed directly in WebSocket query parameters; a short-lived ticket is mandatory.
 - Ticket expiry must be short-lived (e.g., ≤ 60 seconds).
+- Ticket expiry only limits redemption. Connected JWT sessions retain the original JWT expiry; anonymous sessions have no JWT expiry.
 - Ticket redemption is always single-use; a redeemed ticket cannot be reused.
 - A failed token refresh must immediately terminate the WebSocket connection.
 - No user profile fields are resolved during authorization evaluation; ZyncBase only resolves the internal `users.id` mapping.

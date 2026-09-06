@@ -405,7 +405,7 @@ pub const FilterPredicate = struct {
         allocator: std.mem.Allocator,
         guard: *FilterPredicate,
     ) !void {
-        if (guard.state == .match_all) {
+        if (self.state == .match_none or guard.state == .match_all) {
             guard.deinit(allocator);
             return;
         }
@@ -415,6 +415,10 @@ pub const FilterPredicate = struct {
             self.state = .match_none;
             return;
         }
+
+        // Adding a guard to an unrestricted query makes it conditional. Keeping
+        // match_all here would cause normalize() to discard the authorization.
+        self.state = .conditional;
 
         // Move guard's conditions into self
         if (guard.conditions) |guard_conds| {

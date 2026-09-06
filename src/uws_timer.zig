@@ -10,19 +10,13 @@ pub fn startTimer(
     initial_ms: u32,
     repeat_ms: u32,
 ) !*c.struct_us_timer_t {
-    const timer = c.us_create_timer(loop, 1, @sizeOf(*T)) orelse
+    // Application timers keep the loop alive until their owner closes them.
+    const timer = c.us_create_timer(loop, 0, @sizeOf(*T)) orelse
         return error.TimerCreateFailed;
     const ext = c.us_timer_ext(timer);
     @memcpy(@as([*]u8, @ptrCast(ext))[0..@sizeOf(*T)], std.mem.asBytes(&self_ptr));
     c.us_timer_set(timer, callback, @intCast(initial_ms), @intCast(repeat_ms));
     return timer;
-}
-
-pub fn disarmTimer(field: *?*c.struct_us_timer_t) void {
-    if (field.*) |t| {
-        // us_timer_set with 0 ms disarms the timerfd without freeing the poll.
-        c.us_timer_set(t, null, 0, 0);
-    }
 }
 
 pub fn stopTimer(field: *?*c.struct_us_timer_t) void {

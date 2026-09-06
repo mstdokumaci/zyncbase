@@ -111,7 +111,9 @@ pub const ZyncBaseServer = struct {
         try self.memory_strategy.initWithAllocator(allocator);
         errdefer self.memory_strategy.deinit();
 
-        var config = try self.initConfigAndBudget(custom_config, custom_data_dir, custom_schema_file, custom_config_path);
+        self.config = try self.initConfigAndBudget(custom_config, custom_data_dir, custom_schema_file, custom_config_path);
+        // Auth consumers retain pointers into this configuration after init returns.
+        const config = &self.config;
         errdefer config.deinit();
 
         // Initialize violation tracker
@@ -130,10 +132,10 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
         );
 
-        try self.loadSchema(&config);
+        try self.loadSchema(config);
         errdefer self.schema.deinit();
 
-        try self.loadAuthConfig(&config);
+        try self.loadAuthConfig(config);
         errdefer self.auth_config.deinit();
 
         try self.initQueues();
@@ -145,10 +147,10 @@ pub const ZyncBaseServer = struct {
         // threads that can invoke storageEngineWakeup.
         self.wakeup_pending = std.atomic.Value(bool).init(false);
 
-        try self.initWebSocketServer(&config);
+        try self.initWebSocketServer(config);
         errdefer self.websocket_server.deinit();
 
-        try self.initStorageAndMigrations(&config);
+        try self.initStorageAndMigrations(config);
         errdefer self.storage_engine.deinit();
 
         try self.initCheckpoint();
@@ -182,17 +184,17 @@ pub const ZyncBaseServer = struct {
             &self.schema,
         );
 
-        try self.initJWT(&config);
+        try self.initJWT(config);
         errdefer if (self.jwks) |jc| {
             jc.deinit();
             self.memory_strategy.generalAllocator().destroy(jc);
             self.jwks = null;
         };
 
-        self.initMessageHandlerWired(&config);
+        self.initMessageHandlerWired(config);
         errdefer self.message_handler.deinit();
 
-        try self.initConnectionManagerInternal(&config);
+        try self.initConnectionManagerInternal(config);
         errdefer self.connection_manager.deinit();
 
         var pool = try self.initSubscriptionPoolInternal();
@@ -215,7 +217,7 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.wakeup_pending_check = takePendingWakeup;
         self.websocket_server.wakeup_pending_check_ctx = self;
 
-        try self.initTicketExchangeInternal(&config);
+        try self.initTicketExchangeInternal(config);
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
             self.ticket_exchange = null;
@@ -224,7 +226,6 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
-        self.config = config;
         self.shutdown_performed = false;
         self.shutdown_in_progress = false;
         self.shutdown_mutex = .init;
@@ -614,12 +615,10 @@ pub const ZyncBaseServer = struct {
         if (!self.shutdown_in_progress or self.shutdown_performed) return;
         self.shutdown_in_progress = false;
         self.shutdown_performed = true;
-        // Disarm (do NOT free) the shutdown timeout timer: µSockets' us_poll_free
-        // unconditionally decrements loop->num_polls, including for fallthrough
-        // polls whose creation never incremented it. Freeing this timer at
-        // shutdown would push num_polls to -1 and us_loop_run's
-        // `while (num_polls)` would spin forever instead of exiting.
-        uws_timer.disarmTimer(&self.shutdown_timeout_timer);
+        // Close application timers on the event-loop thread before exiting it.
+        self.stopShutdownTimeoutTimer();
+        self.connection_manager.stopTokenSweepTimer();
+        if (self.jwks) |jc| jc.stopRefreshTimer();
 
         std.log.info("Flushing pending writes and performing final checkpoint", .{});
 

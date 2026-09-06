@@ -337,6 +337,33 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     try testing.expectEqualSlices(u8, "first-messagesecond-message", recorder.bytes());
 }
 
+test "ConnectionManager: token sweep expires JWT sessions but preserves anonymous sessions" {
+    var app: AppTestContext = undefined;
+    try app.init(std.heap.smp_allocator, "conn-mgr-token-expiry", &.{});
+    defer app.deinit();
+
+    var sent_buf: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws.test_send_observer = helpers.sendRecorderObserver;
+    ws.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws);
+    defer app.connection_manager.onClose(&ws);
+    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
+    defer app.releaseConnection(conn);
+    const session = if (conn.session) |*session| session else return error.MissingSession;
+
+    recorder.reset();
+    session.token_expires_at = 0;
+    session.is_anonymous = true;
+    app.connection_manager.sweepExpiredTokens();
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+
+    session.is_anonymous = false;
+    app.connection_manager.sweepExpiredTokens();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+}
+
 test "ConnectionManager: generated IDs are unique under concurrent opens" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
