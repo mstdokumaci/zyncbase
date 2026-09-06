@@ -330,7 +330,7 @@ pub const ConnectionManager = struct {
         while (it.next()) |state| {
             const conn = state.*;
             if (conn.session) |sess| {
-                if (now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds))) {
+                if (!sess.is_anonymous and now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds))) {
                     conn.acquire();
                     to_close.append(self.allocator, conn) catch |err| {
                         std.log.err("Failed to add expired connection to close list: {}", .{err});

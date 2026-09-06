@@ -48,6 +48,11 @@ test "Integration: All components properly wired" {
     try testing.expect(server.message_handler.subscription_engine == &server.subscription_engine);
     try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);
 
+    // Both ticket authentication and token refresh must borrow the server-owned
+    // mapping, not the initializer's former stack-local Config.
+    try testing.expect(server.message_handler.session_claims_mapping == &server.config.authentication.session.claims);
+    try testing.expect(server.ticket_exchange.?.claims_mapping == &server.config.authentication.session.claims);
+
     // Verify initial operational state
     try testing.expect(server.shutdown_requested.load(.acquire) == false);
 }

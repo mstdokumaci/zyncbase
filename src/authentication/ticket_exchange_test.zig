@@ -26,7 +26,8 @@ test "TicketExchange: generate and verify ticket" {
     defer exchange.deinit();
 
     const subject = "user_alice";
-    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
+    const token_expiry = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
+    const ticket = try exchange.generateTicket(allocator, subject, false, token_expiry, &empty_claims);
     defer allocator.free(ticket);
 
     var verified_session = try exchange.verifyTicket(allocator, ticket);
@@ -34,6 +35,7 @@ test "TicketExchange: generate and verify ticket" {
 
     try testing.expectEqualStrings(subject, verified_session.external_id);
     try testing.expect(!verified_session.is_anonymous);
+    try testing.expectEqual(token_expiry, verified_session.token_expires_at);
 
     try testing.expectError(error.AuthFailed, exchange.verifyTicket(allocator, ticket));
 }
@@ -55,7 +57,7 @@ test "TicketExchange: expired ticket verification fails" {
     defer exchange.deinit();
 
     const subject = "user_charlie";
-    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
+    const ticket = try exchange.generateTicket(allocator, subject, false, std.Io.Clock.real.now(testing.io).toSeconds() + 3600, &empty_claims);
     defer allocator.free(ticket);
 
     try testing.expectError(error.TokenExpired, exchange.verifyTicket(allocator, ticket));

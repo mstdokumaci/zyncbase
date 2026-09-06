@@ -9,6 +9,34 @@ const Value = typed.Value;
 const Operator = query_ast.Operator;
 const ValueShape = query_ast.ValueShape;
 
+test "FilterPredicate merge preserves authorization for unrestricted and impossible queries" {
+    const allocator = std.testing.allocator;
+    for ([_]query_ast.PredicateState{ .match_all, .match_none }) |state| {
+        var predicate: query_ast.FilterPredicate = .{ .state = state };
+        defer predicate.deinit(allocator);
+        const conditions = try allocator.alloc(query_ast.Condition, 1);
+        conditions[0] = .{
+            .field_index = 0,
+            .field_type = .doc_id,
+            .items_type = null,
+            .op = .eq,
+            .value = .{ .scalar = .{ .doc_id = 7 } },
+        };
+        var guard: query_ast.FilterPredicate = .{ .conditions = conditions };
+        defer guard.deinit(allocator);
+
+        try predicate.mergeInPlace(allocator, &guard);
+        if (state == .match_all) {
+            try std.testing.expectEqual(.conditional, predicate.state);
+            try std.testing.expectEqual(@as(usize, 1), predicate.conditions.?.len);
+            try std.testing.expectEqual(@as(u128, 7), predicate.conditions.?[0].value.?.scalar.doc_id);
+        } else {
+            try std.testing.expectEqual(.match_none, predicate.state);
+            try std.testing.expect(predicate.conditions == null);
+        }
+    }
+}
+
 test "operatorExpectsValueShape op x field-type matrix" {
     // Every (op, field_type) combination resolves to a single expected shape,
     // or to UnsupportedOperatorForFieldType. This is the authoritative matrix

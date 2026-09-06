@@ -123,7 +123,7 @@ pub const TicketExchange = struct {
         return Session{
             .external_id = external_id,
             .is_anonymous = extracted.is_anonymous,
-            .token_expires_at = extracted.exp,
+            .token_expires_at = extracted.token_expires_at orelse return error.InvalidTicket,
             .claims = claims,
         };
     }
@@ -155,6 +155,7 @@ pub const TicketExchange = struct {
         allocator: Allocator,
         subject: []const u8,
         is_anonymous: bool,
+        token_expires_at: i64,
         claims: *const std.StringHashMapUnmanaged(typed.Value),
     ) ![]const u8 {
         const exp = std.Io.Clock.real.now(self.io).toSeconds() + self.ttl_seconds;
@@ -175,6 +176,7 @@ pub const TicketExchange = struct {
         try w.beginObjectField("session");
         try w.field("externalId", subject);
         try w.boolField("isAnonymous", is_anonymous);
+        try w.intField("tokenExpiresAt", token_expires_at);
         try w.beginObjectField("claims");
         var claims_it = claims.iterator();
         while (claims_it.next()) |entry| {
@@ -206,6 +208,7 @@ pub const TicketExchange = struct {
         // SAFETY: subject is always assigned before use in the if/else branches below
         var subject: []const u8 = undefined;
         var is_anonymous = false;
+        var token_expires_at: i64 = 0;
         var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
         defer {
             var it = claims.iterator();
@@ -222,6 +225,7 @@ pub const TicketExchange = struct {
                 if (self.jwt_validator) |val| {
                     const validated = try val.validateWithClaims(allocator, token, self.claims_mapping.*);
                     subject = validated.subject;
+                    token_expires_at = validated.expires_at;
                     claims = validated.claims;
                 } else {
                     std.log.warn("JWT authentication attempted but JWT validator not configured", .{});
@@ -241,7 +245,7 @@ pub const TicketExchange = struct {
         defer allocator.free(subject);
 
         const exp = std.Io.Clock.real.now(self.io).toSeconds() + self.ttl_seconds;
-        const ticket = try self.generateTicket(allocator, subject, is_anonymous, &claims);
+        const ticket = try self.generateTicket(allocator, subject, is_anonymous, token_expires_at, &claims);
         defer allocator.free(ticket);
 
         const response_body = try std.fmt.allocPrint(allocator,
@@ -464,6 +468,7 @@ const TicketPayload = struct {
     jti: []const u8,
     external_id: ?[]const u8,
     is_anonymous: bool,
+    token_expires_at: ?i64 = null,
     claims_json: ?[]const u8,
 };
 
@@ -514,6 +519,9 @@ fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
                 ctx.external_id = json_read.extractJsonString(value, &pos);
             } else if (std.mem.eql(u8, key, "isAnonymous")) {
                 ctx.is_anonymous = std.mem.eql(u8, value, "true");
+            } else if (std.mem.eql(u8, key, "tokenExpiresAt")) {
+                var pos: usize = 0;
+                ctx.token_expires_at = json_read.extractJsonInt(value, &pos);
             } else if (std.mem.eql(u8, key, "claims")) {
                 if (value.len > 2 and value[0] == '{' and value[1] != '}') {
                     ctx.claims_json = value;
