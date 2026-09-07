@@ -268,7 +268,7 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(
 
 function zoom(change: number) {
 	if (!playing) return;
-	scale = Math.min(16, Math.max(4, scale + change));
+	scale = Math.min(16, Math.max(2, scale + change));
 	element("zoom-label").textContent = `${scale}×`;
 	updateSubscriptions();
 }
