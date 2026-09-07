@@ -1,0 +1,82 @@
+# Pixel Conquest
+
+A small multiplayer territory game using ZyncBase's real presence → store path. The browser sends direction input; a Bun simulation determines movement and ownership. Browsers receive territory and player dots together through map-chunk subscriptions.
+
+## Run locally
+
+From the repository root, with Zig 0.16, Bun, and the repository's native build prerequisites installed:
+
+```sh
+bun install
+bun run demo:game
+```
+
+Open **http://localhost:8080**. The terminal prints an invite code. Enter it and a country name; friends using the same country name join the same team. WASD, arrow keys, or the on-screen buttons move in four directions. Releasing keys or switching away stops input. Players can pass through one another; spawning avoids occupied cells.
+
+The launch command builds the SDK and a ReleaseFast ZyncBase executable, then starts both the database and game. For subsequent starts without rebuilding:
+
+```sh
+bun run demo:game:start
+```
+
+Stop with Ctrl+C. Territory is stored in `data/pixel-conquest/`. To clear the world, stop the running game first, then run:
+
+```sh
+bun run demo:game:start --reset
+```
+
+The reset removes game chunks and countries and starts a fresh game. It does not touch other ZyncBase data directories.
+
+## Cloudflare and VPS
+
+Use a named Cloudflare Tunnel with a public hostname such as `game.example.com`, forwarding HTTP to `http://localhost:8080`. Set that exact browser origin when launching:
+
+```sh
+GAME_ORIGIN=https://game.example.com GAME_JOIN_CODE=your-private-invite-code bun run demo:game:start
+```
+
+Share the HTTPS address and invite code. Both HTTP authentication and WebSockets travel through port 8080; ZyncBase listens privately on `127.0.0.1:3001`. The same launch command works on a VPS after building for that VPS's OS and architecture. ZyncBase currently requires **at least four detected CPU cores/vCPUs** at startup. Keep the process running under your service manager and put its data directory on persistent storage.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GAME_ORIGIN` | `http://localhost:8080` | Exact browser origin, including HTTPS for a tunnel. |
+| `GAME_JOIN_CODE` | Random code printed at startup | Shared invite code; set it to keep the same code across restarts. |
+| `GAME_HOST` | `127.0.0.1` | Game listener address. Use `0.0.0.0` for direct LAN access. |
+| `GAME_PORT` | `8080` | Game HTTP/WebSocket port. |
+| `GAME_DB_PORT` | `3001` | Private ZyncBase port. |
+| `GAME_DATA_DIR` | `<repo>/data/pixel-conquest` | Persistent game data. Run only one simulation against a data directory. |
+| `GAME_SERVER_BIN` | `<repo>/zig-out/bin/zyncbase` | Prebuilt ZyncBase executable. |
+
+For LAN access, set `GAME_HOST=0.0.0.0` and `GAME_ORIGIN=http://YOUR-LAN-IP:8080`, and have every browser use that address. Changing the hostname requires restarting with the matching origin. Server-generated player tokens last 24 hours; a server restart or expired token requires rejoining. Territory remains owned by the country.
+
+Setup references: [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), [WebSocket support](https://developers.cloudflare.com/network/websockets/).
+
+## Prototype choices
+
+- One 2000 × 1000 world, cropped to longitude −135°…180°, latitude −60°…85°, with **661,568 land pixels**. New players spawn near the first connected player, starting around northern Italy.
+- Each 32 × 32 chunk stores a little-endian uint16 ownership bitmap in `bytes`, plus a JSON-encoded `bytes` list of player dots. Water remains unowned. Arrays are not used as positional store data.
+- `RULES` in `shared.ts` sets the 50 ms tick and own/neutral/enemy movement costs of 1/2/4 ticks. Entering or leaving water adds 4 ticks. Only completed steps paint land; enclosures do not fill.
+- Flushes wait for **committed** acknowledgment. Ticks pause while a commit is pending, so slow storage slows the game without accumulating writes or producing catch-up bursts. A write or database connection failure stops the game; restart restores committed territory and reconciles dots. A commit acknowledgment does not measure browser delivery.
+- Input heartbeats renew a two-second movement lease; silent players stop, and their dots expire after ten seconds. Normal disconnects remove dots sooner. Rejoining preserves country territory, not the old player position.
+- Players cannot write chunks, countries, or shared presence. Browser code does not subscribe to presence. ZyncBase currently uses the same read gate for joining a presence namespace and subscribing to it, so authorized players could inspect input presence with a custom client; there is no hidden game information there.
+- Admission is capped at 32 active dots for this demo. This is a product limit, **not a measured server capacity**. No rounds, victory rules, body-blocking, minimap, or prediction yet.
+
+The terminal logs cumulative inputs, ticks, committed flushes, changed chunk writes, chunk payload bytes (before subscriber fan-out), and the latest commit duration. The browser displays echoed input-to-view time. These are diagnostic observations, not a throughput benchmark. Measure the complete workload on the VPS, including actual outgoing traffic and overlapping visible-chunk subscriptions, before drawing performance conclusions; FortiEDR makes this development machine unsuitable for that comparison.
+
+## Checks
+
+Build once with `bun run demo:game`, then stop it. Run:
+
+```sh
+bun run test:game
+bunx biome check --write --error-on-warnings
+bun run lint
+```
+
+`test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, and restart reconciliation. Its real-server smoke check uses an isolated temporary database and two SDK clients through the public WebSocket proxy to check invitations, subscriptions, write restrictions, disconnect cleanup, persistence, and manual reset.
+
+For a manual browser check, open two windows, join different countries, move across the same area, release the keys, switch tabs while moving, disconnect one player, and restart the server. Test teammates by entering the same country name. Repeat over the tunnel before inviting everyone.
+
+## Map source
+
+`land.json` contains run-length encoded land spans derived from [Natural Earth's 1:110m land polygons](https://github.com/nvkelso/natural-earth-vector/blob/master/geojson/ne_110m_land.geojson), sampled at pixel centers with an equirectangular projection over the bounds above. Natural Earth data is [public domain](https://www.naturalearthdata.com/about/terms-of-use/). Land and water are terrain; player-created countries are independent of real political borders.
