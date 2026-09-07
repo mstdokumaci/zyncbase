@@ -176,7 +176,9 @@ const front = createServer(async (req, res) => {
 					reply(res, 502, { error: "Database unavailable" });
 				else res.destroy();
 			});
-			upstream.setTimeout(10000, () => upstream.destroy());
+			upstream.setTimeout(10000, () => {
+				upstream.destroy(new Error("Database timed out"));
+			});
 			upstream.end();
 			return;
 		}
