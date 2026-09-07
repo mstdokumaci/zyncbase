@@ -57,7 +57,7 @@ Setup references: [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/)
 
 - One 2000 × 1000 world, cropped to longitude −135°…180°, latitude −60°…85°, with **661,568 land pixels**. New players spawn near the first connected player, starting around northern Italy.
 - Each 32 × 32 chunk stores a little-endian uint16 ownership bitmap in `bytes`, plus a JSON-encoded `bytes` list of player dots. Water remains unowned. Arrays are not used as positional store data.
-- `RULES` in `shared.ts` sets the 50 ms tick and own/neutral/enemy movement costs of 1/2/4 ticks. Entering or leaving water adds 4 ticks. Only completed steps paint land; enclosures do not fill.
+- `RULES` in `shared.ts` sets the 50 ms tick and own/neutral/enemy movement costs of 1/2/4 ticks. Entering or leaving water adds 4 ticks. Completed steps paint land, and enclosing an area captures its land for the surrounding country. The same rule lets a defender reclaim a severed extension. Water remains unowned.
 - Flushes wait for **committed** acknowledgment. Ticks pause while a commit is pending, so slow storage slows the game without accumulating writes or producing catch-up bursts. A write or database connection failure stops the game; restart restores committed territory and reconciles dots. A commit acknowledgment does not measure browser delivery.
 - Input heartbeats renew a two-second movement lease; silent players stop, and their dots expire after ten seconds. Normal disconnects remove dots sooner. Rejoining preserves country territory, not the old player position.
 - Players cannot write chunks, countries, or shared presence. Browser code does not subscribe to presence. ZyncBase currently uses the same read gate for joining a presence namespace and subscribing to it, so authorized players could inspect input presence with a custom client; there is no hidden game information there.
@@ -77,6 +77,14 @@ bun run lint
 ```
 
 `test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, bot teams and replacement counts, and restart reconciliation. Its real-server smoke check uses an isolated temporary database and SDK clients through the public WebSocket proxy to check invitations, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset.
+
+The enclosure performance tests also run with `test:game`. They count ownership bitmap reads during actual simulation steps, so regressions fail independently of machine speed. To print median step times as well:
+
+```sh
+GAME_BENCH=1 bun test examples/pixel-conquest/enclosure.perf.test.ts
+```
+
+Fixtures cover small and large U-shaped countries, a rotated U, a solid square, and a large loop closure. A step along the inner border of the 202,500-pixel U originally needed 3,763,788 bitmap reads; checking local connectivity first reduces that to 13. Steps that cannot close a gap skip the flood fill. Actual closures still search and fill their enclosed area. Timings exclude fixture setup and bitmap-read instrumentation, use two warmups and seven samples, and measure simulation only; database commits, browser delivery, and VPS capacity require separate measurements.
 
 For a manual browser check, open two windows, join different countries, move across the same area, release the keys, switch tabs while moving, disconnect one player, and restart the server. Test teammates by entering the same country name. Repeat over the tunnel before inviting everyone.
 

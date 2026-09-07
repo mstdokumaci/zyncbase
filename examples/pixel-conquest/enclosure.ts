@@ -1,4 +1,4 @@
-import { WIDTH } from "./shared";
+import { HEIGHT, WIDTH } from "./shared";
 
 export type Bounds = {
 	left: number;
@@ -9,6 +9,47 @@ export type Bounds = {
 
 export function neighbors(cell: number) {
 	return [cell - WIDTH, cell + 1, cell + WIDTH, cell - 1];
+}
+
+// If the open side-neighbors still connect around the painted cell, removing
+// that cell from their component cannot enclose anything new. Otherwise search
+// once per local component; a global search still decides whether it is closed.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the eight-cell ring once, keeping one side-neighbor per open group.
+export function enclosureStarts(
+	owners: Uint16Array,
+	code: number,
+	cell: number,
+) {
+	const x = cell % WIDTH;
+	if (
+		x === 0 ||
+		x === WIDTH - 1 ||
+		cell < WIDTH ||
+		cell >= WIDTH * (HEIGHT - 1)
+	)
+		return neighbors(cell);
+	const ring = [
+		cell - WIDTH - 1,
+		cell - WIDTH,
+		cell - WIDTH + 1,
+		cell + 1,
+		cell + WIDTH + 1,
+		cell + WIDTH,
+		cell + WIDTH - 1,
+		cell - 1,
+	];
+	const wall = ring.findIndex((neighbor) => owners[neighbor] === code);
+	if (wall === -1) return [];
+	const starts: number[] = [];
+	let start = -1;
+	for (let i = 1; i <= ring.length; i++) {
+		const index = (wall + i) % ring.length;
+		if (owners[ring[index]] === code) {
+			if (start !== -1) starts.push(start);
+			start = -1;
+		} else if (index % 2 === 1) start = ring[index];
+	}
+	return starts.length > 1 ? starts : [];
 }
 
 // A component reaching a country's bounding edge has an unobstructed route outside.

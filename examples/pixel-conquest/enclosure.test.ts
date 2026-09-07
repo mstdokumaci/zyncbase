@@ -1,8 +1,47 @@
 import { expect, test } from "bun:test";
+import {
+	enclosedOnRestore,
+	enclosedRegion,
+	enclosureStarts,
+} from "./enclosure";
 import { chunkIndex, type Direction, HEIGHT, WIDTH } from "./shared";
 import { World } from "./world";
 
 type Pixel = [number, number, number];
+
+test.each([
+	[3, 20, 20],
+	[3, 0, 0],
+	[3, WIDTH - 3, 0],
+	[3, 0, HEIGHT - 3],
+	[3, WIDTH - 3, HEIGHT - 3],
+	[4, 20, 20],
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: exhaust the small bitmaps and compare each eligible paint against the exterior flood.
+])("local checks match a full exterior flood: size %i at %i,%i", (size, left, top) => {
+	const owners = new Uint16Array(WIDTH * HEIGHT);
+	const bounds = { left, top, right: left + size - 1, bottom: top + size - 1 };
+	const cells = Array.from(
+		{ length: size * size },
+		(_, i) => (top + Math.floor(i / size)) * WIDTH + left + (i % size),
+	);
+	// Every position on 3x3 maps covers edges and diagonal joins. The 4x4
+	// maps add paths beyond the local ring for an interior painted cell.
+	for (let mask = 0; mask < 2 ** cells.length; mask++) {
+		for (const painted of size === 3 ? cells : [cells[size + 1]]) {
+			for (const [i, cell] of cells.entries()) owners[cell] = (mask >> i) & 1;
+			// Normal movement starts from a world whose existing enclosures are filled.
+			for (const cell of enclosedOnRestore(owners, 1, bounds)) owners[cell] = 1;
+			if (owners[painted]) continue;
+			owners[painted] = 1;
+			const expected = enclosedOnRestore(owners, 1, bounds);
+			const captured = new Set<number>();
+			for (const start of enclosureStarts(owners, 1, painted))
+				for (const cell of enclosedRegion(owners, 1, bounds, start))
+					captured.add(cell);
+			expect([...captured].sort((a, b) => a - b)).toEqual(expected);
+		}
+	}
+});
 
 function scenario(pixels: Pixel[], water: [number, number][] = []) {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
