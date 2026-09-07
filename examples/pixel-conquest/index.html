@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#101b28" />
+		<title>Pixel Conquest</title>
+		<link rel="stylesheet" href="/style.css" />
+		<script type="module" src="/client.js"></script>
+	</head>
+	<body>
+		<canvas id="map" aria-label="Live territory map. Your coordinates and territory are shown in the status panels."></canvas>
+		<header>
+			<a class="brand" href="/" aria-label="Pixel Conquest home"><span class="mark">▦</span> PIXEL <strong>CONQUEST</strong></a>
+			<span class="connection" id="connection" role="status">A shared world. One pixel at a time.</span>
+		</header>
+		<main id="lobby">
+			<section class="welcome">
+				<p class="eyebrow">A SMALL WORLD. BIG AMBITIONS.</p>
+				<h1>Leave your<br /><em>mark.</em></h1>
+				<p class="intro">Pick a country. Walk the world. Every piece of land you step on becomes yours.</p>
+				<form id="join">
+					<label for="country">Your country</label>
+					<input id="country" name="country" placeholder="Create a country or join a friend's" required maxlength="24" autocomplete="off" />
+					<label for="code">Invite code</label>
+					<input id="code" name="code" placeholder="Ask your host for the code" type="password" required maxlength="128" autocomplete="off" />
+					<button class="primary" id="join-button" type="submit">Enter the world <span>↗</span></button>
+					<p id="error" class="error" role="alert"></p>
+				</form>
+				<p class="small">Use the same country name to team up. No account needed.</p>
+			</section>
+			<aside class="field-notes">
+				<p class="eyebrow">FIELD NOTES / 001</p>
+				<h2>Time is your strategy.</h2>
+				<p>Travel quickly on your land. Expand into the unknown. Take your time crossing an opponent's border.</p>
+				<div class="speed-row"><span>Own territory</span><span class="speed fast">━━━</span><b>Fast</b></div>
+				<div class="speed-row"><span>Neutral land</span><span class="speed">━━</span><b>Steady</b></div>
+				<div class="speed-row"><span>Enemy territory</span><span class="speed slow">━</span><b>Slow</b></div>
+				<p class="small">Water is a route, never a claim. Entering and leaving it takes extra time.</p>
+			</aside>
+		</main>
+		<aside id="scoreboard" class="panel" hidden>
+			<p class="eyebrow">THE WORLD SO FAR</p>
+			<h2>Countries <span id="country-count">0</span></h2>
+			<ol id="countries"></ol>
+			<p class="small">Circles are people. Squares are bots.<br />Land stays claimed when you leave.</p>
+		</aside>
+		<footer>
+			<div class="instructions"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Hold to move · Release to stop</span></div>
+			<div id="coordinates">2000 × 1000 · A world to explore</div>
+			<div class="zoom"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><span id="zoom-label">MAP</span><button id="zoom-in" type="button" aria-label="Zoom in">+</button></div>
+		</footer>
+		<nav class="direction-pad" id="direction-pad" aria-label="Movement controls" hidden>
+			<button type="button" data-direction="up" aria-label="Move north">↑</button>
+			<button type="button" data-direction="left" aria-label="Move west">←</button>
+			<button type="button" data-direction="down" aria-label="Move south">↓</button>
+			<button type="button" data-direction="right" aria-label="Move east">→</button>
+		</nav>
+	</body>
+</html>

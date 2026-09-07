@@ -1,0 +1,39 @@
+{
+	"version": "0.0.1",
+	"store": {
+		"users": { "fields": {} },
+		"chunks": {
+			"required": ["index", "owners", "dots", "occupied"],
+			"unique": [["index"]],
+			"fields": {
+				"index": { "type": "integer", "indexed": true },
+				"owners": { "type": "bytes", "minLength": 2048, "maxLength": 2048 },
+				"dots": { "type": "bytes", "maxLength": 16384 },
+				"occupied": { "type": "boolean", "indexed": true }
+			}
+		},
+		"countries": {
+			"required": ["code", "name", "color", "count"],
+			"unique": [["code"], ["name"]],
+			"fields": {
+				"code": { "type": "integer", "minimum": 1, "maximum": 65535 },
+				"name": { "type": "string", "minLength": 1, "maxLength": 24 },
+				"color": { "type": "string" },
+				"count": { "type": "integer", "minimum": 0 }
+			}
+		}
+	},
+	"presence": {
+		"user": {
+			"country": { "type": "string", "minLength": 1, "maxLength": 24 },
+			"direction": {
+				"type": "string",
+				"enum": ["idle", "up", "down", "left", "right"]
+			},
+			"seq": { "type": "integer", "minimum": 0 },
+			"sentAt": { "type": "number" },
+			"pulse": { "type": "integer", "minimum": 0 }
+		},
+		"shared": {}
+	}
+}

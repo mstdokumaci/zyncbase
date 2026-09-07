@@ -6,7 +6,13 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["sdk/typescript/**", "tests/e2e/**", "!!vendor"],
+		"includes": [
+			"sdk/typescript/**",
+			"tests/e2e/**",
+			"examples/pixel-conquest/**",
+			"!!examples/pixel-conquest/land.json",
+			"!!vendor"
+		],
 		"ignoreUnknown": true
 	},
 	"formatter": {
