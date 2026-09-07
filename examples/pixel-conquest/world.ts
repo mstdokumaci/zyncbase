@@ -3,7 +3,7 @@ import {
 	type Bounds,
 	enclosedOnRestore,
 	enclosedRegion,
-	neighbors,
+	enclosureStarts,
 } from "./enclosure";
 import {
 	CHUNK,
@@ -331,7 +331,8 @@ export class World {
 		// The previous owner can immediately reclaim paint still inside its enclosure.
 		if (owner) this.capture(owner, to);
 		if (this.owners[to] !== player.code) return;
-		for (const cell of neighbors(to)) this.capture(player.code, cell);
+		for (const cell of enclosureStarts(this.owners, player.code, to))
+			this.capture(player.code, cell);
 	}
 
 	private extendBounds(code: number, cell: number) {
