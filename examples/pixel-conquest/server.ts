@@ -122,7 +122,8 @@ const front = createServer(async (req, res) => {
 		if (path === "/health")
 			return reply(res, ready ? 200 : 503, {
 				ready,
-				players: world.players.size,
+				players: world.humanCount,
+				bots: world.players.size - world.humanCount,
 			});
 		if (path === "/session" && req.method === "POST") {
 			if (!ready) return reply(res, 503, { error: "The world is starting" });
@@ -144,7 +145,7 @@ const front = createServer(async (req, res) => {
 				!timingSafeEqual(provided, expected)
 			)
 				return reply(res, 403, { error: "That invite code is incorrect" });
-			if (world.players.size >= MAX_PLAYERS)
+			if (world.humanCount >= MAX_PLAYERS)
 				return reply(res, 409, {
 					error: "The world is full. Try again after someone leaves.",
 				});
@@ -277,7 +278,8 @@ const database = Bun.spawn(
 		"--config",
 		configPath,
 	],
-	{ cwd: root, stdout: "inherit", stderr: "inherit" },
+	// Keep terminal Ctrl+C in the game process; stop the database after its final commit.
+	{ cwd: root, stdout: "inherit", stderr: "inherit", detached: true },
 );
 const client = createClient({
 	url: `ws://127.0.0.1:${databasePort}/ws`,
@@ -406,6 +408,7 @@ try {
 			});
 		console.log("World reset.");
 	} else world.restore(countries, chunks);
+	world.startBots(performance.now());
 	// A restart can need more reconciliation than one normal movement batch.
 	await publish();
 	client.on("error", failed);
@@ -418,8 +421,8 @@ try {
 		const now = performance.now();
 		if (batch.type === "snapshot") {
 			const connected = new Set(batch.users.map((user) => user.userId));
-			for (const id of world.players.keys())
-				if (!connected.has(id)) world.remove(id);
+			for (const [id, player] of world.players)
+				if (!player.bot && !connected.has(id)) world.remove(id);
 			for (const user of batch.users) world.input(user.userId, user.data, now);
 		} else {
 			for (const change of batch.changes) {
@@ -443,7 +446,8 @@ try {
 		() =>
 			console.log(
 				JSON.stringify({
-					players: world.players.size,
+					players: world.humanCount,
+					bots: world.players.size - world.humanCount,
 					ticks: world.ticks,
 					inputs: world.inputMessages,
 					flushes,

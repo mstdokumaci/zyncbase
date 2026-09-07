@@ -8,6 +8,35 @@ export const NAMESPACE = "pixel-conquest";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 4 };
 export const MAX_PLAYERS = 32;
 export const INPUT_LEASE_MS = 2000;
+const COUNTRY_COLORS = [
+	"#ef4444",
+	"#2588f5",
+	"#ffe14a",
+	"#a66bff",
+	"#31c96a",
+	"#ff8a2b",
+	"#f46ac1",
+	"#35dfdb",
+	"#f1eee5",
+	"#abc92d",
+	"#a65a39",
+	"#8eafcf",
+	"#bc2458",
+	"#3958ba",
+	"#d6ac72",
+	"#aaf3b1",
+	"#7a3685",
+	"#008d88",
+	"#ffc3b0",
+	"#bfb5fa",
+];
+
+export function countryColor(code: number) {
+	return (
+		COUNTRY_COLORS[code - 1] ??
+		`hsl(${(code * 137.508) % 360} 95% ${code % 2 ? 78 : 42}%)`
+	);
+}
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
 
@@ -19,6 +48,7 @@ export type Dot = {
 	y: number;
 	seq: number;
 	sentAt: number;
+	bot?: boolean;
 };
 export type Country = {
 	id: string;

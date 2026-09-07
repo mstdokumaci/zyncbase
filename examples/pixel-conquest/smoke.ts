@@ -58,6 +58,7 @@ async function start(reset = false) {
 			},
 			stdout: "pipe",
 			stderr: "pipe",
+			detached: true,
 		},
 	);
 	void capture(processHandle.stdout as ReadableStream<Uint8Array>);
@@ -77,7 +78,8 @@ async function stop() {
 	for (const timer of timers.splice(0)) clearInterval(timer);
 	for (const client of clients.splice(0)) client.disconnect();
 	if (!processHandle || processHandle.exitCode !== null) return;
-	processHandle.kill("SIGTERM");
+	// A terminal sends Ctrl+C to the whole foreground process group.
+	process.kill(-processHandle.pid, "SIGINT");
 	const code = await processHandle.exited;
 	assert.equal(code, 0, logs);
 }
@@ -128,6 +130,11 @@ async function chunks(client: ZyncBaseClient) {
 
 try {
 	await start();
+	assert.deepEqual(await (await fetch(`${origin}/health`)).json(), {
+		ready: true,
+		players: 0,
+		bots: 10,
+	});
 	assert.equal((await fetch(origin)).status, 200);
 	assert.equal((await fetch(`${origin}/client.js`)).status, 200);
 	assert.equal(
@@ -181,6 +188,10 @@ try {
 		async () => dot(),
 		"presence input creates a subscribed dot",
 	);
+	await eventually(
+		async () => (await (await fetch(`${origin}/health`)).json()).bots === 9,
+		"two humans replace one bot",
+	);
 	console.log(
 		"PASS: invite, identity, WebSocket proxy, presence → store subscription",
 	);
@@ -230,14 +241,26 @@ try {
 	});
 	alice.client.presence.setShared({});
 	await eventually(async () => sharedDenied, "shared presence write denied");
-	const savedCountries = (await alice.client.store.query(
-		"countries",
-	)) as unknown as Country[];
-	assert.ok(savedCountries.some((country) => country.count > 0));
-	const savedChunks = await chunks(alice.client);
 	for (const timer of timers.splice(0)) clearInterval(timer);
 	alice.client.disconnect();
 	await eventually(async () => !dot(), "disconnected dot removed");
+	bob.client.disconnect();
+	const observer = await connect();
+	await eventually(async () => {
+		const health = await (await fetch(`${origin}/health`)).json();
+		return health.players === 0 && health.bots === 10;
+	}, "bots return when humans leave");
+	await eventually(async () => {
+		const dots = (await chunks(observer.client)).flatMap((row) =>
+			readDots(row.dots),
+		);
+		return dots.length === 10 && dots.every((dot) => dot.bot);
+	}, "idle bot state committed");
+	const savedCountries = (await observer.client.store.query(
+		"countries",
+	)) as unknown as Country[];
+	assert.ok(savedCountries.some((country) => country.count > 0));
+	const savedChunks = await chunks(observer.client);
 	console.log("PASS: movement, stop, authorization, disconnected dot cleanup");
 	await stop();
 	await start();
@@ -248,7 +271,9 @@ try {
 			restoredChunks.find((saved) => saved.id === row.id)?.owners,
 			row.owners,
 		);
-	assert.ok(restoredChunks.every((row) => readDots(row.dots).length === 0));
+	assert.ok(
+		restoredChunks.every((row) => readDots(row.dots).every((dot) => dot.bot)),
+	);
 	const restoredCountries = (await returning.client.store.query(
 		"countries",
 	)) as unknown as Country[];
@@ -266,8 +291,16 @@ try {
 	await stop();
 	await start(true);
 	const clean = await connect();
-	assert.equal((await chunks(clean.client)).length, 0);
-	assert.equal((await clean.client.store.query("countries")).length, 0);
+	assert.ok(
+		(await chunks(clean.client)).every((row) =>
+			row.owners.every((byte) => byte === 0),
+		),
+	);
+	const fresh = (await clean.client.store.query(
+		"countries",
+	)) as unknown as Country[];
+	assert.equal(fresh.length, 5);
+	assert.ok(fresh.every((country) => country.count === 0));
 	console.log("PASS: manual world reset");
 } catch (error) {
 	console.error(logs);

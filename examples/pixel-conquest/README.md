@@ -13,6 +13,8 @@ bun run demo:game
 
 Open **http://localhost:8080**. The terminal prints an invite code. Enter it and a country name; friends using the same country name join the same team. WASD, arrow keys, or the on-screen buttons move in four directions. Releasing keys or switching away stops input. Players can pass through one another; spawning avoids occupied cells.
 
+Every world starts with **10 server-controlled bots across five countries**, two bots per country. Squares are bots; circles are people. Each two active human players replace one bot: 2 humans → 9 bots, 8 humans → 6 bots, 20 humans → no bots. Bots return as people leave. Their territory remains with its country and can be conquered normally; retiring a bot does not erase land. Bots resume after a restart, and pause when no humans are playing.
+
 The launch command builds the SDK and a ReleaseFast ZyncBase executable, then starts both the database and game. For subsequent starts without rebuilding:
 
 ```sh
@@ -59,7 +61,8 @@ Setup references: [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/)
 - Flushes wait for **committed** acknowledgment. Ticks pause while a commit is pending, so slow storage slows the game without accumulating writes or producing catch-up bursts. A write or database connection failure stops the game; restart restores committed territory and reconciles dots. A commit acknowledgment does not measure browser delivery.
 - Input heartbeats renew a two-second movement lease; silent players stop, and their dots expire after ten seconds. Normal disconnects remove dots sooner. Rejoining preserves country territory, not the old player position.
 - Players cannot write chunks, countries, or shared presence. Browser code does not subscribe to presence. ZyncBase currently uses the same read gate for joining a presence namespace and subscribing to it, so authorized players could inspect input presence with a custom client; there is no hidden game information there.
-- Admission is capped at 32 active dots for this demo. This is a product limit, **not a measured server capacity**. No rounds, victory rules, body-blocking, minimap, or prediction yet.
+- Admission is capped at 32 humans for this demo, with bots yielding space as humans join. This is a product limit, **not a measured server capacity**. No rounds, victory rules, body-blocking, minimap, or prediction yet.
+- Bots prefer nearby unclaimed or enemy land, avoid water, and stay near human activity. They use the same movement costs and authoritative store updates as people. This is a simple gameplay opponent, not a simulation of browser connections or network load.
 
 The terminal logs cumulative inputs, ticks, committed flushes, changed chunk writes, chunk payload bytes (before subscriber fan-out), and the latest commit duration. The browser displays echoed input-to-view time. These are diagnostic observations, not a throughput benchmark. Measure the complete workload on the VPS, including actual outgoing traffic and overlapping visible-chunk subscriptions, before drawing performance conclusions; FortiEDR makes this development machine unsuitable for that comparison.
 
@@ -73,7 +76,7 @@ bunx biome check --write --error-on-warnings
 bun run lint
 ```
 
-`test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, and restart reconciliation. Its real-server smoke check uses an isolated temporary database and two SDK clients through the public WebSocket proxy to check invitations, subscriptions, write restrictions, disconnect cleanup, persistence, and manual reset.
+`test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, bot teams and replacement counts, and restart reconciliation. Its real-server smoke check uses an isolated temporary database and SDK clients through the public WebSocket proxy to check invitations, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset.
 
 For a manual browser check, open two windows, join different countries, move across the same area, release the keys, switch tabs while moving, disconnect one player, and restart the server. Test teammates by entering the same country name. Repeat over the tunnel before inviting everyone.
 

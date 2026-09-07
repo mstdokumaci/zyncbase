@@ -63,7 +63,7 @@ const baseContext = base.getContext("2d");
 if (!baseContext) throw new Error("Canvas unavailable");
 const pixels = baseContext.createImageData(WIDTH, HEIGHT);
 for (let i = 0; i < land.length; i++) {
-	pixels.data.set(land[i] ? [69, 91, 88, 255] : [19, 37, 52, 255], i * 4);
+	pixels.data.set(land[i] ? [80, 87, 94, 255] : [19, 37, 52, 255], i * 4);
 }
 baseContext.putImageData(pixels, 0, 0);
 
@@ -383,7 +383,9 @@ function draw() {
 		const x = left + (dot.x + 0.5) * zoom,
 			y = top + (dot.y + 0.5) * zoom;
 		ctx.beginPath();
-		ctx.arc(x, y, Math.max(3, zoom * 0.48), 0, Math.PI * 2);
+		const radius = Math.max(3, zoom * 0.48);
+		if (dot.bot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+		else ctx.arc(x, y, radius, 0, Math.PI * 2);
 		ctx.fillStyle = countries.get(dot.code)?.color ?? "white";
 		ctx.fill();
 		ctx.lineWidth = 2;

@@ -4,6 +4,7 @@ import {
 	chunkIndex,
 	HEIGHT,
 	INPUT_LEASE_MS,
+	MAX_PLAYERS,
 	RULES,
 	readDots,
 	readOwners,
@@ -91,6 +92,63 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 			(dot) => dot.id === "alice",
 		),
 	).toBe(false);
+});
+
+test("bots share five countries, obey movement costs, and yield to humans without clearing land", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	expect(world.players.size).toBe(10);
+	expect(world.countries.size).toBe(5);
+	for (const country of world.countries.values())
+		expect(
+			[...world.players.values()].filter(
+				(player) => player.code === country.code,
+			),
+		).toHaveLength(2);
+	const bot = world.players.get("bot:0");
+	const retiring = world.players.get("bot:9");
+	if (!bot || !retiring) throw new Error("Missing bots");
+	bot.x = 100;
+	bot.y = 100;
+	world.tick(INPUT_LEASE_MS * 10);
+	expect([bot.x, bot.y]).toEqual([100, 100]);
+	expect(world.players.size).toBe(10);
+	const now = INPUT_LEASE_MS * 10 + 1;
+	const join = (i: number) =>
+		world.input(
+			`human:${i}`,
+			{ country: "Humans", direction: "idle", seq: 1, sentAt: now },
+			now,
+		);
+	join(0);
+	world.tick(now);
+	expect(world.players.size).toBe(11);
+	expect([bot.x, bot.y]).toEqual([100, 100]);
+	world.tick(now + 1);
+	expect(Math.abs(bot.x - 100) + Math.abs(bot.y - 100)).toBe(1);
+	expect(world.owners[bot.y * WIDTH + bot.x]).toBe(bot.code);
+
+	world.owners[0] = retiring.code;
+	join(1);
+	world.tick(now + 2);
+	expect(world.humanCount).toBe(2);
+	expect(world.players.has("bot:9")).toBe(false);
+	expect(world.players.size).toBe(11);
+	expect(world.owners[0]).toBe(retiring.code);
+	world.remove("human:1");
+	world.tick(now + 3);
+	expect(world.players.get("bot:9")?.code).toBe(retiring.code);
+	expect(world.countries.size).toBe(6);
+	for (let i = 1; i < MAX_PLAYERS + 1; i++) join(i);
+	world.tick(now + 4);
+	expect(world.humanCount).toBe(MAX_PLAYERS);
+	expect([...world.players.values()].some((player) => player.bot)).toBe(false);
+	world.tick(now + INPUT_LEASE_MS * 6);
+	expect(world.humanCount).toBe(0);
+	expect(world.players.size).toBe(10);
+	expect(
+		readDots(world.chunk(chunkIndex(933, 276)).dots).every((dot) => dot.bot),
+	).toBe(true);
 });
 
 test("input validation, borders, and expired input stop movement; map mask is deterministic", () => {
