@@ -4,7 +4,7 @@ A small multiplayer territory game using ZyncBase's real presence → store path
 
 ## Run locally
 
-From the repository root, with Zig 0.16, Bun, and the repository's native build prerequisites installed:
+From the repository root, with Zig 0.16, Bun, OpenSSL, and the repository's native build prerequisites installed:
 
 ```sh
 bun install
