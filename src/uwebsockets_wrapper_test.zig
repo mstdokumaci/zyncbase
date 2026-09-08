@@ -1,15 +1,79 @@
 const std = @import("std");
 
 const helpers = @import("app_test_helpers.zig");
+const uws_timer = @import("uws_timer.zig");
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
+const c = @import("uwebsockets_wrapper.zig").c;
 
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const createMockWebSocket = helpers.createMockWebSocket;
 const destroyMockWebSocket = helpers.destroyMockWebSocket;
+
+test "uWS: worker wakeup reaches idle loop promptly" {
+    const Probe = struct {
+        ready: std.Io.Event = .unset,
+        sent_ns: std.atomic.Value(i64) = .init(0),
+        elapsed_ns: ?i96 = null,
+        woken: bool = false,
+        timer: ?*c.struct_us_timer_t = null,
+
+        fn fromLoop(loop: ?*c.struct_us_loop_t) *@This() {
+            const slot: **@This() = @ptrCast(@alignCast(c.us_loop_ext(loop)));
+            return slot.*;
+        }
+
+        fn pre(loop: ?*c.struct_us_loop_t) callconv(.c) void {
+            fromLoop(loop).ready.set(testing.io);
+        }
+
+        fn wakeup(loop: ?*c.struct_us_loop_t) callconv(.c) void {
+            fromLoop(loop).woken = true;
+        }
+
+        fn post(loop: ?*c.struct_us_loop_t) callconv(.c) void {
+            const self = fromLoop(loop);
+            if (!self.woken or self.elapsed_ns != null) return;
+            self.elapsed_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds() - self.sent_ns.load(.acquire);
+            uws_timer.stopTimer(&self.timer);
+        }
+
+        fn timeout(timer: ?*c.struct_us_timer_t) callconv(.c) void {
+            const self = uws_timer.extractPtr(@This(), timer orelse return);
+            uws_timer.stopTimer(&self.timer);
+        }
+
+        fn signal(self: *@This(), loop: *c.struct_us_loop_t) void {
+            self.ready.waitUncancelable(testing.io);
+            // Let the loop enter its blocking poll before signaling from another thread.
+            testing.io.sleep(.fromMilliseconds(20), .awake) catch |err| @panic(@errorName(err));
+            self.sent_ns.store(@intCast(std.Io.Clock.awake.now(testing.io).toNanoseconds()), .release);
+            c.us_wakeup_loop(loop);
+        }
+    };
+
+    var probe: Probe = .{};
+    // Own the native loop so unrelated wrapper tests cannot keep it alive.
+    const loop = c.us_create_loop(null, Probe.wakeup, Probe.pre, Probe.post, @sizeOf(*Probe)) orelse
+        return error.LoopCreateFailed;
+    defer c.us_loop_free(loop);
+    const slot: **Probe = @ptrCast(@alignCast(c.us_loop_ext(loop)));
+    slot.* = &probe;
+    // Keep the loop alive and bound the test if the wakeup is lost.
+    probe.timer = try uws_timer.startTimer(Probe, &probe, loop, Probe.timeout, 5_000, 0);
+    defer uws_timer.stopTimer(&probe.timer);
+    const worker = try std.Thread.spawn(.{}, Probe.signal, .{ &probe, loop });
+    defer worker.join();
+
+    c.us_loop_run(loop);
+    const elapsed_ns = probe.elapsed_ns orelse return error.WakeupNotObserved;
+    std.debug.print("native loop wakeup latency: {d:.3} ms\n", .{@as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_ms});
+    // Detect second-scale stalls while allowing generous scheduler jitter.
+    try testing.expect(elapsed_ns < 500 * std.time.ns_per_ms);
+}
 
 const TestSslPaths = struct {
     allocator: Allocator,
