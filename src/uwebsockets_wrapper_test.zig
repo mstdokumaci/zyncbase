@@ -62,17 +62,24 @@ test "uWS: worker wakeup reaches idle loop promptly" {
     defer c.us_loop_free(loop);
     const slot: **Probe = @ptrCast(@alignCast(c.us_loop_ext(loop)));
     slot.* = &probe;
-    // Keep the loop alive and bound the test if the wakeup is lost.
-    probe.timer = try uws_timer.startTimer(Probe, &probe, loop, Probe.timeout, 5_000, 0);
-    defer uws_timer.stopTimer(&probe.timer);
-    const worker = try std.Thread.spawn(.{}, Probe.signal, .{ &probe, loop });
-    defer worker.join();
+    // Reuse the loop to check that delivery clears, but does not remove, the event.
+    for (0..3) |_| {
+        probe.ready.reset();
+        probe.sent_ns.store(0, .release);
+        probe.elapsed_ns = null;
+        probe.woken = false;
+        // Keep the loop alive and bound the test if the wakeup is lost.
+        probe.timer = try uws_timer.startTimer(Probe, &probe, loop, Probe.timeout, 5_000, 0);
+        defer uws_timer.stopTimer(&probe.timer);
+        const worker = try std.Thread.spawn(.{}, Probe.signal, .{ &probe, loop });
+        defer worker.join();
 
-    c.us_loop_run(loop);
-    const elapsed_ns = probe.elapsed_ns orelse return error.WakeupNotObserved;
-    std.debug.print("native loop wakeup latency: {d:.3} ms\n", .{@as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_ms});
-    // Detect second-scale stalls while allowing generous scheduler jitter.
-    try testing.expect(elapsed_ns < 500 * std.time.ns_per_ms);
+        c.us_loop_run(loop);
+        const elapsed_ns = probe.elapsed_ns orelse return error.WakeupNotObserved;
+        std.debug.print("native loop wakeup latency: {d:.3} ms\n", .{@as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_ms});
+        // Detect second-scale stalls while allowing generous scheduler jitter.
+        try testing.expect(elapsed_ns < 500 * std.time.ns_per_ms);
+    }
 }
 
 const TestSslPaths = struct {
