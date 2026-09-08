@@ -41,6 +41,10 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 - The network layer does not authorize store/presence operations; it authenticates/initializes the connection and delegates authorization to `MessageHandler` and `authorization/*`.
 - A binary frame carries one or more complete MessagePack messages, byte-concatenated back-to-back. Messages are never split across frames. `Connection.send` submits the provided bytes directly to uWS; the SDK decodes frames with `decodeMulti`.
 
+### TLS Transport
+
+TLS is provided by OpenSSL through usockets when configured. Config shape is owned by [Server configuration](../api-design/configuration.md#server): when `server.tls` is set, the same listener serves WSS and HTTPS ticket exchange; when omitted, it serves plaintext WS/HTTP. Certificate loading failures stop startup rather than falling back to plaintext. Restart the server after replacing certificates.
+
 ## Connection Lifecycle
 
 1. `server.zig` registers HTTP `POST /auth/ticket`; successful requests create a short-lived connection ticket. See [Auth Exchange](./auth-exchange.md).

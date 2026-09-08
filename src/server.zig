@@ -307,6 +307,9 @@ pub const ZyncBaseServer = struct {
             .{
                 .port = config.server.port,
                 .host = config.server.host,
+                .ssl = config.server.tls_cert_file != null or config.server.tls_key_file != null,
+                .ssl_cert_path = config.server.tls_cert_file,
+                .ssl_key_path = config.server.tls_key_file,
                 .max_payload_length = config.security.max_message_size,
             },
         );

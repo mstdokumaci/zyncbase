@@ -17,6 +17,8 @@ pub const Config = struct {
     const ServerConfig = struct {
         port: u16 = 3000,
         host: []const u8 = "0.0.0.0",
+        tls_cert_file: ?[]const u8 = null,
+        tls_key_file: ?[]const u8 = null,
     };
 
     pub const AuthConfig = struct {
@@ -104,6 +106,8 @@ pub const Config = struct {
         }
         self.allocator.free(self.security.allowed_origins);
         self.allocator.free(self.server.host);
+        if (self.server.tls_cert_file) |file| self.allocator.free(file);
+        if (self.server.tls_key_file) |file| self.allocator.free(file);
         self.allocator.free(self.data_dir);
         self.allocator.free(self.schema_file);
         if (self.schema_content) |content| {

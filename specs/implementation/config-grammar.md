@@ -48,6 +48,16 @@ This document defines the schema, properties, and constraints for the server run
 |:---|:---:|:---|:---|
 | `port` | `number` | `3000` | Port to bind (1-65535). |
 | `host` | `string` | `"0.0.0.0"` | Bind address host interface. |
+| `tls` | `object \| null` | `null` | TLS settings object. Semantics owned by [Server configuration](../api-design/configuration.md#server); this section only maps fields to loader types. |
+
+### `server.tls` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `certFile` | `string` | — | PEM certificate-chain path → `ServerConfig.tls_cert_file`. Supports env expansion. |
+| `keyFile` | `string` | — | PEM private-key path → `ServerConfig.tls_key_file`. Supports env expansion. |
+
+Loader (`src/config/loader.zig`) requires both keys together, both non-empty; otherwise `error.InvalidTlsConfig`.
 
 ### `authentication.jwt` Settings
 
