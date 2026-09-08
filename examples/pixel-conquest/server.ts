@@ -7,10 +7,10 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
-	request as httpRequest,
 	type IncomingMessage,
 	type ServerResponse,
 } from "node:http";
+import { createServer as createSecureServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Duplex } from "node:stream";
@@ -31,15 +31,33 @@ import { World } from "./world";
 
 const directory = import.meta.dir;
 const root = resolve(directory, "../..");
-const port = Number(process.env.GAME_PORT ?? 8080);
+const port = Number(process.env.GAME_PORT ?? 8081);
 const databasePort = Number(process.env.GAME_DB_PORT ?? 3001);
 const host = process.env.GAME_HOST ?? "127.0.0.1";
-const origin = process.env.GAME_ORIGIN ?? `http://localhost:${port}`;
+const origin = process.env.GAME_ORIGIN ?? "http://localhost:8080";
 const dataDir = resolve(
 	process.env.GAME_DATA_DIR ?? join(root, "data/pixel-conquest"),
 );
 const joinCode = process.env.GAME_JOIN_CODE || randomBytes(6).toString("hex");
 const secret = randomBytes(32).toString("hex");
+const certFile = process.env.GAME_TLS_CERT;
+const keyFile = process.env.GAME_TLS_KEY;
+if (Boolean(certFile) !== Boolean(keyFile))
+	throw new Error("Set both GAME_TLS_CERT and GAME_TLS_KEY to enable TLS");
+const tlsConfig =
+	certFile && keyFile
+		? { certFile: resolve(certFile), keyFile: resolve(keyFile) }
+		: undefined;
+const tls = tlsConfig
+	? {
+			cert: await readFile(tlsConfig.certFile),
+			key: await readFile(tlsConfig.keyFile),
+		}
+	: undefined;
+const databaseUrl = new URL("/ws", origin);
+databaseUrl.protocol = tls ? "wss:" : "ws:";
+if (!tls) databaseUrl.hostname = "127.0.0.1";
+databaseUrl.port = String(databasePort);
 const world = new World(terrain());
 let ready = false;
 let stopping = false;
@@ -81,38 +99,11 @@ async function body(req: IncomingMessage) {
 	return JSON.parse(Buffer.concat(chunks).toString());
 }
 
-const bundle = await Bun.build({
-	entrypoints: [join(directory, "client.ts")],
-	target: "browser",
-	minify: true,
-});
-if (!bundle.success) throw new Error(bundle.logs.join("\n"));
-const assets = new Map([
-	[
-		"/",
-		{
-			type: "text/html; charset=utf-8",
-			bytes: await readFile(join(directory, "index.html")),
-		},
-	],
-	[
-		"/style.css",
-		{ type: "text/css", bytes: await readFile(join(directory, "style.css")) },
-	],
-	[
-		"/client.js",
-		{
-			type: "text/javascript",
-			bytes: Buffer.from(await bundle.outputs[0].arrayBuffer()),
-		},
-	],
-]);
-
 // ponytail: one shared login budget for a friends-only demo; use per-client limits for public signup.
 let logins = 0,
 	loginWindow = Date.now();
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: these are the complete HTTP routes for this small standalone demo.
-const front = createServer(async (req, res) => {
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
+const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 	try {
 		const path = new URL(req.url ?? "/", origin).pathname;
 		res.setHeader("X-Content-Type-Options", "nosniff");
@@ -151,45 +142,7 @@ const front = createServer(async (req, res) => {
 				});
 			return reply(res, 200, { token: token("player") });
 		}
-		if (path === "/auth/ticket" && req.method === "POST") {
-			if (!ready) return reply(res, 503, { error: "The world is starting" });
-			if (!req.headers.authorization)
-				return reply(res, 401, { error: "Join the game first" });
-			const upstream = httpRequest(
-				{
-					hostname: "127.0.0.1",
-					port: databasePort,
-					path,
-					method: "POST",
-					headers: { Authorization: req.headers.authorization },
-				},
-				(response) => {
-					res.writeHead(response.statusCode ?? 502, {
-						"Content-Type": "application/json",
-						"Cache-Control": "no-store",
-					});
-					response.pipe(res);
-				},
-			);
-			upstream.on("error", () => {
-				if (!res.headersSent)
-					reply(res, 502, { error: "Database unavailable" });
-				else res.destroy();
-			});
-			upstream.setTimeout(10000, () => {
-				upstream.destroy(new Error("Database timed out"));
-			});
-			upstream.end();
-			return;
-		}
-		const asset = assets.get(path);
-		if (!asset || req.method !== "GET")
-			return reply(res, 404, { error: "Not found" });
-		res.writeHead(200, {
-			"Content-Type": asset.type,
-			"Cache-Control": "no-cache",
-		});
-		res.end(asset.bytes);
+		return reply(res, 404, { error: "Not found" });
 	} catch (error) {
 		if (!res.headersSent)
 			reply(res, 400, {
@@ -197,50 +150,10 @@ const front = createServer(async (req, res) => {
 			});
 		else res.destroy();
 	}
-});
-
-// Native streams forward the upgrade and apply TCP backpressure without parsing game messages.
-front.on("upgrade", (req, socket, head) => {
-	if (
-		!ready ||
-		!allowedOrigin(req) ||
-		new URL(req.url ?? "/", origin).pathname !== "/ws"
-	) {
-		socket.end(
-			"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-		);
-		return;
-	}
-	const upstream = httpRequest({
-		hostname: "127.0.0.1",
-		port: databasePort,
-		path: req.url,
-		headers: { ...req.headers, host: `127.0.0.1:${databasePort}` },
-	});
-	upstream.on("upgrade", (response, stream, upstreamHead) => {
-		const headers = response.rawHeaders.reduce(
-			(all, value, i) => all + (i % 2 === 0 ? `${value}: ` : `${value}\r\n`),
-			"",
-		);
-		socket.write(`HTTP/1.1 101 Switching Protocols\r\n${headers}\r\n`);
-		if (head.length) stream.write(head);
-		if (upstreamHead.length) socket.write(upstreamHead);
-		socket.pipe(stream).pipe(socket);
-		stream.on("error", () => socket.destroy());
-		stream.on("close", () => socket.destroy());
-		socket.on("close", () => stream.destroy());
-	});
-	upstream.on("response", (response) => {
-		socket.end(
-			`HTTP/1.1 ${response.statusCode ?? 502} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
-		);
-		response.resume();
-	});
-	upstream.on("error", () => socket.destroy());
-	socket.on("error", () => upstream.destroy());
-	socket.on("close", () => upstream.destroy());
-	upstream.end();
-});
+};
+const front = tls
+	? createSecureServer(tls, handleRequest)
+	: createServer(handleRequest);
 front.on("connection", (socket) => {
 	connections.add(socket);
 	socket.on("close", () => connections.delete(socket));
@@ -256,7 +169,11 @@ const configPath = join(runtime, "config.json");
 await writeFile(
 	configPath,
 	JSON.stringify({
-		server: { host: "127.0.0.1", port: databasePort },
+		server: {
+			host,
+			port: databasePort,
+			...(tlsConfig ? { tls: tlsConfig } : {}),
+		},
 		dataDir,
 		schema: join(directory, "schema.json"),
 		authorization: join(directory, "authorization.json"),
@@ -284,7 +201,7 @@ const database = Bun.spawn(
 	{ cwd: root, stdout: "inherit", stderr: "inherit", detached: true },
 );
 const client = createClient({
-	url: `ws://127.0.0.1:${databasePort}/ws`,
+	url: databaseUrl.toString(),
 	auth: { tokenProvider: async () => token("simulation") },
 	storeNamespace: NAMESPACE,
 	presenceNamespace: NAMESPACE,
@@ -380,7 +297,7 @@ void database.exited.then((code) => {
 try {
 	for (let attempt = 0; attempt < 120; attempt++) {
 		try {
-			await fetch(`http://127.0.0.1:${databasePort}/`, {
+			await fetch(`${tls ? "https:" : "http:"}//${databaseUrl.host}/`, {
 				signal: AbortSignal.timeout(500),
 			});
 			break;
