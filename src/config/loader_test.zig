@@ -95,6 +95,45 @@ test "ConfigLoader validates port range" {
     try std.testing.expectError(error.InvalidPort, result);
 }
 
+test "ConfigLoader requires a complete TLS certificate and key pair" {
+    const allocator = std.testing.allocator;
+    var context = try schema_helpers.TestContext.init(allocator, "config-tls");
+    defer context.deinit();
+    const path = try std.fs.path.join(allocator, &.{ context.test_dir, "config.json" });
+    defer allocator.free(path);
+
+    for ([_][]const u8{
+        "{}",
+        "{\"certFile\":\"cert.pem\"}",
+        "{\"keyFile\":\"key.pem\"}",
+        "{\"certFile\":\"\",\"keyFile\":\"key.pem\"}",
+        "{\"certFile\":\"cert.pem\",\"keyFile\":\"\"}",
+        "{\"certFile\":\"cert.pem\\u0000extra\",\"keyFile\":\"key.pem\"}",
+    }) |tls| {
+        const content = try std.fmt.allocPrint(allocator, "{{\"server\":{{\"tls\":{s}}}}}", .{tls});
+        defer allocator.free(content);
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = content });
+        try std.testing.expectError(error.InvalidTlsConfig, loadConfig(allocator, path));
+    }
+
+    {
+        const content = "{\"server\":{\"tls\":null}}";
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = content });
+        try std.testing.expectError(error.TypeMismatch, loadConfig(allocator, path));
+    }
+
+    const content = try std.json.Stringify.valueAlloc(allocator, .{
+        .dataDir = context.test_dir,
+        .server = .{ .tls = .{ .certFile = "cert.pem", .keyFile = "key.pem" } },
+    }, .{});
+    defer allocator.free(content);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = content });
+    var config = try loadConfig(allocator, path);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("cert.pem", config.server.tls_cert_file.?);
+    try std.testing.expectEqualStrings("key.pem", config.server.tls_key_file.?);
+}
+
 test "ConfigLoader validates numeric ranges" {
     const allocator = std.heap.smp_allocator;
 

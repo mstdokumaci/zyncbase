@@ -132,10 +132,27 @@ Server network configuration.
 {
   "server": {
     "port": 3000,              // Port to listen on
-    "host": "0.0.0.0"          // Host to bind to
+    "host": "0.0.0.0",         // Host to bind to
+    "tls": {                   // Optional; omit for plaintext HTTP/WS
+      "certFile": "./origin.pem",
+      "keyFile": "./origin.key"
+    }
   }
 }
 ```
+
+- `port` - Port to listen on (1-65535).
+- `host` - Host to bind to.
+- `tls` (object, optional) - Enables HTTPS ticket exchange and WSS on the same listener. When omitted, the server uses plaintext HTTP/WS.
+
+**`server.tls`:**
+
+- `certFile` - Path to the PEM certificate-chain file. Supports `${VAR_NAME}` expansion.
+- `keyFile` - Path to the PEM private-key file. Supports `${VAR_NAME}` expansion.
+- Paths are relative to the server's working directory unless absolute.
+- Both `certFile` and `keyFile` must be set together and non-empty; an incomplete or empty pair is rejected at startup.
+- Certificate loading failures stop startup rather than falling back to plaintext.
+- Restart the server after replacing certificates.
 
 #### `schema`
 

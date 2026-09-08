@@ -300,13 +300,24 @@ pub const ZyncBaseServer = struct {
         );
     }
 
+    fn validateTlsPair(cert_file: ?[]const u8, key_file: ?[]const u8) !void {
+        if (cert_file == null and key_file == null) return;
+        const cert_ok = if (cert_file) |c| c.len > 0 else false;
+        const key_ok = if (key_file) |k| k.len > 0 else false;
+        if (!(cert_ok and key_ok)) return error.InvalidTlsConfig;
+    }
+
     fn initWebSocketServer(self: *ZyncBaseServer, config: *const Config) !void {
         std.log.debug("Initializing WebSocket server", .{});
+        try validateTlsPair(config.server.tls_cert_file, config.server.tls_key_file);
         try self.websocket_server.init(
             self.memory_strategy.generalAllocator(),
             .{
                 .port = config.server.port,
                 .host = config.server.host,
+                .ssl = config.server.tls_cert_file != null or config.server.tls_key_file != null,
+                .ssl_cert_path = config.server.tls_cert_file,
+                .ssl_key_path = config.server.tls_key_file,
                 .max_payload_length = config.security.max_message_size,
             },
         );
@@ -429,9 +440,12 @@ pub const ZyncBaseServer = struct {
         const allocator = self.memory_strategy.generalAllocator();
         var environ = try self.environ.createMap(allocator);
         defer environ.deinit();
-        return ConfigLoader.load(self.io, &environ, allocator, path) catch |err| {
-            std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
-            return ConfigLoader.loadDefaults(allocator);
+        return ConfigLoader.load(self.io, &environ, allocator, path) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
+                return ConfigLoader.loadDefaults(allocator);
+            },
+            else => return err,
         };
     }
 
