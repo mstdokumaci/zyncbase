@@ -116,6 +116,12 @@ test "ConfigLoader requires a complete TLS certificate and key pair" {
         try std.testing.expectError(error.InvalidTlsConfig, loadConfig(allocator, path));
     }
 
+    {
+        const content = "{\"server\":{\"tls\":null}}";
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = content });
+        try std.testing.expectError(error.TypeMismatch, loadConfig(allocator, path));
+    }
+
     const content = try std.json.Stringify.valueAlloc(allocator, .{
         .dataDir = context.test_dir,
         .server = .{ .tls = .{ .certFile = "cert.pem", .keyFile = "key.pem" } },

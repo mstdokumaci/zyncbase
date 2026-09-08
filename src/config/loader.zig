@@ -135,6 +135,9 @@ pub const ConfigLoader = struct {
             config.server.port = @intCast(port);
         }
         try json_read.replaceString(allocator, &config.server.host, server_obj, "host");
+        if (server_obj.get("tls")) |v| {
+            if (v == .null) return error.TypeMismatch;
+        }
         if (try json_read.getObject(server_obj, "tls")) |tls| {
             try json_read.setString(allocator, &config.server.tls_cert_file, tls, "certFile");
             try json_read.setString(allocator, &config.server.tls_key_file, tls, "keyFile");
