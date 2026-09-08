@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import { buildBrowser } from "./build";
+import { startLocalEdge } from "./dev";
 import { type ChunkRow, type Country, NAMESPACE, readDots } from "./shared";
 
 async function freePort() {
@@ -32,8 +34,49 @@ async function eventually<T>(check: () => Promise<T>, label: string) {
 
 const dataDir = await mkdtemp(join(tmpdir(), "pixel-conquest-smoke-"));
 const port = await freePort(),
+	authPort = await freePort(),
 	databasePort = await freePort();
 const origin = `http://localhost:${port}`;
+const useTls = process.argv.includes("--tls");
+const certFile = join(dataDir, "cert.pem");
+const keyFile = join(dataDir, "key.pem");
+let cert: string | undefined;
+if (useTls) {
+	const result = Bun.spawnSync([
+		"openssl",
+		"req",
+		"-x509",
+		"-newkey",
+		"rsa:2048",
+		"-nodes",
+		"-days",
+		"1",
+		"-subj",
+		"/CN=localhost",
+		"-addext",
+		"subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1",
+		"-keyout",
+		keyFile,
+		"-out",
+		certFile,
+	]);
+	assert.equal(result.exitCode, 0, result.stderr.toString());
+	cert = await readFile(certFile, "utf8");
+}
+const assets = await buildBrowser(join(dataDir, "assets"));
+assert.deepEqual((await readdir(assets)).sort(), [
+	"_headers",
+	"client.js",
+	"index.html",
+	"style.css",
+]);
+const stopEdge = await startLocalEdge({
+	port,
+	authPort,
+	databasePort,
+	assets,
+	ca: cert,
+});
 let processHandle: Bun.Subprocess | undefined;
 let logs = "";
 const clients: ZyncBaseClient[] = [];
@@ -50,8 +93,14 @@ async function start(reset = false) {
 		{
 			env: {
 				...process.env,
-				GAME_PORT: String(port),
+				GAME_PORT: String(authPort),
 				GAME_DB_PORT: String(databasePort),
+				GAME_HOST: useTls ? "::" : "127.0.0.1",
+				GAME_TLS_CERT: useTls ? certFile : "",
+				GAME_TLS_KEY: useTls ? keyFile : "",
+				NODE_EXTRA_CA_CERTS: useTls
+					? certFile
+					: process.env.NODE_EXTRA_CA_CERTS,
 				GAME_DATA_DIR: dataDir,
 				GAME_ORIGIN: origin,
 				GAME_JOIN_CODE: "smoke-test",
@@ -137,6 +186,23 @@ try {
 	});
 	assert.equal((await fetch(origin)).status, 200);
 	assert.equal((await fetch(`${origin}/client.js`)).status, 200);
+	// The VM's token issuer serves neither browser assets nor database tickets.
+	for (const path of ["/", "/client.js", "/auth/ticket"]) {
+		const response = await fetch(
+			`${useTls ? "https://[::1]" : "http://127.0.0.1"}:${authPort}${path}`,
+			{ method: path === "/auth/ticket" ? "POST" : "GET", tls: { ca: cert } },
+		);
+		assert.equal(response.status, 404);
+	}
+	assert.equal(
+		(
+			await fetch(`${origin}/auth/ticket`, {
+				method: "POST",
+				headers: { Authorization: "Bearer invalid" },
+			})
+		).status,
+		401,
+	);
 	assert.equal(
 		(
 			await fetch(`${origin}/session`, {
@@ -193,7 +259,7 @@ try {
 		"two humans replace one bot",
 	);
 	console.log(
-		"PASS: invite, identity, WebSocket proxy, presence → store subscription",
+		`PASS: invite, identity, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, presence → store subscription`,
 	);
 	input.direction = "right";
 	input.seq++;
@@ -307,5 +373,6 @@ try {
 	throw error;
 } finally {
 	await stop();
+	await stopEdge();
 	await rm(dataDir, { recursive: true, force: true });
 }

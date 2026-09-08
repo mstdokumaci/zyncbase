@@ -3,9 +3,11 @@
     "sdk/*"
   ],
   "scripts": {
-    "demo:game": "bun run --filter @zyncbase/client build && zig build -Doptimize=ReleaseFast && bun run demo:game:start",
+    "demo:game": "bun run --filter @zyncbase/client build && zig build -Doptimize=ReleaseFast && bun run demo:game:dev",
+    "demo:game:dev": "bun examples/pixel-conquest/dev.ts",
+    "demo:game:build": "bun run --filter @zyncbase/client build && bun examples/pixel-conquest/build.ts",
     "demo:game:start": "bun examples/pixel-conquest/server.ts",
-    "test:game": "bun test examples/pixel-conquest && bun examples/pixel-conquest/smoke.ts",
+    "test:game": "bun test examples/pixel-conquest && bun examples/pixel-conquest/smoke.ts && bun examples/pixel-conquest/smoke.ts --tls",
     "test:e2e": "bun test tests/e2e/src/e2e.test.ts",
     "test:tsan": "bash scripts/tsan-prep.sh && zig build test -Dsanitize=thread --summary all --error-style minimal; tsan_exit=$?; bash scripts/tsan-prep.sh --restore; exit $tsan_exit",
     "test:safe": "zig build test -Doptimize=ReleaseSafe --summary all --error-style minimal",

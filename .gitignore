@@ -10,3 +10,5 @@ test-artifacts/
 node_modules/
 data/
 sdk/typescript/dist
+examples/pixel-conquest/dist/
+examples/pixel-conquest/.wrangler/

@@ -4,7 +4,7 @@ A small multiplayer territory game using ZyncBase's real presence → store path
 
 ## Run locally
 
-From the repository root, with Zig 0.16, Bun, and the repository's native build prerequisites installed:
+From the repository root, with Zig 0.16, Bun, OpenSSL, and the repository's native build prerequisites installed:
 
 ```sh
 bun install
@@ -18,40 +18,39 @@ Every world starts with **10 server-controlled bots across five countries**, two
 The launch command builds the SDK and a ReleaseFast ZyncBase executable, then starts both the database and game. For subsequent starts without rebuilding:
 
 ```sh
-bun run demo:game:start
+bun run demo:game:dev
 ```
 
 Stop with Ctrl+C. Territory is stored in `data/pixel-conquest/`. To clear the world, stop the running game first, then run:
 
 ```sh
-bun run demo:game:start --reset
+bun run demo:game:dev --reset
 ```
 
 The reset removes game chunks and countries and starts a fresh game. It does not touch other ZyncBase data directories.
 
 ## Cloudflare and VPS
 
-Use a named Cloudflare Tunnel with a public hostname such as `game.example.com`, forwarding HTTP to `http://localhost:8080`. Set that exact browser origin when launching:
+Follow [the FreeBSD + Cloudflare setup](./DEPLOYMENT.md). One public origin serves browser assets from Cloudflare, sends `/session` and `/health` to Bun, and sends `/auth/ticket` and `/ws` directly to ZyncBase over IPv6/TLS. The production Bun process runs the simulation and token issuer; it does not relay database connections or serve browser files.
 
-```sh
-GAME_ORIGIN=https://game.example.com GAME_JOIN_CODE=your-private-invite-code bun run demo:game:start
-```
-
-Share the HTTPS address and invite code. Both HTTP authentication and WebSockets travel through port 8080; ZyncBase listens privately on `127.0.0.1:3001`. The same launch command works on a VPS after building for that VPS's OS and architecture. ZyncBase currently requires **at least four detected CPU cores/vCPUs** at startup. Keep the process running under your service manager and put its data directory on persistent storage.
+Build an uploadable browser directory with `bun run demo:game:build`. Its output is `examples/pixel-conquest/dist/`. Start the VM processes with `bun run demo:game:start`. The development command `demo:game:dev` supplies local routing on port 8080 and is not used on the VM.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GAME_ORIGIN` | `http://localhost:8080` | Exact browser origin, including HTTPS for a tunnel. |
+| `GAME_ORIGIN` | `http://localhost:8080` | Exact browser origin; use `https://game.example.com` in deployment. |
 | `GAME_JOIN_CODE` | Random code printed at startup | Shared invite code; set it to keep the same code across restarts. |
-| `GAME_HOST` | `127.0.0.1` | Game listener address. Use `0.0.0.0` for direct LAN access. |
-| `GAME_PORT` | `8080` | Game HTTP/WebSocket port. |
-| `GAME_DB_PORT` | `3001` | Private ZyncBase port. |
-| `GAME_DATA_DIR` | `<repo>/data/pixel-conquest` | Persistent game data. Run only one simulation against a data directory. |
+| `GAME_HOST` | `127.0.0.1` | Bind address for both VM listeners. Use `::` for IPv6 deployment. |
+| `GAME_PORT` | `8081` | Bun login/health port. Deployment example: `8444`. |
+| `GAME_DB_PORT` | `3001` | ZyncBase ticket/WebSocket port. Deployment example: `8443`. |
+| `GAME_TLS_CERT`, `GAME_TLS_KEY` | Unset | PEM certificate and key for both listeners. Set both to enable TLS. |
+| `NODE_EXTRA_CA_CERTS` | Unset | CA PEM trusted by the simulation's HTTPS/WSS client. |
+| `GAME_DATA_DIR` | `<repo>/data/pixel-conquest` | Persistent game data. Run one simulation against a data directory. |
 | `GAME_SERVER_BIN` | `<repo>/zig-out/bin/zyncbase` | Prebuilt ZyncBase executable. |
+| `GAME_DEV_PORT` | `8080` | Development router port, used only by `demo:game:dev`. |
 
-For LAN access, set `GAME_HOST=0.0.0.0` and `GAME_ORIGIN=http://YOUR-LAN-IP:8080`, and have every browser use that address. Changing the hostname requires restarting with the matching origin. Server-generated player tokens last 24 hours; a server restart or expired token requires rejoining. Territory remains owned by the country.
+With TLS, the simulation connects to the hostname from `GAME_ORIGIN` on `GAME_DB_PORT`. Map that hostname to `::1` in the VM's `/etc/hosts` so simulation traffic stays local while certificate verification stays enabled. Without TLS it connects to `127.0.0.1`.
 
-Setup references: [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), [WebSocket support](https://developers.cloudflare.com/network/websockets/).
+Changing the hostname requires restarting with the matching origin. Player tokens last 24 hours; a server restart or expired token requires rejoining. Territory remains owned by the country.
 
 ## Prototype choices
 
@@ -76,7 +75,7 @@ bunx biome check --write --error-on-warnings
 bun run lint
 ```
 
-`test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, bot teams and replacement counts, and restart reconciliation. Its real-server smoke check uses an isolated temporary database and SDK clients through the public WebSocket proxy to check invitations, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset.
+`test:game` checks movement costs, stop/resume behavior, chunk boundaries, input expiry, map data, bot teams and replacement counts, and restart reconciliation. Its real-server smoke checks use isolated temporary databases and a development router mirroring Cloudflare. They exercise plaintext and IPv6/TLS origins (with a temporary trusted certificate generated by OpenSSL), and SDK clients to check invitations, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset.
 
 The enclosure performance tests also run with `test:game`. They count ownership bitmap reads during actual simulation steps, so regressions fail independently of machine speed. To print median step times as well:
 
@@ -86,7 +85,7 @@ GAME_BENCH=1 bun test examples/pixel-conquest/enclosure.perf.test.ts
 
 Fixtures cover small and large U-shaped countries, a rotated U, a solid square, and a large loop closure. A step along the inner border of the 202,500-pixel U originally needed 3,763,788 bitmap reads; checking local connectivity first reduces that to 13. Steps that cannot close a gap skip the flood fill. Actual closures still search and fill their enclosed area. Timings exclude fixture setup and bitmap-read instrumentation, use two warmups and seven samples, and measure simulation only; database commits, browser delivery, and VPS capacity require separate measurements.
 
-For a manual browser check, open two windows, join different countries, move across the same area, release the keys, switch tabs while moving, disconnect one player, and restart the server. Test teammates by entering the same country name. Repeat over the tunnel before inviting everyone.
+For a manual browser check, open two windows, join different countries, move across the same area, release the keys, switch tabs while moving, disconnect one player, and restart the server. Test teammates by entering the same country name. Repeat at the public Cloudflare hostname before inviting everyone.
 
 ## Map source
 
