@@ -20,6 +20,7 @@ HoleFiller.prototype.fill = function (owners, code, bounds) {
 	return result;
 };
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: diagnostic-only snapshot asserts and log formatting surround the wrapped tick.
 World.prototype.tick = function (now) {
 	if (this.ticks === 0) {
 		times = [];
@@ -46,6 +47,9 @@ World.prototype.tick = function (now) {
 		}
 	}
 	const stored = (this as unknown as { bounds: Map<number, Bounds> }).bounds;
+	const countries = (
+		this as unknown as { countries: Map<number, { count: number }> }
+	).countries;
 	const boxes = [...tight].map(([code, box]) => {
 		const grown = stored.get(code);
 		assert(grown);
@@ -54,6 +58,13 @@ World.prototype.tick = function (now) {
 		const area = (b: Bounds) => (b.right - b.left + 1) * (b.bottom - b.top + 1);
 		return { code, storedArea: area(grown), tightArea: area(box) };
 	});
+	const surplusZeroCount: number[] = [];
+	for (const code of stored.keys()) {
+		if (tight.has(code)) continue;
+		const count = countries.get(code)?.count ?? 0;
+		assert.equal(count, 0);
+		surplusZeroCount.push(code);
+	}
 	times.sort((a, b) => a - b);
 	areas.sort((a, b) => a - b);
 	console.log(
@@ -68,6 +79,7 @@ World.prototype.tick = function (now) {
 			fillAreaP50: areas[Math.floor(areas.length / 2)] ?? 0,
 			fillAreaMax: areas.at(-1) ?? 0,
 			boxes,
+			surplusZeroCount,
 		}),
 	);
 	times = [];
