@@ -406,9 +406,11 @@ export class World {
 		this.owners[cell] = code;
 		this.extendBounds(code, cell);
 		this.changedCountries.add(code);
+		const starts = this.enclosureCountries.get(code);
 		if (
-			this.enclosureCountries.get(code) !== null &&
-			mayEnclose(this.owners, code, cell, WIDTH)
+			starts !== null &&
+			// A later claim can consume a queued start while its hole still exists.
+			(starts?.has(cell) || mayEnclose(this.owners, code, cell, WIDTH))
 		) {
 			const x = cell % WIDTH;
 			if (cell >= WIDTH) this.queueEnclosure(code, cell - WIDTH);

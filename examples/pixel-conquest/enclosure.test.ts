@@ -410,6 +410,27 @@ test("enclosures use the completed tick, including a later mover's breach", () =
 	expect(owner(32, 32)).toBe(0);
 });
 
+test("later movers preserve enclosure searches when they paint over queued starts", () => {
+	const pixels: Pixel[] = [[32, 32, 2]];
+	for (let y = 30; y <= 34; y++)
+		for (let x = 30; x <= 36; x++)
+			if (y !== 32 || x < 32) pixels.push([x, y, 1]);
+	const { world, actor, owner } = scenario(pixels);
+	// Close the corridor, then consume two successive search starts in one tick.
+	for (const x of [36, 35, 34]) {
+		const mover = actor(String(x), 1, x, 31);
+		mover.direction = "down";
+		mover.credit = 1;
+	}
+	world.tick(0);
+	for (const player of world.players.values()) player.direction = "idle";
+	expect(owner(32, 32)).toBe(1);
+	expect(owner(33, 32)).toBe(1);
+	for (let tick = 1; tick <= 100; tick++) world.tick(tick);
+	expect(owner(32, 32)).toBe(1);
+	expect(owner(33, 32)).toBe(1);
+});
+
 test("own-territory and water movement do not schedule enclosure scans", () => {
 	const { actor, move } = scenario(
 		[
@@ -510,7 +531,7 @@ test("defensive reclaim still runs beside an enclosed water pixel", () => {
 	}
 });
 
-test("gated ticks match unconditional fills across random changes and water gaps", () => {
+test("gated ticks match unconditional fills and leave no holes after inter-country cascades", () => {
 	const { world } = scenario(
 		[],
 		[
@@ -519,6 +540,13 @@ test("gated ticks match unconditional fills across random changes and water gaps
 			[34, 33],
 		],
 	);
+	world.countries.set(3, {
+		id: "3",
+		code: 3,
+		name: "3",
+		color: "red",
+		count: 0,
+	});
 	const reference = new World(world.land);
 	for (const country of world.countries.values())
 		reference.countries.set(country.code, { ...country });
@@ -538,10 +566,10 @@ test("gated ticks match unconditional fills across random changes and water gaps
 		random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
 		return random >>> 16;
 	};
-	for (let tick = 0; tick < 100; tick++) {
+	for (let tick = 0; tick < 1000; tick++) {
 		for (let move = 0; move < 8; move++) {
 			const cell = (30 + (next() % 8)) * WIDTH + 30 + (next() % 8);
-			const code = 1 + (next() % 2);
+			const code = 1 + (next() % 3);
 			Reflect.get(world, "claim").call(world, cell, code);
 			Reflect.get(reference, "claim").call(reference, cell, code);
 		}
@@ -554,5 +582,17 @@ test("gated ticks match unconditional fills across random changes and water gaps
 		expect([...world.countries.values()]).toEqual([
 			...reference.countries.values(),
 		]);
+		// Include an unowned halo so the independent flood sees the world exterior.
+		const cells = Array.from(
+			{ length: 100 },
+			(_, i) => (29 + Math.floor(i / 10)) * WIDTH + 29 + (i % 10),
+		);
+		const owners = Uint16Array.from(cells, (cell) => world.owners[cell]);
+		for (const code of world.countries.keys()) {
+			const labels = referenceFill(owners, 10, code);
+			expect(
+				cells.filter((cell, i) => world.land[cell] && labels[i] === 0),
+			).toEqual([]);
+		}
 	}
 });
