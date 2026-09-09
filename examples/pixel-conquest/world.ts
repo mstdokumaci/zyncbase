@@ -1,10 +1,11 @@
 import { type BotPlan, planBot } from "./bots";
 import {
-	type Bounds,
-	enclosedOnRestore,
-	enclosedRegion,
-	enclosureStarts,
+	hasStraightExit,
+	LOCAL_SEARCH_BUDGET,
+	localEnclosures,
+	mayEnclose,
 } from "./enclosure";
+import { type Bounds, HoleFiller } from "./filler";
 import {
 	CHUNK,
 	type ChunkRow,
@@ -56,10 +57,12 @@ export class World {
 	inputMessages = 0;
 	ticks = 0;
 	private botsEnabled = false;
-	// ponytail: bounds grow conservatively; rebuild them if very large, fragmented countries make searches expensive.
-	private bounds = new Map<number, Bounds>();
+	private readonly filler = new HoleFiller(WIDTH, HEIGHT);
+	private readonly bounds = new Map<number, Bounds>();
+	private readonly changedCountries = new Set<number>();
+	private readonly enclosureCountries = new Map<number, Set<number> | null>();
 
-	constructor(readonly land: Uint8Array) {}
+	constructor(readonly land: Uint8Array) { }
 
 	get humanCount() {
 		return [...this.players.values()].filter((player) => !player.bot).length;
@@ -129,15 +132,14 @@ export class World {
 						throw new Error("Saved territory has an unknown country");
 					country.count++;
 					this.extendBounds(country.code, py * WIDTH + px);
+					this.changedCountries.add(country.code);
+					this.enclosureCountries.set(country.code, null);
 				}
 			}
 			// Reconcile dots before admitting players after a restart.
 			if (chunk.occupied) this.dirtyChunks.add(chunk.index);
 		}
-		for (const [code, bounds] of this.bounds) {
-			for (const cell of enclosedOnRestore(this.owners, code, bounds))
-				this.claim(cell, code);
-		}
+		this.fillEnclosures();
 	}
 
 	private country(name: string) {
@@ -169,9 +171,9 @@ export class World {
 		const angle = (team * Math.PI * 2) / botCountries.length - Math.PI / 2;
 		const anchor = bot
 			? {
-					x: center.x + Math.round(Math.cos(angle) * 48),
-					y: center.y + Math.round(Math.sin(angle) * 48),
-				}
+				x: center.x + Math.round(Math.cos(angle) * 48),
+				y: center.y + Math.round(Math.sin(angle) * 48),
+			}
 			: center;
 		const occupied = new Set(
 			[...this.players.values()].map((p) => p.y * WIDTH + p.x),
@@ -284,6 +286,7 @@ export class World {
 			this.move(player);
 		}
 		this.tickBots(now);
+		this.fillEnclosures();
 	}
 
 	private tickBots(now: number) {
@@ -328,48 +331,114 @@ export class World {
 		this.dirtyChunks.add(chunkIndex(x, y));
 		if (!this.land[to] || owner === player.code) return;
 		this.claim(to, player.code);
-		// The previous owner can immediately reclaim paint still inside its enclosure.
-		if (owner) this.capture(owner, to);
-		if (this.owners[to] !== player.code) return;
-		for (const cell of enclosureStarts(this.owners, player.code, to))
-			this.capture(player.code, cell);
+	}
+
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each affected country fills and updates ownership at most once.
+	private fillEnclosures() {
+		if (!this.enclosureCountries.size) {
+			this.changedCountries.clear();
+			return;
+		}
+		// Keep entries until the pass ends: captures can append affected countries,
+		// but each country runs at most once, in first-change order.
+		for (const code of this.changedCountries) {
+			if (
+				!this.enclosureCountries.has(code) ||
+				!this.countries.get(code)?.count
+			)
+				continue;
+			const box = this.bounds.get(code);
+			if (!box) continue;
+			const starts = this.enclosureCountries.get(code);
+			// A processed country needs no more candidates from its own captures.
+			this.enclosureCountries.set(code, null);
+			const local = starts
+				? localEnclosures(this.owners, code, starts, box, WIDTH)
+				: undefined;
+			if (local) {
+				for (const cell of local) this.claim(cell, code, true);
+				continue;
+			}
+			// Filling only grows a country inside its original bounds. Other
+			// countries only shrink, so these bounds stay safe throughout the pass.
+			const labels = this.filler.fill(this.owners, code, box);
+			for (let y = box.top; y <= box.bottom; y++) {
+				const end = y * WIDTH + box.right;
+				for (let cell = y * WIDTH + box.left; cell <= end; cell++)
+					if (labels[cell] === 0 && this.land[cell])
+						this.claim(cell, code, true);
+			}
+		}
+		this.changedCountries.clear();
+		this.enclosureCountries.clear();
+	}
+
+	private queueEnclosure(code: number, cell: number) {
+		let starts = this.enclosureCountries.get(code);
+		if (starts === null) return;
+		if (!starts) {
+			starts = new Set();
+			this.enclosureCountries.set(code, starts);
+		}
+		if (starts.size === LOCAL_SEARCH_BUDGET)
+			this.enclosureCountries.set(code, null);
+		else starts.add(cell);
 	}
 
 	private extendBounds(code: number, cell: number) {
+		// ponytail: bounds only grow; recompute after losses if loose bounds become costly.
 		const x = cell % WIDTH,
 			y = Math.floor(cell / WIDTH);
-		const bounds = this.bounds.get(code);
-		if (!bounds) {
-			this.bounds.set(code, { left: x, right: x, top: y, bottom: y });
-			return;
+		const box = this.bounds.get(code);
+		if (!box) this.bounds.set(code, { left: x, right: x, top: y, bottom: y });
+		else {
+			box.left = Math.min(box.left, x);
+			box.right = Math.max(box.right, x);
+			box.top = Math.min(box.top, y);
+			box.bottom = Math.max(box.bottom, y);
 		}
-		bounds.left = Math.min(bounds.left, x);
-		bounds.right = Math.max(bounds.right, x);
-		bounds.top = Math.min(bounds.top, y);
-		bounds.bottom = Math.max(bounds.bottom, y);
 	}
 
-	private capture(code: number, start: number) {
-		const bounds = this.bounds.get(code);
-		if (!bounds) return;
-		for (const cell of enclosedRegion(this.owners, code, bounds, start))
-			this.claim(cell, code);
-	}
-
-	private claim(cell: number, code: number) {
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: update both owners and collect bounded enclosure candidates at their shared mutation point.
+	private claim(cell: number, code: number, fromFill = false) {
 		const owner = this.owners[cell];
 		if (!this.land[cell] || owner === code) return;
 		this.owners[cell] = code;
 		this.extendBounds(code, cell);
+		this.changedCountries.add(code);
+		if (
+			this.enclosureCountries.get(code) !== null &&
+			mayEnclose(this.owners, code, cell, WIDTH)
+		) {
+			const x = cell % WIDTH;
+			if (cell >= WIDTH) this.queueEnclosure(code, cell - WIDTH);
+			if (x < WIDTH - 1) this.queueEnclosure(code, cell + 1);
+			if (cell < this.owners.length - WIDTH)
+				this.queueEnclosure(code, cell + WIDTH);
+			if (x > 0) this.queueEnclosure(code, cell - 1);
+		}
 		this.dirtyChunks.add(chunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)));
 		const country = this.countries.get(code);
 		if (country) country.count++;
 		this.dirtyCountries.add(code);
-		if (owner) {
-			const previous = this.countries.get(owner);
-			if (previous) previous.count--;
-			this.dirtyCountries.add(owner);
-		}
+		if (!owner) return;
+		const previous = this.countries.get(owner);
+		if (previous) previous.count--;
+		this.dirtyCountries.add(owner);
+		this.changedCountries.add(owner);
+		if (!previous?.count) return;
+		const box = this.bounds.get(owner);
+		// A loss needs reclaim unless we can prove this pixel still reaches
+		// the exterior. Keep any scan already required by an earlier change.
+		if (
+			this.enclosureCountries.get(owner) !== null &&
+			// Bulk captures enqueue in constant time per pixel; their bounded
+			// local check or one full scan decides reclaim later in this pass.
+			(fromFill ||
+				!box ||
+				!hasStraightExit(this.owners, owner, cell, WIDTH, box))
+		)
+			this.queueEnclosure(owner, cell);
 	}
 
 	chunk(index: number): ChunkRow {

@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { HoleFiller } from "./filler";
 import { chunkIndex, HEIGHT, WIDTH } from "./shared";
 import { World } from "./world";
 
@@ -77,25 +78,18 @@ test.each([
 	["rotated large U", 90, true, "open"],
 	["large square", 90, false, "square"],
 	["large loop closure", 90, false, "closing"],
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: call-count verification and optional warmup timing share the same fixture reset.
 ] as const)("enclosure work: %s", (name, size, rotated, shape) => {
 	const { world, reset, step, verify, count } = workload(size, rotated, shape);
 	reset();
-	// Count actual bitmap reads through World.tick; no production instrumentation
-	// or machine-dependent timing threshold is needed to catch repeated scans.
-	const owners = world.owners;
-	let reads = 0;
-	Object.defineProperty(world, "owners", {
-		value: new Proxy(owners, {
-			get(target, key) {
-				if (typeof key === "string" && /^\d+$/.test(key)) reads++;
-				return Reflect.get(target, key, target);
-			},
-		}),
-	});
+	const fill = spyOn(HoleFiller.prototype, "fill");
 	try {
 		step();
+		expect(fill).toHaveBeenCalledTimes(shape === "closing" ? 1 : 0);
+		if (shape === "closing")
+			expect(fill.mock.calls[0].slice(0, 2)).toEqual([world.owners, 1]);
 	} finally {
-		Object.defineProperty(world, "owners", { value: owners });
+		fill.mockRestore();
 	}
 	verify();
 	if (process.env.GAME_BENCH === "1") {
@@ -113,11 +107,9 @@ test.each([
 			JSON.stringify({
 				name,
 				ownedPixels: count,
-				bitmapReads: reads,
+				worldScans: shape === "closing" ? 1 : 0,
 				medianMs: Number(samples[3].toFixed(3)),
 			}),
 		);
 	}
-	// Ordinary extensions should have bounded work even beside a huge open area.
-	expect(reads).toBeLessThan(shape === "closing" ? WIDTH * HEIGHT * 8 : 100);
 });

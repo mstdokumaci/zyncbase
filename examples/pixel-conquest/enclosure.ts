@@ -1,125 +1,139 @@
-import { HEIGHT, WIDTH } from "./shared";
+import type { Bounds } from "./filler";
 
-export type Bounds = {
-	left: number;
-	right: number;
-	top: number;
-	bottom: number;
-};
-
-export function neighbors(cell: number) {
-	return [cell - WIDTH, cell + 1, cell + WIDTH, cell - 1];
-}
-
-// If the open side-neighbors still connect around the painted cell, removing
-// that cell from their component cannot enclose anything new. Otherwise search
-// once per local component; a global search still decides whether it is closed.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the eight-cell ring once, keeping one side-neighbor per open group.
-export function enclosureStarts(
+// A gain can split the exterior only if its open side-neighbors do not all
+// connect around the eight-cell ring. False rules out a new enclosure; true
+// requests an enclosure search. At world edges, search conservatively.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the local ring once, counting groups that contain a side-neighbor.
+export function mayEnclose(
 	owners: Uint16Array,
 	code: number,
 	cell: number,
+	width: number,
 ) {
-	const x = cell % WIDTH;
+	const x = cell % width;
 	if (
 		x === 0 ||
-		x === WIDTH - 1 ||
-		cell < WIDTH ||
-		cell >= WIDTH * (HEIGHT - 1)
+		x === width - 1 ||
+		cell < width ||
+		cell >= owners.length - width
 	)
-		return neighbors(cell);
+		return true;
 	const ring = [
-		cell - WIDTH - 1,
-		cell - WIDTH,
-		cell - WIDTH + 1,
+		cell - width - 1,
+		cell - width,
+		cell - width + 1,
 		cell + 1,
-		cell + WIDTH + 1,
-		cell + WIDTH,
-		cell + WIDTH - 1,
+		cell + width + 1,
+		cell + width,
+		cell + width - 1,
 		cell - 1,
 	];
 	const wall = ring.findIndex((neighbor) => owners[neighbor] === code);
-	if (wall === -1) return [];
-	const starts: number[] = [];
-	let start = -1;
+	if (wall === -1) return false;
+	let groups = 0,
+		side = false;
 	for (let i = 1; i <= ring.length; i++) {
 		const index = (wall + i) % ring.length;
 		if (owners[ring[index]] === code) {
-			if (start !== -1) starts.push(start);
-			start = -1;
-		} else if (index % 2 === 1) start = ring[index];
+			if (side && ++groups > 1) return true;
+			side = false;
+		} else if (index % 2 === 1) side = true;
 	}
-	return starts.length > 1 ? starts : [];
+	return false;
 }
 
-// A component reaching a country's bounding edge has an unobstructed route outside.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flood until the component closes or reaches the outside.
-export function enclosedRegion(
+// A straight route through non-country pixels proves connection to the exterior.
+// Curved routes can fail this test; those deliberately request an enclosure search.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: four bounded rays avoid allocation and stop at the first country pixel.
+export function hasStraightExit(
 	owners: Uint16Array,
 	code: number,
+	cell: number,
+	width: number,
 	bounds: Bounds,
-	start: number,
 ) {
-	if (owners[start] === code) return [];
-	const cells = [start];
-	const seen = new Set(cells);
-	for (let head = 0; head < cells.length; head++) {
-		const cell = cells[head],
-			x = cell % WIDTH,
-			y = Math.floor(cell / WIDTH);
-		if (
-			x <= bounds.left ||
-			x >= bounds.right ||
-			y <= bounds.top ||
-			y >= bounds.bottom
-		)
-			return [];
-		for (const next of neighbors(cell)) {
-			if (owners[next] === code || seen.has(next)) continue;
-			seen.add(next);
-			cells.push(next);
-		}
-	}
-	return cells;
+	if (owners[cell] === code) return false;
+	const x = cell % width,
+		y = Math.floor(cell / width);
+	if (
+		x <= bounds.left ||
+		x >= bounds.right ||
+		y <= bounds.top ||
+		y >= bounds.bottom
+	)
+		return true;
+	const left = cell - x + bounds.left,
+		right = cell - x + bounds.right;
+	const top = bounds.top * width + x,
+		bottom = bounds.bottom * width + x;
+	let cur = cell;
+	while (cur > left && owners[cur - 1] !== code) cur--;
+	if (cur === left) return true;
+	cur = cell;
+	while (cur < right && owners[cur + 1] !== code) cur++;
+	if (cur === right) return true;
+	cur = cell;
+	while (cur > top && owners[cur - width] !== code) cur -= width;
+	if (cur === top) return true;
+	cur = cell;
+	while (cur < bottom && owners[cur + width] !== code) cur += width;
+	return cur === bottom;
 }
 
-// Startup reconciliation visits each component once, including open components.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: seed the rectangle edges, flood the exterior, then collect its interior.
-export function enclosedOnRestore(
+// Bound all local work per country, then use the whole-country scan as fallback.
+export const LOCAL_SEARCH_BUDGET = 1024;
+const localQueue = new Uint32Array(LOCAL_SEARCH_BUDGET);
+const localSeen = new Set<number>();
+const localOutside = new Set<number>();
+
+// Scratch storage is reused synchronously. Nothing is painted unless every
+// candidate is resolved within the shared budget; undefined requests a full fill.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the bounded flood proves each component open or closed before returning captures.
+export function localEnclosures(
 	owners: Uint16Array,
 	code: number,
+	starts: Set<number>,
 	bounds: Bounds,
-) {
-	const outside = new Set<number>();
-	const queue: number[] = [];
-	const visit = (cell: number) => {
-		if (owners[cell] === code || outside.has(cell)) return;
-		outside.add(cell);
-		queue.push(cell);
-	};
-	for (let x = bounds.left; x <= bounds.right; x++) {
-		visit(bounds.top * WIDTH + x);
-		visit(bounds.bottom * WIDTH + x);
-	}
-	for (let y = bounds.top; y <= bounds.bottom; y++) {
-		visit(y * WIDTH + bounds.left);
-		visit(y * WIDTH + bounds.right);
-	}
-	for (let head = 0; head < queue.length; head++) {
-		const cell = queue[head],
-			x = cell % WIDTH,
-			y = Math.floor(cell / WIDTH);
-		if (x > bounds.left) visit(cell - 1);
-		if (x < bounds.right) visit(cell + 1);
-		if (y > bounds.top) visit(cell - WIDTH);
-		if (y < bounds.bottom) visit(cell + WIDTH);
-	}
-	const enclosed: number[] = [];
-	for (let y = bounds.top + 1; y < bounds.bottom; y++) {
-		for (let x = bounds.left + 1; x < bounds.right; x++) {
-			const cell = y * WIDTH + x;
-			if (owners[cell] !== code && !outside.has(cell)) enclosed.push(cell);
+	width: number,
+): number[] | undefined {
+	let remaining = LOCAL_SEARCH_BUDGET;
+	const holes = new Set<number>();
+	localOutside.clear();
+	for (const start of starts) {
+		if (owners[start] === code || holes.has(start) || localOutside.has(start))
+			continue;
+		if (!remaining--) return;
+		localSeen.clear();
+		localSeen.add(start);
+		localQueue[0] = start;
+		let tail = 1,
+			open = false;
+		for (let head = 0; head < tail && !open; head++) {
+			const cell = localQueue[head],
+				x = cell % width,
+				y = Math.floor(cell / width);
+			if (
+				x <= bounds.left ||
+				x >= bounds.right ||
+				y <= bounds.top ||
+				y >= bounds.bottom
+			) {
+				open = true;
+				break;
+			}
+			for (const next of [cell - width, cell + 1, cell + width, cell - 1]) {
+				if (owners[next] === code || localSeen.has(next)) continue;
+				if (localOutside.has(next)) {
+					open = true;
+					break;
+				}
+				if (!remaining--) return;
+				localSeen.add(next);
+				localQueue[tail++] = next;
+			}
 		}
+		for (const cell of localSeen) (open ? localOutside : holes).add(cell);
 	}
-	return enclosed;
+	// Match the full fill's claim order, including which other countries it affects first.
+	return [...holes].sort((a, b) => a - b);
 }
