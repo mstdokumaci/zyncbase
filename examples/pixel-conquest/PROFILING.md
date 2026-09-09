@@ -240,8 +240,12 @@ bun run --filter @zyncbase/client build
 bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/fresh-20260909/published
 bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
 bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --profile --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
-bun --preload ./test-artifacts/pixel-conquest-profile/fresh-20260909/diagnostics.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long/diagnostic
+bun --preload ./examples/pixel-conquest/diagnostics.preload.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long/diagnostic
 ```
+
+The diagnostic preload is a tracked source file; earlier captures referenced a
+local-only copy under `test-artifacts/`, which is gitignored and absent on a
+clean checkout.
 
 All 16 successful harness runs passed the existing ownership, country-count
 and player-position assertions. The diagnostic preload additionally checked
