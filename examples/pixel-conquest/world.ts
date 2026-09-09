@@ -386,7 +386,7 @@ export class World {
 	}
 
 	private extendBounds(code: number, cell: number) {
-		// ponytail: bounds only grow; recompute after losses if loose bounds become costly.
+		// bounds only grow; recompute after losses if loose bounds become costly.
 		const x = cell % WIDTH,
 			y = Math.floor(cell / WIDTH);
 		const box = this.bounds.get(code);

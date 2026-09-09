@@ -99,7 +99,7 @@ async function body(req: IncomingMessage) {
 	return JSON.parse(Buffer.concat(chunks).toString());
 }
 
-// ponytail: one shared login budget for a friends-only demo; use per-client limits for public signup.
+// one shared login budget for a friends-only demo; use per-client limits for public signup.
 let logins = 0,
 	loginWindow = Date.now();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
@@ -353,7 +353,6 @@ try {
 	ready = true;
 	tick = setInterval(() => {
 		if (inFlight || stopping) return;
-		// ponytail: pause ticks during commit; decouple with a bounded queue if VPS measurements justify it.
 		world.tick(performance.now());
 		inFlight = publish()
 			.catch(failed)

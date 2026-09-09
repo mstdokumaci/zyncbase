@@ -39,23 +39,92 @@ function perimeter(left: number, top: number) {
 	return cells;
 }
 
-function routeCost(world: World, code: number, from: number, cells: number[]) {
+// Scores the same cell sequence planBot used to build (approach, sweep,
+// optional loop closure or coastal return) without building per-candidate
+// cell arrays; only the winner is materialized.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the step body is written out at the three walk sites so cost/cur stay in locals.
+function scoreCells(
+	world: World,
+	code: number,
+	from: number,
+	route: number[],
+	reverse: boolean,
+	horizontalFirst: boolean,
+	loop: boolean,
+	painted: Set<number>,
+) {
+	const owners = world.owners,
+		land = world.land;
 	let cost = 0;
-	const painted = new Set<number>();
-	for (const to of cells) {
+	let cur = from;
+	const last = route.length - 1;
+	const entry = reverse ? route[last] : route[0];
+	// Same two-phase L walk as approach(), scored inline without allocating.
+	// The step body is written out at each site: a closure would put cost/cur
+	// in context-allocated storage and cost more than the arrays it replaces.
+	let x = cur % WIDTH,
+		y = Math.floor(cur / WIDTH);
+	const tx = entry % WIDTH,
+		ty = Math.floor(entry / WIDTH);
+	for (const horizontal of [horizontalFirst, !horizontalFirst]) {
+		while (horizontal ? x !== tx : y !== ty) {
+			if (horizontal) x += Math.sign(tx - x);
+			else y += Math.sign(ty - y);
+			const next = y * WIDTH + x;
+			cost += world.stepCost(
+				code,
+				cur,
+				next,
+				painted.has(next) ? code : owners[next],
+			);
+			if (land[next]) painted.add(next);
+			cur = next;
+		}
+	}
+	for (let k = 1; k < route.length; k++) {
+		const next = reverse ? route[last - k] : route[k];
 		cost += world.stepCost(
 			code,
-			from,
-			to,
-			painted.has(to) ? code : world.owners[to],
+			cur,
+			next,
+			painted.has(next) ? code : owners[next],
 		);
-		if (world.land[to]) painted.add(to);
-		from = to;
+		if (land[next]) painted.add(next);
+		cur = next;
+	}
+	if (loop) {
+		cost += world.stepCost(
+			code,
+			cur,
+			entry,
+			painted.has(entry) ? code : owners[entry],
+		);
+	} else if (from === entry) {
+		const exit = reverse ? route[0] : route[last];
+		let rx = exit % WIDTH,
+			ry = Math.floor(exit / WIDTH);
+		const fx = from % WIDTH,
+			fy = Math.floor(from / WIDTH);
+		for (const horizontal of [horizontalFirst, !horizontalFirst]) {
+			while (horizontal ? rx !== fx : ry !== fy) {
+				if (horizontal) rx += Math.sign(fx - rx);
+				else ry += Math.sign(fy - ry);
+				const next = ry * WIDTH + rx;
+				cost += world.stepCost(
+					code,
+					cur,
+					next,
+					painted.has(next) ? code : owners[next],
+				);
+				if (land[next]) painted.add(next);
+				cur = next;
+			}
+		}
 	}
 	return cost;
 }
 
-// ponytail: compare two L-shaped approaches to nearby patches; add pathfinding only if long voyages need it.
+// compare two L-shaped approaches to nearby patches; add pathfinding only if long voyages need it.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: bounded candidate search evaluates complete travel-and-sweep plans together.
 export function planBot(world: World, bot: Dot): BotPlan | undefined {
 	const rival = [...world.countries.values()]
@@ -68,7 +137,11 @@ export function planBot(world: World, bot: Dot): BotPlan | undefined {
 	);
 	const from = bot.y * WIDTH + bot.x;
 	let best = 0;
-	let plan: BotPlan | undefined;
+	let bestPatch = 0,
+		bestRoute: number[] | undefined,
+		bestReverse = false,
+		bestHorizontalFirst = true,
+		bestLoop = false;
 	for (let dy = -4; dy <= 4; dy++) {
 		for (let dx = -4; dx <= 4; dx++) {
 			const left = (Math.floor(bot.x / SIDE) + dx) * SIDE;
@@ -97,26 +170,42 @@ export function planBot(world: World, bot: Dot): BotPlan | undefined {
 			const edge = perimeter(left, top);
 			const loop = edge.every((cell) => world.land[cell]);
 			const route = loop ? edge : area;
-			for (const order of [route, [...route].reverse()]) {
+			for (const reverse of [false, true]) {
 				for (const horizontalFirst of [true, false]) {
-					const cells = [
-						...approach(from, order[0], horizontalFirst),
-						...order.slice(1),
-					];
-					if (loop) cells.push(order[0]);
-					// A coastal sweep must enter its starting cell too; water cannot close a boundary.
-					else if (from === order[0])
-						cells.push(
-							...approach(order.at(-1) as number, from, horizontalFirst),
+					const score =
+						gain /
+						scoreCells(
+							world,
+							bot.code,
+							from,
+							route,
+							reverse,
+							horizontalFirst,
+							loop,
+							new Set<number>(),
 						);
-					const score = gain / routeCost(world, bot.code, from, cells);
 					if (score > best) {
 						best = score;
-						plan = { patch, cells };
+						bestPatch = patch;
+						bestRoute = route;
+						bestReverse = reverse;
+						bestHorizontalFirst = horizontalFirst;
+						bestLoop = loop;
 					}
 				}
 			}
 		}
 	}
-	return plan;
+	if (!bestRoute) return;
+	// Materialize the winner exactly as before; only one cells array per think.
+	const order = bestReverse ? [...bestRoute].reverse() : bestRoute;
+	const cells = [
+		...approach(from, order[0], bestHorizontalFirst),
+		...order.slice(1),
+	];
+	if (bestLoop) cells.push(order[0]);
+	// A coastal sweep must enter its starting cell too; water cannot close a boundary.
+	else if (from === order[0])
+		cells.push(...approach(order.at(-1) as number, from, bestHorizontalFirst));
+	return { patch: bestPatch, cells };
 }
