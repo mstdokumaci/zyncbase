@@ -62,7 +62,7 @@ export class World {
 	private readonly changedCountries = new Set<number>();
 	private readonly enclosureCountries = new Map<number, Set<number> | null>();
 
-	constructor(readonly land: Uint8Array) { }
+	constructor(readonly land: Uint8Array) {}
 
 	get humanCount() {
 		return [...this.players.values()].filter((player) => !player.bot).length;
@@ -171,9 +171,9 @@ export class World {
 		const angle = (team * Math.PI * 2) / botCountries.length - Math.PI / 2;
 		const anchor = bot
 			? {
-				x: center.x + Math.round(Math.cos(angle) * 48),
-				y: center.y + Math.round(Math.sin(angle) * 48),
-			}
+					x: center.x + Math.round(Math.cos(angle) * 48),
+					y: center.y + Math.round(Math.sin(angle) * 48),
+				}
 			: center;
 		const occupied = new Set(
 			[...this.players.values()].map((p) => p.y * WIDTH + p.x),
