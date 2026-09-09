@@ -36,7 +36,7 @@ export class HoleFiller {
 		}
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the two directional scans preserve upstream's neighboring-run seed rules.
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Milazzo rectangular-block spine with deferred fringe seeds.
 	fill(owners: Uint16Array, code: number, bounds: Bounds): Uint8Array {
 		const labels = this.labels,
 			width = this.width,
@@ -56,36 +56,72 @@ export class HoleFiller {
 		this.seedEdge(top * width + left, width, bottom - top + 1);
 		this.seedEdge(top * width + right, width, bottom - top + 1);
 		while (this.top) {
-			const cell = this.stack[--this.top];
-			if (labels[cell]) continue;
-			const y = Math.floor(cell / width);
-			const row = y * width;
-			for (let direction = 1; direction >= -1; direction -= 2) {
-				let above = true,
-					below = true;
-				const end = direction === 1 ? row + width : row - 1;
-				for (
-					let cur = direction === 1 ? cell : cell - 1;
-					cur !== end;
-					cur += direction
-				) {
-					if (labels[cur]) break;
-					labels[cur] = 1;
-					if (y > 0) {
-						if (labels[cur - width]) above ||= labels[cur - width] === 2;
-						else if (above) {
-							this.push(cur - width);
-							above = false;
-						}
+			const seed = this.stack[--this.top];
+			if (labels[seed]) continue;
+			let x = seed % width;
+			let y = (seed - x) / width;
+			// Up/left are already set for core-originated seeds, so this is a
+			// no-op there and only costs two blocked-cell checks.
+			while (true) {
+				const ox = x,
+					oy = y;
+				while (y !== 0 && labels[(y - 1) * width + x] === 0) y--;
+				while (x !== 0 && labels[y * width + x - 1] === 0) x--;
+				if (x === ox && y === oy) break;
+			}
+			// MyFillCore: fill rectangular blocks down-right, defer fringes.
+			let lastRowLength = 0;
+			while (true) {
+				let rowLength = 0;
+				let sx = x;
+				const rowBase = y * width;
+				if (lastRowLength !== 0 && labels[rowBase + x] !== 0) {
+					while (true) {
+						if (--lastRowLength === 0) break;
+						++x;
+						if (labels[rowBase + x] === 0) break;
 					}
-					if (y < height - 1) {
-						if (labels[cur + width]) below ||= labels[cur + width] === 2;
-						else if (below) {
-							this.push(cur + width);
-							below = false;
-						}
+					if (lastRowLength === 0) break;
+					sx = x;
+				} else {
+					while (x !== 0 && labels[rowBase + x - 1] === 0) {
+						--x;
+						labels[rowBase + x] = 1;
+						rowLength++;
+						lastRowLength++;
+						if (
+							y !== 0 &&
+							labels[rowBase - width + x] === 0 &&
+							labels[rowBase - width + x + 1] !== 0
+						)
+							this.push(rowBase - width + x);
 					}
 				}
+				while (sx < width && labels[rowBase + sx] === 0) {
+					labels[rowBase + sx] = 1;
+					rowLength++;
+					sx++;
+				}
+				if (rowLength < lastRowLength) {
+					const end = x + lastRowLength;
+					for (let gx = sx + 1; gx < end; gx++) {
+						if (labels[rowBase + gx] === 0 && labels[rowBase + gx - 1] !== 0)
+							this.push(rowBase + gx);
+					}
+				} else if (rowLength > lastRowLength && y !== 0) {
+					const aboveBase = rowBase - width;
+					const start = x + lastRowLength;
+					for (let ux = start + 1; ux < sx; ux++) {
+						if (
+							labels[aboveBase + ux] === 0 &&
+							(ux === start + 1 || labels[aboveBase + ux - 1] !== 0)
+						)
+							this.push(aboveBase + ux);
+					}
+				}
+				lastRowLength = rowLength;
+				if (lastRowLength === 0) break;
+				if (++y >= height) break;
 			}
 		}
 		return labels;
