@@ -386,7 +386,7 @@ export class World {
 	}
 
 	private extendBounds(code: number, cell: number) {
-		// ponytail: bounds only grow; recompute after losses if loose bounds become costly.
+		// bounds only grow; recompute after losses if loose bounds become costly.
 		const x = cell % WIDTH,
 			y = Math.floor(cell / WIDTH);
 		const box = this.bounds.get(code);
@@ -406,9 +406,11 @@ export class World {
 		this.owners[cell] = code;
 		this.extendBounds(code, cell);
 		this.changedCountries.add(code);
+		const starts = this.enclosureCountries.get(code);
 		if (
-			this.enclosureCountries.get(code) !== null &&
-			mayEnclose(this.owners, code, cell, WIDTH)
+			starts !== null &&
+			// A later claim can consume a queued start while its hole still exists.
+			(starts?.has(cell) || mayEnclose(this.owners, code, cell, WIDTH))
 		) {
 			const x = cell % WIDTH;
 			if (cell >= WIDTH) this.queueEnclosure(code, cell - WIDTH);

@@ -190,7 +190,11 @@ try {
 	for (const path of ["/", "/client.js", "/auth/ticket"]) {
 		const response = await fetch(
 			`${useTls ? "https://[::1]" : "http://127.0.0.1"}:${authPort}${path}`,
-			{ method: path === "/auth/ticket" ? "POST" : "GET", tls: { ca: cert } },
+			{
+				method: path === "/auth/ticket" ? "POST" : "GET",
+				// Match the local edge's certificate name while connecting over IPv6.
+				tls: { ca: cert, serverName: "localhost" },
+			},
 		);
 		assert.equal(response.status, 404);
 	}

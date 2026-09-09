@@ -81,6 +81,39 @@ An earlier baseline publishing run completed 1,200 ticks in 60.39 seconds and av
 
 The local comparisons select an enclosure implementation. They do not establish production capacity or explain every source of the reported server load. This development machine also runs FortiEDR; a production comparison should use representative saved territory, inputs, and subscription traffic.
 
+## Follow-up: bot scoring allocations
+
+Same machine and harness as above, three interleaved repeats per variant for
+compact bots (candidate then baseline in each pair to reduce drift), and one
+run per variant for fragmented bots: 20 countries, 40 movers, 200 warmup
+ticks, 1,200 measured ticks. Here, baseline means the enclosure implementation
+selected above with the original array-based bot scorer; candidate adds the
+bot scoring change. `planBot` built `cells`, an `approach` array, a sliced
+route and a `Set` for each scoring (up to 324 per think), plus one reversed
+route per patch and an extra approach for coastal returns. Scoring now avoids
+those per-scoring route arrays and materializes only the winning plan; small
+iteration arrays and a fresh `Set` remain. Final checksums match the compact
+bot and candidate fragmented bot values above. These all-land fixtures do not
+exercise coastal sweeps or prove every intermediate decision is identical.
+
+| Workload | Baseline simulation | Candidate simulation | Change |
+| --- | ---: | ---: | ---: |
+| Compact / bots | 1,306–1,322 ms | 1,144–1,158 ms | −12.5% (medians) |
+| Fragmented / bots | 2,292 ms | 2,122 ms | −7.4% (single runs) |
+
+p99 simulation improved from ~16.5–18.1 to ~15.2–15.4 ms on compact bots.
+A shared scoring `Set` with per-candidate `clear()` was tried first and
+regressed compact bots by ~15% in local trials. The kept change passes a
+fresh `Set` per scoring and removes the route-array traffic.
+
+Local paced publishing (4 countries, 200 ticks) still averages ~0.03 Bun
+CPU cores and does not reproduce the reported sustained two-core VM load.
+Next candidates in profile order: grow-only country bounds (fallback scan
+areas already reach ~1.3M cells after 400 ticks and keep the full-world
+`labels.fill`; the memset itself is only ~3% of a fragmented run) and
+`chunk()` `DataView`/`JSON` serialization. Either needs VM tick-stat logs
+over a long session before it can be tied to the production load.
+
 ## Validation
 
-`bun test examples/pixel-conquest` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
+`bun test examples/pixel-conquest` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Bot scoring is compared with materialized reference routes for both directions and approach orders, revisits, coastal returns, ties, and world borders. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
