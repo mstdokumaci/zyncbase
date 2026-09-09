@@ -117,3 +117,135 @@ over a long session before it can be tied to the production load.
 ## Validation
 
 `bun test examples/pixel-conquest` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Bot scoring is compared with materialized reference routes for both directions and approach orders, revisits, coastal returns, ties, and world borders. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
+
+## Fresh profile: 2026-09-09
+
+**The next target is the full enclosure fallback.** On a ten-minute fragmented
+bot simulation, enclosure processing accounts for 73.9% of recorded stack
+samples, including 60.3% inside `HoleFiller.fill`. Bot planning accounts for
+18.8% and chunk preparation for 6.1%. Recomputing country bounds looks
+unpromising in this fixture: the stored bounds remain almost tight.
+
+Source: `ae1b60b` (`Example game bot performance`), with no game or database
+implementation changes. Machine: Intel Core i9-9880H, macOS x64, Bun 1.4.0.
+The existing SDK was rebuilt before the database run. Builds and checks ran
+outside measurement intervals. Raw JSON, sampling traces, logs and the
+diagnostic preload are in
+[`fresh-20260909`](../../test-artifacts/pixel-conquest-profile/fresh-20260909/).
+These are local generated artifacts.
+
+### Fresh timing baseline
+
+Three sequential repeats per workload, each with 20 countries, 40 movers,
+200 disposable warmup ticks and 1,200 measured ticks. Workload order in each
+repeat was fragmented bots, compact bots, fragmented scripted. Sampling was
+disabled. Values are medians across runs; simulation ranges are in parentheses.
+
+| Workload | Simulation total | Chunk preparation total | Simulation p99 | Whole update p99 | Updates >50 ms, by repeat |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Fragmented bots | 2,060 ms (2,025–2,072) | 211 ms | 15.21 ms | 15.55 ms | 0 / 0 / 0 |
+| Compact bots | 1,106 ms (1,106–1,130) | 166 ms | 15.05 ms | 15.41 ms | 0 / 0 / 0 |
+| Fragmented scripted | 6,127 ms (6,044–6,160) | 205 ms | 36.86 ms | 37.38 ms | 0 / 1 / 0 |
+
+All repeats and their separate sampled runs retain the previously documented
+final checksums for the selected implementation. These results are a new
+baseline, not a measured optimization against the older report.
+
+### Where Bun spends its time
+
+Separate runs used the harness's `--profile` option. Percentages below count
+recorded stack traces containing the named function, including callees.
+The filler column is a subset of enclosure processing; the two must not be
+added together. Samples describe the measured Bun workload, not ZyncBase CPU
+usage or a breakdown of every Bun background thread.
+
+| Workload | Stack samples | Enclosure processing | Filler, included at left | Bot planning | Chunk preparation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fragmented bots, 1,200 ticks | 1,852 | 58.6% | 46.6% | 30.0% | 9.4% |
+| Compact bots, 1,200 ticks | 1,050 | 29.9% | 23.8% | 56.0% | 11.6% |
+| Fragmented scripted, 1,200 ticks | 5,218 | 96.4% | 78.0% | 0% | 3.2% |
+| Fragmented bots, 12,000 ticks | 27,224 | 73.9% | 60.3% | 18.8% | 6.1% |
+
+The unsampled 12,000-tick run represents ten minutes of game time and took
+35.08 seconds: 32.96 seconds of simulation and 2.10 seconds of chunk
+preparation. Whole-update p99 was 16.75 ms, maximum 37.76 ms, with no updates
+over 50 ms. This longer timing is a single run.
+
+### Why the filler remains expensive
+
+The implementation already uses horizontal scanline filling and reusable
+scratch buffers. Each fallback still clears the full two-million-cell label
+buffer, prepares the country's rectangular mask, floods its exterior, and
+then scans the rectangle again in `World.fillEnclosures` to find captures.
+Those broad passes scale with bounding area even when few pixels change.
+
+A separate diagnostic preload wrapped the existing methods, counted fallback
+areas and recomputed exact country bounds every 1,200 ticks. It did not alter
+ownership or decisions. Its timings include instrumentation and are excluded
+from the timing baseline above.
+
+| Diagnostic interval | Fallback calls | Median fallback rectangle | Sum of fallback rectangle areas | Largest rectangle |
+| --- | ---: | ---: | ---: | ---: |
+| First simulated minute | 884 | 139,000 cells | 202,570,142 cells | 1,341,424 cells |
+| Tenth simulated minute | 1,613 | 501,860 cells | 909,803,041 cells | 1,668,312 cells |
+
+Across ten minutes, 9,966 fallback calls accumulated 3.943 billion cells of
+rectangle area. This counts each fallback rectangle once; it is not a count
+of all reads, writes or flood visits. The tenth minute processes 4.49 times
+the rectangle area of the first minute.
+
+Exact bounds matched stored bounds at every snapshot through minute seven.
+At minute ten, tightening would reduce summed active-country rectangle area
+by only 0.1425%. These snapshots are not weighted by fallback frequency, but
+they do not support the earlier suggestion that stale bounds are the first
+optimization to pursue for this workload.
+
+The native label-buffer `fill` accounts for only 1.5% of samples in the long
+run. Removing that clear alone has limited potential. A useful next A/B
+experiment is to avoid the explicit rectangular owner-mask preparation pass
+by testing ownership during the flood and using reusable visit markers.
+Extra ownership checks may offset the saved pass, so this is a hypothesis to
+benchmark, not an established faster algorithm. Phase timing inside the
+fallback should accompany that experiment; this sampling profile does not
+reliably separate its inner loops. Preserve enclosure tests and final
+checksums when evaluating it. Compact bot workloads still need their own
+comparison because bot scoring is their largest cost.
+
+The long unsampled, sampled and diagnostic runs all end with checksum
+`d201cfc3153b9fea3f869293f05ccaacb72ef9b344ab8b95ff6ee3dc482ec81b`.
+
+### Real database control
+
+One separate fragmented-bot run used 20 countries, 40 movers and 1,200 ticks,
+paced at 20 Hz, against the local ZyncBase server with committed SDK batches.
+It completed in 60.15 seconds with 1,179 commits, 25,251 chunk writes and
+53,964,488 chunk payload bytes. Commit-phase latency was 2.35 ms median,
+4.95 ms p95 and 9.88 ms p99. Whole-update p99 was 21.84 ms, maximum 33.12 ms,
+and no update exceeded 50 ms. Bun used 5.37 CPU seconds, averaging 0.089 CPU
+cores over the run. The final checksum matches the local fragmented-bot run.
+
+This control does not saturate ZyncBase or measure its maximum throughput.
+The fixtures use synthetic land and omit browser subscribers, presence input
+traffic, TLS and subscriber fan-out. They identify a local simulation
+bottleneck without establishing the cause of sustained load on a deployed VM.
+
+### Reproduce this capture
+
+Use the commands in the earlier reproduction section for the three short
+workloads, repeating into `fresh-20260909/repeat-{1,2,3}`. Run each workload
+separately with `--profile` into `fresh-20260909/sampled`. Additional runs:
+
+```sh
+bun run --filter @zyncbase/client build
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/fresh-20260909/published
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --profile --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
+bun --preload ./test-artifacts/pixel-conquest-profile/fresh-20260909/diagnostics.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long/diagnostic
+```
+
+All 16 successful harness runs passed the existing ownership, country-count
+and player-position assertions. The diagnostic preload additionally checked
+that stored bounds enclosed the exact bounds at every snapshot.
+All 16 result checksums were also checked against their expected workload
+checksum. `bun run lint`, `bunx biome check --write --error-on-warnings` and
+`git diff --check` passed; Biome applied no fixes.
