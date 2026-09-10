@@ -111,12 +111,11 @@ function fixture() {
 			x: start.x,
 			y: start.y,
 			seq: 0,
-			sentAt: 0,
 			direction: "idle",
 			credit: 0,
 			heardAt: 0,
 		});
-		world.dirtyPlayers.add(id);
+		world.dirtyUsers.add(id);
 	}
 	if (values.mode === "bots") {
 		// Benchmark-only population policy: keep 40 bots without a human sentinel.
@@ -169,16 +168,16 @@ function changes(world: World) {
 		const { id, ...value } = country;
 		return { op: "set", path: ["countries", id], value };
 	});
-	for (const id of world.dirtyPlayers) {
-		const row = world.playerRow(id);
+	for (const id of world.dirtyUsers) {
+		const row = world.userRow(id);
 		assert(row);
-		operations.push({ op: "set", path: ["players", id], value: row });
+		operations.push({ op: "set", path: ["users", id], value: row });
 	}
 	for (const { id, ...value } of chunks)
 		operations.push({ op: "set", path: ["chunks", id], value });
 	world.dirtyChunks.clear();
 	world.dirtyCountries.clear();
-	world.dirtyPlayers.clear();
+	world.dirtyUsers.clear();
 	return {
 		operations,
 		chunks: chunks.length,

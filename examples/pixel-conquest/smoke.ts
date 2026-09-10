@@ -12,8 +12,8 @@ import {
 	type Country,
 	MAX_COUNTRIES,
 	NAMESPACE,
-	type PlayerRow,
 	readDots,
+	type UserRow,
 } from "./shared";
 
 async function freePort() {
@@ -175,9 +175,15 @@ async function connect(countryName?: string) {
 	});
 	clients.push(client);
 	await client.connect();
-	const users = await client.store.query("users");
-	assert.equal(users.length, 1, "players only see their own identity");
-	return { client, id: String((users[0] as { id: string }).id), countryCode };
+	// Identity comes from scope setup: the users table now holds the whole
+	// public roster, so a table scan can no longer identify self.
+	let id = client.presence.localUserId ?? "";
+	for (let i = 0; i < 100 && !id; i++) {
+		await Bun.sleep(100);
+		id = client.presence.localUserId ?? "";
+	}
+	assert.ok(id, "scope setup resolves our own identity");
+	return { client, id, countryCode };
 }
 
 async function chunks(client: ZyncBaseClient) {
@@ -247,11 +253,8 @@ try {
 		countryCode: alice.countryCode,
 		direction: "idle",
 		seq: 1,
-		sentAt: Date.now(),
-		pulse: 0,
 	};
-	const send = () =>
-		alice.client.presence.set({ ...input, pulse: ++input.pulse });
+	const send = () => alice.client.presence.set({ ...input });
 	send();
 	timers.push(setInterval(send, 500));
 	bob.client.presence.set({
@@ -259,8 +262,6 @@ try {
 		countryCode: bob.countryCode,
 		direction: "idle",
 		seq: 1,
-		sentAt: Date.now(),
-		pulse: 1,
 	});
 	let visible: ChunkRow[] = [];
 	bob.client.store.subscribe("chunks", { limit: 100 }, (rows) => {
@@ -272,9 +273,9 @@ try {
 			.find((dot) => dot.player_id === alice.id);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
-			(
-				(await client.store.query("players", { limit: 2048 })) as PlayerRow[]
-			).map((row) => [row.id, row]),
+			((await client.store.query("users", { limit: 2048 })) as UserRow[]).map(
+				(row) => [row.id, row],
+			),
 		);
 	const first = await eventually(
 		async () => dot(),
@@ -310,8 +311,6 @@ try {
 		countryCode: north.code,
 		direction: "idle",
 		seq: 1,
-		sentAt: Date.now(),
-		pulse: 1,
 	});
 	await eventually(
 		async () =>
@@ -331,7 +330,6 @@ try {
 	);
 	input.direction = "right";
 	input.seq++;
-	input.sentAt = Date.now();
 	send();
 	await eventually(async () => {
 		const current = dot();
@@ -339,7 +337,6 @@ try {
 	}, "movement");
 	input.direction = "idle";
 	input.seq++;
-	input.sentAt = Date.now();
 	send();
 	// No per-dot ack echo remains: wait until the dot holds still instead.
 	const stopped = await eventually(async () => {
@@ -419,9 +416,18 @@ try {
 		"stale human dots cleared, bot dots republished slim",
 	);
 	const restoredRoster = await rosterOf(returning.client);
+	// Reads materialize absent optional fields as explicit nulls; identity
+	// stubs (connected-but-never-admitted clients) carry no roster data.
+	const isStub = (row: UserRow) => row.country_id == null;
 	assert.ok(
-		[...restoredRoster.values()].every((row) => row.is_bot),
+		![alice.id, bob.id, teammate.id].some((id) => restoredRoster.has(id)),
 		"stale human roster rows purged on restart",
+	);
+	assert.ok(
+		[...restoredRoster.values()].every(
+			(row) => row.is_bot === true || isStub(row),
+		),
+		"only bots and fieldless identity stubs remain",
 	);
 	const restoredCountries = (await returning.client.store.query(
 		"countries",
@@ -455,10 +461,18 @@ try {
 	)) as unknown as Country[];
 	assert.equal(fresh.length, 5);
 	assert.ok(fresh.every((country) => country.count === 0));
-	// Reset clears territory and the roster, then bots immediately repopulate.
+	// Reset clears territory and the roster, then bots immediately repopulate
+	// (plus this client's own fieldless identity row).
 	const resetRoster = await rosterOf(clean.client);
-	assert.equal(resetRoster.size, 10);
-	assert.ok([...resetRoster.values()].every((row) => row.is_bot));
+	assert.equal(
+		[...resetRoster.values()].filter((row) => row.is_bot === true).length,
+		10,
+	);
+	assert.ok(
+		[...resetRoster.values()].every(
+			(row) => row.is_bot === true || row.country_id == null,
+		),
+	);
 	console.log("PASS: manual world reset");
 	for (const body of [
 		"null",

@@ -20,7 +20,7 @@
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
 		{
-			"collection": "players",
+			"collection": "users",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
@@ -28,11 +28,6 @@
 			"collection": "countries",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }
-		},
-		{
-			"collection": "users",
-			"read": { "$doc.id": { "eq": "$session.userId" } },
-			"write": false
 		}
 	]
 }

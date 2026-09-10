@@ -1,7 +1,15 @@
 {
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"store": {
-		"users": { "fields": {} },
+		"users": {
+			"fields": {
+				"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
+				"name": { "type": "string", "minLength": 1, "maxLength": 16 },
+				"is_bot": { "type": "boolean" },
+				"lastX": { "type": "integer", "minimum": 0 },
+				"lastY": { "type": "integer", "minimum": 0 }
+			}
+		},
 		"meta": {
 			"required": ["nextCode"],
 			"fields": {
@@ -13,16 +21,6 @@
 			"fields": {
 				"owners": { "type": "bytes", "minLength": 2048, "maxLength": 2048 },
 				"dots": { "type": "bytes", "maxLength": 16384 }
-			}
-		},
-		"players": {
-			"required": ["country_id", "is_bot", "lastX", "lastY"],
-			"fields": {
-				"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
-				"name": { "type": "string", "minLength": 1, "maxLength": 16 },
-				"is_bot": { "type": "boolean" },
-				"lastX": { "type": "integer", "minimum": 0 },
-				"lastY": { "type": "integer", "minimum": 0 }
 			}
 		},
 		"countries": {
@@ -44,9 +42,7 @@
 				"type": "string",
 				"enum": ["idle", "up", "down", "left", "right"]
 			},
-			"seq": { "type": "integer", "minimum": 0 },
-			"sentAt": { "type": "number" },
-			"pulse": { "type": "integer", "minimum": 0 }
+			"seq": { "type": "integer", "minimum": 0 }
 		},
 		"shared": {}
 	}

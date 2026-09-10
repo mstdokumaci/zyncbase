@@ -250,7 +250,6 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 				countryCode: country,
 				direction,
 				seq: ++seq,
-				sentAt: now,
 			},
 			now,
 		);

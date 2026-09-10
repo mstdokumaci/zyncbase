@@ -87,18 +87,19 @@ export const decoder = new TextDecoder();
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
 // Hot per-tick position broadcast, embedded in chunks.dots. Only x/y change
-// often; identity and country live in the players table (one cold row per
+// often; identity and country live in the users table (one cold row per
 // player, subscribed once) and are joined client-side at render.
 export type Dot = {
 	player_id: string;
 	x: number;
 	y: number;
 };
-// Cold roster row: written on admission, refreshed on chunk crossing and on
-// leave (tombstone with final position for grace reconnects), removed on
-// expiry. lastX/lastY always name the chunk the player is (or was) in, so
-// locate() can jump straight to it with one direct read.
-export type PlayerRow = {
+// Cold roster row, stored in the users table keyed by identity: written on
+// admission, refreshed on chunk crossing and on leave (tombstone with final
+// position for grace reconnects), removed on expiry. lastX/lastY always name
+// the chunk the player is (or was) in, so locate() can jump straight to it
+// with one direct read.
+export type UserRow = {
 	id: string;
 	name?: string;
 	country_id: number;

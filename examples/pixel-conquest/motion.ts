@@ -9,7 +9,7 @@ const steps = {
 };
 
 // Render-side position: hot dot plus its cold country, joined from the
-// players table at receive time. Dots alone carry no identity metadata.
+// users roster at receive time. Dots alone carry no identity metadata.
 export type MotionDot = Dot & { country_id: number };
 
 export class LocalMotion {

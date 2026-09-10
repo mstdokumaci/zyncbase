@@ -374,7 +374,7 @@ bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish 
 Generated artifacts are gitignored; the reproduction above uses
 tracked files available on a clean checkout.
 
-## Iteration: slim dots + players roster (data model, not simulation)
+## Iteration: slim dots + users roster (data model, not simulation)
 
 Baseline: `b50384e` (pre-change HEAD), candidate: uncommitted slim-dots
 work on top. Same machine and Bun 1.4.0 as above. This iteration changes
@@ -382,7 +382,7 @@ only the game's persisted shape; `World.tick`, movement, enclosure, and bot
 decisions are untouched.
 
 - `chunks.dots[]` shrinks from full `Dot{id,name,code,x,y,seq,sentAt,bot}`
-  to `{player_id,x,y}`; identity moves to a new `players` collection
+  to `{player_id,x,y}`; identity moves to `users` rows themselves
   (`name`, `country_id`, `is_bot`, `lastX/lastY`), subscribed once and
   joined client-side at render. `chunks.index`/`occupied` columns are
   dropped (`id` is the index; dirtiness on restore comes from decoding

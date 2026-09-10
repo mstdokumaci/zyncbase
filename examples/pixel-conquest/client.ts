@@ -12,11 +12,11 @@ import {
 	HEIGHT,
 	MAX_COUNTRIES,
 	NAMESPACE,
-	type PlayerRow,
 	playerName,
 	readDots,
 	readOwners,
 	terrain,
+	type UserRow,
 	WIDTH,
 } from "./shared";
 
@@ -34,9 +34,10 @@ const lobby = element("lobby");
 const countryChoice = element<HTMLSelectElement>("country-choice");
 const countryInput = element<HTMLInputElement>("country");
 const countries = new Map<number, Country>();
-// Cold roster: one row per live player plus 10s grace tombstones. Updated
-// only on admission, chunk crossing, and leave — never per tick.
-const players = new Map<string, PlayerRow>();
+// Cold roster from the users table, keyed by identity: one row per live
+// player plus 10s grace tombstones. Updated only on admission, chunk
+// crossing, and leave — never per tick.
+const players = new Map<string, UserRow>();
 let playersUnsub: (() => void) | undefined;
 const chunks = new Map<
 	number,
@@ -55,8 +56,7 @@ let myId = "",
 	name = "",
 	nickname = "",
 	seq = 0,
-	pulse = 0,
-	sentAt = 0;
+	lastChangeAt = 0;
 let direction: Direction = "idle";
 let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -209,8 +209,8 @@ function receive(row: ChunkRow) {
 	if (!self || !selfMotion) return;
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
-		// First sighting acks our input; latency uses our own send clock.
-		connection.textContent = `Live · ${Math.max(0, Date.now() - sentAt)} ms input → view`;
+		// First sighting acks our input; latency uses our own change clock.
+		connection.textContent = `Live · ${Math.max(0, now - lastChangeAt)} ms input → view`;
 	}
 	lastOwnDot = now;
 	if (!motion) motion = new LocalMotion(selfMotion, moving, now, land, ownerAt);
@@ -313,15 +313,13 @@ function publish(changed = false) {
 	if (!online || !client) return;
 	if (changed) {
 		seq++;
-		sentAt = Date.now();
+		lastChangeAt = performance.now();
 	}
 	client.presence.set({
 		name: nickname,
 		countryCode: selectedCountryCode,
 		direction,
 		seq,
-		sentAt,
-		pulse: ++pulse,
 	});
 }
 
@@ -433,8 +431,8 @@ async function locate() {
 		// O(1) self-locate: our own roster row names our chunk (spawn cell on
 		// admission, chunk-entry cell after crossings, final cell as a grace
 		// tombstone). No table scan; the visible-ring subscriptions deliver us.
-		const me = (await client.store.get(["players", myId])) as unknown as
-			| PlayerRow
+		const me = (await client.store.get(["users", myId])) as unknown as
+			| UserRow
 			| undefined;
 		if (
 			me &&
@@ -520,8 +518,13 @@ element("join").addEventListener("submit", async (event) => {
 			}
 		});
 		await client.connect();
-		const users = await client.store.query("users", { limit: 1 });
-		myId = String((users[0] as { id: string })?.id ?? "");
+		// Identity comes from scope setup, not a table scan: the users table
+		// now holds every roster row, so limit:1 would return anyone.
+		myId = client.presence.localUserId ?? "";
+		for (let i = 0; i < 30 && !myId; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			myId = client.presence.localUserId ?? "";
+		}
 		if (!myId) throw new Error("Could not resolve your player identity");
 		playing = online = true;
 		clearTimeout(admissionTimer);
@@ -537,14 +540,10 @@ element("join").addEventListener("submit", async (event) => {
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
 		playersUnsub?.();
-		playersUnsub = client.store.subscribe(
-			"players",
-			{ limit: 2048 },
-			(rows) => {
-				players.clear();
-				for (const row of rows as PlayerRow[]) players.set(row.id, row);
-			},
-		);
+		playersUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
+			players.clear();
+			for (const row of rows as UserRow[]) players.set(row.id, row);
+		});
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();

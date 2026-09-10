@@ -39,7 +39,7 @@ export class PresenceImpl implements Presence {
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
 	>();
-	private localUserId: string | null = null;
+	private _localUserId: string | null = null;
 	private lastSetTime = 0;
 	private pendingSetData: Record<string, unknown> | null = null;
 	private throttleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -57,7 +57,12 @@ export class PresenceImpl implements Presence {
 	}
 
 	setLocalUserId(userId: string | null): void {
-		this.localUserId = userId;
+		this._localUserId = userId;
+	}
+
+	/** Scope-resolved internal users.id, or null before scope setup. */
+	get localUserId(): string | null {
+		return this._localUserId;
 	}
 
 	set(data: Record<string, unknown>): void {
@@ -271,8 +276,8 @@ export class PresenceImpl implements Presence {
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[] {
 		// snapshots stay O(n); add a delta API only if copying profiles hot again.
 		const entries = this.userEntries.slice();
-		if (!options?.includeSelf && this.localUserId) {
-			const selfIndex = this.userIndexes.get(this.localUserId);
+		if (!options?.includeSelf && this._localUserId) {
+			const selfIndex = this.userIndexes.get(this._localUserId);
 			if (selfIndex !== undefined) {
 				entries[selfIndex] = entries[entries.length - 1];
 				entries.pop();
@@ -294,7 +299,7 @@ export class PresenceImpl implements Presence {
 	invalidate(): void {
 		this.userSubGen++;
 		this.sharedSubGen++;
-		this.localUserId = null;
+		this._localUserId = null;
 		this.clearUserCache();
 		this.sharedCache = null;
 		this.userSubId = null;
@@ -357,10 +362,10 @@ export class PresenceImpl implements Presence {
 	}
 
 	private shouldIncludeChange(change: PresenceChange): boolean {
-		if (this.localUserId === null) return true;
+		if (this._localUserId === null) return true;
 		const changeUserId =
 			change.type === "leave" ? change.userId : change.entry.userId;
-		return changeUserId !== this.localUserId;
+		return changeUserId !== this._localUserId;
 	}
 
 	private fireUserChangeCallbacks(batch: PresenceChangeBatch): void {

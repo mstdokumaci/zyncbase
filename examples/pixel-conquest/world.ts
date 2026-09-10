@@ -23,11 +23,11 @@ import {
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
 	PLAYER_GRACE_MS,
-	type PlayerRow,
 	playerName,
 	RULES,
 	readOwners,
 	rowId,
+	type UserRow,
 	WIDTH,
 } from "./shared";
 
@@ -41,7 +41,6 @@ type Player = {
 	x: number;
 	y: number;
 	seq: number;
-	sentAt: number;
 	direction: Direction;
 	credit: number;
 	heardAt: number;
@@ -70,14 +69,14 @@ export class World {
 	readonly dirtyChunks = new Set<number>();
 	readonly dirtyCountries = new Set<number>();
 	readonly dirtyRemovedCountries = new Set<number>();
-	readonly dirtyPlayers = new Set<string>();
-	readonly dirtyRemovedPlayers = new Set<string>();
+	readonly dirtyUsers = new Set<string>();
+	readonly dirtyRemovedUsers = new Set<string>();
 	// Departed players kept briefly for same-id grace reconnects: store row
 	// (with final position) lingers, live map entry is gone immediately so
 	// ghosts never draw, block spawns, or pin countries.
 	private readonly graveyard = new Map<
 		string,
-		{ row: PlayerRow; expires: number }
+		{ row: UserRow; expires: number }
 	>();
 	inputMessages = 0;
 	ticks = 0;
@@ -95,10 +94,10 @@ export class World {
 	}
 
 	/** Cold roster value for publishing (id rides in the path, not the body). */
-	playerRow(id: string): Omit<PlayerRow, "id"> | undefined {
+	userRow(id: string): Omit<UserRow, "id"> | undefined {
 		const player = this.players.get(id);
 		if (player) {
-			const row: Omit<PlayerRow, "id"> = {
+			const row: Omit<UserRow, "id"> = {
 				country_id: player.country_id,
 				is_bot: player.is_bot,
 				lastX: player.lastX,
@@ -209,7 +208,7 @@ export class World {
 		}
 		// Stale roster rows (including grace tombstones) never survive a
 		// restart: the live map is empty, so queue them all for removal.
-		for (const player of players) this.dirtyRemovedPlayers.add(player.id);
+		for (const player of players) this.dirtyRemovedUsers.add(player.id);
 		// No players exist yet after a restart, so zero-land countries are
 		// abandoned by definition: drop them and free their names for reuse.
 		for (const [code, country] of this.countries) {
@@ -338,7 +337,7 @@ export class World {
 		const grave = this.graveyard.get(id);
 		if (grave) {
 			this.graveyard.delete(id);
-			this.dirtyRemovedPlayers.delete(id);
+			this.dirtyRemovedUsers.delete(id);
 			const { lastX: x, lastY: y } = grave.row;
 			if (
 				x >= 0 &&
@@ -371,14 +370,13 @@ export class World {
 			x,
 			y,
 			seq: -1,
-			sentAt: 0,
 			direction: "idle",
 			credit: 0,
 			heardAt: now,
 		};
 		this.players.set(id, player);
 		this.dirtyChunks.add(chunkIndex(x, y));
-		this.dirtyPlayers.add(id);
+		this.dirtyUsers.add(id);
 		return player;
 	}
 
@@ -398,8 +396,6 @@ export class World {
 		if (typeof direction !== "string" || !Object.hasOwn(steps, direction))
 			return;
 		if (!Number.isSafeInteger(data.seq) || Number(data.seq) < 0) return;
-		if (typeof data.sentAt !== "number" || !Number.isFinite(data.sentAt))
-			return;
 		let player = this.players.get(id);
 		if (!player) {
 			if (this.humanCount >= MAX_PLAYERS) return;
@@ -421,7 +417,6 @@ export class World {
 		if (player.seq !== data.seq)
 			this.dirtyChunks.add(chunkIndex(player.x, player.y));
 		player.seq = Number(data.seq);
-		player.sentAt = data.sentAt as number;
 		player.direction = direction as Direction;
 	}
 
@@ -434,7 +429,7 @@ export class World {
 		// final position so a same-id reconnect resumes in place. Expiry is
 		// purely in-memory; the row shape never changes, so rejoin overwrites
 		// it with no field-clearing hazards.
-		const row: PlayerRow = {
+		const row: UserRow = {
 			id: player.id,
 			country_id: player.country_id,
 			is_bot: player.is_bot,
@@ -443,7 +438,7 @@ export class World {
 		};
 		if (player.name !== undefined) row.name = player.name;
 		this.graveyard.set(id, { row, expires: player.heardAt + PLAYER_GRACE_MS });
-		this.dirtyPlayers.add(id);
+		this.dirtyUsers.add(id);
 		this.maybeDeleteCountry(player.country_id);
 	}
 
@@ -469,7 +464,7 @@ export class World {
 		for (const [id, grave] of this.graveyard) {
 			if (now < grave.expires) continue;
 			this.graveyard.delete(id);
-			if (!this.players.has(id)) this.dirtyRemovedPlayers.add(id);
+			if (!this.players.has(id)) this.dirtyRemovedUsers.add(id);
 		}
 	}
 
@@ -521,7 +516,7 @@ export class World {
 		if (after !== before) {
 			player.lastX = x;
 			player.lastY = y;
-			this.dirtyPlayers.add(player.id);
+			this.dirtyUsers.add(player.id);
 		}
 		if (!this.land[to] || owner === player.country_id) return;
 		this.claim(to, player.country_id);
