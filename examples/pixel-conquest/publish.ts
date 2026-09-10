@@ -8,6 +8,8 @@ export type PublishSnapshot = {
 	chunks: number[];
 	countries: number[];
 	removed: number[];
+	users: string[];
+	removedUsers: string[];
 };
 
 /** Snapshot the world's dirty sets and clear them for the next tick. */
@@ -16,10 +18,14 @@ export function drainPublishState(world: World): PublishSnapshot {
 		chunks: [...world.dirtyChunks],
 		countries: [...world.dirtyCountries],
 		removed: [...world.dirtyRemovedCountries],
+		users: [...world.dirtyUsers],
+		removedUsers: [...world.dirtyRemovedUsers],
 	};
 	world.dirtyChunks.clear();
 	world.dirtyCountries.clear();
 	world.dirtyRemovedCountries.clear();
+	world.dirtyUsers.clear();
+	world.dirtyRemovedUsers.clear();
 	return snapshot;
 }
 
@@ -31,6 +37,8 @@ export function restorePublishState(
 	for (const index of snapshot.chunks) world.dirtyChunks.add(index);
 	for (const code of snapshot.countries) world.dirtyCountries.add(code);
 	for (const code of snapshot.removed) world.dirtyRemovedCountries.add(code);
+	for (const id of snapshot.users) world.dirtyUsers.add(id);
+	for (const id of snapshot.removedUsers) world.dirtyRemovedUsers.add(id);
 }
 
 /** Build committed-batch operations from a snapshot; removes go first. */
@@ -42,16 +50,33 @@ export function buildPublishOperations(
 	const countries = snapshot.countries
 		.map((code) => world.countries.get(code))
 		.filter((c) => c !== undefined);
+	// Stale tombstone expiry loses to a live rejoin: rejoins clear their
+	// queued remove in spawnAt, and this filter covers any drain/build gap.
+	const removedUsers = snapshot.removedUsers.filter(
+		(id) => !world.players.has(id),
+	);
+	const users = snapshot.users
+		.map((id) => ({ id, row: world.userRow(id) }))
+		.filter((entry) => entry.row !== undefined);
 	return [
 		...extra,
 		...snapshot.removed.map((code) => ({
 			op: "remove" as const,
 			path: ["countries", rowId(code)],
 		})),
+		...removedUsers.map((id) => ({
+			op: "remove" as const,
+			path: ["users", id],
+		})),
 		...countries.map(({ id, ...value }) => ({
 			op: "set" as const,
 			path: ["countries", id],
 			value,
+		})),
+		...users.map(({ id, row }) => ({
+			op: "set" as const,
+			path: ["users", id],
+			value: row,
 		})),
 		...snapshot.chunks.map((index) => {
 			const { id, ...value } = world.chunk(index);

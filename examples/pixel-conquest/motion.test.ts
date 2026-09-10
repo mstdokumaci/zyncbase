@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { LocalMotion } from "./motion";
-import { type Dot, HEIGHT, RULES, WIDTH } from "./shared";
+import { LocalMotion, type MotionDot } from "./motion";
+import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
-const dot: Dot = { id: "me", code: 1, x: 31, y: 10, seq: 1, sentAt: 0 };
+const dot: MotionDot = { player_id: "me", country_id: 1, x: 31, y: 10 };
 const land = new Uint8Array(WIDTH * HEIGHT);
 
 test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
@@ -13,7 +13,7 @@ test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pi
 	expect(motion.position(0)).toEqual({ x: 31, y: 10 });
 	expect(motion.position(250)).toEqual({ x: 31.5, y: 10 });
 	// Echoes/heartbeats at the same cell must not restart the animation.
-	motion.update({ ...dot, seq: 2 }, "right", 250);
+	motion.update({ ...dot }, "right", 250);
 	expect(motion.position(250).x).toBe(31.5);
 	for (const hz of [30, 60, 120, 144]) {
 		for (let frame = 0; frame <= hz; frame++) {
@@ -35,7 +35,7 @@ test("visual step durations match the server for every terrain and ownership com
 				world.land[from] = source;
 				world.land[to] = destination;
 				world.owners[to] = owner;
-				const ms = world.stepCost(dot.code, from, to) * RULES.tickMs;
+				const ms = world.stepCost(dot.country_id, from, to) * RULES.tickMs;
 				const motion = new LocalMotion(
 					dot,
 					"right",
@@ -59,7 +59,7 @@ test("destination ownership changes retime an active step without jumps or heart
 	motion.update(dot, "right", 50);
 	expect(motion.position(50).x).toBe(31.25);
 	expect(motion.position(75).x).toBe(31.625);
-	motion.update({ ...dot, seq: 2 }, "right", 75);
+	motion.update({ ...dot }, "right", 75);
 	expect(motion.position(75).x).toBe(31.625);
 	expect(motion.position(100).x).toBe(32);
 	expect(motion.position(1000).x).toBe(32);

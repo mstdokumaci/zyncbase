@@ -1,4 +1,4 @@
-import { type Dot, HEIGHT, WIDTH } from "./shared";
+import { HEIGHT, WIDTH } from "./shared";
 import type { World } from "./world";
 
 export type BotPlan = { patch: number; cells: number[] };
@@ -126,13 +126,18 @@ function scoreCells(
 
 // compare two L-shaped approaches to nearby patches; add pathfinding only if long voyages need it.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: bounded candidate search evaluates complete travel-and-sweep plans together.
-export function planBot(world: World, bot: Dot): BotPlan | undefined {
+export function planBot(
+	world: World,
+	bot: { id: string; x: number; y: number; country_id: number },
+): BotPlan | undefined {
 	const rival = [...world.countries.values()]
-		.filter((country) => country.code !== bot.code)
+		.filter((country) => country.code !== bot.country_id)
 		.sort((a, b) => b.count - a.count)[0]?.code;
 	const reserved = new Set(
 		[...world.players.values()]
-			.filter((other) => other.id !== bot.id && other.code === bot.code)
+			.filter(
+				(other) => other.id !== bot.id && other.country_id === bot.country_id,
+			)
 			.map((other) => other.plan?.patch),
 	);
 	const from = bot.y * WIDTH + bot.x;
@@ -159,7 +164,7 @@ export function planBot(world: World, bot: Dot): BotPlan | undefined {
 			const gain = area.reduce(
 				(sum, cell) =>
 					sum +
-					(!world.land[cell] || world.owners[cell] === bot.code
+					(!world.land[cell] || world.owners[cell] === bot.country_id
 						? 0
 						: world.owners[cell] === rival
 							? 2
@@ -176,7 +181,7 @@ export function planBot(world: World, bot: Dot): BotPlan | undefined {
 						gain /
 						scoreCells(
 							world,
-							bot.code,
+							bot.country_id,
 							from,
 							route,
 							reverse,

@@ -407,6 +407,8 @@ export interface Presence {
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[];
 	/** Synchronous local lookup of current shared state. */
 	getShared(): Record<string, unknown> | null;
+	/** Scope-resolved internal users.id, or null before scope setup. */
+	readonly localUserId: string | null;
 	/** Remove your presence record. */
 	remove(): void;
 }

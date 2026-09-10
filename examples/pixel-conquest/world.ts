@@ -16,19 +16,31 @@ import {
 	countryName,
 	type Direction,
 	type Dot,
+	decoder,
 	encoder,
 	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
+	PLAYER_GRACE_MS,
 	playerName,
 	RULES,
 	readOwners,
 	rowId,
+	type UserRow,
 	WIDTH,
 } from "./shared";
 
-type Player = Dot & {
+type Player = {
+	id: string;
+	name?: string;
+	country_id: number;
+	is_bot: boolean;
+	lastX: number;
+	lastY: number;
+	x: number;
+	y: number;
+	seq: number;
 	direction: Direction;
 	credit: number;
 	heardAt: number;
@@ -57,6 +69,15 @@ export class World {
 	readonly dirtyChunks = new Set<number>();
 	readonly dirtyCountries = new Set<number>();
 	readonly dirtyRemovedCountries = new Set<number>();
+	readonly dirtyUsers = new Set<string>();
+	readonly dirtyRemovedUsers = new Set<string>();
+	// Departed players kept briefly for same-id grace reconnects: store row
+	// (with final position) lingers, live map entry is gone immediately so
+	// ghosts never draw, block spawns, or pin countries.
+	private readonly graveyard = new Map<
+		string,
+		{ row: UserRow; expires: number }
+	>();
 	inputMessages = 0;
 	ticks = 0;
 	private nextCode = 1;
@@ -69,7 +90,26 @@ export class World {
 	constructor(readonly land: Uint8Array) {}
 
 	get humanCount() {
-		return [...this.players.values()].filter((player) => !player.bot).length;
+		return [...this.players.values()].filter((player) => !player.is_bot).length;
+	}
+
+	/** Cold roster value for publishing (id rides in the path, not the body). */
+	userRow(id: string): Omit<UserRow, "id"> | undefined {
+		const player = this.players.get(id);
+		if (player) {
+			const row: Omit<UserRow, "id"> = {
+				country_id: player.country_id,
+				is_bot: player.is_bot,
+				lastX: player.lastX,
+				lastY: player.lastY,
+			};
+			if (player.name !== undefined) row.name = player.name;
+			return row;
+		}
+		const grave = this.graveyard.get(id);
+		if (!grave) return undefined;
+		const { id: _dropped, ...row } = grave.row;
+		return row;
 	}
 
 	/** Next unallocated country code; persisted so retired codes never repeat. */
@@ -85,8 +125,8 @@ export class World {
 	private populateBots(now: number) {
 		const target = Math.max(0, 10 - Math.floor(this.humanCount / 2));
 		for (let i = 0; i < 10; i++) {
-			const id = `bot:${i}`;
-			if (i >= target) this.remove(id);
+			const id = `bot-${i}`;
+			if (i >= target) this.remove(id, now);
 			else if (!this.players.has(id)) {
 				const country = this.country(botCountries[Math.floor(i / 2)]);
 				if (country) this.add(id, country, now, true);
@@ -116,7 +156,12 @@ export class World {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass restores the bitmap and recomputes its counts together.
-	restore(countries: Country[], chunks: ChunkRow[], persistedNextCode = 0) {
+	restore(
+		countries: Country[],
+		chunks: ChunkRow[],
+		players: { id: string }[] = [],
+		persistedNextCode = 0,
+	) {
 		for (const country of countries) {
 			const { id, code, name, color } = country;
 			this.countries.set(code, {
@@ -136,9 +181,18 @@ export class World {
 			Math.max(0, ...this.countries.keys()) + 1,
 		);
 		for (const chunk of chunks) {
+			const index = Number(chunk.id);
+			// Reject negatives (whose cells dodge the per-cell bounds check
+			// below and would corrupt counts/bounds) and out-of-range ids.
+			if (
+				!Number.isSafeInteger(index) ||
+				index < 0 ||
+				index >= COLUMNS * Math.ceil(HEIGHT / CHUNK)
+			)
+				continue;
 			const owners = readOwners(chunk.owners);
-			const x = (chunk.index % COLUMNS) * CHUNK;
-			const y = Math.floor(chunk.index / COLUMNS) * CHUNK;
+			const x = (index % COLUMNS) * CHUNK;
+			const y = Math.floor(index / COLUMNS) * CHUNK;
 			for (let i = 0; i < owners.length; i++) {
 				const px = x + (i % CHUNK);
 				const py = y + Math.floor(i / CHUNK);
@@ -154,9 +208,14 @@ export class World {
 					this.enclosureCountries.set(country.code, null);
 				}
 			}
-			// Reconcile dots before admitting players after a restart.
-			if (chunk.occupied) this.dirtyChunks.add(chunk.index);
+			// Positions don't survive a restart (live map starts empty), so any
+			// chunk persisting dots must be republished empty. Dots bytes are
+			// small; decoding beats keeping a queryable flag for this one path.
+			if (this.chunkHasDots(chunk)) this.dirtyChunks.add(index);
 		}
+		// Stale roster rows (including grace tombstones) never survive a
+		// restart: the live map is empty, so queue them all for removal.
+		for (const player of players) this.dirtyRemovedUsers.add(player.id);
 		// No players exist yet after a restart, so zero-land countries are
 		// abandoned by definition: drop them and free their names for reuse.
 		for (const [code, country] of this.countries) {
@@ -203,8 +262,9 @@ export class World {
 	maybeDeleteCountry(code: number) {
 		const country = this.countries.get(code);
 		if (!country || country.count !== 0) return;
+		// Grace tombstones never pin a country: only live holders count.
 		for (const player of this.players.values())
-			if (player.code === code) return;
+			if (player.country_id === code) return;
 		this.countries.delete(code);
 		this.bounds.delete(code);
 		this.enclosureCountries.delete(code);
@@ -215,7 +275,9 @@ export class World {
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search first preserves spacing, then admits players on cramped land.
 	private spawn(code: number, bot: boolean, team: number) {
-		const center = [...this.players.values()].find((player) => !player.bot) ?? {
+		const center = [...this.players.values()].find(
+			(player) => !player.is_bot,
+		) ?? {
 			x: 933,
 			y: 276,
 		};
@@ -232,7 +294,7 @@ export class World {
 		const clearances = [...this.players.values()].map((other) => ({
 			x: other.x,
 			y: other.y,
-			radius: bot || other.bot ? (code === other.code ? 12 : 28) : 1,
+			radius: bot || other.is_bot ? (code === other.country_id ? 12 : 28) : 1,
 		}));
 		if (bot) clearances.push({ x: center.x, y: center.y, radius: 28 });
 		// Prefer breathing room, but tiny islands must still admit players on free land.
@@ -270,26 +332,69 @@ export class World {
 		throw new Error("No available land");
 	}
 
-	private add(id: string, country: Country, now: number, bot = false) {
-		const position = this.spawn(
-			country.code,
-			bot,
-			botCountries.indexOf(country.name),
-		);
+	// Same-id grace reconnects resume their tombstone cell when it is still
+	// free land; otherwise they fall through to the normal ring search.
+	private spawnAt(
+		code: number,
+		bot: boolean,
+		team: number,
+		now: number,
+		id: string,
+	): Player {
+		const grave = this.graveyard.get(id);
+		if (grave) {
+			this.graveyard.delete(id);
+			this.dirtyRemovedUsers.delete(id);
+			const { lastX: x, lastY: y } = grave.row;
+			if (
+				x >= 0 &&
+				x < WIDTH &&
+				y >= 0 &&
+				y < HEIGHT &&
+				this.land[y * WIDTH + x] &&
+				![...this.players.values()].some((p) => p.x === x && p.y === y)
+			)
+				return this.makePlayer(id, code, bot, x, y, now);
+		}
+		const position = this.spawn(code, bot, team);
+		return this.makePlayer(id, code, bot, position.x, position.y, now);
+	}
+
+	private makePlayer(
+		id: string,
+		code: number,
+		bot: boolean,
+		x: number,
+		y: number,
+		now: number,
+	): Player {
 		const player: Player = {
 			id,
-			...position,
-			code: country.code,
+			country_id: code,
+			is_bot: bot,
+			lastX: x,
+			lastY: y,
+			x,
+			y,
 			seq: -1,
-			sentAt: 0,
 			direction: "idle",
 			credit: 0,
 			heardAt: now,
-			bot,
 		};
 		this.players.set(id, player);
-		this.dirtyChunks.add(chunkIndex(player.x, player.y));
+		this.dirtyChunks.add(chunkIndex(x, y));
+		this.dirtyUsers.add(id);
 		return player;
+	}
+
+	private add(id: string, country: Country, now: number, bot = false) {
+		return this.spawnAt(
+			country.code,
+			bot,
+			botCountries.indexOf(country.name),
+			now,
+			id,
+		);
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep untrusted input validation adjacent to player admission.
@@ -298,8 +403,6 @@ export class World {
 		if (typeof direction !== "string" || !Object.hasOwn(steps, direction))
 			return;
 		if (!Number.isSafeInteger(data.seq) || Number(data.seq) < 0) return;
-		if (typeof data.sentAt !== "number" || !Number.isFinite(data.sentAt))
-			return;
 		let player = this.players.get(id);
 		if (!player) {
 			if (this.humanCount >= MAX_PLAYERS) return;
@@ -321,31 +424,56 @@ export class World {
 		if (player.seq !== data.seq)
 			this.dirtyChunks.add(chunkIndex(player.x, player.y));
 		player.seq = Number(data.seq);
-		player.sentAt = data.sentAt;
 		player.direction = direction as Direction;
 	}
 
-	remove(id: string) {
+	remove(id: string, now: number) {
 		const player = this.players.get(id);
 		if (!player) return;
 		this.dirtyChunks.add(chunkIndex(player.x, player.y));
 		this.players.delete(id);
-		this.maybeDeleteCountry(player.code);
+		// Tombstone: the dots vanish now, but the roster row lingers with its
+		// final position so a same-id reconnect resumes in place. Expiry runs
+		// from the removal time (not last contact), so silent-timeout removals
+		// get the full grace window too. It is purely in-memory; the row shape
+		// never changes, so rejoin overwrites it with no field-clearing hazards.
+		const row: UserRow = {
+			id: player.id,
+			country_id: player.country_id,
+			is_bot: player.is_bot,
+			lastX: player.x,
+			lastY: player.y,
+		};
+		if (player.name !== undefined) row.name = player.name;
+		this.graveyard.set(id, { row, expires: now + PLAYER_GRACE_MS });
+		this.dirtyUsers.add(id);
+		this.maybeDeleteCountry(player.country_id);
 	}
 
 	tick(now: number) {
 		this.ticks++;
 		for (const player of this.players.values()) {
-			if (player.bot) continue;
+			if (player.is_bot) continue;
 			if (now - player.heardAt > INPUT_LEASE_MS * 5) {
-				this.remove(player.id);
+				this.remove(player.id, now);
 				continue;
 			}
 			if (now - player.heardAt > INPUT_LEASE_MS) player.direction = "idle";
 			this.move(player);
 		}
+		// Expire grace tombstones whose owners never came back. Live rejoins
+		// cancel by deleting the graveyard entry (and any stale queued remove).
+		this.sweepGraveyard(now);
 		this.tickBots(now);
 		this.fillEnclosures();
+	}
+
+	private sweepGraveyard(now: number) {
+		for (const [id, grave] of this.graveyard) {
+			if (now < grave.expires) continue;
+			this.graveyard.delete(id);
+			if (!this.players.has(id)) this.dirtyRemovedUsers.add(id);
+		}
 	}
 
 	private tickBots(now: number) {
@@ -354,7 +482,7 @@ export class World {
 		// Empty worlds wait for people, so territory is not consumed between sessions.
 		if (!this.humanCount) return;
 		for (const player of this.players.values()) {
-			if (!player.bot) continue;
+			if (!player.is_bot) continue;
 			if (!player.credit) this.steerBot(player);
 			this.move(player);
 			if (player.plan?.cells[0] === player.y * WIDTH + player.x)
@@ -381,15 +509,25 @@ export class World {
 		const from = player.y * WIDTH + player.x,
 			to = y * WIDTH + x;
 		const owner = this.owners[to];
-		const cost = this.stepCost(player.code, from, to);
+		const cost = this.stepCost(player.country_id, from, to);
 		if (++player.credit < cost) return;
 		player.credit = 0;
-		this.dirtyChunks.add(chunkIndex(player.x, player.y));
+		const before = chunkIndex(player.x, player.y);
+		this.dirtyChunks.add(before);
 		player.x = x;
 		player.y = y;
-		this.dirtyChunks.add(chunkIndex(x, y));
-		if (!this.land[to] || owner === player.code) return;
-		this.claim(to, player.code);
+		const after = chunkIndex(x, y);
+		this.dirtyChunks.add(after);
+		// Roster position tracks chunk crossings only (not every cell): exact
+		// enough for O(1) locate, quiet enough to keep the cold subscription
+		// cold. ponytail: per-tick sync if locate ever misses on fast movers.
+		if (after !== before) {
+			player.lastX = x;
+			player.lastY = y;
+			this.dirtyUsers.add(player.id);
+		}
+		if (!this.land[to] || owner === player.country_id) return;
+		this.claim(to, player.country_id);
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each affected country fills and updates ownership at most once.
@@ -503,6 +641,16 @@ export class World {
 			this.queueEnclosure(owner, cell);
 	}
 
+	/** Persisted dots are untrusted input: corrupt rows republish empty. */
+	private chunkHasDots(chunk: ChunkRow): boolean {
+		try {
+			const dots = JSON.parse(decoder.decode(chunk.dots));
+			return !Array.isArray(dots) || dots.length > 0;
+		} catch {
+			return true;
+		}
+	}
+
 	chunk(index: number): ChunkRow {
 		const x = (index % COLUMNS) * CHUNK,
 			y = Math.floor(index / COLUMNS) * CHUNK;
@@ -519,22 +667,11 @@ export class World {
 		}
 		const dots: Dot[] = [...this.players.values()]
 			.filter((p) => chunkIndex(p.x, p.y) === index)
-			.map(({ id, name, code, x, y, seq, sentAt, bot }) => ({
-				id,
-				name,
-				code,
-				x,
-				y,
-				seq,
-				sentAt,
-				bot,
-			}));
+			.map(({ id, x, y }) => ({ player_id: id, x, y }));
 		return {
 			id: rowId(index),
-			index,
 			owners,
 			dots: encoder.encode(JSON.stringify(dots)),
-			occupied: dots.length > 0,
 		};
 	}
 }

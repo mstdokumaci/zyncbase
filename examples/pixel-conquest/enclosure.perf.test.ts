@@ -36,7 +36,6 @@ function workload(size: number, rotated: boolean, shape: string) {
 			countryCode: 1,
 			direction: "idle",
 			seq: 0,
-			sentAt: 0,
 		},
 		0,
 	);

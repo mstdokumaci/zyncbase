@@ -250,7 +250,6 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 				countryCode: country,
 				direction,
 				seq: ++seq,
-				sentAt: now,
 			},
 			now,
 		);
@@ -269,8 +268,8 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 			direction
 		];
 		const from = player.y * WIDTH + player.x;
-		const cost = world.stepCost(player.code, from, from + offset);
-		input(id, player.code, direction);
+		const cost = world.stepCost(player.country_id, from, from + offset);
+		input(id, player.country_id, direction);
 		for (let i = 0; i < cost; i++) world.tick(++now);
 		input(id, player.code, "idle");
 	};

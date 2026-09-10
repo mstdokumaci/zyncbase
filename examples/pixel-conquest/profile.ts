@@ -100,19 +100,22 @@ function fixture() {
 		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
 	);
 	for (const [i, start] of starts.entries()) {
-		world.players.set(`mover:${i}`, {
-			id: `mover:${i}`,
+		const id = `mover-${i}`;
+		world.players.set(id, {
+			id,
 			name: values.mode === "bots" ? undefined : `Player ${i}`,
-			code: start.code,
+			country_id: start.code,
+			is_bot: values.mode === "bots",
+			lastX: start.x,
+			lastY: start.y,
 			x: start.x,
 			y: start.y,
 			seq: 0,
-			sentAt: 0,
 			direction: "idle",
 			credit: 0,
 			heardAt: 0,
-			bot: values.mode === "bots",
 		});
+		world.dirtyUsers.add(id);
 	}
 	if (values.mode === "bots") {
 		// Benchmark-only population policy: keep 40 bots without a human sentinel.
@@ -156,7 +159,7 @@ function steer(world: World, tick: number) {
 	}
 }
 
-// Match server.ts: full dirty chunk rows, country rows, then committed batches.
+// Match server.ts: full dirty chunk rows, country rows, player rows, then committed batches.
 function changes(world: World) {
 	const chunks = [...world.dirtyChunks].map((index) => world.chunk(index));
 	const operations: BatchOperation[] = [...world.dirtyCountries].map((code) => {
@@ -165,10 +168,16 @@ function changes(world: World) {
 		const { id, ...value } = country;
 		return { op: "set", path: ["countries", id], value };
 	});
+	for (const id of world.dirtyUsers) {
+		const row = world.userRow(id);
+		assert(row);
+		operations.push({ op: "set", path: ["users", id], value: row });
+	}
 	for (const { id, ...value } of chunks)
 		operations.push({ op: "set", path: ["chunks", id], value });
 	world.dirtyChunks.clear();
 	world.dirtyCountries.clear();
+	world.dirtyUsers.clear();
 	return {
 		operations,
 		chunks: chunks.length,
