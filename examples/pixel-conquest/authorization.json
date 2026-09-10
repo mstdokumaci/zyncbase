@@ -11,7 +11,7 @@
 	"store": [
 		{
 			"collection": "meta",
-			"read": false,
+			"read": { "$session.role": { "eq": "simulation" } },
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
 		{
