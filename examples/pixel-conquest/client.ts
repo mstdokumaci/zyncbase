@@ -14,6 +14,7 @@ import {
 	type Direction,
 	type Dot,
 	HEIGHT,
+	MAX_COUNTRIES,
 	NAMESPACE,
 	readDots,
 	readOwners,
@@ -57,8 +58,38 @@ let width = innerWidth,
 let lastOwnDot = 0;
 let locating = false;
 let lastHeartbeat = 0;
+let admissionTimer: ReturnType<typeof setTimeout> | undefined;
+let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
 let lastFrame = 0;
+const OFFLINE = "The world is offline";
+const TAGLINE = "A shared world. One pixel at a time.";
+
+async function checkHealth() {
+	if (playing) return;
+	const button = element<HTMLButtonElement>("join-button");
+	try {
+		const response = await fetch("/health", {
+			signal: AbortSignal.timeout(3000),
+		});
+		const health = await response.json();
+		if (!response.ok || health.ready !== true) throw new Error();
+		button.disabled = false;
+		if (element("error").textContent === OFFLINE)
+			element("error").textContent = "";
+		if (connection.textContent.startsWith(OFFLINE))
+			connection.textContent = TAGLINE;
+	} catch {
+		button.disabled = true;
+		element("error").textContent = OFFLINE;
+		connection.textContent = `${OFFLINE} · Retrying…`;
+	}
+}
+void checkHealth();
+const healthTimer = setInterval(() => {
+	if (playing) clearInterval(healthTimer);
+	else void checkHealth();
+}, 5000);
 
 const land = terrain();
 const base = document.createElement("canvas");
@@ -107,6 +138,7 @@ function receive(row: ChunkRow) {
 	const moving = online ? direction : "idle";
 	if (motion) motion.update(self ?? motion.dot, moving, now);
 	if (!self) return;
+	if (lastOwnDot === 0) clearTimeout(admissionTimer);
 	lastOwnDot = now;
 	if (!motion) motion = new LocalMotion(self, moving, now, land, ownerAt);
 	const position = motion.position(lastOwnDot);
@@ -293,6 +325,32 @@ function zoom(change: number) {
 element("zoom-in").addEventListener("click", () => zoom(2));
 element("zoom-out").addEventListener("click", () => zoom(-2));
 
+// Admission rejects new names once 64 live countries exist, which leaves
+// the newcomer without a dot. A join-scoped timeout reads the latest
+// country state so the check runs even when no country updates arrive.
+function checkAdmission() {
+	if (!playing || lastOwnDot !== 0) return;
+	if (
+		latestCountries.length >= MAX_COUNTRIES &&
+		!latestCountries.some(
+			(country) => country.name.toLowerCase() === name.toLowerCase(),
+		)
+	) {
+		client?.disconnect();
+		for (const handle of subscriptions.values()) handle.unsubscribe();
+		subscriptions.clear();
+		chunks.clear();
+		playing = online = false;
+		lobby.hidden = false;
+		element("scoreboard").hidden = true;
+		element("direction-pad").hidden = true;
+		element("error").textContent =
+			`The world already has ${MAX_COUNTRIES} countries — join an existing one.`;
+		connection.textContent = "Ready when you are.";
+		element<HTMLButtonElement>("join-button").disabled = false;
+	}
+}
+
 async function locate() {
 	if (!client || !online || locating || performance.now() - lastOwnDot < 1500)
 		return;
@@ -318,6 +376,9 @@ element("join").addEventListener("submit", async (event) => {
 	const button = element<HTMLButtonElement>("join-button");
 	button.disabled = true;
 	element("error").textContent = "";
+	lastOwnDot = 0;
+	latestCountries = [];
+	clearTimeout(admissionTimer);
 	try {
 		name = countryName(element<HTMLInputElement>("country").value);
 		const response = await fetch("/session", {
@@ -354,12 +415,16 @@ element("join").addEventListener("submit", async (event) => {
 		myId = String((users[0] as { id: string })?.id ?? "");
 		if (!myId) throw new Error("Could not resolve your player identity");
 		playing = online = true;
+		clearTimeout(admissionTimer);
+		admissionTimer = setTimeout(checkAdmission, 3000);
 		lobby.hidden = true;
 		element("scoreboard").hidden = false;
 		element("direction-pad").hidden = false;
-		client.store.subscribe("countries", { limit: 1000 }, (rows) =>
-			scoreboard(rows as Country[]),
-		);
+		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+			const list = rows as Country[];
+			latestCountries = list;
+			scoreboard(list);
+		});
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
@@ -368,6 +433,7 @@ element("join").addEventListener("submit", async (event) => {
 		connection.textContent = "Connected · Finding your dot…";
 		void locate();
 	} catch (error) {
+		clearTimeout(admissionTimer);
 		client?.disconnect();
 		playing = online = false;
 		element("error").textContent =

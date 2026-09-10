@@ -20,6 +20,12 @@ import {
 	type JsonValue,
 } from "@zyncbase/client";
 import {
+	buildPublishOperations,
+	drainPublishState,
+	restorePublishState,
+	runPublishBatches,
+} from "./publish";
+import {
 	type ChunkRow,
 	type Country,
 	MAX_PLAYERS,
@@ -66,6 +72,7 @@ let flushes = 0,
 	chunkWrites = 0,
 	payloadBytes = 0,
 	commitMs = 0;
+let lastPublishedMark = 1;
 const connections = new Set<Duplex>();
 
 function token(role: "player" | "simulation") {
@@ -122,7 +129,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				logins = 0;
 				loginWindow = Date.now();
 			}
-			if (++logins > 60)
+			if (++logins > 120)
 				return reply(res, 429, {
 					error: "Please wait a minute before trying again",
 				});
@@ -184,8 +191,8 @@ await writeFile(
 		security: {
 			allowedOrigins: [origin],
 			allowLocalhost: true,
-			maxConnections: 128,
-			maxMessagesPerSecond: 500,
+			maxConnections: 2048,
+			maxMessagesPerSecond: 2000,
 			maxMessageSize: 1048576,
 		},
 	}),
@@ -222,35 +229,48 @@ async function allRows(collection: string) {
 	return rows;
 }
 
-async function publish() {
-	const chunks = [...world.dirtyChunks].map((index) => world.chunk(index));
-	const countries = [...world.dirtyCountries]
-		.map((code) => world.countries.get(code))
-		.filter((c) => c !== undefined);
-	world.dirtyChunks.clear();
-	world.dirtyCountries.clear();
-	const operations: BatchOperation[] = [
-		...countries.map(({ id, ...value }) => ({
+// The allocator mark rides in the first batch with the country removes so
+// a retired code and its tombstone commit atomically: crash before batch 1
+// retries everything, crash after keeps the mark past every retired code.
+function allocatorOp(): BatchOperation[] {
+	if (world.allocatorMark === lastPublishedMark) return [];
+	return [
+		{
 			op: "set" as const,
-			path: ["countries", id],
-			value,
-		})),
-		...chunks.map(({ id, ...value }) => ({
-			op: "set" as const,
-			path: ["chunks", id],
-			value,
-		})),
+			path: ["meta", "allocator"],
+			value: { nextCode: world.allocatorMark },
+		},
 	];
+}
+
+async function publish() {
+	const snapshot = drainPublishState(world);
+	const operations = buildPublishOperations(world, snapshot, allocatorOp());
 	if (!operations.length) return;
+	// A rejected batch restores every drained entry, so a retry resends all
+	// uncommitted operations instead of silently dropping them.
 	const started = performance.now();
-	await client.store.batch(operations, { confirm: "committed" });
+	try {
+		await runPublishBatches(
+			(batch) => client.store.batch(batch, { confirm: "committed" }),
+			operations,
+		);
+	} catch (error) {
+		restorePublishState(world, snapshot);
+		throw error;
+	}
+	lastPublishedMark = world.allocatorMark;
 	commitMs = performance.now() - started;
 	flushes++;
-	chunkWrites += chunks.length;
-	payloadBytes += chunks.reduce(
-		(sum, chunk) => sum + chunk.owners.byteLength + chunk.dots.byteLength,
-		0,
-	);
+	for (const op of operations) {
+		if (op.op !== "set" || op.path[0] !== "chunks") continue;
+		const value = op.value as unknown as {
+			owners: Uint8Array;
+			dots: Uint8Array;
+		};
+		chunkWrites++;
+		payloadBytes += value.owners.byteLength + value.dots.byteLength;
+	}
 }
 
 let tick: ReturnType<typeof setInterval> | undefined;
@@ -310,6 +330,7 @@ try {
 	await client.connect();
 	const countries = (await allRows("countries")) as Country[];
 	const chunks = (await allRows("chunks")) as ChunkRow[];
+	const meta = (await allRows("meta")) as { id: string; nextCode: number }[];
 	if (process.argv.includes("--reset")) {
 		const operations: BatchOperation[] = [
 			...chunks.map((row) => ({
@@ -320,13 +341,17 @@ try {
 				op: "remove" as const,
 				path: ["countries", row.id],
 			})),
+			...meta.map((row) => ({
+				op: "remove" as const,
+				path: ["meta", row.id],
+			})),
 		];
 		for (let i = 0; i < operations.length; i += 100)
 			await client.store.batch(operations.slice(i, i + 100), {
 				confirm: "committed",
 			});
 		console.log("World reset.");
-	} else world.restore(countries, chunks);
+	} else world.restore(countries, chunks, meta[0]?.nextCode ?? 0);
 	world.startBots(performance.now());
 	// A restart can need more reconciliation than one normal movement batch.
 	await publish();

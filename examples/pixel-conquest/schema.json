@@ -1,7 +1,13 @@
 {
-	"version": "0.0.1",
+	"version": "0.1.0",
 	"store": {
 		"users": { "fields": {} },
+		"meta": {
+			"required": ["nextCode"],
+			"fields": {
+				"nextCode": { "type": "integer", "minimum": 1 }
+			}
+		},
 		"chunks": {
 			"required": ["index", "owners", "dots", "occupied"],
 			"unique": [["index"]],

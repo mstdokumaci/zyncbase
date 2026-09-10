@@ -5,8 +5,9 @@ export const HEIGHT = map.height;
 export const CHUNK = 32;
 export const COLUMNS = Math.ceil(WIDTH / CHUNK);
 export const NAMESPACE = "pixel-conquest";
-export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 4 };
-export const MAX_PLAYERS = 32;
+export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
+export const MAX_PLAYERS = 1024;
+export const MAX_COUNTRIES = 64;
 export const INPUT_LEASE_MS = 2000;
 const COUNTRY_COLORS = [
 	"#ef4444",
