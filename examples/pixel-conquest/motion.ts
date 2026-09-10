@@ -28,7 +28,7 @@ export class LocalMotion {
 		const relocated = dot.id !== this.dot.id || dot.code !== this.dot.code;
 		if (!distance && !relocated && direction === this.direction) {
 			this.dot = dot;
-			return;
+			if (this.duration === this.stepDuration()) return;
 		}
 		const position = this.position(now);
 		// Respawns and large corrections should not pan across the map.
@@ -44,9 +44,9 @@ export class LocalMotion {
 
 	position(now: number) {
 		const elapsed = Math.max(0, now - this.started);
-		// ponytail: anticipate one cell; predicting farther needs server tick/credit metadata.
+		// anticipate one cell; predicting farther needs server tick/credit metadata.
 		const progress = Math.min(elapsed / this.duration, 1);
-		const correction = Math.max(0, 1 - elapsed / 100);
+		const correction = Math.max(0, 1 - elapsed / Math.min(100, this.duration));
 		const [dx, dy] = steps[this.direction];
 		return {
 			x: this.dot.x + dx * progress + this.offset.x * correction,

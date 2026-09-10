@@ -50,6 +50,32 @@ test("visual step durations match the server for every terrain and ownership com
 	}
 });
 
+test("destination ownership changes retime an active step without jumps or heartbeat resets", () => {
+	const terrain = land.slice().fill(1);
+	let owner = 2;
+	const motion = new LocalMotion(dot, "right", 0, terrain, () => owner);
+	expect(motion.position(50).x).toBe(31.25);
+	owner = 1;
+	motion.update(dot, "right", 50);
+	expect(motion.position(50).x).toBe(31.25);
+	expect(motion.position(75).x).toBe(31.625);
+	motion.update({ ...dot, seq: 2 }, "right", 75);
+	expect(motion.position(75).x).toBe(31.625);
+	expect(motion.position(100).x).toBe(32);
+	expect(motion.position(1000).x).toBe(32);
+
+	const slower = new LocalMotion(dot, "right", 0, terrain, () => owner);
+	expect(slower.position(25).x).toBe(31.5);
+	owner = 2;
+	slower.update(dot, "right", 25);
+	expect(slower.position(25).x).toBe(31.5);
+	expect(slower.position(125).x).toBe(31.5);
+	owner = 3; // A different enemy has the same cost and must not restart timing.
+	slower.update(dot, "right", 125);
+	expect(slower.position(175).x).toBe(31.75);
+	expect(slower.position(225).x).toBe(32);
+});
+
 test("confirmations, stops, reversals and respawns reconcile the visible position", () => {
 	const motion = new LocalMotion(dot, "right", 0, land, () => 0);
 	expect(motion.position(100).x).toBe(32);

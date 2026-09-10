@@ -103,11 +103,12 @@ function receive(row: ChunkRow) {
 	const owners = readOwners(row.owners);
 	chunks.set(row.index, { dots, owners, image: chunkImage(owners) });
 	const self = dots.find((dot) => dot.id === myId);
-	if (!self) return;
-	lastOwnDot = performance.now();
+	const now = performance.now();
 	const moving = online ? direction : "idle";
-	if (motion) motion.update(self, moving, lastOwnDot);
-	else motion = new LocalMotion(self, moving, lastOwnDot, land, ownerAt);
+	if (motion) motion.update(self ?? motion.dot, moving, now);
+	if (!self) return;
+	lastOwnDot = now;
+	if (!motion) motion = new LocalMotion(self, moving, now, land, ownerAt);
 	const position = motion.position(lastOwnDot);
 	camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	if (self.seq > lastAck) {
@@ -381,8 +382,9 @@ element("join").addEventListener("submit", async (event) => {
 function draw(now: number) {
 	requestAnimationFrame(draw);
 	const elapsed = now - lastFrame;
-	if (elapsed < FRAME_MS) return;
-	lastFrame = now - (elapsed % FRAME_MS);
+	// Allow timestamp rounding at the frame boundary without accumulating drift.
+	if (elapsed + 0.1 < FRAME_MS) return;
+	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
 	const position = motion?.position(now);
 	if (position) camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
@@ -402,6 +404,7 @@ function draw(now: number) {
 		);
 		for (const dot of chunk.dots) dots.set(dot.id, dot);
 	}
+	if (motion && !dots.has(myId)) dots.set(myId, motion.dot);
 	for (const dot of dots.values()) {
 		const display = dot.id === myId && position ? position : dot;
 		const x = left + (display.x + 0.5) * zoom,
