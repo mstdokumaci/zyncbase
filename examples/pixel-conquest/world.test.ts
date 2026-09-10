@@ -100,7 +100,7 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	expect(readOwners(world.chunk(chunkIndex(32, 10)).owners)[10 * CHUNK]).toBe(
 		alice.country_id,
 	);
-	world.remove("alice");
+	world.remove("alice", now);
 	expect(world.owners[10 * WIDTH + 35]).toBe(alice.country_id);
 	expect(
 		readDots(world.chunk(chunkIndex(35, 10)).dots).some(
@@ -155,7 +155,7 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 	expect(world.players.has("bot-9")).toBe(false);
 	expect(world.players.size).toBe(11);
 	expect(world.owners[0]).toBe(retiring.country_id);
-	world.remove("human:1");
+	world.remove("human:1", now + 2);
 	world.tick(now + 3);
 	expect(world.players.get("bot-9")?.country_id).toBe(retiring.country_id);
 	expect(world.countries.size).toBe(6);
@@ -237,13 +237,13 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	expect(world.players.has("ally")).toBe(true);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
 	// Nation 0 still has a live holder, so removing one of two holders keeps it.
-	world.remove("founder:0");
+	world.remove("founder:0", now);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
 	// The last holder leaves a zero-land country: the slot is reclaimed.
 	const holder = world.players.get("ally");
 	if (!holder) throw new Error("Holder missing");
 	const freed = holder.country_id;
-	world.remove("ally");
+	world.remove("ally", now);
 	expect(world.countries.has(freed)).toBe(false);
 	expect(world.countries.size).toBe(MAX_COUNTRIES - 1);
 	expect(world.dirtyRemovedCountries).toEqual(new Set([freed]));
@@ -296,7 +296,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 	if (!retired) throw new Error("Country missing");
 	retired.count = 0;
 	world.owners[17] = 0;
-	world.remove("17");
+	world.remove("17", 0);
 	world.input(
 		"replacement",
 		{
@@ -387,7 +387,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 	// a still roams, so landless Alpha survives.
 	expect(world.countries.has(a.country_id)).toBe(true);
 	expect(world.dirtyRemovedCountries.size).toBe(0);
-	world.remove("a");
+	world.remove("a", now);
 	expect(world.countries.has(a.country_id)).toBe(false);
 	expect(world.dirtyRemovedCountries.has(a.country_id)).toBe(true);
 });
@@ -442,7 +442,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	const fresh = dst.players.get("n");
 	if (!fresh) throw new Error("Fresh missing");
 	const retired = fresh.country_id;
-	dst.remove("n");
+	dst.remove("n", now);
 	expect(dst.countries.has(retired)).toBe(false);
 	const drained = drainPublishState(dst);
 	const ops = buildPublishOperations(dst, drained);
@@ -562,7 +562,7 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 		lastX: x,
 		lastY: y,
 	});
-	world.remove("alice");
+	world.remove("alice", 0);
 	// Dots vanish immediately but the row lingers with its final position.
 	expect(world.players.has("alice")).toBe(false);
 	expect(
@@ -583,13 +583,50 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 	expect([returned?.x, returned?.y]).toEqual([x, y]);
 	expect(world.dirtyRemovedUsers.has("alice")).toBe(false);
 	// After the window the row is queued for removal.
-	world.remove("alice");
+	world.remove("alice", 1);
 	world.tick(1 + PLAYER_GRACE_MS);
 	expect(world.userRow("alice")).toBeUndefined();
 	expect(world.dirtyRemovedUsers.has("alice")).toBe(true);
 	const drained = drainPublishState(world);
 	const ops = buildPublishOperations(world, drained);
 	expect(ops).toContainEqual({ op: "remove", path: ["users", "alice"] });
+});
+
+test("silent-timeout removal still grants the full grace window on reconnect", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const data = {
+		name: "Alice",
+		countryCode: world.country("North")?.code,
+		direction: "idle",
+		seq: 1,
+	};
+	world.input("alice", data, 0);
+	const player = world.players.get("alice");
+	if (!player) throw new Error("Player missing");
+	const [x, y] = [player.x, player.y];
+	// Go silent past the input lease: the tick removes at now, so expiry must
+	// run from removal (10001 + grace), not last contact (0 + grace).
+	const removedAt = INPUT_LEASE_MS * 5 + 1;
+	world.tick(removedAt);
+	expect(world.players.has("alice")).toBe(false);
+	expect(world.userRow("alice")).toMatchObject({ lastX: x, lastY: y });
+	// A tick past the old heardAt-based expiry must NOT collect the row.
+	world.tick(removedAt + 2000);
+	expect(world.userRow("alice")).toMatchObject({ lastX: x, lastY: y });
+	expect(world.dirtyRemovedUsers.has("alice")).toBe(false);
+	// Reconnect inside the removal-based window but past the old
+	// heardAt-based one: the exact cell must resume, not a fresh spawn.
+	const rejoinAt = removedAt + PLAYER_GRACE_MS - 5000;
+	const revived = world.country("North")?.code;
+	world.input("alice", { ...data, countryCode: revived, seq: 2 }, rejoinAt);
+	const returned = world.players.get("alice");
+	expect([returned?.x, returned?.y]).toEqual([x, y]);
+	expect(returned?.country_id).toBe(revived);
+	// And a tombstone left alone still expires on schedule.
+	world.remove("alice", rejoinAt);
+	world.tick(rejoinAt + PLAYER_GRACE_MS + 1);
+	expect(world.userRow("alice")).toBeUndefined();
+	expect(world.dirtyRemovedUsers.has("alice")).toBe(true);
 });
 
 test("crossing a chunk boundary refreshes the roster position, plain moves do not", () => {

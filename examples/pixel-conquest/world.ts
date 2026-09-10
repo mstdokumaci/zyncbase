@@ -126,7 +126,7 @@ export class World {
 		const target = Math.max(0, 10 - Math.floor(this.humanCount / 2));
 		for (let i = 0; i < 10; i++) {
 			const id = `bot-${i}`;
-			if (i >= target) this.remove(id);
+			if (i >= target) this.remove(id, now);
 			else if (!this.players.has(id)) {
 				const country = this.country(botCountries[Math.floor(i / 2)]);
 				if (country) this.add(id, country, now, true);
@@ -182,7 +182,14 @@ export class World {
 		);
 		for (const chunk of chunks) {
 			const index = Number(chunk.id);
-			if (!Number.isSafeInteger(index)) continue;
+			// Reject negatives (whose cells dodge the per-cell bounds check
+			// below and would corrupt counts/bounds) and out-of-range ids.
+			if (
+				!Number.isSafeInteger(index) ||
+				index < 0 ||
+				index >= COLUMNS * Math.ceil(HEIGHT / CHUNK)
+			)
+				continue;
 			const owners = readOwners(chunk.owners);
 			const x = (index % COLUMNS) * CHUNK;
 			const y = Math.floor(index / COLUMNS) * CHUNK;
@@ -420,15 +427,16 @@ export class World {
 		player.direction = direction as Direction;
 	}
 
-	remove(id: string) {
+	remove(id: string, now: number) {
 		const player = this.players.get(id);
 		if (!player) return;
 		this.dirtyChunks.add(chunkIndex(player.x, player.y));
 		this.players.delete(id);
 		// Tombstone: the dots vanish now, but the roster row lingers with its
-		// final position so a same-id reconnect resumes in place. Expiry is
-		// purely in-memory; the row shape never changes, so rejoin overwrites
-		// it with no field-clearing hazards.
+		// final position so a same-id reconnect resumes in place. Expiry runs
+		// from the removal time (not last contact), so silent-timeout removals
+		// get the full grace window too. It is purely in-memory; the row shape
+		// never changes, so rejoin overwrites it with no field-clearing hazards.
 		const row: UserRow = {
 			id: player.id,
 			country_id: player.country_id,
@@ -437,7 +445,7 @@ export class World {
 			lastY: player.y,
 		};
 		if (player.name !== undefined) row.name = player.name;
-		this.graveyard.set(id, { row, expires: player.heardAt + PLAYER_GRACE_MS });
+		this.graveyard.set(id, { row, expires: now + PLAYER_GRACE_MS });
 		this.dirtyUsers.add(id);
 		this.maybeDeleteCountry(player.country_id);
 	}
@@ -447,7 +455,7 @@ export class World {
 		for (const player of this.players.values()) {
 			if (player.is_bot) continue;
 			if (now - player.heardAt > INPUT_LEASE_MS * 5) {
-				this.remove(player.id);
+				this.remove(player.id, now);
 				continue;
 			}
 			if (now - player.heardAt > INPUT_LEASE_MS) player.direction = "idle";
@@ -637,7 +645,7 @@ export class World {
 	private chunkHasDots(chunk: ChunkRow): boolean {
 		try {
 			const dots = JSON.parse(decoder.decode(chunk.dots));
-			return Array.isArray(dots) && dots.length > 0;
+			return !Array.isArray(dots) || dots.length > 0;
 		} catch {
 			return true;
 		}

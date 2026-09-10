@@ -31,7 +31,7 @@ test("a rejected batch restores every drained entry so retry resends all", async
 		},
 		0,
 	);
-	world.remove("ghost");
+	world.remove("ghost", 0);
 	const ghost = [...world.dirtyRemovedCountries];
 	expect(ghost).toHaveLength(1);
 	// The ghost's dots vanish but its roster row lingers as a tombstone.

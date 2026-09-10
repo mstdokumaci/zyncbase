@@ -299,7 +299,8 @@ async function stop(code = 0) {
 	try {
 		if (code === 0) {
 			await inFlight;
-			for (const id of world.players.keys()) world.remove(id);
+			for (const id of world.players.keys())
+				world.remove(id, performance.now());
 			await publish();
 		}
 	} catch (error) {
@@ -384,11 +385,11 @@ try {
 		if (batch.type === "snapshot") {
 			const connected = new Set(batch.users.map((user) => user.userId));
 			for (const [id, player] of world.players)
-				if (!player.is_bot && !connected.has(id)) world.remove(id);
+				if (!player.is_bot && !connected.has(id)) world.remove(id, now);
 			for (const user of batch.users) world.input(user.userId, user.data, now);
 		} else {
 			for (const change of batch.changes) {
-				if (change.type === "leave") world.remove(change.userId);
+				if (change.type === "leave") world.remove(change.userId, now);
 				else world.input(change.entry.userId, change.entry.data, now);
 			}
 		}
