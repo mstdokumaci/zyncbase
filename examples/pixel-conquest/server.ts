@@ -1,9 +1,4 @@
-import {
-	createHmac,
-	randomBytes,
-	randomUUID,
-	timingSafeEqual,
-} from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
@@ -28,6 +23,7 @@ import {
 import {
 	type ChunkRow,
 	type Country,
+	INPUT_LEASE_MS,
 	MAX_PLAYERS,
 	NAMESPACE,
 	RULES,
@@ -44,7 +40,6 @@ const origin = process.env.GAME_ORIGIN ?? "http://localhost:8080";
 const dataDir = resolve(
 	process.env.GAME_DATA_DIR ?? join(root, "data/pixel-conquest"),
 );
-const joinCode = process.env.GAME_JOIN_CODE || randomBytes(6).toString("hex");
 const secret = randomBytes(32).toString("hex");
 const certFile = process.env.GAME_TLS_CERT;
 const keyFile = process.env.GAME_TLS_KEY;
@@ -103,10 +98,10 @@ async function body(req: IncomingMessage) {
 		if (size > 1024) throw new Error("Request too large");
 		chunks.push(Buffer.from(chunk));
 	}
-	return JSON.parse(Buffer.concat(chunks).toString());
+	return size ? JSON.parse(Buffer.concat(chunks).toString()) : {};
 }
 
-// one shared login budget for a friends-only demo; use per-client limits for public signup.
+// ponytail: shared session budget; add per-client quotas if one caller starves others.
 let logins = 0,
 	loginWindow = Date.now();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
@@ -122,6 +117,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				ready,
 				players: world.humanCount,
 				bots: world.players.size - world.humanCount,
+				countries: [...world.countries.values()],
 			});
 		if (path === "/session" && req.method === "POST") {
 			if (!ready) return reply(res, 503, { error: "The world is starting" });
@@ -134,20 +130,31 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					error: "Please wait a minute before trying again",
 				});
 			const input = await body(req);
-			const provided = Buffer.from(
-				typeof input?.code === "string" ? input.code : "",
-			);
-			const expected = Buffer.from(joinCode);
-			if (
-				provided.length !== expected.length ||
-				!timingSafeEqual(provided, expected)
-			)
-				return reply(res, 403, { error: "That invite code is incorrect" });
+			if (!input || typeof input !== "object" || Array.isArray(input))
+				throw new Error("Expected a session request object");
+			if (!ready) return reply(res, 503, { error: "The world is starting" });
 			if (world.humanCount >= MAX_PLAYERS)
 				return reply(res, 409, {
 					error: "The world is full. Try again after someone leaves.",
 				});
-			return reply(res, 200, { token: token("player") });
+			let country: Country | undefined;
+			if (Object.hasOwn(input, "countryName")) {
+				country = world.country(input.countryName);
+				if (!country)
+					return reply(res, 409, {
+						error: "All country slots are taken. Join an existing country.",
+					});
+				// Release an unused slot if the browser never completes admission.
+				const code = country.code;
+				setTimeout(
+					() => world.maybeDeleteCountry(code),
+					INPUT_LEASE_MS * 5,
+				).unref();
+			}
+			return reply(res, 200, {
+				token: token("player"),
+				countryCode: country?.code,
+			});
 		}
 		return reply(res, 404, { error: "Not found" });
 	} catch (error) {
@@ -402,7 +409,7 @@ try {
 		10000,
 	);
 	console.log(
-		`\nPixel Conquest: ${origin}\nInvite code: ${joinCode}\nData: ${dataDir}\nStop with Ctrl+C.\n`,
+		`\nPixel Conquest: ${origin}\nData: ${dataDir}\nStop with Ctrl+C.\n`,
 	);
 } catch (error) {
 	failed(error);

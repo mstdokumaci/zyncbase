@@ -26,7 +26,7 @@ On your Mac, from the same checkout/version:
 bun run demo:game:build
 ```
 
-Only `examples/pixel-conquest/dist/` is uploaded. It contains the HTML, CSS, browser JavaScript and asset headers. Server code, invite codes, signing secrets and certificates are not part of that build.
+Only `examples/pixel-conquest/dist/` is uploaded. It contains the HTML, CSS, browser JavaScript and asset headers. Server code, signing secrets and certificates are not part of that build.
 
 ## 2. Create the origin certificate
 
@@ -73,7 +73,6 @@ export GAME_ORIGIN=https://game.example.com
 export GAME_HOST=::
 export GAME_PORT=8444
 export GAME_DB_PORT=8443
-export GAME_JOIN_CODE='replace-with-your-invite-code'
 export GAME_DATA_DIR=/home/freebsd/zyncbase/data/pixel-conquest
 export GAME_TLS_CERT=/home/freebsd/.config/pixel-conquest/origin.pem
 export GAME_TLS_KEY=/home/freebsd/.config/pixel-conquest/origin.key
@@ -167,7 +166,7 @@ curl -I https://game.example.com/
 curl https://game.example.com/health
 ```
 
-Open `https://game.example.com`, enter the invite code and join from two browser windows. In browser developer tools, verify:
+Open `https://game.example.com`, enter player names and choose countries in two browser windows. Anyone with the URL can join while player slots remain. In browser developer tools, verify:
 
 - `/session` succeeds on `game.example.com`.
 - `/auth/ticket` succeeds on the same hostname.

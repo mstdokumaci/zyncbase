@@ -20,14 +20,22 @@
 				<h1>Leave your<br /><em>mark.</em></h1>
 				<p class="intro">Pick a country. Walk the world. Every piece of land you step on becomes yours.</p>
 				<form id="join">
-					<label for="country">Your country</label>
-					<input id="country" name="country" placeholder="Join a friend's country" required maxlength="24" autocomplete="off" />
-					<label for="code">Invite code</label>
-					<input id="code" name="code" placeholder="Ask your host for the code" type="password" required maxlength="128" autocomplete="off" />
-					<button class="primary" id="join-button" type="submit">Enter the world <span>↗</span></button>
+					<label for="player-name">Your name <span class="small">· up to 16 characters</span></label>
+					<input id="player-name" name="player-name" placeholder="How others see you" required maxlength="16" autocomplete="nickname" />
+					<label for="country-choice">Your country</label>
+					<select id="country-choice" name="country-choice" required disabled aria-describedby="country-slots">
+						<option value="">Loading countries…</option>
+					</select>
+					<p id="country-slots" class="small" role="status"></p>
+					<div id="country-preview" hidden><span id="country-swatch" class="swatch" aria-hidden="true"></span><span id="country-detail" class="small"></span></div>
+					<div id="new-country" hidden>
+						<label for="country">New country name</label>
+						<input id="country" name="country" placeholder="Name your country" disabled maxlength="24" autocomplete="off" />
+					</div>
+					<button class="primary" id="join-button" type="submit" disabled>Enter the world <span>↗</span></button>
 					<p id="error" class="error" role="alert"></p>
 				</form>
-				<p class="small">64 countries max — use an existing name to team up. No account needed.</p>
+				<p class="small">Join a country to team up, or start your own. No account needed.</p>
 			</section>
 			<aside class="field-notes">
 				<p class="eyebrow">FIELD NOTES / 001</p>
@@ -43,7 +51,7 @@
 			<p class="eyebrow">THE WORLD SO FAR</p>
 			<h2>Countries <span id="country-count">0</span></h2>
 			<ol id="countries"></ol>
-			<p class="small">Circles are people. Squares are bots.<br />Land stays claimed when you leave.</p>
+			<p class="small">Your name is gold. Circles are people; squares are bots.<br />Land stays claimed when you leave.</p>
 		</aside>
 		<footer>
 			<div class="instructions"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Hold to move · Release to stop</span></div>

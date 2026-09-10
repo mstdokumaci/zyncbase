@@ -16,6 +16,7 @@ import {
 	HEIGHT,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	playerName,
 	readDots,
 	readOwners,
 	terrain,
@@ -33,6 +34,8 @@ if (!context) throw new Error("Your browser needs Canvas support");
 const ctx = context;
 const connection = element("connection");
 const lobby = element("lobby");
+const countryChoice = element<HTMLSelectElement>("country-choice");
+const countryInput = element<HTMLInputElement>("country");
 const countries = new Map<number, Country>();
 const chunks = new Map<
 	number,
@@ -43,8 +46,13 @@ const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
 let playing = false;
+let joining = false;
+let worldReady = false;
+let selectedCountryCode: number | undefined;
+let lobbyCountries: Country[] = [];
 let myId = "",
 	name = "",
+	nickname = "",
 	seq = 0,
 	pulse = 0,
 	lastAck = -1,
@@ -65,31 +73,81 @@ let lastFrame = 0;
 const OFFLINE = "The world is offline";
 const TAGLINE = "A shared world. One pixel at a time.";
 
+function updateCountryChoice() {
+	const creating = countryChoice.value === "new";
+	const country = lobbyCountries.find(
+		(country) => String(country.code) === countryChoice.value,
+	);
+	element("new-country").hidden = !creating;
+	countryInput.disabled = !creating;
+	countryInput.required = creating;
+	element("country-preview").hidden = !country;
+	if (country) {
+		element("country-swatch").style.background = country.color;
+		element("country-detail").textContent =
+			`${country.name} · ${country.count.toLocaleString()} land pixels`;
+	}
+	element<HTMLButtonElement>("join-button").disabled =
+		joining || !worldReady || (!creating && !country);
+}
+countryChoice.addEventListener("change", updateCountryChoice);
+
+function showLobbyCountries(rows: Country[]) {
+	rows.sort((a, b) => a.name.localeCompare(b.name));
+	const slots = MAX_COUNTRIES - rows.length;
+	// Keep the native picker intact during polling unless its options change.
+	if (
+		countryChoice.options.length === 1 ||
+		rows.length !== lobbyCountries.length ||
+		rows.some((country, i) => country.code !== lobbyCountries[i]?.code)
+	) {
+		const selected = countryChoice.value;
+		const create = new Option("＋ Create a country", "new");
+		create.disabled = slots === 0;
+		countryChoice.replaceChildren(
+			new Option("Choose a country…", ""),
+			...rows.map((country) => new Option(country.name, String(country.code))),
+			create,
+		);
+		countryChoice.value = selected;
+		if (selected === "new" && !slots) countryChoice.value = "";
+		if (!rows.length) countryChoice.value = "new";
+	}
+	lobbyCountries = rows;
+	countryChoice.disabled = false;
+	element("country-slots").textContent = slots
+		? `${rows.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
+		: `All ${MAX_COUNTRIES} slots are taken. Join an existing country.`;
+	updateCountryChoice();
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: in-flight health polls must not alter the UI after joining starts.
 async function checkHealth() {
-	if (playing) return;
-	const button = element<HTMLButtonElement>("join-button");
+	if (playing || joining) return;
 	try {
 		const response = await fetch("/health", {
 			signal: AbortSignal.timeout(3000),
 		});
 		const health = await response.json();
+		if (playing || joining) return;
 		if (!response.ok || health.ready !== true) throw new Error();
-		button.disabled = false;
+		worldReady = true;
+		showLobbyCountries(health.countries);
 		if (element("error").textContent === OFFLINE)
 			element("error").textContent = "";
 		if (connection.textContent.startsWith(OFFLINE))
 			connection.textContent = TAGLINE;
 	} catch {
-		button.disabled = true;
+		if (playing || joining) return;
+		worldReady = false;
+		countryChoice.disabled = true;
+		updateCountryChoice();
 		element("error").textContent = OFFLINE;
 		connection.textContent = `${OFFLINE} · Retrying…`;
 	}
 }
 void checkHealth();
-const healthTimer = setInterval(() => {
-	if (playing) clearInterval(healthTimer);
-	else void checkHealth();
-}, 5000);
+setInterval(() => void checkHealth(), 5000);
 
 const land = terrain();
 const base = document.createElement("canvas");
@@ -248,7 +306,8 @@ function publish(changed = false) {
 		sentAt = Date.now();
 	}
 	client.presence.set({
-		country: name,
+		name: nickname,
+		countryCode: selectedCountryCode,
 		direction,
 		seq,
 		sentAt,
@@ -325,29 +384,31 @@ function zoom(change: number) {
 element("zoom-in").addEventListener("click", () => zoom(2));
 element("zoom-out").addEventListener("click", () => zoom(-2));
 
-// Admission rejects new names once 64 live countries exist, which leaves
-// the newcomer without a dot. A join-scoped timeout reads the latest
-// country state so the check runs even when no country updates arrive.
+function returnToLobby(message: string) {
+	clearTimeout(admissionTimer);
+	client?.disconnect();
+	for (const handle of subscriptions.values()) handle.unsubscribe();
+	subscriptions.clear();
+	chunks.clear();
+	playing = online = false;
+	lobby.hidden = false;
+	element("scoreboard").hidden = true;
+	element("direction-pad").hidden = true;
+	element("error").textContent = message;
+	connection.textContent = "Ready when you are.";
+	updateCountryChoice();
+	void checkHealth();
+}
+
+// The roster can change between the lobby poll and presence admission.
 function checkAdmission() {
 	if (!playing || lastOwnDot !== 0) return;
 	if (
-		latestCountries.length >= MAX_COUNTRIES &&
-		!latestCountries.some(
-			(country) => country.name.toLowerCase() === name.toLowerCase(),
-		)
+		selectedCountryCode !== undefined &&
+		!latestCountries.some((country) => country.code === selectedCountryCode)
 	) {
-		client?.disconnect();
-		for (const handle of subscriptions.values()) handle.unsubscribe();
-		subscriptions.clear();
-		chunks.clear();
-		playing = online = false;
-		lobby.hidden = false;
-		element("scoreboard").hidden = true;
-		element("direction-pad").hidden = true;
-		element("error").textContent =
-			`The world already has ${MAX_COUNTRIES} countries — join an existing one.`;
-		connection.textContent = "Ready when you are.";
-		element<HTMLButtonElement>("join-button").disabled = false;
+		returnToLobby("That country is no longer available. Choose another one.");
+		return;
 	}
 }
 
@@ -371,23 +432,48 @@ async function locate() {
 	}
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep selection validation and connection cleanup together during admission.
 element("join").addEventListener("submit", async (event) => {
 	event.preventDefault();
-	const button = element<HTMLButtonElement>("join-button");
-	button.disabled = true;
+	if (joining || playing || !worldReady) return;
+	joining = true;
+	updateCountryChoice();
 	element("error").textContent = "";
 	lastOwnDot = 0;
 	latestCountries = [];
 	clearTimeout(admissionTimer);
 	try {
-		name = countryName(element<HTMLInputElement>("country").value);
+		nickname = playerName(element<HTMLInputElement>("player-name").value);
+		const selected = lobbyCountries.find(
+			(country) => String(country.code) === countryChoice.value,
+		);
+		selectedCountryCode = selected?.code;
+		if (countryChoice.value === "new") {
+			if (lobbyCountries.length >= MAX_COUNTRIES)
+				throw new Error(
+					"All country slots are taken. Join an existing country.",
+				);
+			name = countryName(countryInput.value);
+			if (
+				lobbyCountries.some(
+					(country) => country.name.toLowerCase() === name.toLowerCase(),
+				)
+			)
+				throw new Error(
+					"That country already exists. Choose it from the list to join.",
+				);
+		} else {
+			if (!selected) throw new Error("Choose a country to join.");
+			name = selected.name;
+		}
 		const response = await fetch("/session", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ code: element<HTMLInputElement>("code").value }),
+			body: JSON.stringify(selected ? {} : { countryName: name }),
 		});
 		const session = await response.json();
 		if (!response.ok) throw new Error(session.error);
+		selectedCountryCode = selected?.code ?? session.countryCode;
 		client = createClient({
 			url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
 			auth: { token: session.token },
@@ -433,14 +519,10 @@ element("join").addEventListener("submit", async (event) => {
 		connection.textContent = "Connected · Finding your dot…";
 		void locate();
 	} catch (error) {
-		clearTimeout(admissionTimer);
-		client?.disconnect();
-		playing = online = false;
-		element("error").textContent =
-			error instanceof Error ? error.message : String(error);
-		connection.textContent = "Ready when you are.";
+		returnToLobby(error instanceof Error ? error.message : String(error));
 	} finally {
-		button.disabled = false;
+		joining = false;
+		updateCountryChoice();
 	}
 });
 
@@ -470,7 +552,12 @@ function draw(now: number) {
 		);
 		for (const dot of chunk.dots) dots.set(dot.id, dot);
 	}
-	if (motion && !dots.has(myId)) dots.set(myId, motion.dot);
+	// Draw yourself last so nearby dots and names do not cover your marker.
+	const self = dots.get(myId) ?? motion?.dot;
+	if (self) {
+		dots.delete(myId);
+		dots.set(myId, self);
+	}
 	for (const dot of dots.values()) {
 		const display = dot.id === myId && position ? position : dot;
 		const x = left + (display.x + 0.5) * zoom,
@@ -482,13 +569,17 @@ function draw(now: number) {
 		ctx.fillStyle = countries.get(dot.code)?.color ?? "white";
 		ctx.fill();
 		ctx.lineWidth = 2;
-		ctx.strokeStyle = dot.id === myId ? "#ffffff" : "#0d1822";
+		ctx.strokeStyle = dot.id === myId ? "#ffe3a0" : "#0d1822";
 		ctx.stroke();
-		if (dot.id === myId) {
-			ctx.fillStyle = "#fff";
-			ctx.font = "bold 10px system-ui";
+		if (!dot.bot && dot.name) {
+			ctx.fillStyle = dot.id === myId ? "#ffe3a0" : "#bccacb";
+			ctx.font = dot.id === myId ? "bold 11px system-ui" : "10px system-ui";
 			ctx.textAlign = "center";
-			ctx.fillText("YOU", x, y - zoom - 7);
+			ctx.strokeStyle = "#0d1822";
+			ctx.lineWidth = 3;
+			ctx.lineJoin = "round";
+			ctx.strokeText(dot.name, x, y - zoom - 7, 120);
+			ctx.fillText(dot.name, x, y - zoom - 7, 120);
 		}
 	}
 	if (playing && performance.now() - lastHeartbeat > 500) {

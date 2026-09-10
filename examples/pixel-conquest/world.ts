@@ -10,9 +10,9 @@ import {
 	CHUNK,
 	type ChunkRow,
 	COLUMNS,
+	COUNTRY_COLORS,
 	type Country,
 	chunkIndex,
-	countryColor,
 	countryName,
 	type Direction,
 	type Dot,
@@ -21,6 +21,7 @@ import {
 	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
+	playerName,
 	RULES,
 	readOwners,
 	rowId,
@@ -86,8 +87,10 @@ export class World {
 		for (let i = 0; i < 10; i++) {
 			const id = `bot:${i}`;
 			if (i >= target) this.remove(id);
-			else if (!this.players.has(id))
-				this.add(id, botCountries[Math.floor(i / 2)], now, true);
+			else if (!this.players.has(id)) {
+				const country = this.country(botCountries[Math.floor(i / 2)]);
+				if (country) this.add(id, country, now, true);
+			}
 		}
 	}
 
@@ -115,12 +118,12 @@ export class World {
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass restores the bitmap and recomputes its counts together.
 	restore(countries: Country[], chunks: ChunkRow[], persistedNextCode = 0) {
 		for (const country of countries) {
-			const { id, code, name } = country;
+			const { id, code, name, color } = country;
 			this.countries.set(code, {
 				id,
 				code,
 				name,
-				color: countryColor(code),
+				color,
 				count: 0,
 			});
 			this.dirtyCountries.add(country.code);
@@ -166,7 +169,8 @@ export class World {
 		this.fillEnclosures();
 	}
 
-	private country(name: string) {
+	country(value: unknown) {
+		const name = countryName(value);
 		const existing = [...this.countries.values()].find(
 			(c) => c.name.toLowerCase() === name.toLowerCase(),
 		);
@@ -178,11 +182,14 @@ export class World {
 		const code = this.nextCode++;
 		if (code > 65535)
 			throw new Error("Country storage is full; reset the world");
+		const used = new Set([...this.countries.values()].map((c) => c.color));
+		const color = COUNTRY_COLORS.find((color) => !used.has(color));
+		if (!color) throw new Error("No country colors available");
 		const country = {
 			id: rowId(code),
 			code,
 			name,
-			color: countryColor(code),
+			color,
 			count: 0,
 		};
 		this.countries.set(code, country);
@@ -193,7 +200,7 @@ export class World {
 	// A country with no land and no live holders is gone: its slot and name
 	// become available for newcomers. Zero-land countries with live players
 	// stay, so roaming dots keep their identity.
-	private maybeDeleteCountry(code: number) {
+	maybeDeleteCountry(code: number) {
 		const country = this.countries.get(code);
 		if (!country || country.count !== 0) return;
 		for (const player of this.players.values())
@@ -263,10 +270,12 @@ export class World {
 		throw new Error("No available land");
 	}
 
-	private add(id: string, name: string, now: number, bot = false) {
-		const country = this.country(name);
-		if (!country) return undefined;
-		const position = this.spawn(country.code, bot, botCountries.indexOf(name));
+	private add(id: string, country: Country, now: number, bot = false) {
+		const position = this.spawn(
+			country.code,
+			bot,
+			botCountries.indexOf(country.name),
+		);
 		const player: Player = {
 			id,
 			...position,
@@ -294,14 +303,17 @@ export class World {
 		let player = this.players.get(id);
 		if (!player) {
 			if (this.humanCount >= MAX_PLAYERS) return;
-			let name: string;
+			if (!Number.isSafeInteger(data.countryCode)) return;
+			const country = this.countries.get(Number(data.countryCode));
+			if (!country) return;
+			let nickname: string;
 			try {
-				name = countryName(data.country);
+				nickname = playerName(data.name);
 			} catch {
 				return;
 			}
-			player = this.add(id, name, now);
-			if (!player) return;
+			player = this.add(id, country, now);
+			player.name = nickname;
 		}
 		this.inputMessages++;
 		player.heardAt = now;
@@ -507,8 +519,9 @@ export class World {
 		}
 		const dots: Dot[] = [...this.players.values()]
 			.filter((p) => chunkIndex(p.x, p.y) === index)
-			.map(({ id, code, x, y, seq, sentAt, bot }) => ({
+			.map(({ id, name, code, x, y, seq, sentAt, bot }) => ({
 				id,
+				name,
 				code,
 				x,
 				y,

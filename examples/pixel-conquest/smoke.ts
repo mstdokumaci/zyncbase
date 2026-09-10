@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { createClient, type ZyncBaseClient } from "@zyncbase/client";
 import { buildBrowser } from "./build";
 import { startLocalEdge } from "./dev";
-import { type ChunkRow, type Country, NAMESPACE, readDots } from "./shared";
+import {
+	type ChunkRow,
+	COUNTRY_COLORS,
+	type Country,
+	MAX_COUNTRIES,
+	NAMESPACE,
+	readDots,
+} from "./shared";
 
 async function freePort() {
 	const server = createServer();
@@ -103,7 +110,6 @@ async function start(reset = false) {
 					: process.env.NODE_EXTRA_CA_CERTS,
 				GAME_DATA_DIR: dataDir,
 				GAME_ORIGIN: origin,
-				GAME_JOIN_CODE: "smoke-test",
 			},
 			stdout: "pipe",
 			stderr: "pipe",
@@ -133,13 +139,15 @@ async function stop() {
 	assert.equal(code, 0, logs);
 }
 
-async function connect() {
+async function connect(countryName?: string) {
 	const response = await fetch(`${origin}/session`, {
 		method: "POST",
-		body: JSON.stringify({ code: "smoke-test" }),
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(countryName === undefined ? {} : { countryName }),
 	});
 	assert.equal(response.status, 200);
-	const { token } = await response.json();
+	const { token, countryCode } = await response.json();
+	if (countryName !== undefined) assert.equal(typeof countryCode, "number");
 	const ticketResponse = await fetch(`${origin}/auth/ticket`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${token}` },
@@ -168,7 +176,7 @@ async function connect() {
 	await client.connect();
 	const users = await client.store.query("users");
 	assert.equal(users.length, 1, "players only see their own identity");
-	return { client, id: String((users[0] as { id: string }).id) };
+	return { client, id: String((users[0] as { id: string }).id), countryCode };
 }
 
 async function chunks(client: ZyncBaseClient) {
@@ -179,11 +187,24 @@ async function chunks(client: ZyncBaseClient) {
 
 try {
 	await start();
-	assert.deepEqual(await (await fetch(`${origin}/health`)).json(), {
+	const { countries: lobbyCountries, ...health } = await (
+		await fetch(`${origin}/health`)
+	).json();
+	assert.deepEqual(health, {
 		ready: true,
 		players: 0,
 		bots: 10,
 	});
+	assert.equal(lobbyCountries.length, 5, "lobby lists countries before login");
+	assert.equal(
+		new Set(lobbyCountries.map((country: Country) => country.color)).size,
+		5,
+	);
+	assert.ok(
+		lobbyCountries.every((country: Country) =>
+			COUNTRY_COLORS.includes(country.color),
+		),
+	);
 	assert.equal((await fetch(origin)).status, 200);
 	assert.equal((await fetch(`${origin}/client.js`)).status, 200);
 	// The VM's token issuer serves neither browser assets nor database tickets.
@@ -207,15 +228,7 @@ try {
 		).status,
 		401,
 	);
-	assert.equal(
-		(
-			await fetch(`${origin}/session`, {
-				method: "POST",
-				body: '{"code":"wrong"}',
-			})
-		).status,
-		403,
-	);
+	assert.equal((await fetch(`${origin}/session`)).status, 404);
 	assert.equal(
 		(
 			await fetch(`${origin}/session`, {
@@ -225,11 +238,12 @@ try {
 		).status,
 		403,
 	);
-	const alice = await connect(),
-		bob = await connect();
+	const alice = await connect("North"),
+		bob = await connect("South");
 	assert.notEqual(alice.id, bob.id);
 	const input = {
-		country: "North",
+		name: "Ａlice",
+		countryCode: alice.countryCode,
 		direction: "idle",
 		seq: 1,
 		sentAt: Date.now(),
@@ -240,7 +254,8 @@ try {
 	send();
 	timers.push(setInterval(send, 500));
 	bob.client.presence.set({
-		country: "South",
+		name: "Bob",
+		countryCode: bob.countryCode,
 		direction: "idle",
 		seq: 1,
 		sentAt: Date.now(),
@@ -258,12 +273,46 @@ try {
 		async () => dot(),
 		"presence input creates a subscribed dot",
 	);
+	assert.equal(first.name, "Alice", "map dots carry normalized player names");
+	await eventually(
+		async () =>
+			visible
+				.flatMap((row) => readDots(row.dots))
+				.some((dot) => dot.id === bob.id && dot.name === "Bob"),
+		"other humans have named map dots",
+	);
+	const roster = (await (await fetch(`${origin}/health`)).json())
+		.countries as Country[];
+	const north = roster.find((country) => country.name === "North");
+	assert.ok(north, "new countries appear in the lobby");
+	assert.equal(
+		north.code,
+		alice.countryCode,
+		"session returns the persisted country code",
+	);
+	const teammate = await connect();
+	teammate.client.presence.set({
+		name: "Teammate",
+		countryCode: north.code,
+		direction: "idle",
+		seq: 1,
+		sentAt: Date.now(),
+		pulse: 1,
+	});
+	await eventually(
+		async () =>
+			visible
+				.flatMap((row) => readDots(row.dots))
+				.some((dot) => dot.id === teammate.id && dot.code === north.code),
+		"lobby selection joins an existing country by code",
+	);
+	teammate.client.disconnect();
 	await eventually(
 		async () => (await (await fetch(`${origin}/health`)).json()).bots === 9,
 		"two humans replace one bot",
 	);
 	console.log(
-		`PASS: invite, identity, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, presence → store subscription`,
+		`PASS: open admission, identity, player names, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, presence → store subscription`,
 	);
 	input.direction = "right";
 	input.seq++;
@@ -347,11 +396,16 @@ try {
 	const restoredCountries = (await returning.client.store.query(
 		"countries",
 	)) as unknown as Country[];
-	for (const country of savedCountries)
+	for (const country of savedCountries) {
 		assert.equal(
 			restoredCountries.find((saved) => saved.code === country.code)?.count,
 			country.count,
 		);
+		assert.equal(
+			restoredCountries.find((saved) => saved.code === country.code)?.color,
+			country.color,
+		);
+	}
 	await assert.rejects(returning.client.setStoreNamespace("another-world"), {
 		code: "NAMESPACE_UNAUTHORIZED",
 	});
@@ -372,6 +426,53 @@ try {
 	assert.equal(fresh.length, 5);
 	assert.ok(fresh.every((country) => country.count === 0));
 	console.log("PASS: manual world reset");
+	for (const body of [
+		"null",
+		"[]",
+		"{",
+		JSON.stringify({ countryName: "\u0000" }),
+		JSON.stringify({ countryName: "x".repeat(1024) }),
+	]) {
+		assert.equal(
+			(await fetch(`${origin}/session`, { method: "POST", body })).status,
+			400,
+		);
+	}
+	// Concurrent creation requests cannot exceed the live-country cap.
+	const attempts = await Promise.all(
+		Array.from({ length: MAX_COUNTRIES - fresh.length + 1 }, (_, i) =>
+			fetch(`${origin}/session`, {
+				method: "POST",
+				body: JSON.stringify({ countryName: `Reserved ${i}` }),
+			}),
+		),
+	);
+	assert.equal(
+		attempts.filter((response) => response.status === 200).length,
+		MAX_COUNTRIES - fresh.length,
+	);
+	assert.equal(
+		attempts.filter((response) => response.status === 409).length,
+		1,
+	);
+	assert.equal(
+		(await (await fetch(`${origin}/health`)).json()).countries.length,
+		MAX_COUNTRIES,
+	);
+	assert.equal(
+		(await fetch(`${origin}/session`, { method: "POST" })).status,
+		200,
+		"existing-country players still receive sessions",
+	);
+	await eventually(
+		async () =>
+			(await (await fetch(`${origin}/health`)).json()).countries.length ===
+			fresh.length,
+		"unused country reservations expire",
+	);
+	console.log(
+		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
+	);
 } catch (error) {
 	console.error(logs);
 	throw error;

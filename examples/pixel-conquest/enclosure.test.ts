@@ -245,7 +245,13 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 	const input = (id: string, country: number, direction: Direction) =>
 		world.input(
 			id,
-			{ country: String(country), direction, seq: ++seq, sentAt: now },
+			{
+				name: id,
+				countryCode: country,
+				direction,
+				seq: ++seq,
+				sentAt: now,
+			},
 			now,
 		);
 	const actor = (id: string, code: number, x: number, y: number) => {
