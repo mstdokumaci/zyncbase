@@ -129,10 +129,7 @@ unpromising in this fixture: the stored bounds remain almost tight.
 Source: `ae1b60b` (`Example game bot performance`), with no game or database
 implementation changes. Machine: Intel Core i9-9880H, macOS x64, Bun 1.4.0.
 The existing SDK was rebuilt before the database run. Builds and checks ran
-outside measurement intervals. Raw JSON, sampling traces, logs and the
-diagnostic preload are in
-[`fresh-20260909`](../../test-artifacts/pixel-conquest-profile/fresh-20260909/).
-These are local generated artifacts.
+outside measurement intervals.
 
 ### Fresh timing baseline
 
@@ -374,10 +371,5 @@ bun --preload ./examples/pixel-conquest/diagnostics.preload.ts examples/pixel-co
 bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/iteration-20260910/published
 ```
 
-Local raw results and the source snapshot are in
-[`iteration-20260910`](../../test-artifacts/pixel-conquest-profile/iteration-20260910/).
-`final-{baseline,candidate}-{1,2,3}-{1200,12000}` contains the selected
-comparison; `comparison-*` contains the rejected depth-first experiment.
-The baseline snapshot changes only imports for running alongside the
-candidate. Generated artifacts are gitignored; the reproduction above uses
+Generated artifacts are gitignored; the reproduction above uses
 tracked files available on a clean checkout.
