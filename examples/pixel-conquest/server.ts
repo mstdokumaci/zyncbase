@@ -104,6 +104,8 @@ async function body(req: IncomingMessage) {
 // ponytail: shared session budget; add per-client quotas if one caller starves others.
 let logins = 0,
 	loginWindow = Date.now();
+// Latest reservation generation per country code; stale timers no-op.
+const countryLeases = new Map<number, number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 	try {
@@ -146,10 +148,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					});
 				// Release an unused slot if the browser never completes admission.
 				const code = country.code;
-				setTimeout(
-					() => world.maybeDeleteCountry(code),
-					INPUT_LEASE_MS * 5,
-				).unref();
+				const lease = (countryLeases.get(code) ?? 0) + 1;
+				countryLeases.set(code, lease);
+				setTimeout(() => {
+					if (countryLeases.get(code) !== lease) return;
+					countryLeases.delete(code);
+					world.maybeDeleteCountry(code);
+				}, INPUT_LEASE_MS * 5).unref();
 			}
 			return reply(res, 200, {
 				token: token("player"),
