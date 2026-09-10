@@ -102,6 +102,12 @@ export function localEnclosures(
 	for (const start of starts) {
 		if (owners[start] === code || holes.has(start) || localOutside.has(start))
 			continue;
+		// Gains and bulk captures also queue exterior cells. Reuse the loss gate
+		// before a broad open component can exhaust the local flood budget.
+		if (hasStraightExit(owners, code, start, width, bounds)) {
+			localOutside.add(start);
+			continue;
+		}
 		if (!remaining--) return;
 		localSeen.clear();
 		localSeen.add(start);

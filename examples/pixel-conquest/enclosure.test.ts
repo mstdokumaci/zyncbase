@@ -52,6 +52,23 @@ test("bounded local searches match a complete flood for every 4x4 mask", () => {
 	}
 });
 
+test("a straight exit resolves a broad open component without exhausting the flood budget", () => {
+	const width = 80;
+	const owners = new Uint16Array(width * width);
+	owners[0] = owners[owners.length - 1] = 1;
+	const initial = owners.slice();
+	expect(
+		localEnclosures(
+			owners,
+			1,
+			new Set([40 * width + 40]),
+			{ left: 0, right: width - 1, top: 0, bottom: width - 1 },
+			width,
+		),
+	).toEqual([]);
+	expect(owners).toEqual(initial);
+});
+
 test("the local budget is shared across components and exhaustion leaves ownership untouched", () => {
 	const width = 80,
 		height = 30;

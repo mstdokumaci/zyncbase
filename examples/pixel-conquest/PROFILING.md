@@ -2,13 +2,13 @@
 
 Measured September 9, 2026 with Bun 1.4.0, macOS x64, Intel Core i9-9880H. Baseline: `9f6c5982240aa73c0960d056453db3f25ee95227`.
 
-The selected implementation combines safe gates, bounded local searches, cached country bounds, and a TypeScript scanline fallback. It reduces simulation time and long updates on fragmented territory. Compact bot simulation remains slightly slower in absolute time; this is a tradeoff for bounded enclosure work, not a universal speedup.
+The selected implementation combines safe gates, bounded local searches, cached country bounds, and a TypeScript scanline fallback. The [September 10 iteration](#iteration-2026-09-10-straight-exit-checks-for-local-candidates) applies the existing straight-exit proof to local candidates, avoiding more fallback scans while preserving game outcomes. Earlier comparisons below describe their own baselines.
 
 ## Selected algorithm
 
 1. All movers paint before enclosure resolution. Countries are processed in first territory-change order, at most once per tick, including countries affected by captures.
 2. A gain's eight-neighbor ring can prove that it cannot create a hole. A lost pixel with a straight route to the country's conservative bounding-box edge needs no defensive reclaim. Failed proofs request a search; they do not assume an enclosure exists.
-3. Candidate components share a **1,024-cell local search budget per country per tick**. Proven exterior cells are reused between candidates. No pixels are painted unless every candidate is resolved within the budget. Candidate storage is also capped; exceeding either limit requests one fallback scan.
+3. Each candidate first gets the same bounds-limited straight-exit proof. Unresolved components share a **1,024-cell local flood budget per country per tick**. Proven exterior cells are reused between candidates. No pixels are painted unless every candidate is resolved. Candidate storage is also capped at 1,024; exceeding the storage or flood limit requests one fallback scan. Ray reads are separate from the flood budget and bounded by the country's width and height per candidate.
 4. The fallback fills all holes for that country using four-neighbor scanlines and reusable typed arrays. Country masks and capture checks use incrementally maintained bounds, including disconnected territory. The workspace outside those bounds is marked exterior in bulk.
 5. Bulk captures enqueue defensive candidates in constant time per pixel, avoiding long straight-ray checks for every captured pixel. Restore performs a full reconciliation for each populated country.
 
@@ -129,10 +129,7 @@ unpromising in this fixture: the stored bounds remain almost tight.
 Source: `ae1b60b` (`Example game bot performance`), with no game or database
 implementation changes. Machine: Intel Core i9-9880H, macOS x64, Bun 1.4.0.
 The existing SDK was rebuilt before the database run. Builds and checks ran
-outside measurement intervals. Raw JSON, sampling traces, logs and the
-diagnostic preload are in
-[`fresh-20260909`](../../test-artifacts/pixel-conquest-profile/fresh-20260909/).
-These are local generated artifacts.
+outside measurement intervals.
 
 ### Fresh timing baseline
 
@@ -253,3 +250,126 @@ that stored bounds enclosed the exact bounds at every snapshot.
 All 16 result checksums were also checked against their expected workload
 checksum. `bun run lint`, `bunx biome check --write --error-on-warnings` and
 `git diff --check` passed; Biome applied no fixes.
+
+## Iteration: 2026-09-10, straight-exit checks for local candidates
+
+Baseline: `ebe25e528df5baf0dca88657d9f178d55cc3c882`. Same Intel Core
+i9-9880H, macOS x64 and Bun 1.4.0. This iteration changes only the game's
+local enclosure search; the ZyncBase server, SDK, bot decisions, capture
+order and scanline filler are unchanged.
+
+### Fresh profile and selected change
+
+A fresh, separate 1,200-tick fragmented-bot sample recorded 1,568 stacks:
+52.9% included enclosure processing, 37.8% included the filler, 35.7%
+included bot planning and 8.9% included chunk preparation. The filler share
+is included in enclosure processing. These are sampled Bun stacks, not
+ZyncBase CPU measurements.
+
+`claim()` already uses `hasStraightExit()` to skip defensive searches for
+exposed losses. Gains and bulk captures can also queue exterior pixels,
+but those candidates previously entered the breadth-first flood directly.
+A large open component could exhaust 1,024 discovered cells before reaching
+its boundary and request an expensive full-country scan.
+
+`localEnclosures()` now applies that same exact straight-exit proof before
+flooding each unresolved candidate. A successful proof caches the start as
+exterior; a blocked or curved route still uses the existing bounded flood
+and fallback. The 1,024-cell flood and candidate-storage limits remain;
+ray reads are additional, bounded by country dimensions per candidate.
+This preserves capture order and avoids changing the flood-fill kernel.
+
+### Paired timing results
+
+Three sequential repeats per variant and workload, with the pair order
+alternated as described below. Sampling and diagnostic instrumentation were
+disabled. Values are medians across runs, including the median of per-run
+p99 values. Simulation excludes chunk preparation and database waiting;
+whole-update p99 includes chunk preparation.
+
+| Workload | Ticks | Baseline simulation | Candidate simulation | Change | Whole-update p99, baseline / candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fragmented bots | 1,200 | 1,671 ms | 998 ms | −40.3% | 13.73 / 13.28 ms |
+| Compact bots | 1,200 | 1,098 ms | 759 ms | −30.9% | 16.43 / 13.65 ms |
+| Fragmented scripted | 1,200 | 4,321 ms | 3,058 ms | −29.2% | 26.79 / 24.32 ms |
+| Fragmented bots, ten simulated minutes | 12,000 | 24,119 ms | 15,692 ms | −34.9% | 11.61 / 9.75 ms |
+
+Simulation ranges were 1,656–1,778 vs 994–1,002 ms for fragmented bots;
+1,011–1,676 vs 730–791 ms for compact bots; 4,273–4,689 vs 3,005–3,325 ms
+for scripted movement; and 23,951–24,862 vs 15,616–16,165 ms for the long
+run. The first compact baseline was an outlier with five updates over 50 ms;
+the other two had none. All other baseline runs and every candidate run had
+zero over-budget updates. The outlier is retained in the range and median;
+these measurements do not isolate its cause.
+
+Chunk-preparation medians were 193 / 176 ms, 188 / 179 ms, 196 / 178 ms and
+2,038 / 1,929 ms in table order. The long run's median elapsed time fell
+from 26.04 to 17.56 seconds, and measured Bun CPU time from 28.40 to 19.45
+seconds. These are unpaced local runs, not a database throughput result.
+
+Every pair matched initial and final checksums, chunk-write counts and
+payload byte counts. All 24 runs passed the harness's ownership, country
+count and player-position assertions. Final checksums match the previously
+recorded candidate values for all three short workloads and `d201cfc3…82ec81b`
+for the ten-minute workload. This iteration preserves the same trajectories
+in the measured fixtures.
+
+### Why the gain holds
+
+Separate diagnostic runs used the existing preload on both variants. These
+counts exclude disposable warmup and restoration; their instrumented timings
+are excluded from the comparison above.
+
+| Interval | Fallback calls, baseline / candidate | Summed rectangle area, baseline / candidate |
+| --- | ---: | ---: |
+| First simulated minute | 884 / 292 | 202,570,142 / 59,784,480 cells |
+| Tenth simulated minute | 1,613 / 1,280 | 909,803,041 / 657,001,802 cells |
+| All ten minutes | 9,966 / 5,547 | 3,942,801,033 / 2,074,372,971 cells |
+
+That is **44.3% fewer fallback calls and 47.4% less fallback rectangle area**
+over ten minutes. Area counts each fallback rectangle once, not every memory
+access or flood visit. Both diagnostic runs retained the long checksum and
+passed the stored-bounds assertions at every snapshot.
+
+A separate candidate sample recorded 965 stacks: enclosure processing fell
+to 25.1% of samples, including 17.0% in the filler; bot planning accounted
+for 56.3% and chunk preparation for 16.0%. This short workload now spends
+more sampled time in bot planning. Larger territories still incur full
+fallback scans; the tenth minute alone accounts for 657 million cells of
+rectangle area even with the new proof.
+
+### Rejected experiments
+
+- Testing ownership during the scanline flood, with native rectangle clears
+  instead of an explicit owner-mask loop, passed the exhaustive tests and
+  checksums but regressed the initial fragmented-bot trial from 1,684 to
+  2,062 ms and scripted movement from 4,333 to 6,167 ms. These are single
+  exploratory runs, not a general result about every direct-ownership design.
+- Depth-first local traversal improved the short workloads, but the three
+  ten-minute comparisons regressed from 21.38–24.21 seconds to 32.10–36.21
+  seconds of simulation. Checksums matched. The final change retains
+  breadth-first traversal; long-session verification prevented selecting a
+  short-workload improvement that would hurt the demo later.
+
+### Reproduction
+
+Use the unchanged [profile.ts](./profile.ts) harness with 20 countries,
+40 movers and 200 disposable warmup ticks. For each of three repeats, run
+fragmented bots, compact bots, fragmented scripted movement (1,200 ticks
+each), then fragmented bots for 12,000 ticks. Pair baseline and candidate
+within each workload; use baseline first on repeats 1 and 3, candidate first
+on repeat 2. Run builds, tests and sampling outside these timing intervals.
+Use a separate checkout at the baseline commit for the baseline commands.
+
+```sh
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
+bun examples/pixel-conquest/profile.ts --mode bots --shape compact --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
+bun examples/pixel-conquest/profile.ts --mode scripted --shape fragmented --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/iteration-20260910/long-1
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --profile --output test-artifacts/pixel-conquest-profile/iteration-20260910/sampled
+bun --preload ./examples/pixel-conquest/diagnostics.preload.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/iteration-20260910/diagnostic
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/iteration-20260910/published
+```
+
+Generated artifacts are gitignored; the reproduction above uses
+tracked files available on a clean checkout.
