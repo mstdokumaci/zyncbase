@@ -31,7 +31,8 @@
 	},
 	"presence": {
 		"user": {
-			"country": { "type": "string", "minLength": 1, "maxLength": 24 },
+			"name": { "type": "string", "minLength": 1, "maxLength": 16 },
+			"countryCode": { "type": "integer", "minimum": 1, "maximum": 65535 },
 			"direction": {
 				"type": "string",
 				"enum": ["idle", "up", "down", "left", "right"]

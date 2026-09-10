@@ -31,7 +31,13 @@ function workload(size: number, rotated: boolean, shape: string) {
 	);
 	world.input(
 		"walker",
-		{ country: "Benchmark", direction: "idle", seq: 0, sentAt: 0 },
+		{
+			name: "Walker",
+			countryCode: 1,
+			direction: "idle",
+			seq: 0,
+			sentAt: 0,
+		},
 		0,
 	);
 	const player = world.players.get("walker");

@@ -13,12 +13,24 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.input(
 		"keeper",
-		{ direction: "idle", country: "Keep", seq: 1, sentAt: 0 },
+		{
+			name: "Keeper",
+			direction: "idle",
+			countryCode: world.country("Keep")?.code,
+			seq: 1,
+			sentAt: 0,
+		},
 		0,
 	);
 	world.input(
 		"ghost",
-		{ direction: "idle", country: "Ghost", seq: 1, sentAt: 0 },
+		{
+			name: "Ghost",
+			direction: "idle",
+			countryCode: world.country("Ghost")?.code,
+			seq: 1,
+			sentAt: 0,
+		},
 		0,
 	);
 	world.remove("ghost");

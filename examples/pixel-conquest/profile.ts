@@ -102,6 +102,7 @@ function fixture() {
 	for (const [i, start] of starts.entries()) {
 		world.players.set(`mover:${i}`, {
 			id: `mover:${i}`,
+			name: values.mode === "bots" ? undefined : `Player ${i}`,
 			code: start.code,
 			x: start.x,
 			y: start.y,

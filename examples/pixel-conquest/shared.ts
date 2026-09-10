@@ -8,8 +8,11 @@ export const NAMESPACE = "pixel-conquest";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
 export const MAX_PLAYERS = 1024;
 export const MAX_COUNTRIES = 64;
+export const MAX_PLAYER_NAME_LENGTH = 16;
 export const INPUT_LEASE_MS = 2000;
-const COUNTRY_COLORS = [
+// Farthest-point sampling in OKLab, seeded with eight vivid colors.
+// Lightness 0.55–0.94 and chroma >= 0.055 keep claims visible on the dark map.
+export const COUNTRY_COLORS = [
 	"#ef4444",
 	"#2588f5",
 	"#ffe14a",
@@ -18,32 +21,70 @@ const COUNTRY_COLORS = [
 	"#ff8a2b",
 	"#f46ac1",
 	"#35dfdb",
-	"#f1eee5",
-	"#abc92d",
-	"#a65a39",
-	"#8eafcf",
-	"#bc2458",
-	"#3958ba",
-	"#d6ac72",
-	"#aaf3b1",
-	"#7a3685",
-	"#008d88",
-	"#ffc3b0",
-	"#bfb5fa",
+	"#707850",
+	"#ffd0ff",
+	"#70ff00",
+	"#c000a8",
+	"#a8a8d8",
+	"#f000ff",
+	"#a06898",
+	"#009800",
+	"#00a8b0",
+	"#c0c088",
+	"#c8f8d8",
+	"#a89800",
+	"#9008ff",
+	"#ffa0b0",
+	"#4078a0",
+	"#c08878",
+	"#b05800",
+	"#50ffb0",
+	"#b0d000",
+	"#20b8ff",
+	"#f80088",
+	"#6058e8",
+	"#ff98ff",
+	"#c03868",
+	"#ffd0a8",
+	"#a8d8ff",
+	"#9848c8",
+	"#8088c8",
+	"#f0b800",
+	"#00e000",
+	"#60a068",
+	"#d8ff00",
+	"#c888e8",
+	"#c000e8",
+	"#ff7080",
+	"#d87000",
+	"#d050d0",
+	"#80b8b0",
+	"#58ffff",
+	"#f068ff",
+	"#ff20c8",
+	"#b8e888",
+	"#008878",
+	"#d06888",
+	"#d02010",
+	"#d0b8ff",
+	"#788800",
+	"#78d898",
+	"#9098ff",
+	"#7068b8",
+	"#986860",
+	"#d0a050",
+	"#70a800",
+	"#f8b078",
+	"#98b858",
+	"#d090b0",
 ];
-
-export function countryColor(code: number) {
-	return (
-		COUNTRY_COLORS[code - 1] ??
-		`hsl(${(code * 137.508) % 360} 95% ${code % 2 ? 78 : 42}%)`
-	);
-}
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
 export type Dot = {
 	id: string;
+	name?: string;
 	code: number;
 	x: number;
 	y: number;
@@ -97,10 +138,21 @@ export function readDots(bytes: Uint8Array): Dot[] {
 }
 
 export function countryName(value: unknown): string {
-	if (typeof value !== "string") throw new Error("Enter a country name");
+	return displayName(value, "Country", 24);
+}
+
+export function playerName(value: unknown): string {
+	return displayName(value, "Player", MAX_PLAYER_NAME_LENGTH);
+}
+
+function displayName(value: unknown, label: string, limit: number): string {
+	if (typeof value !== "string")
+		throw new Error(`Enter a ${label.toLowerCase()} name`);
 	const name = value.normalize("NFKC").trim().replace(/\s+/gu, " ");
-	if (!name || [...name].length > 24 || /[\p{Cc}\p{Cf}]/u.test(name)) {
-		throw new Error("Country names must contain 1–24 visible characters");
+	if (!name || [...name].length > limit || /[\p{Cc}\p{Cf}]/u.test(name)) {
+		throw new Error(
+			`${label} names must contain 1–${limit} visible characters`,
+		);
 	}
 	return name;
 }

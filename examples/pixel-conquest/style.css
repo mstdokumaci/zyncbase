@@ -17,7 +17,8 @@ body {
 	display: none !important;
 }
 button,
-input {
+input,
+select {
 	font: inherit;
 }
 button,
@@ -29,7 +30,8 @@ button {
 }
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
 	outline: 2px solid #f1cb7c;
 	outline-offset: 4px;
 }
@@ -139,7 +141,8 @@ label {
 	color: #d5dcd7;
 	font-size: 12px;
 }
-input {
+input,
+select {
 	background: #101b28bf;
 	border: 1px solid #9ab1ad40;
 	color: #eef0e8;
@@ -151,6 +154,24 @@ input {
 }
 input::placeholder {
 	color: #8e9fa6;
+}
+#country-slots {
+	margin: -8px 0 4px;
+}
+#country-preview {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+#country-preview .swatch {
+	width: 18px;
+	height: 18px;
+	border: 1px solid #ffffff60;
+	flex-shrink: 0;
+}
+#new-country input {
+	margin-top: 10px;
 }
 .primary {
 	background: #f1cb7c;

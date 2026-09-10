@@ -2,11 +2,13 @@ import { expect, test } from "bun:test";
 import { buildPublishOperations, drainPublishState } from "./publish";
 import {
 	CHUNK,
+	COUNTRY_COLORS,
 	chunkIndex,
 	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
+	playerName,
 	RULES,
 	readDots,
 	readOwners,
@@ -21,7 +23,18 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	let now = 0,
 		seq = 0;
 	const input = (id: string, direction: string, country = id) =>
-		world.input(id, { direction, country, seq: ++seq, sentAt: now }, now);
+		world.input(
+			id,
+			{
+				name: id,
+				direction,
+				countryCode:
+					world.players.get(id)?.code ?? world.country(country)?.code,
+				seq: ++seq,
+				sentAt: now,
+			},
+			now,
+		);
 	const ticks = (count: number) => {
 		for (let i = 0; i < count; i++) world.tick(++now);
 	};
@@ -119,7 +132,13 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 	const join = (i: number) =>
 		world.input(
 			`human:${i}`,
-			{ country: "Humans", direction: "idle", seq: 1, sentAt: now },
+			{
+				name: `Human ${i}`,
+				countryCode: world.country("Humans")?.code,
+				direction: "idle",
+				seq: 1,
+				sentAt: now,
+			},
 			now,
 		);
 	join(0);
@@ -157,9 +176,16 @@ test("input validation, borders, and expired input stop movement; map mask is de
 	const land = terrain();
 	expect(land.reduce((sum, cell) => sum + cell, 0)).toBe(661568);
 	const world = new World(land);
-	const data = { direction: "right", country: "Test", seq: 1, sentAt: 0 };
+	const data = {
+		name: "Player",
+		direction: "right",
+		countryCode: world.country("Test")?.code,
+		seq: 1,
+		sentAt: 0,
+	};
 	world.input("invalid", { ...data, direction: "__proto__" }, 0);
-	world.input("invalid", { ...data, country: "\u0000" }, 0);
+	world.input("invalid", { ...data, countryCode: 999 }, 0);
+	expect(() => world.country("\u0000")).toThrow();
 	expect(world.players.size).toBe(0);
 	world.input("valid", data, 0);
 	const player = world.players.get("valid");
@@ -176,17 +202,37 @@ test("input validation, borders, and expired input stop movement; map mask is de
 });
 
 test("country creation stops at 64 live countries and freed names are reusable", () => {
+	expect(COUNTRY_COLORS).toHaveLength(MAX_COUNTRIES);
+	expect(new Set(COUNTRY_COLORS).size).toBe(MAX_COUNTRIES);
+	expect(COUNTRY_COLORS.every((color) => /^#[0-9a-f]{6}$/.test(color))).toBe(
+		true,
+	);
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const world = new World(land);
 	const now = 0;
 	const enter = (id: string, country: string) =>
-		world.input(id, { direction: "idle", country, seq: 1, sentAt: now }, now);
+		world.input(
+			id,
+			{
+				name: id,
+				direction: "idle",
+				countryCode: world.country(country)?.code,
+				seq: 1,
+				sentAt: now,
+			},
+			now,
+		);
 	for (let i = 0; i < MAX_COUNTRIES; i++) enter(`founder:${i}`, `Nation ${i}`);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
 	enter("late", "Newcomer");
 	expect(world.players.has("late")).toBe(false);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
-	enter("ally", "Nation 0");
+	const countryCode = world.players.get("founder:0")?.code;
+	world.input(
+		"ally",
+		{ name: "Ally", countryCode, direction: "idle", seq: 1, sentAt: now },
+		now,
+	);
 	expect(world.players.has("ally")).toBe(true);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
 	// Nation 0 still has a live holder, so removing one of two holders keeps it.
@@ -200,6 +246,22 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	expect(world.countries.has(freed)).toBe(false);
 	expect(world.countries.size).toBe(MAX_COUNTRIES - 1);
 	expect(world.dirtyRemovedCountries).toEqual(new Set([freed]));
+	// A stale or malformed selection must never create a country by its old name.
+	for (const countryCode of [freed, "1", null, 1.5]) {
+		world.input(
+			"stale",
+			{
+				name: "Stale",
+				countryCode,
+				country: "Nation 0",
+				direction: "idle",
+				seq: 1,
+				sentAt: now,
+			},
+			now,
+		);
+		expect(world.players.has("stale")).toBe(false);
+	}
 	// The freed name founds a fresh country with a never-reused code.
 	enter("reborn", "Nation 0");
 	const reborn = world.players.get("reborn");
@@ -210,18 +272,93 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	expect(world.players.has("too-late")).toBe(false);
 });
 
+test("64 live countries keep distinct colors through slot reuse and restart", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const world = new World(land);
+	for (let i = 0; i < MAX_COUNTRIES; i++) {
+		world.input(
+			String(i),
+			{
+				name: String(i),
+				countryCode: world.country(String(i))?.code,
+				direction: "idle",
+				seq: 1,
+				sentAt: 0,
+			},
+			0,
+		);
+		// Give every surviving country one cell so restart keeps it.
+		const country = world.countries.get(i + 1);
+		if (!country) throw new Error("Country missing");
+		country.count = 1;
+		world.owners[i] = country.code;
+	}
+	const retired = world.countries.get(18);
+	if (!retired) throw new Error("Country missing");
+	retired.count = 0;
+	world.owners[17] = 0;
+	world.remove("17");
+	world.input(
+		"replacement",
+		{
+			name: "New Player",
+			countryCode: world.country("Replacement")?.code,
+			direction: "idle",
+			seq: 1,
+			sentAt: 0,
+		},
+		0,
+	);
+	const replacement = world.countries.get(MAX_COUNTRIES + 1);
+	if (!replacement) throw new Error("Replacement missing");
+	expect(replacement.color).toBe(retired.color);
+	replacement.count = 1;
+	world.owners[17] = replacement.code;
+	const rows = [...world.countries.values()];
+	expect(new Set(rows.map((country) => country.color)).size).toBe(
+		MAX_COUNTRIES,
+	);
+	const restored = new World(land);
+	restored.restore(rows, [world.chunk(0), world.chunk(1)], world.allocatorMark);
+	expect([...restored.countries.values()]).toEqual(rows);
+	restored.input(
+		"teammate",
+		{
+			name: "Teammate",
+			countryCode: replacement.code,
+			direction: "idle",
+			seq: 1,
+			sentAt: 0,
+		},
+		0,
+	);
+	expect(restored.players.get("teammate")?.code).toBe(replacement.code);
+});
+
 test("capturing the last cell deletes only abandoned countries", () => {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const world = new World(land);
 	let now = 0;
 	world.input(
 		"a",
-		{ direction: "idle", country: "Alpha", seq: 1, sentAt: now },
+		{
+			name: "Alice",
+			direction: "idle",
+			countryCode: world.country("Alpha")?.code,
+			seq: 1,
+			sentAt: now,
+		},
 		now,
 	);
 	world.input(
 		"b",
-		{ direction: "idle", country: "Beta", seq: 1, sentAt: now },
+		{
+			name: "Bob",
+			direction: "idle",
+			countryCode: world.country("Beta")?.code,
+			seq: 1,
+			sentAt: now,
+		},
 		now,
 	);
 	const a = world.players.get("a");
@@ -236,7 +373,13 @@ test("capturing the last cell deletes only abandoned countries", () => {
 	alpha.count = 1;
 	world.input(
 		"b",
-		{ direction: "right", country: "Beta", seq: 2, sentAt: now },
+		{
+			name: "Bob",
+			direction: "right",
+			countryCode: b.code,
+			seq: 2,
+			sentAt: now,
+		},
 		now,
 	);
 	for (let i = 0; i < RULES.enemy; i++) world.tick(++now);
@@ -256,7 +399,13 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	let now = 0;
 	src.input(
 		"f",
-		{ direction: "right", country: "Keep", seq: 1, sentAt: now },
+		{
+			name: "Founder",
+			direction: "right",
+			countryCode: src.country("Keep")?.code,
+			seq: 1,
+			sentAt: now,
+		},
 		now,
 	);
 	for (let i = 0; i < RULES.neutral; i++) src.tick(++now);
@@ -279,7 +428,13 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	expect(dst.countries.get(keep.code)?.count).toBe(1);
 	dst.input(
 		"n",
-		{ direction: "idle", country: "Fresh", seq: 1, sentAt: now },
+		{
+			name: "Newcomer",
+			direction: "idle",
+			countryCode: dst.country("Fresh")?.code,
+			seq: 1,
+			sentAt: now,
+		},
 		now,
 	);
 	// The pruned Ghost row still counts toward the mark (safe direction:
@@ -304,8 +459,80 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	expect(dst2.countries.has(retired)).toBe(false);
 	dst2.input(
 		"m",
-		{ direction: "idle", country: "More", seq: 1, sentAt: now },
+		{
+			name: "More",
+			direction: "idle",
+			countryCode: dst2.country("More")?.code,
+			seq: 1,
+			sentAt: now,
+		},
 		now,
 	);
 	expect(dst2.players.get("m")?.code).toBe(mark);
+});
+
+test("human names are required, limited to 16 characters, and published separately from countries", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const data = {
+		countryCode: world.country("North")?.code,
+		direction: "idle",
+		seq: 1,
+		sentAt: 0,
+	};
+	for (const name of [
+		undefined,
+		null,
+		123,
+		"",
+		"  ",
+		"x".repeat(17),
+		"A\u0000",
+		"A\u200b",
+	]) {
+		expect(() => playerName(name)).toThrow();
+		world.input("invalid", { ...data, name }, 0);
+	}
+	expect(world.players.size).toBe(0);
+	expect(world.countries.size).toBe(1);
+	expect(playerName("北".repeat(16))).toBe("北".repeat(16));
+	world.input("alice", { ...data, name: "  Ａlice   Smith " }, 0);
+	world.input("bob", { ...data, name: "Bob" }, 0);
+	const alice = world.players.get("alice");
+	const bob = world.players.get("bob");
+	if (!alice || !bob) throw new Error("Players missing");
+	expect(alice.code).toBe(bob.code);
+	expect(world.countries.get(alice.code)?.name).toBe("North");
+	for (const player of [alice, bob]) {
+		expect(
+			readDots(world.chunk(chunkIndex(player.x, player.y)).dots).find(
+				(dot) => dot.id === player.id,
+			)?.name,
+		).toBe(player.id === "alice" ? "Alice Smith" : "Bob");
+	}
+	// A name belongs to this admission; later movement cannot rename its dot.
+	world.input("alice", { ...data, name: "Changed", seq: 2 }, 1);
+	expect(alice.name).toBe("Alice Smith");
+	world.startBots(1);
+	expect(
+		[...world.players.values()]
+			.filter((player) => player.bot)
+			.every((player) => player.name === undefined),
+	).toBe(true);
+});
+
+test("presence only joins country codes and unused country reservations can be released", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const data = { name: "Alice", direction: "idle", seq: 1, sentAt: 0 };
+	world.input("alice", { ...data, country: "Must not create" }, 0);
+	expect(world.players.size).toBe(0);
+	expect(world.countries.size).toBe(0);
+	const abandoned = world.country("Abandoned");
+	const occupied = world.country("Occupied");
+	if (!abandoned || !occupied) throw new Error("Countries missing");
+	world.input("alice", { ...data, countryCode: occupied.code }, 0);
+	world.maybeDeleteCountry(abandoned.code);
+	world.maybeDeleteCountry(occupied.code);
+	expect(world.countries.has(abandoned.code)).toBe(false);
+	expect(world.countries.has(occupied.code)).toBe(true);
+	expect(world.country("Next")?.code).toBeGreaterThan(occupied.code);
 });
