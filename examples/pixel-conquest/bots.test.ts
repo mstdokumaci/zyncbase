@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { planBot } from "./bots";
-import { type Dot, HEIGHT, WIDTH } from "./shared";
+import { HEIGHT, WIDTH } from "./shared";
 import { World } from "./world";
 
 // Array-based reference walks keep route construction independent of scoring.
@@ -63,13 +63,11 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 				patch + 2 * WIDTH + 2,
 				patch + 7 * WIDTH + 7,
 			]) {
-				const bot: Dot = {
+				const bot = {
 					id: "bot",
-					code: 1,
+					country_id: 1,
 					x: from % WIDTH,
 					y: Math.floor(from / WIDTH),
-					seq: 0,
-					sentAt: 0,
 				};
 				const expected: number[][] = [];
 				let bestCost = Number.POSITIVE_INFINITY;
@@ -90,8 +88,8 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 							current = from;
 						for (const next of cells) {
 							expected.push([current, next, owners[next]]);
-							cost += stepCost(bot.code, current, next, owners[next]);
-							if (world.land[next]) owners[next] = bot.code;
+							cost += stepCost(bot.country_id, current, next, owners[next]);
+							if (world.land[next]) owners[next] = bot.country_id;
 							current = next;
 						}
 						if (cost < bestCost) {
@@ -114,6 +112,6 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 	}
 	world.owners.fill(1);
 	expect(
-		planBot(world, { id: "bot", code: 1, x: 0, y: 0, seq: 0, sentAt: 0 }),
+		planBot(world, { id: "bot", country_id: 1, x: 0, y: 0 }),
 	).toBeUndefined();
 });

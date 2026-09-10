@@ -10,6 +10,10 @@ export const MAX_PLAYERS = 1024;
 export const MAX_COUNTRIES = 64;
 export const MAX_PLAYER_NAME_LENGTH = 16;
 export const INPUT_LEASE_MS = 2000;
+// Departed players keep their store row briefly so a same-id reconnect
+// respawns in place; rows never draw anything. ponytail: raise only if
+// flap-reconnects still jump on slow networks.
+export const PLAYER_GRACE_MS = INPUT_LEASE_MS * 5;
 // Farthest-point sampling in OKLab, seeded with eight vivid colors.
 // Lightness 0.55–0.94 and chroma >= 0.055 keep claims visible on the dark map.
 export const COUNTRY_COLORS = [
@@ -82,15 +86,25 @@ export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
+// Hot per-tick position broadcast, embedded in chunks.dots. Only x/y change
+// often; identity and country live in the players table (one cold row per
+// player, subscribed once) and are joined client-side at render.
 export type Dot = {
-	id: string;
-	name?: string;
-	code: number;
+	player_id: string;
 	x: number;
 	y: number;
-	seq: number;
-	sentAt: number;
-	bot?: boolean;
+};
+// Cold roster row: written on admission, refreshed on chunk crossing and on
+// leave (tombstone with final position for grace reconnects), removed on
+// expiry. lastX/lastY always name the chunk the player is (or was) in, so
+// locate() can jump straight to it with one direct read.
+export type PlayerRow = {
+	id: string;
+	name?: string;
+	country_id: number;
+	is_bot: boolean;
+	lastX: number;
+	lastY: number;
 };
 export type Country = {
 	id: string;
@@ -101,10 +115,8 @@ export type Country = {
 };
 export type ChunkRow = {
 	id: string;
-	index: number;
 	owners: Uint8Array;
 	dots: Uint8Array;
-	occupied: boolean;
 };
 
 export function terrain() {

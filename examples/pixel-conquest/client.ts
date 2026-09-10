@@ -1,9 +1,5 @@
-import {
-	createClient,
-	type SubscriptionHandle,
-	type ZyncBaseClient,
-} from "@zyncbase/client";
-import { LocalMotion } from "./motion";
+import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import { LocalMotion, type MotionDot } from "./motion";
 import {
 	CHUNK,
 	type ChunkRow,
@@ -16,6 +12,7 @@ import {
 	HEIGHT,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	type PlayerRow,
 	playerName,
 	readDots,
 	readOwners,
@@ -37,11 +34,15 @@ const lobby = element("lobby");
 const countryChoice = element<HTMLSelectElement>("country-choice");
 const countryInput = element<HTMLInputElement>("country");
 const countries = new Map<number, Country>();
+// Cold roster: one row per live player plus 10s grace tombstones. Updated
+// only on admission, chunk crossing, and leave — never per tick.
+const players = new Map<string, PlayerRow>();
+let playersUnsub: (() => void) | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
 >();
-const subscriptions = new Map<number, SubscriptionHandle>();
+const subscriptions = new Map<number, () => void>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -55,7 +56,6 @@ let myId = "",
 	nickname = "",
 	seq = 0,
 	pulse = 0,
-	lastAck = -1,
 	sentAt = 0;
 let direction: Direction = "idle";
 let motion: LocalMotion | undefined;
@@ -187,25 +187,36 @@ function chunkImage(owners: Uint16Array) {
 	return image;
 }
 
+function myCountry(): number {
+	return players.get(myId)?.country_id ?? selectedCountryCode ?? 0;
+}
+
+function toMotion(dot: Dot): MotionDot {
+	return { ...dot, country_id: myCountry() };
+}
+
 function receive(row: ChunkRow) {
+	const index = Number(row.id);
+	if (!Number.isSafeInteger(index)) return;
 	const dots = readDots(row.dots);
 	const owners = readOwners(row.owners);
-	chunks.set(row.index, { dots, owners, image: chunkImage(owners) });
-	const self = dots.find((dot) => dot.id === myId);
+	chunks.set(index, { dots, owners, image: chunkImage(owners) });
+	const self = dots.find((dot) => dot.player_id === myId);
 	const now = performance.now();
 	const moving = online ? direction : "idle";
-	if (motion) motion.update(self ?? motion.dot, moving, now);
-	if (!self) return;
-	if (lastOwnDot === 0) clearTimeout(admissionTimer);
+	const selfMotion = self ? toMotion(self) : undefined;
+	if (motion && selfMotion) motion.update(selfMotion, moving, now);
+	if (!self || !selfMotion) return;
+	if (lastOwnDot === 0) {
+		clearTimeout(admissionTimer);
+		// First sighting acks our input; latency uses our own send clock.
+		connection.textContent = `Live · ${Math.max(0, Date.now() - sentAt)} ms input → view`;
+	}
 	lastOwnDot = now;
-	if (!motion) motion = new LocalMotion(self, moving, now, land, ownerAt);
+	if (!motion) motion = new LocalMotion(selfMotion, moving, now, land, ownerAt);
 	const position = motion.position(lastOwnDot);
 	camera = { x: position.x + 0.5, y: position.y + 0.5 };
-	if (self.seq > lastAck) {
-		lastAck = self.seq;
-		connection.textContent = `Live · ${Math.max(0, Date.now() - self.sentAt)} ms input → view`;
-	}
-	const country = countries.get(self.code);
+	const country = countries.get(myCountry());
 	element("coordinates").textContent =
 		`${country?.name ?? name} · ${self.x}, ${self.y}`;
 	updateSubscriptions();
@@ -243,24 +254,23 @@ function visibleChunks() {
 function updateSubscriptions() {
 	if (!client || !playing) return;
 	const visible = visibleChunks();
-	for (const [index, handle] of subscriptions) {
+	for (const [index, unsub] of subscriptions) {
 		if (visible.has(index)) continue;
-		handle.unsubscribe();
+		unsub();
 		subscriptions.delete(index);
 		chunks.delete(index);
 	}
 	for (const index of visible) {
 		if (subscriptions.has(index)) continue;
-		const handle = client.store.subscribe(
-			"chunks",
-			{ where: { index }, limit: 1 },
-			(rows) => {
-				if (!subscriptions.has(index)) return;
-				if (rows.length) receive(rows[0] as ChunkRow);
-				else chunks.delete(index);
-			},
-		);
-		subscriptions.set(index, handle);
+		// Direct document listens: chunk ids are the store primary keys, so
+		// no secondary index or query-subscription group is needed per tile.
+		const key = index;
+		const unsub = client.store.listen(["chunks", String(index)], (row) => {
+			if (!subscriptions.has(key)) return;
+			if (row) receive(row as ChunkRow);
+			else chunks.delete(key);
+		});
+		subscriptions.set(index, unsub);
 	}
 }
 
@@ -387,9 +397,12 @@ element("zoom-out").addEventListener("click", () => zoom(-2));
 function returnToLobby(message: string) {
 	clearTimeout(admissionTimer);
 	client?.disconnect();
-	for (const handle of subscriptions.values()) handle.unsubscribe();
+	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
+	playersUnsub?.();
+	playersUnsub = undefined;
+	players.clear();
 	playing = online = false;
 	lobby.hidden = false;
 	element("scoreboard").hidden = true;
@@ -417,14 +430,24 @@ async function locate() {
 		return;
 	locating = true;
 	try {
-		const rows = await client.store.query("chunks", {
-			where: { occupied: true },
-			limit: 100,
-		});
-		const row = (rows as unknown as ChunkRow[]).find((row) =>
-			readDots(row.dots).some((dot) => dot.id === myId),
-		);
-		if (row) receive(row);
+		// O(1) self-locate: our own roster row names our chunk (spawn cell on
+		// admission, chunk-entry cell after crossings, final cell as a grace
+		// tombstone). No table scan; the visible-ring subscriptions deliver us.
+		const me = (await client.store.get(["players", myId])) as unknown as
+			| PlayerRow
+			| undefined;
+		if (
+			me &&
+			Number.isSafeInteger(me.lastX) &&
+			Number.isSafeInteger(me.lastY) &&
+			me.lastX >= 0 &&
+			me.lastX < WIDTH &&
+			me.lastY >= 0 &&
+			me.lastY < HEIGHT
+		) {
+			camera = { x: me.lastX + 0.5, y: me.lastY + 0.5 };
+			updateSubscriptions();
+		}
 	} catch (error) {
 		connection.textContent = `Connection interrupted: ${String(error)}`;
 	} finally {
@@ -511,6 +534,17 @@ element("join").addEventListener("submit", async (event) => {
 			latestCountries = list;
 			scoreboard(list);
 		});
+		// Cold roster, subscribed once: identity and country per dot, joined
+		// at render. Fires only on admission, chunk crossing, and leave.
+		playersUnsub?.();
+		playersUnsub = client.store.subscribe(
+			"players",
+			{ limit: 2048 },
+			(rows) => {
+				players.clear();
+				for (const row of rows as PlayerRow[]) players.set(row.id, row);
+			},
+		);
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
@@ -550,36 +584,42 @@ function draw(now: number) {
 			CHUNK * zoom,
 			CHUNK * zoom,
 		);
-		for (const dot of chunk.dots) dots.set(dot.id, dot);
+		for (const dot of chunk.dots) dots.set(dot.player_id, dot);
 	}
 	// Draw yourself last so nearby dots and names do not cover your marker.
 	const self = dots.get(myId) ?? motion?.dot;
 	if (self) {
-		dots.delete(myId);
-		dots.set(myId, self);
+		dots.delete(self.player_id);
+		dots.set(self.player_id, self);
 	}
 	for (const dot of dots.values()) {
-		const display = dot.id === myId && position ? position : dot;
+		const key = dot.player_id;
+		// Simple client-side join: hot dot plus its cold roster row. Dots
+		// without a row are mid-join/leave races; draw them neutrally once.
+		const meta = players.get(key);
+		const isBot = meta?.is_bot ?? false;
+		const display =
+			key === myId && position ? { x: position.x, y: position.y } : dot;
 		const x = left + (display.x + 0.5) * zoom,
 			y = top + (display.y + 0.5) * zoom;
 		ctx.beginPath();
 		const radius = Math.max(3, zoom * 0.48);
-		if (dot.bot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+		if (isBot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
 		else ctx.arc(x, y, radius, 0, Math.PI * 2);
-		ctx.fillStyle = countries.get(dot.code)?.color ?? "white";
+		ctx.fillStyle = (meta && countries.get(meta.country_id)?.color) ?? "white";
 		ctx.fill();
 		ctx.lineWidth = 2;
-		ctx.strokeStyle = dot.id === myId ? "#ffe3a0" : "#0d1822";
+		ctx.strokeStyle = key === myId ? "#ffe3a0" : "#0d1822";
 		ctx.stroke();
-		if (!dot.bot && dot.name) {
-			ctx.fillStyle = dot.id === myId ? "#ffe3a0" : "#bccacb";
-			ctx.font = dot.id === myId ? "bold 11px system-ui" : "10px system-ui";
+		if (!isBot && meta?.name) {
+			ctx.fillStyle = key === myId ? "#ffe3a0" : "#bccacb";
+			ctx.font = key === myId ? "bold 11px system-ui" : "10px system-ui";
 			ctx.textAlign = "center";
 			ctx.strokeStyle = "#0d1822";
 			ctx.lineWidth = 3;
 			ctx.lineJoin = "round";
-			ctx.strokeText(dot.name, x, y - zoom - 7, 120);
-			ctx.fillText(dot.name, x, y - zoom - 7, 120);
+			ctx.strokeText(meta.name, x, y - zoom - 7, 120);
+			ctx.fillText(meta.name, x, y - zoom - 7, 120);
 		}
 	}
 	if (playing && performance.now() - lastHeartbeat > 500) {

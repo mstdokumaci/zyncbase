@@ -8,12 +8,16 @@ const steps = {
 	right: [1, 0],
 };
 
+// Render-side position: hot dot plus its cold country, joined from the
+// players table at receive time. Dots alone carry no identity metadata.
+export type MotionDot = Dot & { country_id: number };
+
 export class LocalMotion {
 	private offset = { x: 0, y: 0 };
 	private duration: number;
 
 	constructor(
-		public dot: Dot,
+		public dot: MotionDot,
 		private direction: Direction,
 		private started: number,
 		private readonly land: Uint8Array,
@@ -22,10 +26,12 @@ export class LocalMotion {
 		this.duration = this.stepDuration();
 	}
 
-	update(dot: Dot, direction: Direction, now: number) {
+	update(dot: MotionDot, direction: Direction, now: number) {
 		const distance =
 			Math.abs(dot.x - this.dot.x) + Math.abs(dot.y - this.dot.y);
-		const relocated = dot.id !== this.dot.id || dot.code !== this.dot.code;
+		const relocated =
+			dot.player_id !== this.dot.player_id ||
+			dot.country_id !== this.dot.country_id;
 		if (!distance && !relocated && direction === this.direction) {
 			this.dot = dot;
 			if (this.duration === this.stepDuration()) return;
@@ -67,7 +73,7 @@ export class LocalMotion {
 			to = y * WIDTH + x;
 		let cost = RULES.neutral;
 		if (this.land[to] && owner)
-			cost = owner === this.dot.code ? RULES.own : RULES.enemy;
+			cost = owner === this.dot.country_id ? RULES.own : RULES.enemy;
 		if (this.land[from] !== this.land[to]) cost += RULES.crossing;
 		return cost * RULES.tickMs;
 	}

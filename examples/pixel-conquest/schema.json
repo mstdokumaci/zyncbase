@@ -1,5 +1,5 @@
 {
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"store": {
 		"users": { "fields": {} },
 		"meta": {
@@ -9,13 +9,20 @@
 			}
 		},
 		"chunks": {
-			"required": ["index", "owners", "dots", "occupied"],
-			"unique": [["index"]],
+			"required": ["owners", "dots"],
 			"fields": {
-				"index": { "type": "integer", "indexed": true },
 				"owners": { "type": "bytes", "minLength": 2048, "maxLength": 2048 },
-				"dots": { "type": "bytes", "maxLength": 16384 },
-				"occupied": { "type": "boolean", "indexed": true }
+				"dots": { "type": "bytes", "maxLength": 16384 }
+			}
+		},
+		"players": {
+			"required": ["country_id", "is_bot", "lastX", "lastY"],
+			"fields": {
+				"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
+				"name": { "type": "string", "minLength": 1, "maxLength": 16 },
+				"is_bot": { "type": "boolean" },
+				"lastX": { "type": "integer", "minimum": 0 },
+				"lastY": { "type": "integer", "minimum": 0 }
 			}
 		},
 		"countries": {

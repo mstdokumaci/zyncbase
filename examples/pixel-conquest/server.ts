@@ -26,6 +26,7 @@ import {
 	INPUT_LEASE_MS,
 	MAX_PLAYERS,
 	NAMESPACE,
+	type PlayerRow,
 	RULES,
 	terrain,
 } from "./shared";
@@ -342,12 +343,17 @@ try {
 	await client.connect();
 	const countries = (await allRows("countries")) as Country[];
 	const chunks = (await allRows("chunks")) as ChunkRow[];
+	const players = (await allRows("players")) as PlayerRow[];
 	const meta = (await allRows("meta")) as { id: string; nextCode: number }[];
 	if (process.argv.includes("--reset")) {
 		const operations: BatchOperation[] = [
 			...chunks.map((row) => ({
 				op: "remove" as const,
 				path: ["chunks", row.id],
+			})),
+			...players.map((row) => ({
+				op: "remove" as const,
+				path: ["players", row.id],
 			})),
 			...countries.map((row) => ({
 				op: "remove" as const,
@@ -363,7 +369,7 @@ try {
 				confirm: "committed",
 			});
 		console.log("World reset.");
-	} else world.restore(countries, chunks, meta[0]?.nextCode ?? 0);
+	} else world.restore(countries, chunks, players, meta[0]?.nextCode ?? 0);
 	world.startBots(performance.now());
 	// A restart can need more reconciliation than one normal movement batch.
 	await publish();
@@ -378,7 +384,7 @@ try {
 		if (batch.type === "snapshot") {
 			const connected = new Set(batch.users.map((user) => user.userId));
 			for (const [id, player] of world.players)
-				if (!player.bot && !connected.has(id)) world.remove(id);
+				if (!player.is_bot && !connected.has(id)) world.remove(id);
 			for (const user of batch.users) world.input(user.userId, user.data, now);
 		} else {
 			for (const change of batch.changes) {

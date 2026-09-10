@@ -20,6 +20,11 @@
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
 		{
+			"collection": "players",
+			"read": true,
+			"write": { "$session.role": { "eq": "simulation" } }
+		},
+		{
 			"collection": "countries",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }

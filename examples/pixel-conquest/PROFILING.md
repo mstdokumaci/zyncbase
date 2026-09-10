@@ -373,3 +373,80 @@ bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish 
 
 Generated artifacts are gitignored; the reproduction above uses
 tracked files available on a clean checkout.
+
+## Iteration: slim dots + players roster (data model, not simulation)
+
+Baseline: `b50384e` (pre-change HEAD), candidate: uncommitted slim-dots
+work on top. Same machine and Bun 1.4.0 as above. This iteration changes
+only the game's persisted shape; `World.tick`, movement, enclosure, and bot
+decisions are untouched.
+
+- `chunks.dots[]` shrinks from full `Dot{id,name,code,x,y,seq,sentAt,bot}`
+  to `{player_id,x,y}`; identity moves to a new `players` collection
+  (`name`, `country_id`, `is_bot`, `lastX/lastY`), subscribed once and
+  joined client-side at render. `chunks.index`/`occupied` columns are
+  dropped (`id` is the index; dirtiness on restore comes from decoding
+  dots). Departed players keep their row 10 s (tombstone with final
+  position) for same-id grace reconnects.
+- `profile.ts` now also publishes roster sets (admission, chunk crossings,
+  leave/expiry), so `--publish` batches carry them; the `payloadBytes`
+  metric still counts chunk `owners`+`dots` only.
+
+### Paired local timing (same day, same machine)
+
+Three sequential repeats per workload, 20 countries, 40 movers, 200 warmup
+ticks, 1,200 measured ticks. Values are medians; ranges in parentheses.
+Chunk-write counts are identical across baseline and candidate runs, so
+trajectories match (same dirty chunks every tick).
+
+| Workload | Sim total, baseline / candidate | Ser total, baseline / candidate | Chunk payload bytes |
+| --- | ---: | ---: | ---: |
+| Fragmented bots | 1,041 (1,039–1,050) / 1,053 (1,033–1,060) ms | 203 / 197 ms | 53,964,488 → 52,977,504 (−1.83%) |
+| Compact bots | 776 (762–776)¹ / 787 (759–791) ms | 179 / 194 ms | 50,634,480 → 49,705,327 (−1.82%) |
+| Fragmented scripted | 3,597 (3,596–3,605) / 3,399 (3,372–3,414) ms | 194 / 187 ms | 50,796,186 → 49,579,530 (−2.40%) |
+
+¹ Baseline compact repeat 1 (1,266 ms sim, 445 ms serialization) was a
+machine outlier and is excluded from the median; the remaining repeats are
+762/776 ms. Simulation p99 is unchanged (fragmented bots ~13.5 ms, compact
+~13.7–14.0 ms, scripted ~25–27 ms, both variants).
+
+Checksums differ across variants by construction (the hash covers player
+state, whose shape changed) and are deterministic within each variant
+(three identical repeats each). Chunk-write counts match exactly
+(25,251 / 23,685 / 23,732), confirming the simulation itself is unaffected.
+
+### Real database control
+
+One fragmented-bot run, 20 countries, 40 movers, 1,200 ticks paced at
+20 Hz against the local ZyncBase server with committed SDK batches
+(candidate code; the pre-change control is the September 9 capture above).
+
+- 59.98 s elapsed, 1,179 commits, 25,251 chunk writes — identical counts.
+- Chunk payload bytes: 53,964,488 → 52,977,504 (−986,984 B, −1.83%).
+- Commit latency: p50 2.35 → 2.01 ms, p95 4.95 → 3.75 ms,
+  p99 9.88 → 6.79 ms (single runs each; direction favors the slimmer
+  batches but this is not a saturated-server result).
+- Whole-update p99: 21.84 → 17.28 ms, maximum 33.12 → 32.83 ms.
+- Final checksum matches the local slim-dots fragmented-bot runs.
+
+The same fixture, subscriber, TLS, and fan-out caveats from the September 9
+control apply. The payload win is small because `owners` (2,048 B fixed per
+write) dominates every chunk write; it grows with crowd density (more dots
+per chunk) and raises the 16 KB dots cap from ~120 to ~250 dots per chunk.
+
+### Reproduction
+
+```sh
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
+bun examples/pixel-conquest/profile.ts --mode bots --shape compact --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
+bun examples/pixel-conquest/profile.ts --mode scripted --shape fragmented --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
+bun run --filter @zyncbase/client build
+bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/slim-dots/published
+```
+
+Repeat into `repeat-{1,2,3}`. For the baseline, stash the `examples/pixel-conquest`
+worktree and rerun into `slim-dots-baseline/`; the pre-change fragmented-bot
+and compact checksums match the September 10 values (`68e5f484…`, `adbc1537…`).
+The scripted baseline checksum (`bcf99f91…`) differs from the September 10
+value (`ba7e0c52…`): scripted behavior changed on main since that capture,
+before this iteration.

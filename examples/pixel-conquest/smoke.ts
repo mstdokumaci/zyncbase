@@ -12,6 +12,7 @@ import {
 	type Country,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	type PlayerRow,
 	readDots,
 } from "./shared";
 
@@ -268,18 +269,31 @@ try {
 	const dot = () =>
 		visible
 			.flatMap((row) => readDots(row.dots))
-			.find((dot) => dot.id === alice.id);
+			.find((dot) => dot.player_id === alice.id);
+	const rosterOf = async (client: ZyncBaseClient) =>
+		new Map(
+			(
+				(await client.store.query("players", { limit: 2048 })) as PlayerRow[]
+			).map((row) => [row.id, row]),
+		);
 	const first = await eventually(
 		async () => dot(),
 		"presence input creates a subscribed dot",
 	);
-	assert.equal(first.name, "Alice", "map dots carry normalized player names");
+	const aliceRow = await eventually(async () => {
+		const row = (await rosterOf(bob.client)).get(alice.id);
+		return row?.name === "Alice" ? row : undefined;
+	}, "roster carries normalized player names");
+	assert.equal(aliceRow.country_id, alice.countryCode);
+	assert.equal(aliceRow.is_bot, false);
+	assert.deepEqual([aliceRow.lastX, aliceRow.lastY], [first.x, first.y]);
 	await eventually(
 		async () =>
 			visible
 				.flatMap((row) => readDots(row.dots))
-				.some((dot) => dot.id === bob.id && dot.name === "Bob"),
-		"other humans have named map dots",
+				.some((dot) => dot.player_id === bob.id) &&
+			(await rosterOf(bob.client)).get(bob.id)?.name === "Bob",
+		"other humans have roster-backed map dots",
 	);
 	const roster = (await (await fetch(`${origin}/health`)).json())
 		.countries as Country[];
@@ -303,7 +317,8 @@ try {
 		async () =>
 			visible
 				.flatMap((row) => readDots(row.dots))
-				.some((dot) => dot.id === teammate.id && dot.code === north.code),
+				.some((dot) => dot.player_id === teammate.id) &&
+			(await rosterOf(bob.client)).get(teammate.id)?.country_id === north.code,
 		"lobby selection joins an existing country by code",
 	);
 	teammate.client.disconnect();
@@ -326,9 +341,13 @@ try {
 	input.seq++;
 	input.sentAt = Date.now();
 	send();
+	// No per-dot ack echo remains: wait until the dot holds still instead.
 	const stopped = await eventually(async () => {
-		const current = dot();
-		return current?.seq === input.seq ? current : undefined;
+		const a = dot();
+		if (!a) return undefined;
+		await Bun.sleep(150);
+		const b = dot();
+		return b && b.x === a.x && b.y === a.y ? b : undefined;
 	}, "idle acknowledgment");
 	await Bun.sleep(700);
 	assert.deepEqual(
@@ -337,11 +356,11 @@ try {
 		"key release stops movement",
 	);
 	const row = visible.find((row) =>
-		readDots(row.dots).some((dot) => dot.id === alice.id),
+		readDots(row.dots).some((dot) => dot.player_id === alice.id),
 	);
 	assert.ok(row);
 	await assert.rejects(
-		alice.client.store.set(["chunks", row.id, "occupied"], false),
+		alice.client.store.set(["chunks", row.id, "dots"], new Uint8Array()),
 		{ code: "PERMISSION_DENIED" },
 	);
 	await assert.rejects(
@@ -373,7 +392,9 @@ try {
 		const dots = (await chunks(observer.client)).flatMap((row) =>
 			readDots(row.dots),
 		);
-		return dots.length === 10 && dots.every((dot) => dot.bot);
+		if (dots.length !== 10) return false;
+		const roster = await rosterOf(observer.client);
+		return dots.every((dot) => roster.get(dot.player_id)?.is_bot === true);
 	}, "idle bot state committed");
 	const savedCountries = (await observer.client.store.query(
 		"countries",
@@ -391,7 +412,16 @@ try {
 			row.owners,
 		);
 	assert.ok(
-		restoredChunks.every((row) => readDots(row.dots).every((dot) => dot.bot)),
+		restoredChunks.every((row) => {
+			const dots = readDots(row.dots);
+			return dots.every((dot) => dot.player_id.startsWith("bot-"));
+		}),
+		"stale human dots cleared, bot dots republished slim",
+	);
+	const restoredRoster = await rosterOf(returning.client);
+	assert.ok(
+		[...restoredRoster.values()].every((row) => row.is_bot),
+		"stale human roster rows purged on restart",
 	);
 	const restoredCountries = (await returning.client.store.query(
 		"countries",
@@ -425,6 +455,10 @@ try {
 	)) as unknown as Country[];
 	assert.equal(fresh.length, 5);
 	assert.ok(fresh.every((country) => country.count === 0));
+	// Reset clears territory and the roster, then bots immediately repopulate.
+	const resetRoster = await rosterOf(clean.client);
+	assert.equal(resetRoster.size, 10);
+	assert.ok([...resetRoster.values()].every((row) => row.is_bot));
 	console.log("PASS: manual world reset");
 	for (const body of [
 		"null",
