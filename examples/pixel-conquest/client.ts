@@ -3,11 +3,13 @@ import {
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
+import { LocalMotion } from "./motion";
 import {
 	CHUNK,
 	type ChunkRow,
 	COLUMNS,
 	type Country,
+	chunkIndex,
 	countryName,
 	type Direction,
 	type Dot,
@@ -33,7 +35,7 @@ const lobby = element("lobby");
 const countries = new Map<number, Country>();
 const chunks = new Map<
 	number,
-	{ row: ChunkRow; image: HTMLCanvasElement; dots: Dot[] }
+	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
 >();
 const subscriptions = new Map<number, SubscriptionHandle>();
 const held = new Map<string, Direction>();
@@ -47,6 +49,7 @@ let myId = "",
 	lastAck = -1,
 	sentAt = 0;
 let direction: Direction = "idle";
+let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
 let scale = 8;
 let width = innerWidth,
@@ -54,6 +57,8 @@ let width = innerWidth,
 let lastOwnDot = 0;
 let locating = false;
 let lastHeartbeat = 0;
+const FRAME_MS = 1000 / 30;
+let lastFrame = 0;
 
 const land = terrain();
 const base = document.createElement("canvas");
@@ -80,12 +85,11 @@ function resize() {
 addEventListener("resize", resize);
 resize();
 
-function chunkImage(row: ChunkRow) {
+function chunkImage(owners: Uint16Array) {
 	const image = document.createElement("canvas");
 	image.width = image.height = CHUNK;
 	const draw = image.getContext("2d");
 	if (!draw) throw new Error("Canvas unavailable");
-	const owners = readOwners(row.owners);
 	for (let i = 0; i < owners.length; i++) {
 		if (!owners[i]) continue;
 		draw.fillStyle = countries.get(owners[i])?.color ?? "#b7c4bb";
@@ -96,11 +100,17 @@ function chunkImage(row: ChunkRow) {
 
 function receive(row: ChunkRow) {
 	const dots = readDots(row.dots);
-	chunks.set(row.index, { row, dots, image: chunkImage(row) });
+	const owners = readOwners(row.owners);
+	chunks.set(row.index, { dots, owners, image: chunkImage(owners) });
 	const self = dots.find((dot) => dot.id === myId);
+	const now = performance.now();
+	const moving = online ? direction : "idle";
+	if (motion) motion.update(self ?? motion.dot, moving, now);
 	if (!self) return;
-	camera = { x: self.x + 0.5, y: self.y + 0.5 };
-	lastOwnDot = performance.now();
+	lastOwnDot = now;
+	if (!motion) motion = new LocalMotion(self, moving, now, land, ownerAt);
+	const position = motion.position(lastOwnDot);
+	camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	if (self.seq > lastAck) {
 		lastAck = self.seq;
 		connection.textContent = `Live · ${Math.max(0, Date.now() - self.sentAt)} ms input → view`;
@@ -109,6 +119,12 @@ function receive(row: ChunkRow) {
 	element("coordinates").textContent =
 		`${country?.name ?? name} · ${self.x}, ${self.y}`;
 	updateSubscriptions();
+}
+
+function ownerAt(x: number, y: number) {
+	return chunks.get(chunkIndex(x, y))?.owners[
+		(y % CHUNK) * CHUNK + (x % CHUNK)
+	];
 }
 
 function visibleChunks() {
@@ -188,10 +204,12 @@ function scoreboard(rows: Country[]) {
 			}),
 	);
 	if (paletteChanged)
-		for (const chunk of chunks.values()) chunk.image = chunkImage(chunk.row);
+		for (const chunk of chunks.values()) chunk.image = chunkImage(chunk.owners);
 }
 
 function publish(changed = false) {
+	if (changed)
+		motion?.update(motion.dot, online ? direction : "idle", performance.now());
 	if (!online || !client) return;
 	if (changed) {
 		seq++;
@@ -320,8 +338,7 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		client.on("disconnected", () => {
 			online = false;
-			held.clear();
-			direction = "idle";
+			release();
 			connection.textContent = "Disconnected · Reconnecting…";
 		});
 		client.on("connected", () => {
@@ -343,6 +360,7 @@ element("join").addEventListener("submit", async (event) => {
 		client.store.subscribe("countries", { limit: 1000 }, (rows) =>
 			scoreboard(rows as Country[]),
 		);
+		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
 		updateSubscriptions();
@@ -361,7 +379,14 @@ element("join").addEventListener("submit", async (event) => {
 });
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: draw the map layers and local-player marker in their visual order.
-function draw() {
+function draw(now: number) {
+	requestAnimationFrame(draw);
+	const elapsed = now - lastFrame;
+	// Allow timestamp rounding at the frame boundary without accumulating drift.
+	if (elapsed + 0.1 < FRAME_MS) return;
+	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
+	const position = motion?.position(now);
+	if (position) camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
 	const left = width / 2 - camera.x * zoom;
 	const top = height / 2 - camera.y * zoom;
@@ -379,9 +404,11 @@ function draw() {
 		);
 		for (const dot of chunk.dots) dots.set(dot.id, dot);
 	}
+	if (motion && !dots.has(myId)) dots.set(myId, motion.dot);
 	for (const dot of dots.values()) {
-		const x = left + (dot.x + 0.5) * zoom,
-			y = top + (dot.y + 0.5) * zoom;
+		const display = dot.id === myId && position ? position : dot;
+		const x = left + (display.x + 0.5) * zoom,
+			y = top + (display.y + 0.5) * zoom;
 		ctx.beginPath();
 		const radius = Math.max(3, zoom * 0.48);
 		if (dot.bot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
@@ -403,6 +430,5 @@ function draw() {
 		publish();
 		void locate();
 	}
-	requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
