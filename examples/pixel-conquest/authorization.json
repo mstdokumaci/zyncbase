@@ -10,6 +10,11 @@
 	],
 	"store": [
 		{
+			"collection": "meta",
+			"read": false,
+			"write": { "$session.role": { "eq": "simulation" } }
+		},
+		{
 			"collection": "chunks",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }

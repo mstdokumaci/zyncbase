@@ -71,6 +71,11 @@ export class World {
 		return [...this.players.values()].filter((player) => !player.bot).length;
 	}
 
+	/** Next unallocated country code; persisted so retired codes never repeat. */
+	get allocatorMark() {
+		return this.nextCode;
+	}
+
 	startBots(now: number) {
 		this.botsEnabled = true;
 		this.populateBots(now);
@@ -108,7 +113,7 @@ export class World {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass restores the bitmap and recomputes its counts together.
-	restore(countries: Country[], chunks: ChunkRow[]) {
+	restore(countries: Country[], chunks: ChunkRow[], persistedNextCode = 0) {
 		for (const country of countries) {
 			const { id, code, name } = country;
 			this.countries.set(code, {
@@ -120,6 +125,13 @@ export class World {
 			});
 			this.dirtyCountries.add(country.code);
 		}
+		// The allocator mark lives outside the country rows so retired codes
+		// stay retired: restore it before pruning, never recompute it from
+		// the survivors alone.
+		this.nextCode = Math.max(
+			persistedNextCode,
+			Math.max(0, ...this.countries.keys()) + 1,
+		);
 		for (const chunk of chunks) {
 			const owners = readOwners(chunk.owners);
 			const x = (chunk.index % COLUMNS) * CHUNK;
@@ -151,7 +163,6 @@ export class World {
 				this.dirtyRemovedCountries.add(code);
 			}
 		}
-		this.nextCode = Math.max(0, ...this.countries.keys()) + 1;
 		this.fillEnclosures();
 	}
 

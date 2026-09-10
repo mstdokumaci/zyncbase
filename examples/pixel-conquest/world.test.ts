@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { buildPublishOperations, drainPublishState } from "./publish";
 import {
 	CHUNK,
 	chunkIndex,
@@ -281,5 +282,30 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 		{ direction: "idle", country: "Fresh", seq: 1, sentAt: now },
 		now,
 	);
-	expect(dst.players.get("n")?.code).toBe(keep.code + 1);
+	// The pruned Ghost row still counts toward the mark (safe direction:
+	// skipping codes is harmless, reusing them is not).
+	expect(dst.players.get("n")?.code).toBe(1000);
+	// Deletion publishes as a remove, and the persisted mark keeps the
+	// retired code retired across the restart: no reuse.
+	const fresh = dst.players.get("n");
+	if (!fresh) throw new Error("Fresh missing");
+	const retired = fresh.code;
+	dst.remove("n");
+	expect(dst.countries.has(retired)).toBe(false);
+	const drained = drainPublishState(dst);
+	const ops = buildPublishOperations(dst, drained);
+	expect(ops).toContainEqual({
+		op: "remove",
+		path: ["countries", String(retired)],
+	});
+	const mark = dst.allocatorMark;
+	const dst2 = new World(land.slice());
+	dst2.restore([...dst.countries.values()], chunks, mark);
+	expect(dst2.countries.has(retired)).toBe(false);
+	dst2.input(
+		"m",
+		{ direction: "idle", country: "More", seq: 1, sentAt: now },
+		now,
+	);
+	expect(dst2.players.get("m")?.code).toBe(mark);
 });
