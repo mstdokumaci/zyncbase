@@ -14,6 +14,7 @@ import {
 	type Direction,
 	type Dot,
 	HEIGHT,
+	MAX_COUNTRIES,
 	NAMESPACE,
 	readDots,
 	readOwners,
@@ -57,8 +58,37 @@ let width = innerWidth,
 let lastOwnDot = 0;
 let locating = false;
 let lastHeartbeat = 0;
+let connectedAt = 0;
 const FRAME_MS = 1000 / 30;
 let lastFrame = 0;
+const OFFLINE = "The world is offline";
+const TAGLINE = "A shared world. One pixel at a time.";
+
+async function checkHealth() {
+	if (playing) return;
+	const button = element<HTMLButtonElement>("join-button");
+	try {
+		const response = await fetch("/health", {
+			signal: AbortSignal.timeout(3000),
+		});
+		const health = await response.json();
+		if (!response.ok || health.ready !== true) throw new Error();
+		button.disabled = false;
+		if (element("error").textContent === OFFLINE)
+			element("error").textContent = "";
+		if (connection.textContent.startsWith(OFFLINE))
+			connection.textContent = TAGLINE;
+	} catch {
+		button.disabled = true;
+		element("error").textContent = OFFLINE;
+		connection.textContent = `${OFFLINE} · Retrying…`;
+	}
+}
+void checkHealth();
+const healthTimer = setInterval(() => {
+	if (playing) clearInterval(healthTimer);
+	else void checkHealth();
+}, 5000);
 
 const land = terrain();
 const base = document.createElement("canvas");
@@ -318,6 +348,7 @@ element("join").addEventListener("submit", async (event) => {
 	const button = element<HTMLButtonElement>("join-button");
 	button.disabled = true;
 	element("error").textContent = "";
+	lastOwnDot = 0;
 	try {
 		name = countryName(element<HTMLInputElement>("country").value);
 		const response = await fetch("/session", {
@@ -354,12 +385,39 @@ element("join").addEventListener("submit", async (event) => {
 		myId = String((users[0] as { id: string })?.id ?? "");
 		if (!myId) throw new Error("Could not resolve your player identity");
 		playing = online = true;
+		connectedAt = performance.now();
 		lobby.hidden = true;
 		element("scoreboard").hidden = false;
 		element("direction-pad").hidden = false;
-		client.store.subscribe("countries", { limit: 1000 }, (rows) =>
-			scoreboard(rows as Country[]),
-		);
+		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+			const list = rows as Country[];
+			scoreboard(list);
+			// Admission rejects new names once 64 live countries exist, which
+			// leaves the newcomer without a dot. Detect that here and send
+			// them back to the lobby instead of searching forever.
+			if (
+				playing &&
+				lastOwnDot === 0 &&
+				performance.now() - connectedAt > 3000 &&
+				list.length >= MAX_COUNTRIES &&
+				!list.some(
+					(country) => country.name.toLowerCase() === name.toLowerCase(),
+				)
+			) {
+				client?.disconnect();
+				for (const handle of subscriptions.values()) handle.unsubscribe();
+				subscriptions.clear();
+				chunks.clear();
+				playing = online = false;
+				lobby.hidden = false;
+				element("scoreboard").hidden = true;
+				element("direction-pad").hidden = true;
+				element("error").textContent =
+					`The world already has ${MAX_COUNTRIES} countries — join an existing one.`;
+				connection.textContent = "Ready when you are.";
+				element<HTMLButtonElement>("join-button").disabled = false;
+			}
+		});
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();

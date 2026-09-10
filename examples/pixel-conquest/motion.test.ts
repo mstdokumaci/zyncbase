@@ -6,19 +6,19 @@ import { World } from "./world";
 const dot: Dot = { id: "me", code: 1, x: 31, y: 10, seq: 1, sentAt: 0 };
 const land = new Uint8Array(WIDTH * HEIGHT);
 
-test("a 400 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
+test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
 	const terrain = land.slice();
 	terrain[dot.y * WIDTH + dot.x + 1] = 1;
 	const motion = new LocalMotion(dot, "right", 0, terrain, () => 2);
 	expect(motion.position(0)).toEqual({ x: 31, y: 10 });
-	expect(motion.position(200)).toEqual({ x: 31.5, y: 10 });
+	expect(motion.position(250)).toEqual({ x: 31.5, y: 10 });
 	// Echoes/heartbeats at the same cell must not restart the animation.
-	motion.update({ ...dot, seq: 2 }, "right", 200);
-	expect(motion.position(200).x).toBe(31.5);
+	motion.update({ ...dot, seq: 2 }, "right", 250);
+	expect(motion.position(250).x).toBe(31.5);
 	for (const hz of [30, 60, 120, 144]) {
 		for (let frame = 0; frame <= hz; frame++) {
 			const now = (frame * 1000) / hz;
-			expect(motion.position(now).x).toBeCloseTo(31 + Math.min(now / 400, 1));
+			expect(motion.position(now).x).toBeCloseTo(31 + Math.min(now / 500, 1));
 		}
 	}
 	expect(motion.position(20000)).toEqual({ x: 32, y: 10 });

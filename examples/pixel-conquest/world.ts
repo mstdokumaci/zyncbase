@@ -19,6 +19,7 @@ import {
 	encoder,
 	HEIGHT,
 	INPUT_LEASE_MS,
+	MAX_COUNTRIES,
 	MAX_PLAYERS,
 	RULES,
 	readOwners,
@@ -54,8 +55,10 @@ export class World {
 	readonly countries = new Map<number, Country>();
 	readonly dirtyChunks = new Set<number>();
 	readonly dirtyCountries = new Set<number>();
+	readonly dirtyRemovedCountries = new Set<number>();
 	inputMessages = 0;
 	ticks = 0;
+	private nextCode = 1;
 	private botsEnabled = false;
 	private readonly filler = new HoleFiller(WIDTH, HEIGHT);
 	private readonly bounds = new Map<number, Bounds>();
@@ -139,6 +142,16 @@ export class World {
 			// Reconcile dots before admitting players after a restart.
 			if (chunk.occupied) this.dirtyChunks.add(chunk.index);
 		}
+		// No players exist yet after a restart, so zero-land countries are
+		// abandoned by definition: drop them and free their names for reuse.
+		for (const [code, country] of this.countries) {
+			if (country.count === 0) {
+				this.countries.delete(code);
+				this.dirtyCountries.delete(code);
+				this.dirtyRemovedCountries.add(code);
+			}
+		}
+		this.nextCode = Math.max(0, ...this.countries.keys()) + 1;
 		this.fillEnclosures();
 	}
 
@@ -147,7 +160,11 @@ export class World {
 			(c) => c.name.toLowerCase() === name.toLowerCase(),
 		);
 		if (existing) return existing;
-		const code = Math.max(0, ...this.countries.keys()) + 1;
+		// Newcomers join existing countries once the world is full of them.
+		if (this.countries.size >= MAX_COUNTRIES) return undefined;
+		// Codes never repeat, so a removed row and a later row never collide
+		// inside one publication batch.
+		const code = this.nextCode++;
 		if (code > 65535)
 			throw new Error("Country storage is full; reset the world");
 		const country = {
@@ -160,6 +177,22 @@ export class World {
 		this.countries.set(code, country);
 		this.dirtyCountries.add(code);
 		return country;
+	}
+
+	// A country with no land and no live holders is gone: its slot and name
+	// become available for newcomers. Zero-land countries with live players
+	// stay, so roaming dots keep their identity.
+	private maybeDeleteCountry(code: number) {
+		const country = this.countries.get(code);
+		if (!country || country.count !== 0) return;
+		for (const player of this.players.values())
+			if (player.code === code) return;
+		this.countries.delete(code);
+		this.bounds.delete(code);
+		this.enclosureCountries.delete(code);
+		this.changedCountries.delete(code);
+		this.dirtyCountries.delete(code);
+		this.dirtyRemovedCountries.add(code);
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search first preserves spacing, then admits players on cramped land.
@@ -221,6 +254,7 @@ export class World {
 
 	private add(id: string, name: string, now: number, bot = false) {
 		const country = this.country(name);
+		if (!country) return undefined;
 		const position = this.spawn(country.code, bot, botCountries.indexOf(name));
 		const player: Player = {
 			id,
@@ -256,6 +290,7 @@ export class World {
 				return;
 			}
 			player = this.add(id, name, now);
+			if (!player) return;
 		}
 		this.inputMessages++;
 		player.heardAt = now;
@@ -272,6 +307,7 @@ export class World {
 		if (!player) return;
 		this.dirtyChunks.add(chunkIndex(player.x, player.y));
 		this.players.delete(id);
+		this.maybeDeleteCountry(player.code);
 	}
 
 	tick(now: number) {
@@ -428,6 +464,7 @@ export class World {
 		if (previous) previous.count--;
 		this.dirtyCountries.add(owner);
 		this.changedCountries.add(owner);
+		if (previous?.count === 0) this.maybeDeleteCountry(owner);
 		if (!previous?.count) return;
 		const box = this.bounds.get(owner);
 		// A loss needs reclaim unless we can prove this pixel still reaches

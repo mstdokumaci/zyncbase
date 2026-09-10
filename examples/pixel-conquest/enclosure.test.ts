@@ -223,10 +223,22 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 		chunks.add(chunkIndex(x, y));
 	}
 	const world = new World(land);
+	const owned = new Set<number>(pixels.map((pixel) => pixel[2]));
 	world.restore(
-		[...seed.countries.values()],
+		[...seed.countries.values()].filter((country) => owned.has(country.code)),
 		[...chunks].map((index) => seed.chunk(index)),
 	);
+	// Production restore prunes landless countries as abandoned, so
+	// re-register test identities that own no pixels yet as setup-only state.
+	for (const code of [1, 2])
+		if (!world.countries.has(code))
+			world.countries.set(code, {
+				id: String(code),
+				code,
+				name: String(code),
+				color: "old",
+				count: 0,
+			});
 	world.dirtyChunks.clear();
 	let now = 0,
 		seq = 0;

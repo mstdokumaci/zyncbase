@@ -25,6 +25,7 @@ import {
 	MAX_PLAYERS,
 	NAMESPACE,
 	RULES,
+	rowId,
 	terrain,
 } from "./shared";
 import { World } from "./world";
@@ -122,7 +123,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				logins = 0;
 				loginWindow = Date.now();
 			}
-			if (++logins > 60)
+			if (++logins > 120)
 				return reply(res, 429, {
 					error: "Please wait a minute before trying again",
 				});
@@ -184,8 +185,8 @@ await writeFile(
 		security: {
 			allowedOrigins: [origin],
 			allowLocalhost: true,
-			maxConnections: 128,
-			maxMessagesPerSecond: 500,
+			maxConnections: 2048,
+			maxMessagesPerSecond: 2000,
 			maxMessageSize: 1048576,
 		},
 	}),
@@ -227,9 +228,15 @@ async function publish() {
 	const countries = [...world.dirtyCountries]
 		.map((code) => world.countries.get(code))
 		.filter((c) => c !== undefined);
+	const removed = [...world.dirtyRemovedCountries].map((code) => ({
+		op: "remove" as const,
+		path: ["countries", rowId(code)],
+	}));
 	world.dirtyChunks.clear();
 	world.dirtyCountries.clear();
+	world.dirtyRemovedCountries.clear();
 	const operations: BatchOperation[] = [
+		...removed,
 		...countries.map(({ id, ...value }) => ({
 			op: "set" as const,
 			path: ["countries", id],
@@ -242,8 +249,14 @@ async function publish() {
 		})),
 	];
 	if (!operations.length) return;
+	// Bound each message well under maxMessageSize no matter how many
+	// players move in one tick; removes go first so a reused id (none today:
+	// codes never repeat) could not collide with a set in a later batch.
 	const started = performance.now();
-	await client.store.batch(operations, { confirm: "committed" });
+	for (let i = 0; i < operations.length; i += 100)
+		await client.store.batch(operations.slice(i, i + 100), {
+			confirm: "committed",
+		});
 	commitMs = performance.now() - started;
 	flushes++;
 	chunkWrites += chunks.length;

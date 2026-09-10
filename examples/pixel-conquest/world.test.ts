@@ -4,6 +4,7 @@ import {
 	chunkIndex,
 	HEIGHT,
 	INPUT_LEASE_MS,
+	MAX_COUNTRIES,
 	MAX_PLAYERS,
 	RULES,
 	readDots,
@@ -171,4 +172,114 @@ test("input validation, borders, and expired input stop movement; map mask is de
 	expect(player.x).toBe(WIDTH - 1);
 	world.tick(INPUT_LEASE_MS * 7);
 	expect(world.players.size).toBe(0);
+});
+
+test("country creation stops at 64 live countries and freed names are reusable", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const world = new World(land);
+	const now = 0;
+	const enter = (id: string, country: string) =>
+		world.input(id, { direction: "idle", country, seq: 1, sentAt: now }, now);
+	for (let i = 0; i < MAX_COUNTRIES; i++) enter(`founder:${i}`, `Nation ${i}`);
+	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	enter("late", "Newcomer");
+	expect(world.players.has("late")).toBe(false);
+	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	enter("ally", "Nation 0");
+	expect(world.players.has("ally")).toBe(true);
+	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	// Nation 0 still has a live holder, so removing one of two holders keeps it.
+	world.remove("founder:0");
+	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	// The last holder leaves a zero-land country: the slot is reclaimed.
+	const holder = world.players.get("ally");
+	if (!holder) throw new Error("Holder missing");
+	const freed = holder.code;
+	world.remove("ally");
+	expect(world.countries.has(freed)).toBe(false);
+	expect(world.countries.size).toBe(MAX_COUNTRIES - 1);
+	expect(world.dirtyRemovedCountries).toEqual(new Set([freed]));
+	// The freed name founds a fresh country with a never-reused code.
+	enter("reborn", "Nation 0");
+	const reborn = world.players.get("reborn");
+	if (!reborn) throw new Error("Rejoin missing");
+	expect(reborn.code).not.toBe(freed);
+	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	enter("too-late", "Another");
+	expect(world.players.has("too-late")).toBe(false);
+});
+
+test("capturing the last cell deletes only abandoned countries", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const world = new World(land);
+	let now = 0;
+	world.input(
+		"a",
+		{ direction: "idle", country: "Alpha", seq: 1, sentAt: now },
+		now,
+	);
+	world.input(
+		"b",
+		{ direction: "idle", country: "Beta", seq: 1, sentAt: now },
+		now,
+	);
+	const a = world.players.get("a");
+	const b = world.players.get("b");
+	if (!a || !b) throw new Error("Missing players");
+	b.x = 100;
+	b.y = 100;
+	const cell = 100 * WIDTH + 101;
+	world.owners[cell] = a.code;
+	const alpha = world.countries.get(a.code);
+	if (!alpha) throw new Error("Alpha missing");
+	alpha.count = 1;
+	world.input(
+		"b",
+		{ direction: "right", country: "Beta", seq: 2, sentAt: now },
+		now,
+	);
+	for (let i = 0; i < RULES.enemy; i++) world.tick(++now);
+	expect([b.x, b.y]).toEqual([101, 100]);
+	expect(world.countries.get(a.code)?.count).toBe(0);
+	// a still roams, so landless Alpha survives.
+	expect(world.countries.has(a.code)).toBe(true);
+	expect(world.dirtyRemovedCountries.size).toBe(0);
+	world.remove("a");
+	expect(world.countries.has(a.code)).toBe(false);
+	expect(world.dirtyRemovedCountries.has(a.code)).toBe(true);
+});
+
+test("restart prunes abandoned zero-land countries and keeps codes monotonic", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const src = new World(land);
+	let now = 0;
+	src.input(
+		"f",
+		{ direction: "right", country: "Keep", seq: 1, sentAt: now },
+		now,
+	);
+	for (let i = 0; i < RULES.neutral; i++) src.tick(++now);
+	const keep = src.players.get("f");
+	if (!keep) throw new Error("Founder missing");
+	expect(src.countries.get(keep.code)?.count).toBe(1);
+	const chunks = [...src.dirtyChunks].map((index) => src.chunk(index));
+	const rows = [...src.countries.values()];
+	rows.push({
+		id: "999",
+		code: 999,
+		name: "Ghost",
+		color: "#ffffff",
+		count: 0,
+	});
+	const dst = new World(land.slice());
+	dst.restore(rows, chunks);
+	expect(dst.countries.has(999)).toBe(false);
+	expect(dst.dirtyRemovedCountries.has(999)).toBe(true);
+	expect(dst.countries.get(keep.code)?.count).toBe(1);
+	dst.input(
+		"n",
+		{ direction: "idle", country: "Fresh", seq: 1, sentAt: now },
+		now,
+	);
+	expect(dst.players.get("n")?.code).toBe(keep.code + 1);
 });
