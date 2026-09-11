@@ -126,6 +126,13 @@ const sessionBudget = Number(process.env.GAME_SESSION_BUDGET || 120);
 // never trips, silently removing the admission limit. Fail startup instead.
 if (!Number.isSafeInteger(sessionBudget) || sessionBudget < 0)
 	throw new Error("GAME_SESSION_BUDGET must be a non-negative integer");
+// A browser that abandoned admission frees its slot after this long. Tests
+// shorten it so the cleanup path does not sit on the production grace window.
+const countryLeaseMs = Number(
+	process.env.GAME_COUNTRY_LEASE_MS ?? INPUT_LEASE_MS * 5,
+);
+if (!Number.isSafeInteger(countryLeaseMs) || countryLeaseMs < 0)
+	throw new Error("GAME_COUNTRY_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country code; stale timers no-op.
 const countryLeases = new Map<number, number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
@@ -180,7 +187,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					if (countryLeases.get(code) !== lease) return;
 					countryLeases.delete(code);
 					world.maybeDeleteCountry(code);
-				}, INPUT_LEASE_MS * 5).unref();
+				}, countryLeaseMs).unref();
 			}
 			return reply(res, 200, {
 				token: token("player"),

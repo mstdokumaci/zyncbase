@@ -95,12 +95,13 @@ async function capture(stream: ReadableStream<Uint8Array>) {
 		logs = (logs + new TextDecoder().decode(chunk)).slice(-20000);
 }
 
-async function start(reset = false) {
+async function start(reset = false, env: Record<string, string> = {}) {
 	processHandle = Bun.spawn(
 		["bun", join(import.meta.dir, "server.ts"), ...(reset ? ["--reset"] : [])],
 		{
 			env: {
 				...process.env,
+				...env,
 				GAME_PORT: String(authPort),
 				GAME_DB_PORT: String(databasePort),
 				GAME_HOST: useTls ? "::" : "127.0.0.1",
@@ -477,7 +478,10 @@ try {
 		"PASS: committed territory and counts restored, stale dots cleared, namespace isolated",
 	);
 	await stop();
-	await start(true);
+	// Only this start creates reserved-but-abandoned countries (the cap test
+	// below), so shorten the lease here; earlier starts keep the default so a
+	// real admission cannot race the reaper.
+	await start(true, { GAME_COUNTRY_LEASE_MS: "500" });
 	const clean = await connect();
 	assert.ok(
 		(await chunks(clean.client)).every((row) =>
