@@ -96,6 +96,7 @@ function fixture() {
 			name: `Country ${i + 1}`,
 			color: "red",
 			count: 0,
+			is_bot: false,
 		})),
 		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
 	);

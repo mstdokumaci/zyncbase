@@ -48,7 +48,7 @@ test("a chunks-only drain holds roster rows back for the slower flush", () => {
 	expect(buildPublishOperations(world, full)).toContainEqual({
 		op: "set",
 		path: ["countries", String(code)],
-		value: { code, name: "Hold", color: "#ef4444", count: 0 },
+		value: { code, name: "Hold", color: "#ef4444", count: 0, is_bot: false },
 	});
 });
 test("a rejected batch restores every drained entry so retry resends all", async () => {

@@ -147,7 +147,7 @@ export class World {
 			const id = `bot-${i}`;
 			if (i >= target) this.remove(id, now);
 			else if (!this.players.has(id)) {
-				const country = this.country(botCountries[Math.floor(i / 2)]);
+				const country = this.country(botCountries[Math.floor(i / 2)], true);
 				if (country) this.add(id, country, now, true);
 			}
 		}
@@ -182,13 +182,14 @@ export class World {
 		persistedNextCode = 0,
 	) {
 		for (const country of countries) {
-			const { id, code, name, color } = country;
+			const { id, code, name, color, is_bot } = country;
 			this.countries.set(code, {
 				id,
 				code,
 				name,
 				color,
 				count: 0,
+				is_bot,
 			});
 			this.dirtyCountries.add(country.code);
 		}
@@ -247,7 +248,7 @@ export class World {
 		this.fillEnclosures();
 	}
 
-	country(value: unknown) {
+	country(value: unknown, isBot = false) {
 		const name = countryName(value);
 		const existing = [...this.countries.values()].find(
 			(c) => c.name.toLowerCase() === name.toLowerCase(),
@@ -269,6 +270,7 @@ export class World {
 			name,
 			color,
 			count: 0,
+			is_bot: isBot,
 		};
 		this.countries.set(code, country);
 		this.dirtyCountries.add(code);
@@ -645,7 +647,7 @@ export class World {
 			if (this.humanCount >= MAX_PLAYERS) return;
 			if (!Number.isSafeInteger(data.countryCode)) return;
 			const country = this.countries.get(Number(data.countryCode));
-			if (!country) return;
+			if (!country || country.is_bot) return;
 			let nickname: string;
 			try {
 				nickname = playerName(data.name);

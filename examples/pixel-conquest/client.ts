@@ -1,4 +1,8 @@
-import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import {
+	createClient,
+	type SubscriptionHandle,
+	type ZyncBaseClient,
+} from "@zyncbase/client";
 import { LocalMotion, type MotionDot } from "./motion";
 import {
 	CHUNK,
@@ -38,7 +42,7 @@ const countries = new Map<number, Country>();
 // player plus 10s grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
 const players = new Map<string, UserRow>();
-let playersUnsub: (() => void) | undefined;
+let playersUnsub: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
@@ -92,9 +96,10 @@ function updateCountryChoice() {
 }
 countryChoice.addEventListener("change", updateCountryChoice);
 
-function showLobbyCountries(rows: Country[]) {
+function showLobbyCountries(all: Country[]) {
+	const rows = all.filter((country) => !country.is_bot);
 	rows.sort((a, b) => a.name.localeCompare(b.name));
-	const slots = MAX_COUNTRIES - rows.length;
+	const slots = MAX_COUNTRIES - all.length;
 	// Keep the native picker intact during polling unless its options change.
 	if (
 		countryChoice.options.length === 1 ||
@@ -116,7 +121,7 @@ function showLobbyCountries(rows: Country[]) {
 	lobbyCountries = rows;
 	countryChoice.disabled = false;
 	element("country-slots").textContent = slots
-		? `${rows.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
+		? `${all.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
 		: `All ${MAX_COUNTRIES} slots are taken. Join an existing country.`;
 	updateCountryChoice();
 }
@@ -398,7 +403,7 @@ function returnToLobby(message: string) {
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
-	playersUnsub?.();
+	playersUnsub?.unsubscribe();
 	playersUnsub = undefined;
 	players.clear();
 	playing = online = false;
@@ -539,7 +544,7 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		playersUnsub?.();
+		playersUnsub?.unsubscribe();
 		playersUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
 			players.clear();
 			for (const row of rows as UserRow[]) players.set(row.id, row);

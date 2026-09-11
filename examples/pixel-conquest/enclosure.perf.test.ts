@@ -26,7 +26,16 @@ function workload(size: number, rotated: boolean, shape: string) {
 	}
 	const world = new World(land);
 	world.restore(
-		[{ id: "1", code: 1, name: "Benchmark", color: "red", count: 0 }],
+		[
+			{
+				id: "1",
+				code: 1,
+				name: "Benchmark",
+				color: "red",
+				count: 0,
+				is_bot: false,
+			},
+		],
 		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
 	);
 	world.input(

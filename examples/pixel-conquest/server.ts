@@ -168,6 +168,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					return reply(res, 409, {
 						error: "All country slots are taken. Join an existing country.",
 					});
+				if (country.is_bot)
+					return reply(res, 409, {
+						error: "That country is reserved for bots.",
+					});
 				// Release an unused slot if the browser never completes admission.
 				const code = country.code;
 				const lease = (countryLeases.get(code) ?? 0) + 1;
