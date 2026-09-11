@@ -450,3 +450,112 @@ and compact checksums match the September 10 values (`68e5f484…`, `adbc1537…
 The scripted baseline checksum (`bcf99f91…`) differs from the September 10
 value (`ba7e0c52…`): scripted behavior changed on main since that capture,
 before this iteration.
+
+## Iteration: 2026-09-11, 1024-player ramp
+
+Same Intel Core i9-9880H, macOS x64, Bun 1.4.0. This iteration exercises the
+**browser profiler** at the product cap: one real Chromium observer plus 1024
+thin SDK peers, against a local ZyncBase started with the game schema. All
+processes share the laptop; the numbers below are co-located, not VPS
+capacity.
+
+### Fatal finding: the dots cap ended the game, not CPU
+
+`chunks.dots` was limited to 16 KB, which fits roughly 200 slim dots. Every
+human used to spawn on the first player's cell, so as the crowd grew one
+32 × 32 chunk accumulated the whole population; the next publish was rejected
+with `SCHEMA_VALIDATION_FAILED` (`Value length outside allowed range`). The
+server treats a rejected commit as fatal (`failed()` → `stop()`), so the game
+paused and `/session` then failed with the edge's `502` at admitted counts of
+334, 394, 667 and 748 in repeated runs. The 502 was a symptom: an
+`ECONNREFUSED` to the stopped game server.
+
+Fix: schema `0.3.0` → `0.3.1`, `dots` `16384` → `131072` bytes (holds 1024
+dots with 64-character identities), plus a test that computes the worst-case
+dot encoding times `MAX_PLAYERS` against the cap.
+
+### Roster publish throttle
+
+`countries` and `users` rows dirtied on nearly every tick under a crowd.
+They now flush on every tenth tick (2 Hz); chunks still publish per tick. New
+country rows force a roster flush until their first write lands, so a crash
+cannot leave chunk owners referencing a country row that never committed, and
+the allocator mark still travels with country removals. One second was tried
+and rejected: the accumulated flush produced a periodic latency spike (commit
+p95 46 ms vs 23 ms at 128 players).
+
+`smoke.ts` now waits for two equal country reads across a flush interval
+before snapshotting; the old immediate read raced the held-back roster.
+
+### Spawn spread and reinforcement
+
+Spawn anchors no longer stack on one point:
+
+- Eight regions are farthest-point samples over chunks at least 60% land and
+  128 px from the map edge; the seed is the historical northern-Italy start.
+- Founding a new country round-robins humans across the regions, then spirals
+  (golden angle, 16 px anchor spacing) inside the chosen one.
+- A human joining an existing country anchors on a teammate standing on its
+  land, else the first owned cell within the country's cached bounds (scan
+  capped at 65,536 cells), else a live teammate, else the regional spiral. A
+  separate pass requires the chosen cell to be own territory, bounded to a
+  32 px search before spilling.
+- Bots anchor at `spawnCenters[(code - 1) % 8]` with their existing team-angle
+  ring, so the five bot countries cover regions 0–4 and the opening region has
+  opponents.
+- Humans and bots share the same 12 px same-country / 28 px cross-country
+  spacing. A 16 px spatial hash makes each spacing test a 5 × 5 bucket scan
+  instead of an O(players) loop; without it, 1024 same-country spawns took
+  287 seconds. With it: 0.8–1.9 s for 1024 spawns on all-land and terrain.
+
+Local spawn benchmark (not router-visible): 1024 players in one country used
+to fill 4 chunks with a maximum of 588 dots in one chunk. After the change the
+same run uses ~666 chunks (all-land) or ~425 chunks (terrain) with at most
+12–48 dots per chunk.
+
+### Measured 1024 ramp
+
+One run, stages measured for 30 s each, fast local admission, peers connected
+directly to ZyncBase as in production. Tick rate is the server's effective
+tick frequency: the tick loop waits for committed publishes, so high commit
+latency directly lowers it.
+
+| Players | Tick rate | Commit p50 / p95 | Browser rx | Driver CPU | Positioned | Errors |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 19.8 Hz | 1.0 / 3.0 ms | 74 KiB/s | 0.03 cores | 0 | 0 |
+| 32 | 19.8 Hz | 1.6 / 3.2 ms | 82 KiB/s | 0.09 cores | 31 | 0 |
+| 128 | 19.7 Hz | 6.1 / 13.4 ms | 214 KiB/s | 0.48 cores | 127 | 0 |
+| 256 | 19.2 Hz | 10.3 / 21.8 ms | 388 KiB/s | 1.40 cores | 255 | 0 |
+| 512 | 9.9 Hz | 22.6 / 39.4 ms | 428 KiB/s | 2.42 cores | 511 | 0 |
+| 1024 | 4.2 Hz | 40.7 / 107.9 ms | 307 KiB/s | 3.34 cores | 1023 | 0 |
+
+"Positioned" counts SDK peers that resolved their committed spawn row and moved
+their chunk subscriptions there; the profiler asserts it equals the expected
+peer count at every stage, so peers measuring the wrong region fail the run
+instead of skewing it.
+
+All 1024 players stayed connected; the browser held ~30 FPS with draw p95 under
+1 ms; `test:game` and the unit suites pass. The remaining wall is the tick
+loop's commit serialization: commit p50 reaches 41 ms at 1024 and the tick rate
+follows it down. ZyncBase used at most one core during that stage, so the wait
+is not simple CPU saturation; the co-located load generator, browser and both
+server processes share the laptop, and a separate load host or VPS pair is
+needed to attribute what remains. Next payload lever: stop resending the 2 KB
+`owners` bitmap when only dots moved.
+
+### Reproduction
+
+```sh
+bun run --filter @zyncbase/client build
+zig build -Doptimize=ReleaseFast
+bun examples/pixel-conquest/profile-browser.ts --players 1,32,128,256,512,1024 --seconds 30 --output test-artifacts/pixel-conquest-profile/browser-1024
+bun test examples/pixel-conquest
+bun run test:game
+```
+
+The local run lifts `GAME_SESSION_BUDGET` (default 120/minute unchanged) and
+sends `/ws` and `/auth/ticket` straight to ZyncBase, matching deployment;
+`--url` keeps the public admission budget and the edge path for an external
+server. Validation for this iteration: `bun run lint`, `bunx biome check
+--write --error-on-warnings`, 53 unit tests and `test:game` (plaintext and
+IPv6/TLS) all pass.
