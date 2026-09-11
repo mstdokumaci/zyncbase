@@ -61,9 +61,10 @@ export async function startLocalEdge(options: {
 			},
 		);
 		target.on("error", (error) => {
-			// /health polls intentionally race startup, so a refused upstream
-			// is expected; only unexpected proxy failures are worth a log line.
-			if ((error as { code?: string }).code !== "ECONNREFUSED")
+			// /health is polled while the upstream starts; a refused /session
+			// or /auth/ticket is a real failure and stays logged.
+			const refused = (error as { code?: string }).code === "ECONNREFUSED";
+			if (path !== "/health" || !refused)
 				console.error(`Proxy error for ${path}:`, error);
 			if (!res.headersSent) res.writeHead(502);
 			res.end();
