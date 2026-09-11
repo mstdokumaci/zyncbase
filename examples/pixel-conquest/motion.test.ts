@@ -101,10 +101,22 @@ test("confirmations, stops, reversals and respawns reconcile the visible positio
 	expect(motion.position(800)).toEqual({ x: 1000, y: 300 });
 });
 
-test("anticipation respects map edges and waits for unknown destination chunks", () => {
+test("anticipation wraps at the seam, stops at the poles, and waits for unknown chunks", () => {
+	// The seam is open water at both edges; only the poles stop movement.
+	for (const [x, y, direction, expected] of [
+		[0, 10, "left", -1],
+		[WIDTH - 1, 10, "right", WIDTH],
+	] as const) {
+		const motion = new LocalMotion(
+			{ ...dot, x, y },
+			direction,
+			0,
+			land,
+			() => 0,
+		);
+		expect(motion.position(1000)).toEqual({ x: expected, y });
+	}
 	for (const [x, y, direction] of [
-		[0, 10, "left"],
-		[WIDTH - 1, 10, "right"],
 		[10, 0, "up"],
 		[10, HEIGHT - 1, "down"],
 	] as const) {
@@ -119,4 +131,27 @@ test("anticipation respects map edges and waits for unknown destination chunks",
 	}
 	const unknown = new LocalMotion(dot, "right", 0, land, () => undefined);
 	expect(unknown.position(1000)).toEqual({ x: 31, y: 10 });
+});
+
+test("crossing the seam unrolls the camera and walking back stays continuous", () => {
+	const motion = new LocalMotion(
+		{ ...dot, x: WIDTH - 1, y: 10 },
+		"right",
+		0,
+		land,
+		() => 0,
+	);
+	expect(motion.position(0).x).toBe(WIDTH - 1);
+	expect(motion.position(50).x).toBe(WIDTH - 0.5);
+	expect(motion.position(100).x).toBe(WIDTH);
+	// Server confirms the wrapped cell: the rendered dot keeps going right.
+	motion.update({ ...dot, x: 0, y: 10 }, "right", 100);
+	expect(motion.position(100).x).toBe(WIDTH);
+	expect(motion.position(150).x).toBe(WIDTH + 0.5);
+	expect(motion.position(200).x).toBe(WIDTH + 1);
+	// Turning around crosses the same seam without a jump.
+	motion.update({ ...dot, x: 0, y: 10 }, "left", 200);
+	expect(motion.position(200).x).toBe(WIDTH + 1);
+	expect(motion.position(250).x).toBe(WIDTH);
+	expect(motion.position(300).x).toBe(WIDTH - 1);
 });

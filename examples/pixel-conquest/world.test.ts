@@ -177,7 +177,11 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 
 test("input validation, borders, and expired input stop movement; map mask is deterministic", () => {
 	const land = terrain();
-	expect(land.reduce((sum, cell) => sum + cell, 0)).toBe(661568);
+	expect(land.reduce((sum, cell) => sum + cell, 0)).toBe(661453);
+	// The seam columns are water, so no owned wall can wrap and the planar
+	// enclosure logic stays valid.
+	for (let y = 0; y < HEIGHT; y++)
+		expect(land[y * WIDTH] + land[y * WIDTH + WIDTH - 1]).toBeLessThan(2);
 	const world = new World(land);
 	const data = {
 		name: "Player",
@@ -196,9 +200,23 @@ test("input validation, borders, and expired input stop movement; map mask is de
 	world.tick(INPUT_LEASE_MS + 1);
 	expect([player.x, player.y]).toEqual(start);
 	world.input("valid", { ...data, seq: 2 }, INPUT_LEASE_MS + 2);
+	// Horizontal movement wraps across the water seam: 1999 -> 0 costs a
+	// neutral crossing. One tick banks credit, the next moves.
 	player.x = WIDTH - 1;
+	player.y = 0;
 	world.tick(INPUT_LEASE_MS + 3);
 	expect(player.x).toBe(WIDTH - 1);
+	world.tick(INPUT_LEASE_MS + 4);
+	expect(player.x).toBe(0);
+	// Vertical edges still block movement.
+	player.y = HEIGHT - 1;
+	world.input(
+		"valid",
+		{ ...data, direction: "down", seq: 3 },
+		INPUT_LEASE_MS + 5,
+	);
+	world.tick(INPUT_LEASE_MS + 6);
+	expect(player.y).toBe(HEIGHT - 1);
 	world.tick(INPUT_LEASE_MS * 7);
 	expect(world.players.size).toBe(0);
 });

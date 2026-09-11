@@ -130,6 +130,12 @@ export function terrain() {
 	return result;
 }
 
+// The world wraps horizontally; every canonical storage/lookup coordinate
+// stays inside [0, WIDTH).
+export function wrapX(x: number) {
+	return ((x % WIDTH) + WIDTH) % WIDTH;
+}
+
 export function chunkIndex(x: number, y: number) {
 	return Math.floor(y / CHUNK) * COLUMNS + Math.floor(x / CHUNK);
 }

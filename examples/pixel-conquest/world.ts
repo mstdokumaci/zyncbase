@@ -29,6 +29,7 @@ import {
 	rowId,
 	type UserRow,
 	WIDTH,
+	wrapX,
 } from "./shared";
 
 type Player = {
@@ -739,9 +740,10 @@ export class World {
 	private move(player: Player) {
 		if (player.direction === "idle") return;
 		const [dx, dy] = steps[player.direction];
-		const x = player.x + dx,
+		// Horizontal movement wraps around the seam; only the poles block.
+		const x = wrapX(player.x + dx),
 			y = player.y + dy;
-		if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) {
+		if (y < 0 || y >= HEIGHT) {
 			player.credit = 0;
 			return;
 		}
