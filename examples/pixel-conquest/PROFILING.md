@@ -520,30 +520,26 @@ directly to ZyncBase as in production. Tick rate is the server's effective
 tick frequency: the tick loop waits for committed publishes, so high commit
 latency directly lowers it.
 
-| Players | Tick rate | Commit p50 / p95 | Browser rx | Driver CPU | Errors |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 19.7 Hz | 0.9 / 2.4 ms | 219 KiB/s | 0.03 cores | 0 |
-| 32 | 19.7 Hz | 1.8 / 3.8 ms | 75 KiB/s | 0.08 cores | 0 |
-| 128 | 19.7 Hz | 5.6 / 14.4 ms | 212 KiB/s | 0.43 cores | 0 |
-| 256 | 19.1 Hz | 11.6 / 23.1 ms | 346 KiB/s | 1.07 cores | 0 |
-| 512 | 8.6 Hz | 26.9 / 57.6 ms | 309 KiB/s | 2.24 cores | 0 |
-| 1024 | 3.4 Hz | 41.9 / 195.5 ms | 255 KiB/s | 2.87 cores | 0 |
+| Players | Tick rate | Commit p50 / p95 | Browser rx | Driver CPU | Positioned | Errors |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 19.8 Hz | 1.0 / 3.0 ms | 74 KiB/s | 0.03 cores | 0 | 0 |
+| 32 | 19.8 Hz | 1.6 / 3.2 ms | 82 KiB/s | 0.09 cores | 31 | 0 |
+| 128 | 19.7 Hz | 6.1 / 13.4 ms | 214 KiB/s | 0.48 cores | 127 | 0 |
+| 256 | 19.2 Hz | 10.3 / 21.8 ms | 388 KiB/s | 1.40 cores | 255 | 0 |
+| 512 | 9.9 Hz | 22.6 / 39.4 ms | 428 KiB/s | 2.42 cores | 511 | 0 |
+| 1024 | 4.2 Hz | 40.7 / 107.9 ms | 307 KiB/s | 3.34 cores | 1023 | 0 |
 
-All 1024 players stayed connected for the full stage; the browser held ~30 FPS
-with draw p95 under 1 ms; `test:game` and the unit suites pass. Comparing with
-an otherwise identical run where all humans still spawned around one point
-(which also survives now that the cap fits): at 1024 players commit p50 fell
-from 126.8 to 41.9 ms, commit p95 from 307.1 to 195.5 ms, driver CPU from 4.26
-to 2.87 cores, and the observer's traffic from 565 to 255 KiB/s. That run
-published ~283 operations/s at 1024; the spread run published ~1,207, because
-players in eight regions dirty more distinct chunks. The lower tick rate in
-the table is therefore not a regression: the server is committing ~4× more
-game data per second, still serialized behind the commit window.
+"Positioned" counts SDK peers that resolved their committed spawn row and moved
+their chunk subscriptions there; the profiler asserts it equals the expected
+peer count at every stage, so peers measuring the wrong region fail the run
+instead of skewing it.
 
-The remaining wall is the tick loop's commit serialization at 512+ players.
-ZyncBase used under one core while commit p50 was 42 ms, so the wait is not
-simple CPU saturation; the co-located load generator, browser and both server
-processes compete for the same laptop, and a separate load host or VPS pair is
+All 1024 players stayed connected; the browser held ~30 FPS with draw p95 under
+1 ms; `test:game` and the unit suites pass. The remaining wall is the tick
+loop's commit serialization: commit p50 reaches 41 ms at 1024 and the tick rate
+follows it down. ZyncBase used at most one core during that stage, so the wait
+is not simple CPU saturation; the co-located load generator, browser and both
+server processes share the laptop, and a separate load host or VPS pair is
 needed to attribute what remains. Next payload lever: stop resending the 2 KB
 `owners` bitmap when only dots moved.
 

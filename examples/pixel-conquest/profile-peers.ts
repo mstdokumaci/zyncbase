@@ -7,6 +7,7 @@ import {
 	HEIGHT,
 	NAMESPACE,
 	readDots,
+	type UserRow,
 } from "./shared";
 
 type Peer = {
@@ -15,6 +16,7 @@ type Peer = {
 	subscriptions: Map<number, () => void>;
 	x: number;
 	y: number;
+	positioned: boolean;
 	index: number;
 	width: number;
 	height: number;
@@ -95,6 +97,43 @@ function subscribe(peer: Peer) {
 	}
 }
 
+// The committed roster row carries the admitted spawn cell. Roster fanout is
+// eventual, so read committed state and retry until the row lands; derive the
+// position from delta timing instead and a slow flush silently leaves the
+// peer framed on the wrong chunks.
+async function readSpawn(peer: Peer) {
+	const id = peer.client.presence.localUserId;
+	if (!id) return undefined;
+	try {
+		const me = (await peer.client.store.get(["users", id])) as unknown as
+			| UserRow
+			| undefined;
+		if (
+			!me ||
+			!Number.isSafeInteger(me.lastX) ||
+			!Number.isSafeInteger(me.lastY)
+		)
+			return undefined;
+		return { x: me.lastX, y: me.lastY };
+	} catch {
+		return undefined;
+	}
+}
+
+async function locate(peer: Peer) {
+	for (let attempt = 0; attempt < 100 && !peer.positioned; attempt++) {
+		const position = await readSpawn(peer);
+		if (position) {
+			peer.positioned = true;
+			peer.x = position.x;
+			peer.y = position.y;
+			subscribe(peer);
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+}
+
 const heartbeat = setInterval(() => {
 	const now = performance.now();
 	heartbeatLag.push(Math.max(0, now - lastBeat - 500));
@@ -139,6 +178,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				zoom: data.zoom,
 				x: 933,
 				y: 276,
+				positioned: false,
 				moves: 0,
 				subscriptions: new Map(),
 				input: {
@@ -153,6 +193,11 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
 			client.presence.set(peer.input);
 			subscribe(peer);
+			// Spawn regions are server state, so the placeholder above is only
+			// a camera start. The committed roster row carries the admitted
+			// cell; the roster publishes on a slower cadence, so read it in
+			// the background rather than blocking admission.
+			void locate(peer);
 		} else if (data.type === "move") {
 			moving = data.moving;
 			started = Date.now();
@@ -172,6 +217,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			errors,
 			subscriptions: peers.reduce((n, p) => n + p.subscriptions.size + 2, 0),
 			movingPeers: peers.filter((p) => p.moves > 0).length,
+			positioned: peers.filter((p) => p.positioned).length,
 		});
 	} catch (error) {
 		self.postMessage({ failure: String(error) });

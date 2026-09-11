@@ -534,11 +534,15 @@ export class World {
 				];
 		// Prefer breathing room, but tiny islands must still admit players on free land.
 		for (const pass of passes) {
+			// Spiral anchors can sit off-map; reach to the farthest corner
+			// from the anchor, not just the map's larger dimension, or the
+			// fallback can miss a strip on the far side.
 			const reach = pass.own
 				? SPAWN_OWN_RADIUS
 				: pass.spaced
 					? 128
-					: Math.max(WIDTH, HEIGHT);
+					: Math.max(anchor.x, WIDTH - anchor.x, anchor.y, HEIGHT - anchor.y) +
+						1;
 			for (let radius = 0; radius < reach; radius++) {
 				for (let d = -radius; d <= radius; d++) {
 					const candidates = [

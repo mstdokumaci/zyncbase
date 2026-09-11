@@ -13,8 +13,14 @@ World.prototype.tick = function (now) {
 	tick.call(this, now);
 	ticks.push({ at: Date.now(), ms: performance.now() - started });
 };
+// Automatic reconnects run through ConnectionManager.connect(), but an
+// explicit second connect() would wrap store.batch a second time and record
+// every commit twice; keep the wrapper per store.
+const wrapped = new WeakSet<object>();
 const connect = ZyncBaseClient.prototype.connect;
 ZyncBaseClient.prototype.connect = async function () {
+	if (wrapped.has(this.store)) return connect.call(this);
+	wrapped.add(this.store);
 	const batch = this.store.batch.bind(this.store);
 	this.store.batch = async (operations, options) => {
 		const started = performance.now();

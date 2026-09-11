@@ -61,7 +61,10 @@ export async function startLocalEdge(options: {
 			},
 		);
 		target.on("error", (error) => {
-			console.error(`Proxy error for ${path}:`, error);
+			// /health polls intentionally race startup, so a refused upstream
+			// is expected; only unexpected proxy failures are worth a log line.
+			if ((error as { code?: string }).code !== "ECONNREFUSED")
+				console.error(`Proxy error for ${path}:`, error);
 			if (!res.headersSent) res.writeHead(502);
 			res.end();
 		});

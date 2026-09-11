@@ -78,6 +78,7 @@ type PeerStats = {
 	errors: string[];
 	subscriptions: number;
 	movingPeers: number;
+	positioned: number;
 	failure?: string;
 };
 const workers: Worker[] = [];
@@ -428,6 +429,7 @@ try {
 				rss: process.memoryUsage.rss(),
 				heartbeatLag: summary(peerStats.flatMap((s) => s.heartbeatLag)),
 				movingPeers: peerStats.reduce((n, s) => n + s.movingPeers, 0),
+				positioned: peerStats.reduce((n, s) => n + s.positioned, 0),
 				workers: workers.length,
 				lateDeltas: peerStats.reduce((n, s) => n + s.lateDeltas, 0),
 			},
@@ -473,6 +475,11 @@ try {
 		assert(
 			result.driver.heartbeatLag.max < 1000,
 			"Load generator cannot maintain input cadence; use more workers or a separate load host",
+		);
+		assert.equal(
+			result.driver.positioned,
+			target - 1,
+			"Peers did not locate their spawn region; subscriptions measure the wrong chunks",
 		);
 		assert(
 			perf.draws.length > 0 && rxFrames > 0,

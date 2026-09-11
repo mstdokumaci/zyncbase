@@ -121,7 +121,11 @@ let logins = 0,
 	loginWindow = Date.now();
 // The public demo admits 120 sessions/minute. A load profile that needs a
 // 1024-client ramp can raise the budget instead of pacing for ten minutes.
-const sessionBudget = Number(process.env.GAME_SESSION_BUDGET ?? 120);
+const sessionBudget = Number(process.env.GAME_SESSION_BUDGET || 120);
+// A malformed value would turn the guard below into a NaN comparison that
+// never trips, silently removing the admission limit. Fail startup instead.
+if (!Number.isSafeInteger(sessionBudget) || sessionBudget < 0)
+	throw new Error("GAME_SESSION_BUDGET must be a non-negative integer");
 // Latest reservation generation per country code; stale timers no-op.
 const countryLeases = new Map<number, number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
