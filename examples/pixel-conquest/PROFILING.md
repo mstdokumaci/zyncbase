@@ -575,11 +575,11 @@ tick period.
 The candidate sends every slice without waiting for earlier acknowledgements:
 slices are mapped synchronously in order and all awaited with
 `Promise.allSettled`. The connection sends in order and the write worker
-commits FIFO, so removes still land before sets; every slice still commits, so
-a rejected commit remains observable and fatal. `PUBLISH_BATCH_SIZE` rises
-100 to 500 (the SDK and server cap), and `security.maxMessageSize` rises 1 MB
-to 4 MB: a full slice is bounded by 500 x 2,048 bytes of owners plus at most
-`MAX_PLAYERS` dots, well under 2 MB.
+commits FIFO, so removes still land before sets; every slice is dispatched and
+settled, so a rejected slice remains observable and fatal. `PUBLISH_BATCH_SIZE`
+rises 100 to 500 (the SDK and server cap), and `security.maxMessageSize` rises
+1 MB to 4 MB: a full slice is bounded by 500 x 2,048 bytes of owners plus at
+most `MAX_PLAYERS` dots, well under 2 MB.
 
 ### Paired timing
 

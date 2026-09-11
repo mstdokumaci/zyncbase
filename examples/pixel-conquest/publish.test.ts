@@ -168,3 +168,33 @@ test("every slice is dispatched before the first one settles", async () => {
 	release?.();
 	await pending;
 });
+
+test("a synchronously throwing batch still settles every slice", async () => {
+	const operations: BatchOperation[] = Array.from(
+		{ length: PUBLISH_BATCH_SIZE * 2 + 1 },
+		(_, i) => ({
+			op: "set" as const,
+			path: ["chunks", String(i)],
+			value: { owners: new Uint8Array(2), dots: new Uint8Array(0) },
+		}),
+	);
+	const invoked: number[] = [];
+	let firstSettled = false;
+	// Deliberately non-async: a synchronous throw must not abort the map and
+	// skip later slices or the pending first slice.
+	const pending = runPublishBatches((slice) => {
+		invoked.push(slice.length);
+		if (invoked.length === 2) throw new Error("sync batch failure");
+		if (invoked.length === 1)
+			return new Promise<void>((resolve) =>
+				setTimeout(() => {
+					firstSettled = true;
+					resolve();
+				}, 10),
+			);
+		return Promise.resolve();
+	}, operations);
+	await expect(pending).rejects.toThrow("sync batch failure");
+	expect(invoked).toEqual([PUBLISH_BATCH_SIZE, PUBLISH_BATCH_SIZE, 1]);
+	expect(firstSettled).toBe(true);
+});

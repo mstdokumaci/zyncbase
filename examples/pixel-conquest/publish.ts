@@ -106,7 +106,15 @@ export async function runPublishBatches(
 	const slices: BatchOperation[][] = [];
 	for (let i = 0; i < operations.length; i += PUBLISH_BATCH_SIZE)
 		slices.push(operations.slice(i, i + PUBLISH_BATCH_SIZE));
-	const results = await Promise.allSettled(slices.map((slice) => batch(slice)));
+	const results = await Promise.allSettled(
+		slices.map((slice) => {
+			try {
+				return batch(slice);
+			} catch (error) {
+				return Promise.reject(error);
+			}
+		}),
+	);
 	for (const result of results)
 		if (result.status === "rejected") throw result.reason;
 }
