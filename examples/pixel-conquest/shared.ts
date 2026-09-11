@@ -4,7 +4,7 @@ export const WIDTH = map.width;
 export const HEIGHT = map.height;
 export const CHUNK = 32;
 export const COLUMNS = Math.ceil(WIDTH / CHUNK);
-export const NAMESPACE = "pixel-conquest";
+export const NAMESPACE = "world-1";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
 export const MAX_PLAYERS = 1024;
 export const MAX_COUNTRIES = 64;
@@ -113,6 +113,7 @@ export type Country = {
 	name: string;
 	color: string;
 	count: number;
+	is_bot: boolean;
 };
 export type ChunkRow = {
 	id: string;

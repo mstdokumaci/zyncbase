@@ -418,6 +418,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 		name: "Ghost",
 		color: "#ffffff",
 		count: 0,
+		is_bot: false,
 	});
 	const dst = new World(land.slice());
 	dst.restore(rows, chunks);
@@ -767,4 +768,37 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	const returning = world.players.get("returning");
 	if (!returning) throw new Error("Missing returning player");
 	expect(world.owners[returning.y * WIDTH + returning.x]).toBe(country.code);
+});
+
+test("humans cannot join bot countries, even with a forged code", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const bot = world.country("Bot · Amber", true);
+	if (!bot) throw new Error("Missing bot country");
+	expect(bot.is_bot).toBe(true);
+	const human = world.country("North");
+	if (!human) throw new Error("Missing human country");
+	expect(human.is_bot).toBe(false);
+	for (const id of ["forged", "reinforce"])
+		world.input(
+			id,
+			{
+				name: id,
+				countryCode: bot.code,
+				direction: "idle",
+				seq: 1,
+			},
+			0,
+		);
+	expect(world.players.size).toBe(0);
+	world.input(
+		"human",
+		{
+			name: "Human",
+			countryCode: human.code,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	expect(world.players.get("human")?.country_id).toBe(human.code);
 });

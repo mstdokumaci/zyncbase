@@ -1,4 +1,8 @@
-import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import {
+	createClient,
+	type SubscriptionHandle,
+	type ZyncBaseClient,
+} from "@zyncbase/client";
 import { LocalMotion, type MotionDot } from "./motion";
 import {
 	CHUNK,
@@ -38,7 +42,7 @@ const countries = new Map<number, Country>();
 // player plus 10s grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
 const players = new Map<string, UserRow>();
-let playersUnsub: (() => void) | undefined;
+let playersUnsub: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
@@ -52,6 +56,7 @@ let joining = false;
 let worldReady = false;
 let selectedCountryCode: number | undefined;
 let lobbyCountries: Country[] = [];
+let availableSlots = 0;
 let myId = "",
 	name = "",
 	nickname = "",
@@ -92,9 +97,12 @@ function updateCountryChoice() {
 }
 countryChoice.addEventListener("change", updateCountryChoice);
 
-function showLobbyCountries(rows: Country[]) {
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one reconciliation pass must sync slots, rows, and the native picker.
+function showLobbyCountries(all: Country[]) {
+	const rows = all.filter((country) => !country.is_bot);
 	rows.sort((a, b) => a.name.localeCompare(b.name));
-	const slots = MAX_COUNTRIES - rows.length;
+	const slots = MAX_COUNTRIES - all.length;
+	availableSlots = slots;
 	// Keep the native picker intact during polling unless its options change.
 	if (
 		countryChoice.options.length === 1 ||
@@ -110,13 +118,22 @@ function showLobbyCountries(rows: Country[]) {
 			create,
 		);
 		countryChoice.value = selected;
-		if (selected === "new" && !slots) countryChoice.value = "";
-		if (!rows.length) countryChoice.value = "new";
+		if (!rows.length && slots > 0) countryChoice.value = "new";
+	}
+	// Slots can change without the option list changing (bots come and go),
+	// so keep the create option and its selection in sync on every poll.
+	const createOption = countryChoice.options.item(
+		countryChoice.options.length - 1,
+	);
+	if (createOption?.value === "new") {
+		createOption.disabled = slots === 0;
+		if (createOption.disabled && countryChoice.value === "new")
+			countryChoice.value = "";
 	}
 	lobbyCountries = rows;
 	countryChoice.disabled = false;
 	element("country-slots").textContent = slots
-		? `${rows.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
+		? `${all.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
 		: `All ${MAX_COUNTRIES} slots are taken. Join an existing country.`;
 	updateCountryChoice();
 }
@@ -398,7 +415,7 @@ function returnToLobby(message: string) {
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
-	playersUnsub?.();
+	playersUnsub?.unsubscribe();
 	playersUnsub = undefined;
 	players.clear();
 	playing = online = false;
@@ -470,7 +487,7 @@ element("join").addEventListener("submit", async (event) => {
 		);
 		selectedCountryCode = selected?.code;
 		if (countryChoice.value === "new") {
-			if (lobbyCountries.length >= MAX_COUNTRIES)
+			if (availableSlots === 0)
 				throw new Error(
 					"All country slots are taken. Join an existing country.",
 				);
@@ -539,7 +556,7 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		playersUnsub?.();
+		playersUnsub?.unsubscribe();
 		playersUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
 			players.clear();
 			for (const row of rows as UserRow[]) players.set(row.id, row);

@@ -95,12 +95,13 @@ async function capture(stream: ReadableStream<Uint8Array>) {
 		logs = (logs + new TextDecoder().decode(chunk)).slice(-20000);
 }
 
-async function start(reset = false) {
+async function start(reset = false, env: Record<string, string> = {}) {
 	processHandle = Bun.spawn(
 		["bun", join(import.meta.dir, "server.ts"), ...(reset ? ["--reset"] : [])],
 		{
 			env: {
 				...process.env,
+				...env,
 				GAME_PORT: String(authPort),
 				GAME_DB_PORT: String(databasePort),
 				GAME_HOST: useTls ? "::" : "127.0.0.1",
@@ -212,6 +213,10 @@ try {
 			COUNTRY_COLORS.includes(country.color),
 		),
 	);
+	assert.ok(
+		lobbyCountries.every((country: Country) => country.is_bot === true),
+		"starting countries are bot countries",
+	);
 	assert.equal((await fetch(origin)).status, 200);
 	assert.equal((await fetch(`${origin}/client.js`)).status, 200);
 	// The VM's token issuer serves neither browser assets nor database tickets.
@@ -248,6 +253,14 @@ try {
 	const alice = await connect("North"),
 		bob = await connect("South");
 	assert.notEqual(alice.id, bob.id);
+	// Subscribe before any presence is set: the admitted rows must arrive as
+	// deltas, not the initial snapshot (the browser creates the roster
+	// subscription before its first presence.set too).
+	const subscribed = new Map<string, UserRow>();
+	bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
+		subscribed.clear();
+		for (const row of rows as UserRow[]) subscribed.set(row.id, row);
+	});
 	const input = {
 		name: "Ａlice",
 		countryCode: alice.countryCode,
@@ -285,6 +298,10 @@ try {
 		const row = (await rosterOf(bob.client)).get(alice.id);
 		return row?.name === "Alice" ? row : undefined;
 	}, "roster carries normalized player names");
+	await eventually(
+		async () => subscribed.get(alice.id)?.name === "Alice",
+		"users subscription receives live roster deltas",
+	);
 	assert.equal(aliceRow.country_id, alice.countryCode);
 	assert.equal(aliceRow.is_bot, false);
 	assert.deepEqual([aliceRow.lastX, aliceRow.lastY], [first.x, first.y]);
@@ -300,6 +317,7 @@ try {
 		.countries as Country[];
 	const north = roster.find((country) => country.name === "North");
 	assert.ok(north, "new countries appear in the lobby");
+	assert.equal(north.is_bot, false, "human countries are not flagged as bots");
 	assert.equal(
 		north.code,
 		alice.countryCode,
@@ -454,13 +472,16 @@ try {
 		);
 	}
 	await assert.rejects(returning.client.setStoreNamespace("another-world"), {
-		code: "NAMESPACE_UNAUTHORIZED",
+		code: "NAMESPACE_SWITCH_REJECTED",
 	});
 	console.log(
 		"PASS: committed territory and counts restored, stale dots cleared, namespace isolated",
 	);
 	await stop();
-	await start(true);
+	// Only this start creates reserved-but-abandoned countries (the cap test
+	// below), so shorten the lease here; earlier starts keep the default so a
+	// real admission cannot race the reaper.
+	await start(true, { GAME_COUNTRY_LEASE_MS: "500" });
 	const clean = await connect();
 	assert.ok(
 		(await chunks(clean.client)).every((row) =>
@@ -472,6 +493,10 @@ try {
 	)) as unknown as Country[];
 	assert.equal(fresh.length, 5);
 	assert.ok(fresh.every((country) => country.count === 0));
+	assert.ok(
+		fresh.every((country) => country.is_bot === true),
+		"reset repopulates bot countries",
+	);
 	// Reset clears territory and the roster, then bots immediately repopulate
 	// (plus this client's own fieldless identity row).
 	const resetRoster = await rosterOf(clean.client);
@@ -497,6 +522,16 @@ try {
 			400,
 		);
 	}
+	assert.equal(
+		(
+			await fetch(`${origin}/session`, {
+				method: "POST",
+				body: JSON.stringify({ countryName: "Bot · Amber" }),
+			})
+		).status,
+		409,
+		"bot country names are rejected",
+	);
 	// Concurrent creation requests cannot exceed the live-country cap.
 	const attempts = await Promise.all(
 		Array.from({ length: MAX_COUNTRIES - fresh.length + 1 }, (_, i) =>

@@ -1,7 +1,8 @@
 {
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"store": {
 		"users": {
+			"namespaced": true,
 			"fields": {
 				"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
 				"name": { "type": "string", "minLength": 1, "maxLength": 16 },
@@ -30,7 +31,8 @@
 				"code": { "type": "integer", "minimum": 1, "maximum": 65535 },
 				"name": { "type": "string", "minLength": 1, "maxLength": 24 },
 				"color": { "type": "string" },
-				"count": { "type": "integer", "minimum": 0 }
+				"count": { "type": "integer", "minimum": 0 },
+				"is_bot": { "type": "boolean" }
 			}
 		}
 	},

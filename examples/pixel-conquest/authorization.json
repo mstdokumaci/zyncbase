@@ -1,7 +1,7 @@
 {
 	"namespaces": [
 		{
-			"pattern": "pixel-conquest",
+			"pattern": "world-1",
 			"storeFilter": true,
 			"presenceRead": true,
 			"presenceWrite": { "$session.role": { "eq": "player" } },

@@ -216,6 +216,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 			name: String(code),
 			color: "old",
 			count: 0,
+			is_bot: false,
 		});
 	const chunks = new Set<number>();
 	for (const [x, y, code] of pixels) {
@@ -238,6 +239,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 				name: String(code),
 				color: "old",
 				count: 0,
+				is_bot: false,
 			});
 	world.dirtyChunks.clear();
 	let now = 0,
@@ -580,6 +582,7 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 		name: "3",
 		color: "red",
 		count: 0,
+		is_bot: false,
 	});
 	const reference = new World(world.land);
 	for (const country of world.countries.values())
