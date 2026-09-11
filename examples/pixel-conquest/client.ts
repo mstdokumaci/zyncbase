@@ -22,6 +22,7 @@ import {
 	terrain,
 	type UserRow,
 	WIDTH,
+	wrapX,
 } from "./shared";
 
 function element<T extends HTMLElement>(id: string): T {
@@ -240,31 +241,36 @@ function receive(row: ChunkRow) {
 }
 
 function ownerAt(x: number, y: number) {
-	return chunks.get(chunkIndex(x, y))?.owners[
-		(y % CHUNK) * CHUNK + (x % CHUNK)
+	const wrapped = wrapX(x);
+	return chunks.get(chunkIndex(wrapped, y))?.owners[
+		(y % CHUNK) * CHUNK + (wrapped % CHUNK)
 	];
 }
 
+// A world copy is WIDTH wide but chunk columns are CHUNK wide; the last column
+// is partial, so the wrapped columns come from world copies rather than a
+// modulo of the chunk column. Straddling the seam can need columns from both
+// ends at once.
 function visibleChunks() {
 	const visible = new Set<number>();
-	const left = Math.max(
-		0,
-		Math.floor((camera.x - width / scale / 2) / CHUNK) - 1,
-	);
-	const top = Math.max(
-		0,
-		Math.floor((camera.y - height / scale / 2) / CHUNK) - 1,
-	);
-	const right = Math.min(
-		COLUMNS - 1,
-		Math.floor((camera.x + width / scale / 2) / CHUNK) + 1,
-	);
+	const halfWidth = width / scale / 2;
+	const halfHeight = height / scale / 2;
+	const top = Math.max(0, Math.floor((camera.y - halfHeight) / CHUNK) - 1);
 	const bottom = Math.min(
 		Math.ceil(HEIGHT / CHUNK) - 1,
-		Math.floor((camera.y + height / scale / 2) / CHUNK) + 1,
+		Math.floor((camera.y + halfHeight) / CHUNK) + 1,
 	);
-	for (let y = top; y <= bottom; y++)
-		for (let x = left; x <= right; x++) visible.add(y * COLUMNS + x);
+	const xMin = camera.x - halfWidth,
+		xMax = camera.x + halfWidth;
+	for (let k = Math.floor(xMin / WIDTH); k <= Math.floor(xMax / WIDTH); k++) {
+		const start = Math.max(0, xMin - k * WIDTH),
+			end = Math.min(WIDTH, xMax - k * WIDTH);
+		if (start >= end) continue;
+		const first = Math.floor(start / CHUNK);
+		const last = Math.min(COLUMNS - 1, Math.ceil(end / CHUNK) - 1);
+		for (let col = first; col <= last; col++)
+			for (let y = top; y <= bottom; y++) visible.add(y * COLUMNS + col);
+	}
 	return visible;
 }
 
@@ -588,18 +594,38 @@ function draw(now: number) {
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
 	const left = width / 2 - camera.x * zoom;
 	const top = height / 2 - camera.y * zoom;
+	const xMin = camera.x - width / zoom / 2,
+		xMax = camera.x + width / zoom / 2;
 	ctx.fillStyle = "#0d1822";
 	ctx.fillRect(0, 0, width, height);
-	ctx.drawImage(base, left, top, WIDTH * zoom, HEIGHT * zoom);
+	// The world repeats every WIDTH: draw each visible copy so the map pans
+	// forever and the seam stays seamless.
+	const firstCopy = Math.floor(xMin / WIDTH),
+		lastCopy = Math.floor(xMax / WIDTH);
+	for (let k = firstCopy; k <= lastCopy; k++)
+		ctx.drawImage(
+			base,
+			left + k * WIDTH * zoom,
+			top,
+			WIDTH * zoom,
+			HEIGHT * zoom,
+		);
 	const dots = new Map<string, Dot>();
 	for (const [index, chunk] of chunks) {
-		ctx.drawImage(
-			chunk.image,
-			left + (index % COLUMNS) * CHUNK * zoom,
-			top + Math.floor(index / COLUMNS) * CHUNK * zoom,
-			CHUNK * zoom,
-			CHUNK * zoom,
-		);
+		const chunkX = (index % COLUMNS) * CHUNK,
+			chunkY = Math.floor(index / COLUMNS) * CHUNK;
+		for (
+			let k = Math.floor((xMin - chunkX) / WIDTH);
+			k <= Math.floor((xMax - chunkX) / WIDTH);
+			k++
+		)
+			ctx.drawImage(
+				chunk.image,
+				left + (chunkX + k * WIDTH) * zoom,
+				top + chunkY * zoom,
+				CHUNK * zoom,
+				CHUNK * zoom,
+			);
 		for (const dot of chunk.dots) dots.set(dot.player_id, dot);
 	}
 	// Draw yourself last so nearby dots and names do not cover your marker.
@@ -616,7 +642,9 @@ function draw(now: number) {
 		const isBot = meta?.is_bot ?? false;
 		const display =
 			key === myId && position ? { x: position.x, y: position.y } : dot;
-		const x = left + (display.x + 0.5) * zoom,
+		// Draw the dot in whichever world copy is nearest the camera.
+		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+		const x = left + (dotX + 0.5) * zoom,
 			y = top + (display.y + 0.5) * zoom;
 		ctx.beginPath();
 		const radius = Math.max(3, zoom * 0.48);

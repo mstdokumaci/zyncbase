@@ -1,4 +1,11 @@
-import { type Direction, type Dot, HEIGHT, RULES, WIDTH } from "./shared";
+import {
+	type Direction,
+	type Dot,
+	HEIGHT,
+	RULES,
+	WIDTH,
+	wrapX,
+} from "./shared";
 
 const steps = {
 	idle: [0, 0],
@@ -14,6 +21,10 @@ export type MotionDot = Dot & { country_id: number };
 
 export class LocalMotion {
 	private offset = { x: 0, y: 0 };
+	// Whole-world copies of the current dot. The rendered position is unrolled
+	// (e.g. 2000 is canonical 0), so crossing the seam is a normal step and the
+	// camera keeps panning right instead of snapping back.
+	private shift = 0;
 	private duration: number;
 
 	constructor(
@@ -27,8 +38,10 @@ export class LocalMotion {
 	}
 
 	update(dot: MotionDot, direction: Direction, now: number) {
-		const distance =
-			Math.abs(dot.x - this.dot.x) + Math.abs(dot.y - this.dot.y);
+		// Wrap-aware delta: 1999 -> 0 is one step right, not a relocation.
+		let dx = dot.x - this.dot.x;
+		dx -= WIDTH * Math.round(dx / WIDTH);
+		const distance = Math.abs(dx) + Math.abs(dot.y - this.dot.y);
 		const relocated =
 			dot.player_id !== this.dot.player_id ||
 			dot.country_id !== this.dot.country_id;
@@ -37,11 +50,14 @@ export class LocalMotion {
 			if (this.duration === this.stepDuration()) return;
 		}
 		const position = this.position(now);
-		// Respawns and large corrections should not pan across the map.
+		// Keep the unrolled copy nearest the displayed point; respawns and large
+		// corrections still snap rather than pan.
+		this.shift +=
+			WIDTH * Math.round((position.x - (dot.x + this.shift)) / WIDTH);
 		this.offset =
 			relocated || distance > 2
 				? { x: 0, y: 0 }
-				: { x: position.x - dot.x, y: position.y - dot.y };
+				: { x: position.x - dot.x - this.shift, y: position.y - dot.y };
 		this.dot = dot;
 		this.direction = direction;
 		this.started = now;
@@ -55,7 +71,7 @@ export class LocalMotion {
 		const correction = Math.max(0, 1 - elapsed / Math.min(100, this.duration));
 		const [dx, dy] = steps[this.direction];
 		return {
-			x: this.dot.x + dx * progress + this.offset.x * correction,
+			x: this.dot.x + this.shift + dx * progress + this.offset.x * correction,
 			y: this.dot.y + dy * progress + this.offset.y * correction,
 		};
 	}
@@ -63,10 +79,9 @@ export class LocalMotion {
 	private stepDuration() {
 		if (this.direction === "idle") return Number.POSITIVE_INFINITY;
 		const [dx, dy] = steps[this.direction];
-		const x = this.dot.x + dx,
-			y = this.dot.y + dy;
-		if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT)
-			return Number.POSITIVE_INFINITY;
+		const y = this.dot.y + dy;
+		if (y < 0 || y >= HEIGHT) return Number.POSITIVE_INFINITY;
+		const x = wrapX(this.dot.x + dx);
 		const owner = this.ownerAt(x, y);
 		if (owner === undefined) return Number.POSITIVE_INFINITY;
 		const from = this.dot.y * WIDTH + this.dot.x,
