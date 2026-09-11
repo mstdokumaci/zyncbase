@@ -238,7 +238,9 @@ await writeFile(
 			allowLocalhost: true,
 			maxConnections: 2048,
 			maxMessagesPerSecond: 2000,
-			maxMessageSize: 1048576,
+			// 500-op slices of 2 KB owner rows plus bounded dots/roster rows
+			// stay under ~1.5 MB; keep headroom for the SDK's msgpack framing.
+			maxMessageSize: 4194304,
 		},
 	}),
 	{ mode: 0o600 },

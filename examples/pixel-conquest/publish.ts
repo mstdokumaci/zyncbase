@@ -2,7 +2,9 @@ import type { BatchOperation } from "@zyncbase/client";
 import { rowId } from "./shared";
 import type { World } from "./world";
 
-export const PUBLISH_BATCH_SIZE = 100;
+// 500 is both the SDK and server batch cap. With 2 KB owner rows plus at most
+// MAX_PLAYERS dots, a full slice stays well under the configured message cap.
+export const PUBLISH_BATCH_SIZE = 500;
 
 export type PublishSnapshot = {
 	chunks: number[];
@@ -94,11 +96,25 @@ export function buildPublishOperations(
 	];
 }
 
-/** Send operations in bounded slices so no message exceeds size limits. */
+/** Send every slice without waiting for earlier acknowledgements. The
+ * connection sends synchronously in order and the write worker commits FIFO,
+ * so removes still land before sets; all slices are awaited before returning. */
 export async function runPublishBatches(
 	batch: (operations: BatchOperation[]) => Promise<void>,
 	operations: BatchOperation[],
 ): Promise<void> {
+	const slices: BatchOperation[][] = [];
 	for (let i = 0; i < operations.length; i += PUBLISH_BATCH_SIZE)
-		await batch(operations.slice(i, i + PUBLISH_BATCH_SIZE));
+		slices.push(operations.slice(i, i + PUBLISH_BATCH_SIZE));
+	const results = await Promise.allSettled(
+		slices.map((slice) => {
+			try {
+				return batch(slice);
+			} catch (error) {
+				return Promise.reject(error);
+			}
+		}),
+	);
+	for (const result of results)
+		if (result.status === "rejected") throw result.reason;
 }

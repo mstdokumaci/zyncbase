@@ -559,3 +559,71 @@ sends `/ws` and `/auth/ticket` straight to ZyncBase, matching deployment;
 server. Validation for this iteration: `bun run lint`, `bunx biome check
 --write --error-on-warnings`, 53 unit tests and `test:game` (plaintext and
 IPv6/TLS) all pass.
+
+## Iteration: 2026-09-11, batch fan-in and pipelined publishes
+
+Baseline: `082d7b0` (pre-change HEAD), candidate: uncommitted publish changes
+on top. Same Intel Core i9-9880H, macOS x64, Bun 1.4.0. Only the game's publish
+path changes; `World.tick`, enclosure, bots, schema and SDK are untouched.
+
+At 1024 players the server wrote ~360 chunk rows per tick at ~2,200 bytes per
+row while the tick rate fell from 19.8 to 4.2 Hz. `runPublishBatches` awaited
+each 100-operation slice before sending the next (4-5 commit round trips per
+tick), and `server.log` recorded `lastCommitMs` of 184-276 ms against a 238 ms
+tick period.
+
+The candidate sends every slice without waiting for earlier acknowledgements:
+slices are mapped synchronously in order and all awaited with
+`Promise.allSettled`. The connection sends in order and the write worker
+commits FIFO, so removes still land before sets; every slice is dispatched and
+settled, so a rejected slice remains observable and fatal. `PUBLISH_BATCH_SIZE`
+rises 100 to 500 (the SDK and server cap), and `security.maxMessageSize` rises
+1 MB to 4 MB: a full slice is bounded by 500 x 2,048 bytes of owners plus at
+most `MAX_PLAYERS` dots, well under 2 MB.
+
+### Paired timing
+
+One complete adjacent pair (`p1-b` then `p1-c`), 128/256/512/1024 ramp, 30 s
+per stage. Fixed-work CPU probes averaged 169.98 ms (baseline) versus
+168.18 ms (candidate), a 1.1% machine-state edge to the candidate, and
+`CPU_Speed_Limit` stayed 100; neither can explain the 44-60% deltas. Three
+candidate runs (`p1-c`, `p2-c`, soak) landed at 1024 in 5.9/5.0/5.9 Hz and at
+512 in 14.4/11.3/15.5 Hz; the second pair was aborted when its browser was
+closed by the operator and is excluded.
+
+| Stage | Baseline Hz / commits / commit p50 | Candidate Hz / commits / commit p50 | Change |
+| --- | ---: | ---: | ---: |
+| 128 | 19.8 / 610 / 4.8 ms | 19.8 / 594 / 6.3 ms | 0% |
+| 256 | 19.0 / 666 / 13.5 ms | 19.2 / 575 / 16.5 ms | +1% |
+| 512 | 10.0 / 704 / 22.7 ms | 14.4 / 433 / 28.8 ms | +44% |
+| 1024 | 3.7 / 458 / 42.6 ms | 5.9 / 194 / 79.5 ms | +60% |
+
+Commits here are commit acknowledgements per 30 s stage. At 1024 the median
+operations per commit moved from 100 (the old cap) to 330, so per-commit p50
+rose while the number of transactions and the commit wall time per tick fell.
+This is a single adjacent pair plus consistent supporting runs, not the
+four-pair session the protocol called for; the co-located laptop still bounds
+absolute numbers.
+
+A dots-only partial-write split was evaluated first and rejected before
+implementation: play is claim-dominated, so nearly every move rewrites the
+destination chunk's 2 KB `owners` row anyway, and chunk-boundary crossings
+that could carry dots alone are only a few percent of dirty chunks.
+
+### Reproduction
+
+Snapshot the baseline before editing, then run alternating variants from the
+repo root so both resolve the shared Zig binary and `tests/e2e` paths:
+
+```sh
+cp -R examples/pixel-conquest test-artifacts/pc-baseline   # before editing
+# implement the publish changes, then:
+cp -R examples/pixel-conquest test-artifacts/pc-candidate
+bun test-artifacts/pc-baseline/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-b
+bun test-artifacts/pc-candidate/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-c
+```
+
+Validation: `bun test examples/pixel-conquest` (56 pass, including a new test
+asserting every slice is dispatched before the first settles; it fails against
+the serial implementation), `bun run test:game` (plaintext and IPv6/TLS),
+`bun run lint` and `bunx biome check --write --error-on-warnings` all pass.
