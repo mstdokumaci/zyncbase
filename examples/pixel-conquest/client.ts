@@ -56,6 +56,7 @@ let joining = false;
 let worldReady = false;
 let selectedCountryCode: number | undefined;
 let lobbyCountries: Country[] = [];
+let availableSlots = 0;
 let myId = "",
 	name = "",
 	nickname = "",
@@ -96,10 +97,12 @@ function updateCountryChoice() {
 }
 countryChoice.addEventListener("change", updateCountryChoice);
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one reconciliation pass must sync slots, rows, and the native picker.
 function showLobbyCountries(all: Country[]) {
 	const rows = all.filter((country) => !country.is_bot);
 	rows.sort((a, b) => a.name.localeCompare(b.name));
 	const slots = MAX_COUNTRIES - all.length;
+	availableSlots = slots;
 	// Keep the native picker intact during polling unless its options change.
 	if (
 		countryChoice.options.length === 1 ||
@@ -115,8 +118,17 @@ function showLobbyCountries(all: Country[]) {
 			create,
 		);
 		countryChoice.value = selected;
-		if (selected === "new" && !slots) countryChoice.value = "";
-		if (!rows.length) countryChoice.value = "new";
+		if (!rows.length && slots > 0) countryChoice.value = "new";
+	}
+	// Slots can change without the option list changing (bots come and go),
+	// so keep the create option and its selection in sync on every poll.
+	const createOption = countryChoice.options.item(
+		countryChoice.options.length - 1,
+	);
+	if (createOption?.value === "new") {
+		createOption.disabled = slots === 0;
+		if (createOption.disabled && countryChoice.value === "new")
+			countryChoice.value = "";
 	}
 	lobbyCountries = rows;
 	countryChoice.disabled = false;
@@ -475,7 +487,7 @@ element("join").addEventListener("submit", async (event) => {
 		);
 		selectedCountryCode = selected?.code;
 		if (countryChoice.value === "new") {
-			if (lobbyCountries.length >= MAX_COUNTRIES)
+			if (availableSlots === 0)
 				throw new Error(
 					"All country slots are taken. Join an existing country.",
 				);
