@@ -684,3 +684,87 @@ test("restore clears persisted dots and queues stale roster rows for removal", (
 		expect(readDots(dst.chunk(index).dots)).toEqual([]);
 	expect(dst.dirtyRemovedUsers).toEqual(new Set(["alice", "bot-0"]));
 });
+
+test("human spawns spread out instead of stacking on one chunk", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const country = world.country("Spread");
+	if (!country) throw new Error("Missing country");
+	for (let i = 0; i < 256; i++)
+		world.input(
+			`human:${i}`,
+			{
+				name: `Human ${i}`,
+				countryCode: country.code,
+				direction: "idle",
+				seq: 1,
+			},
+			0,
+		);
+	const perChunk = new Map<number, number>();
+	for (const player of world.players.values())
+		perChunk.set(
+			chunkIndex(player.x, player.y),
+			(perChunk.get(chunkIndex(player.x, player.y)) ?? 0) + 1,
+		);
+	// Stacking the crowd on the first player used to put every dot in one or
+	// two chunks, which overflowed the dots field once the chunk was full.
+	expect(perChunk.size).toBeGreaterThan(64);
+	expect(Math.max(...perChunk.values())).toBeLessThan(16);
+});
+
+test("human joiners reinforce their territory, teammates, or a region", () => {
+	const world = new World(terrain());
+	const country = world.country("Team");
+	if (!country) throw new Error("Missing country");
+	const join = (id: string, now = 0) =>
+		world.input(
+			id,
+			{
+				name: id,
+				countryCode: country.code,
+				direction: "idle",
+				seq: 1,
+			},
+			now,
+		);
+	join("founder");
+	const founder = world.players.get("founder");
+	if (!founder) throw new Error("Missing founder");
+	// No territory yet: the next joiner aims at the live teammate.
+	join("mate");
+	const mate = world.players.get("mate");
+	if (!mate) throw new Error("Missing mate");
+	expect(Math.hypot(mate.x - founder.x, mate.y - founder.y)).toBeLessThan(64);
+	// Give the country a patch of land: joiners must prefer it.
+	for (let dy = -16; dy <= 16; dy++)
+		for (let dx = -16; dx <= 16; dx++)
+			world.owners[(founder.y + dy) * WIDTH + founder.x + dx] = country.code;
+	country.count = 33 * 33;
+	(
+		world as unknown as {
+			bounds: Map<
+				number,
+				{ left: number; right: number; top: number; bottom: number }
+			>;
+		}
+	).bounds.set(country.code, {
+		left: founder.x - 16,
+		right: founder.x + 16,
+		top: founder.y - 16,
+		bottom: founder.y + 16,
+	});
+	join("reinforcement");
+	const reinforcement = world.players.get("reinforcement");
+	if (!reinforcement) throw new Error("Missing reinforcement");
+	expect(world.owners[reinforcement.y * WIDTH + reinforcement.x]).toBe(
+		country.code,
+	);
+	// Abandoned territory still pulls its country's next player home.
+	world.remove("founder", 0);
+	world.remove("mate", 0);
+	world.remove("reinforcement", 0);
+	join("returning", PLAYER_GRACE_MS * 10);
+	const returning = world.players.get("returning");
+	if (!returning) throw new Error("Missing returning player");
+	expect(world.owners[returning.y * WIDTH + returning.x]).toBe(country.code);
+});

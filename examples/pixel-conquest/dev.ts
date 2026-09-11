@@ -19,6 +19,10 @@ export async function startLocalEdge(options: {
 		hostname: options.ca ? "::1" : "127.0.0.1",
 		servername: "localhost",
 		ca: options.ca,
+		// A fresh socket per proxy request. A pooled keep-alive socket the
+		// upstream closed on its idle timeout races the next request and
+		// surfaces as a spurious 502 on /session or /health.
+		agent: false,
 	};
 	const assets = new Map([
 		["/", ["index.html", "text/html"]],
@@ -49,14 +53,15 @@ export async function startLocalEdge(options: {
 				port: path === "/auth/ticket" ? options.databasePort : options.authPort,
 				path: req.url,
 				method: req.method,
-				headers: req.headers,
+				headers: { ...req.headers, connection: "close" },
 			},
 			(response) => {
 				res.writeHead(response.statusCode ?? 502, response.headers);
 				response.pipe(res);
 			},
 		);
-		target.on("error", () => {
+		target.on("error", (error) => {
+			console.error(`Proxy error for ${path}:`, error);
 			if (!res.headersSent) res.writeHead(502);
 			res.end();
 		});

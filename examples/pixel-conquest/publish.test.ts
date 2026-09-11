@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { BatchOperation } from "@zyncbase/client";
 import {
 	buildPublishOperations,
@@ -6,9 +7,50 @@ import {
 	restorePublishState,
 	runPublishBatches,
 } from "./publish";
-import { HEIGHT, WIDTH } from "./shared";
+import { HEIGHT, MAX_PLAYERS, WIDTH } from "./shared";
 import { World } from "./world";
 
+test("a chunk's dots cap can hold every player in one chunk", async () => {
+	const schema = (await Bun.file(
+		new URL("./schema.json", import.meta.url),
+	).json()) as {
+		store: { chunks: { fields: { dots: { maxLength: number } } } };
+	};
+	const cap = schema.store.chunks.fields.dots.maxLength;
+	// Worst case: MAX_PLAYERS dots in one 32x32 chunk, with identity at its
+	// longest plausible shape plus coordinates.
+	const dot = JSON.stringify({
+		player_id: "player:".padEnd(64, "0"),
+		x: 9999,
+		y: 9999,
+	});
+	assert.ok(
+		cap >= dot.length * MAX_PLAYERS,
+		`dots cap ${cap} < ${dot.length * MAX_PLAYERS} needed for ${MAX_PLAYERS} players in one chunk`,
+	);
+});
+
+test("a chunks-only drain holds roster rows back for the slower flush", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const code = world.country("Hold")?.code;
+	assert(code);
+	world.dirtyChunks.add(7);
+	const partial = drainPublishState(world, { rosters: false });
+	expect(partial.chunks).toEqual([7]);
+	expect(partial.countries).toEqual([]);
+	expect(partial.users).toEqual([]);
+	expect(world.dirtyChunks.size).toBe(0);
+	// Held entries keep their latest values until the roster flush drains them.
+	expect(world.dirtyCountries.has(code)).toBe(true);
+	const full = drainPublishState(world);
+	expect(full.countries).toEqual([code]);
+	expect(world.dirtyCountries.size).toBe(0);
+	expect(buildPublishOperations(world, full)).toContainEqual({
+		op: "set",
+		path: ["countries", String(code)],
+		value: { code, name: "Hold", color: "#ef4444", count: 0 },
+	});
+});
 test("a rejected batch restores every drained entry so retry resends all", async () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.input(

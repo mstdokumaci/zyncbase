@@ -393,9 +393,20 @@ try {
 		const roster = await rosterOf(observer.client);
 		return dots.every((dot) => roster.get(dot.player_id)?.is_bot === true);
 	}, "idle bot state committed");
-	const savedCountries = (await observer.client.store.query(
-		"countries",
-	)) as unknown as Country[];
+	// Country rows publish on a slower cadence than chunk writes, so a just-
+	// frozen world can still have a roster flush pending. Snapshot only once
+	// two reads across a flush interval agree, or the saved counts may lag the
+	// chunks and the restart comparison fails on a pixel that moved since.
+	const savedCountries = (await eventually(async () => {
+		const before = (await observer.client.store.query(
+			"countries",
+		)) as unknown as Country[];
+		await Bun.sleep(750);
+		const after = (await observer.client.store.query(
+			"countries",
+		)) as unknown as Country[];
+		return JSON.stringify(before) === JSON.stringify(after) ? after : undefined;
+	}, "roster settled")) as Country[];
 	assert.ok(savedCountries.some((country) => country.count > 0));
 	const savedChunks = await chunks(observer.client);
 	console.log("PASS: movement, stop, authorization, disconnected dot cleanup");

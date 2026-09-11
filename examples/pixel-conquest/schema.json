@@ -1,5 +1,5 @@
 {
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"store": {
 		"users": {
 			"fields": {
@@ -20,7 +20,7 @@
 			"required": ["owners", "dots"],
 			"fields": {
 				"owners": { "type": "bytes", "minLength": 2048, "maxLength": 2048 },
-				"dots": { "type": "bytes", "maxLength": 16384 }
+				"dots": { "type": "bytes", "maxLength": 131072 }
 			}
 		},
 		"countries": {

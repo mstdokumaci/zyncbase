@@ -17,6 +17,7 @@ import {
 import {
 	buildPublishOperations,
 	drainPublishState,
+	type PublishSnapshot,
 	restorePublishState,
 	runPublishBatches,
 } from "./publish";
@@ -69,6 +70,19 @@ let flushes = 0,
 	payloadBytes = 0,
 	commitMs = 0;
 let lastPublishedMark = 1;
+let tickCount = 0;
+// Scoreboard and roster rows dirty on nearly every tick under a crowd, but no
+// reader needs them at 20 Hz: flushing them at 2 Hz cuts their global fan-out
+// ~10x while chunks (movement) stay per-tick. Worst-case staleness is half a
+// second, inside the lobby poll (5 s) and grace (10 s) windows. Shorter than
+// 1 Hz keeps each accumulated flush to ~1 batch so the flush tick itself does
+// not become a periodic latency spike.
+const ROSTER_PUBLISH_EVERY_TICKS = 10;
+// Country rows whose write has landed. A held-back new country would let a
+// chunk commit owners for a row that does not exist yet, and restart restore
+// refuses unknown owner codes; creating a country therefore forces a roster
+// flush. Existing count updates stay throttled.
+const persistedCountries = new Set<number>();
 const connections = new Set<Duplex>();
 
 function token(role: "player" | "simulation") {
@@ -105,6 +119,9 @@ async function body(req: IncomingMessage) {
 // ponytail: shared session budget; add per-client quotas if one caller starves others.
 let logins = 0,
 	loginWindow = Date.now();
+// The public demo admits 120 sessions/minute. A load profile that needs a
+// 1024-client ramp can raise the budget instead of pacing for ten minutes.
+const sessionBudget = Number(process.env.GAME_SESSION_BUDGET ?? 120);
 // Latest reservation generation per country code; stale timers no-op.
 const countryLeases = new Map<number, number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
@@ -128,7 +145,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				logins = 0;
 				loginWindow = Date.now();
 			}
-			if (++logins > 120)
+			if (++logins > sessionBudget)
 				return reply(res, 429, {
 					error: "Please wait a minute before trying again",
 				});
@@ -256,9 +273,31 @@ function allocatorOp(): BatchOperation[] {
 	];
 }
 
-async function publish() {
-	const snapshot = drainPublishState(world);
-	const operations = buildPublishOperations(world, snapshot, allocatorOp());
+/** Roster rows are throttled; a brand-new country forces a flush so its chunk
+ * writes never reference a row that has not landed yet. */
+function shouldPublishRosters(force: boolean) {
+	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
+	for (const code of world.dirtyCountries)
+		if (!persistedCountries.has(code)) return true;
+	return false;
+}
+
+/** Roster rows whose write has landed; also advances the allocator mark. */
+function recordRosterCommit(snapshot: PublishSnapshot) {
+	for (const code of snapshot.countries) persistedCountries.add(code);
+	for (const code of snapshot.removed) persistedCountries.delete(code);
+	lastPublishedMark = world.allocatorMark;
+}
+
+async function publish(forceRosters = false) {
+	tickCount++;
+	const rosters = shouldPublishRosters(forceRosters);
+	const snapshot = drainPublishState(world, { rosters });
+	const operations = buildPublishOperations(
+		world,
+		snapshot,
+		rosters ? allocatorOp() : [],
+	);
 	if (!operations.length) return;
 	// A rejected batch restores every drained entry, so a retry resends all
 	// uncommitted operations instead of silently dropping them.
@@ -272,7 +311,9 @@ async function publish() {
 		restorePublishState(world, snapshot);
 		throw error;
 	}
-	lastPublishedMark = world.allocatorMark;
+	// The allocator mark rides with the country removes (see allocatorOp), so
+	// it only advances on roster flushes.
+	if (rosters) recordRosterCommit(snapshot);
 	commitMs = performance.now() - started;
 	flushes++;
 	for (const op of operations) {
@@ -301,7 +342,8 @@ async function stop(code = 0) {
 			await inFlight;
 			for (const id of world.players.keys())
 				world.remove(id, performance.now());
-			await publish();
+			// Final save must flush held-back roster rows too.
+			await publish(true);
 		}
 	} catch (error) {
 		console.error("Uncommitted updates were not saved:", error);
@@ -371,9 +413,13 @@ try {
 			});
 		console.log("World reset.");
 	} else world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+	// Rows surviving the restart are already committed; only later creations
+	// need the force-flush above.
+	for (const code of world.countries.keys()) persistedCountries.add(code);
 	world.startBots(performance.now());
 	// A restart can need more reconciliation than one normal movement batch.
-	await publish();
+	// Force the roster flush: startup reconciliation must be complete, not throttled.
+	await publish(true);
 	client.on("error", failed);
 	client.on("disconnected", () => {
 		if (!stopping) failed("Database disconnected");

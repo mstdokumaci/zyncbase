@@ -13,19 +13,28 @@ export type PublishSnapshot = {
 };
 
 /** Snapshot the world's dirty sets and clear them for the next tick. */
-export function drainPublishState(world: World): PublishSnapshot {
+export function drainPublishState(
+	world: World,
+	opts?: { rosters?: boolean },
+): PublishSnapshot {
+	// Roster rows (countries/users) can be held back for a slower flush while
+	// chunks stay per-tick: the sets dedupe, so held entries simply publish
+	// later with their latest values.
+	const rosters = opts?.rosters ?? true;
 	const snapshot = {
 		chunks: [...world.dirtyChunks],
-		countries: [...world.dirtyCountries],
-		removed: [...world.dirtyRemovedCountries],
-		users: [...world.dirtyUsers],
-		removedUsers: [...world.dirtyRemovedUsers],
+		countries: rosters ? [...world.dirtyCountries] : [],
+		removed: rosters ? [...world.dirtyRemovedCountries] : [],
+		users: rosters ? [...world.dirtyUsers] : [],
+		removedUsers: rosters ? [...world.dirtyRemovedUsers] : [],
 	};
 	world.dirtyChunks.clear();
-	world.dirtyCountries.clear();
-	world.dirtyRemovedCountries.clear();
-	world.dirtyUsers.clear();
-	world.dirtyRemovedUsers.clear();
+	if (rosters) {
+		world.dirtyCountries.clear();
+		world.dirtyRemovedCountries.clear();
+		world.dirtyUsers.clear();
+		world.dirtyRemovedUsers.clear();
+	}
 	return snapshot;
 }
 
