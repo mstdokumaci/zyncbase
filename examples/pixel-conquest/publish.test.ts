@@ -4,6 +4,7 @@ import type { BatchOperation } from "@zyncbase/client";
 import {
 	buildPublishOperations,
 	drainPublishState,
+	PUBLISH_BATCH_SIZE,
 	restorePublishState,
 	runPublishBatches,
 } from "./publish";
@@ -80,8 +81,8 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(world.dirtyUsers.has("keeper")).toBe(true);
 	expect(world.dirtyUsers.has("ghost")).toBe(true);
 	expect(world.dirtyRemovedUsers.size).toBe(0);
-	// More than one 100-operation batch of chunk writes.
-	for (let i = 0; i < 120; i++) world.dirtyChunks.add(i);
+	// More than one 500-operation batch of chunk writes.
+	for (let i = 0; i < 520; i++) world.dirtyChunks.add(i);
 	const snapshot = drainPublishState(world);
 	expect(world.dirtyChunks.size).toBe(0);
 	expect(world.dirtyCountries.size).toBe(0);
@@ -141,4 +142,29 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(world.dirtyRemovedCountries.size).toBe(0);
 	expect(world.dirtyUsers.size).toBe(0);
 	expect(world.dirtyRemovedUsers.size).toBe(0);
+});
+
+test("every slice is dispatched before the first one settles", async () => {
+	const operations: BatchOperation[] = Array.from(
+		{ length: PUBLISH_BATCH_SIZE + 1 },
+		(_, i) => ({
+			op: "set" as const,
+			path: ["chunks", String(i)],
+			value: { owners: new Uint8Array(2), dots: new Uint8Array(0) },
+		}),
+	);
+	const started: number[] = [];
+	let release: (() => void) | undefined;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const pending = runPublishBatches(async (slice) => {
+		started.push(slice.length);
+		if (started.length === 1) await gate;
+	}, operations);
+	// Slices are mapped synchronously, so the second is in flight while the
+	// first is still blocked; a serial implementation would only see the first.
+	expect(started).toEqual([PUBLISH_BATCH_SIZE, 1]);
+	release?.();
+	await pending;
 });
