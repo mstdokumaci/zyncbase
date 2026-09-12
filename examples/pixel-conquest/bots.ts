@@ -20,23 +20,44 @@ function approach(from: number, to: number, horizontalFirst: boolean) {
 	return cells;
 }
 
-function sweep(left: number, top: number) {
-	const cells: number[] = [];
-	for (let y = 0; y < SIDE; y++)
-		for (let x = 0; x < SIDE; x++)
-			cells.push((top + y) * WIDTH + left + (y % 2 ? SIDE - 1 - x : x));
+const AREA_CELLS = SIDE * SIDE;
+const EDGE_CELLS = SIDE * 4 - 4;
+const areaScratch: number[] = new Array(AREA_CELLS);
+const edgeScratch: number[] = new Array(EDGE_CELLS);
+function fillPerimeter(cells: number[], left: number, top: number) {
+	let i = 0;
+	for (let x = 0; x < SIDE; x++) cells[i++] = top * WIDTH + left + x;
+	for (let y = 1; y < SIDE; y++)
+		cells[i++] = (top + y) * WIDTH + left + SIDE - 1;
+	for (let x = SIDE - 2; x >= 0; x--)
+		cells[i++] = (top + SIDE - 1) * WIDTH + left + x;
+	for (let y = SIDE - 2; y > 0; y--) cells[i++] = (top + y) * WIDTH + left;
 	return cells;
 }
 
-function perimeter(left: number, top: number) {
-	const cells: number[] = [];
-	for (let x = 0; x < SIDE; x++) cells.push(top * WIDTH + left + x);
-	for (let y = 1; y < SIDE; y++)
-		cells.push((top + y) * WIDTH + left + SIDE - 1);
-	for (let x = SIDE - 2; x >= 0; x--)
-		cells.push((top + SIDE - 1) * WIDTH + left + x);
-	for (let y = SIDE - 2; y > 0; y--) cells.push((top + y) * WIDTH + left);
-	return cells;
+function segmentAllLand(
+	world: World,
+	start: number,
+	step: number,
+	count: number,
+) {
+	for (let i = 0, cell = start; i < count; i++, cell += step)
+		if (!world.land[cell]) return false;
+	return true;
+}
+
+function isAllLand(world: World, left: number, top: number) {
+	return (
+		segmentAllLand(world, top * WIDTH + left, 1, SIDE) &&
+		segmentAllLand(
+			world,
+			(top + 1) * WIDTH + left + SIDE - 1,
+			WIDTH,
+			SIDE - 1,
+		) &&
+		segmentAllLand(world, (top + SIDE - 1) * WIDTH + left, 1, SIDE) &&
+		segmentAllLand(world, (top + 1) * WIDTH + left, WIDTH, SIDE - 1)
+	);
 }
 
 // Scores the same cell sequence planBot used to build (approach, sweep,
@@ -141,7 +162,8 @@ export function planBot(
 			.map((other) => other.plan?.patch),
 	);
 	const from = bot.y * WIDTH + bot.x;
-	let best = 0;
+	let bestGain = 0;
+	let bestCost = 1;
 	let bestPatch = 0,
 		bestRoute: number[] | undefined,
 		bestReverse = false,
@@ -160,39 +182,45 @@ export function planBot(
 				reserved.has(patch)
 			)
 				continue;
-			const area = sweep(left, top);
-			const gain = area.reduce(
-				(sum, cell) =>
-					sum +
-					(!world.land[cell] || world.owners[cell] === bot.country_id
-						? 0
-						: world.owners[cell] === rival
-							? 2
-							: 1),
-				0,
-			);
+			let gain = 0;
+			let i = 0;
+			for (let y = 0; y < SIDE; y++) {
+				for (let x = 0; x < SIDE; x++) {
+					const cell = (top + y) * WIDTH + left + (y % 2 ? SIDE - 1 - x : x);
+					areaScratch[i++] = cell;
+					if (!world.land[cell] || world.owners[cell] === bot.country_id)
+						continue;
+					gain += world.owners[cell] === rival ? 2 : 1;
+				}
+			}
 			if (!gain) continue;
-			const edge = perimeter(left, top);
-			const loop = edge.every((cell) => world.land[cell]);
-			const route = loop ? edge : area;
+			const loop = isAllLand(world, left, top);
+			const route = loop ? fillPerimeter(edgeScratch, left, top) : areaScratch;
 			for (const reverse of [false, true]) {
+				const entry = reverse ? (route.at(-1) as number) : route[0];
+				const lowerBound =
+					Math.abs((entry % WIDTH) - bot.x) +
+					Math.abs(Math.floor(entry / WIDTH) - bot.y) +
+					route.length -
+					1 +
+					(loop ? 1 : 0);
 				for (const horizontalFirst of [true, false]) {
-					const score =
-						gain /
-						scoreCells(
-							world,
-							bot.country_id,
-							from,
-							route,
-							reverse,
-							horizontalFirst,
-							loop,
-							new Set<number>(),
-						);
-					if (score > best) {
-						best = score;
+					if (bestGain && gain * bestCost <= bestGain * lowerBound) continue;
+					const cost = scoreCells(
+						world,
+						bot.country_id,
+						from,
+						route,
+						reverse,
+						horizontalFirst,
+						loop,
+						new Set<number>(),
+					);
+					if (gain * bestCost > bestGain * cost) {
+						bestGain = gain;
+						bestCost = cost;
 						bestPatch = patch;
-						bestRoute = route;
+						bestRoute = route.slice();
 						bestReverse = reverse;
 						bestHorizontalFirst = horizontalFirst;
 						bestLoop = loop;
