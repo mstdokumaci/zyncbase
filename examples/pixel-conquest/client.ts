@@ -634,11 +634,16 @@ element("join").addEventListener("submit", async (event) => {
 		client.on("error", (error) => {
 			connection.textContent = `Connection issue: ${String(error)}`;
 		});
-		client.on("disconnected", () => {
+		// A transient drop only emits "reconnecting" (the SDK resumes on its
+		// own), but input, presence, and subscription setup must stop until
+		// "connected": a listen issued while down is dropped, not queued.
+		const offline = () => {
 			online = false;
 			release();
 			connection.textContent = "Disconnected · Reconnecting…";
-		});
+		};
+		client.on("disconnected", offline);
+		client.on("reconnecting", offline);
 		client.on("connected", () => {
 			if (playing) {
 				online = true;

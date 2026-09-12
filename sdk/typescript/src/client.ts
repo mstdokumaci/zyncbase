@@ -155,7 +155,7 @@ export class ZyncBaseClient {
 
 		this.tracker.reconnect(oldToNew, () => {
 			for (const [newSubId, snapshot] of replaySnapshots) {
-				this._repopulateMaterializedView(newSubId, snapshot);
+				this._repopulateSubscription(newSubId, snapshot);
 			}
 		});
 	}
@@ -189,12 +189,14 @@ export class ZyncBaseClient {
 		}
 	}
 
-	private _repopulateMaterializedView(
+	// Replayed snapshots must reach every subscription kind: collection views
+	// rebuild their materialized view, document listens re-emit the record.
+	private _repopulateSubscription(
 		newSubId: number,
 		snapshot: { collection: string; value: JsonValue[] },
 	): void {
 		const entry = this.tracker.get(newSubId);
-		if (!entry?.materializedView) return;
+		if (!entry) return;
 
 		this.tracker.dispatchInitialSnapshot(
 			newSubId,
