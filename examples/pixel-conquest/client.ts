@@ -72,6 +72,9 @@ let width = innerWidth,
 	height = innerHeight;
 let lastOwnDot = 0;
 let locating = false;
+// Bumped when a session ends so in-flight locate() failures cannot write
+// status text into the lobby that started after them.
+let sessionGeneration = 0;
 // Dirty-frame rendering: the scene repaints only when something it draws
 // changes. Presence heartbeat runs on its own timer, not as a frame side
 // effect, so it survives idle frames.
@@ -484,6 +487,7 @@ element("zoom-in").addEventListener("click", () => zoom(2));
 element("zoom-out").addEventListener("click", () => zoom(-2));
 
 function returnToLobby(message: string) {
+	sessionGeneration++;
 	clearTimeout(admissionTimer);
 	clearInterval(heartbeat);
 	heartbeat = undefined;
@@ -520,6 +524,7 @@ function checkAdmission() {
 async function locate() {
 	if (!client || !online || locating || performance.now() - lastOwnDot < 1500)
 		return;
+	const generation = sessionGeneration;
 	locating = true;
 	try {
 		// O(1) self-locate: our own roster row names our chunk (spawn cell on
@@ -542,7 +547,8 @@ async function locate() {
 			updateSubscriptions();
 		}
 	} catch (error) {
-		connection.textContent = `Connection interrupted: ${String(error)}`;
+		if (generation === sessionGeneration)
+			connection.textContent = `Connection interrupted: ${String(error)}`;
 	} finally {
 		locating = false;
 	}
