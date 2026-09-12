@@ -2,7 +2,7 @@ import { HEIGHT, WIDTH } from "./shared";
 import type { World } from "./world";
 
 export type BotPlan = { patch: number; cells: number[] };
-const SIDE = 6;
+const SIDE = 9;
 
 function approach(from: number, to: number, horizontalFirst: boolean) {
 	const cells: number[] = [];

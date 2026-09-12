@@ -24,10 +24,10 @@ function walk(from: number, to: number, horizontalFirst: boolean) {
 test("bot scoring matches executed routes, including revisits, coastal returns and ties", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const stepCost = world.stepCost.bind(world);
-	for (const patch of [0, 60 * WIDTH + 60, (HEIGHT - 10) * WIDTH + WIDTH - 8]) {
-		const area = Array.from({ length: 36 }, (_, i) => {
-			const row = Math.floor(i / 6);
-			return patch + row * WIDTH + (row % 2 ? 5 - (i % 6) : i % 6);
+	for (const patch of [0, 54 * WIDTH + 54, 981 * WIDTH + 1980]) {
+		const area = Array.from({ length: 81 }, (_, i) => {
+			const row = Math.floor(i / 9);
+			return patch + row * WIDTH + (row % 2 ? 8 - (i % 9) : i % 9);
 		});
 		const edge = [
 			0,
@@ -36,15 +36,27 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 			3,
 			4,
 			5,
-			WIDTH + 5,
-			2 * WIDTH + 5,
-			3 * WIDTH + 5,
-			4 * WIDTH + 5,
-			5 * WIDTH + 5,
-			5 * WIDTH + 4,
-			5 * WIDTH + 3,
-			5 * WIDTH + 2,
-			5 * WIDTH + 1,
+			6,
+			7,
+			8,
+			WIDTH + 8,
+			2 * WIDTH + 8,
+			3 * WIDTH + 8,
+			4 * WIDTH + 8,
+			5 * WIDTH + 8,
+			6 * WIDTH + 8,
+			7 * WIDTH + 8,
+			8 * WIDTH + 8,
+			8 * WIDTH + 7,
+			8 * WIDTH + 6,
+			8 * WIDTH + 5,
+			8 * WIDTH + 4,
+			8 * WIDTH + 3,
+			8 * WIDTH + 2,
+			8 * WIDTH + 1,
+			8 * WIDTH,
+			7 * WIDTH,
+			6 * WIDTH,
 			5 * WIDTH,
 			4 * WIDTH,
 			3 * WIDTH,
@@ -61,7 +73,7 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 				route[0],
 				route[route.length - 1],
 				patch + 2 * WIDTH + 2,
-				patch + 7 * WIDTH + 7,
+				patch + 13 * WIDTH + 13,
 			]) {
 				const bot = {
 					id: "bot",
