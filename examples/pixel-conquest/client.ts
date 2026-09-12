@@ -500,6 +500,9 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(
 		);
 		movement();
 	});
+	button.addEventListener("touchstart", (event) => event.preventDefault(), {
+		passive: false,
+	});
 	for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
 		button.addEventListener(type, (event) => {
 			held.delete(`pointer:${(event as PointerEvent).pointerId}`);
