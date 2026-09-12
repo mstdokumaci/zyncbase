@@ -24,6 +24,9 @@ select {
 button,
 a {
 	-webkit-tap-highlight-color: transparent;
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
 }
 button {
 	cursor: pointer;
@@ -382,7 +385,6 @@ kbd {
 	width: 42px;
 	height: 42px;
 	touch-action: none;
-	user-select: none;
 }
 .direction-pad button:first-child {
 	grid-column: 2;
