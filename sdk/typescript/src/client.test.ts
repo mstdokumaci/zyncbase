@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { decode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
+import { packDocId, unpackDocId } from "./doc_id";
 import {
 	encodeToBuffer,
 	installMockFetchTicket,
@@ -9,7 +11,7 @@ import {
 	triggerNamespaceOk,
 	triggerSchemaSync,
 } from "./test-helpers";
-import type { ClientOptions } from "./types";
+import type { ClientOptions, JsonValue } from "./types";
 
 let mockWs: MockWebSocket;
 const OriginalWebSocket = globalThis.WebSocket;
@@ -101,6 +103,73 @@ describe("ZyncBaseClient", () => {
 		triggerSchemaSync(mockWs);
 		await p;
 		expect(events).toContain("connected");
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("subscription replay re-delivers document listen snapshots", async () => {
+		const userId = "019c1e50-7d11-7000-8000-000000000001";
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const values: JsonValue[] = [];
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const unlisten = client.store.listen(["users", userId], (value) =>
+			values.push(value),
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		const initial = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(values).toEqual([]);
+
+		// A namespace switch re-runs the replay path without dropping the socket.
+		const switching = client.setStoreNamespace("other");
+		await new Promise((r) => setTimeout(r, 0));
+		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: namespace.id }));
+		await new Promise((r) => setTimeout(r, 0));
+
+		const replay = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			conditions?: unknown;
+		};
+		const condition = (replay.conditions as [number, number, Uint8Array][])[0];
+		expect(condition[0]).toBe(0);
+		expect(condition[1]).toBe(0);
+		expect(unpackDocId(condition[2])).toBe(userId);
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: replay.id,
+				subId: 11,
+				value: [[packDocId(userId), 1, "Ada", 0, 0]],
+			}),
+		);
+		await switching;
+
+		// The remapped document listen receives its snapshot again.
+		expect(values).toEqual([
+			{
+				id: userId,
+				namespace_id: 1,
+				name: "Ada",
+				created_at: 0,
+				updated_at: 0,
+			},
+		]);
+		unlisten();
 		client.disconnect();
 		restoreWebSocket();
 	});

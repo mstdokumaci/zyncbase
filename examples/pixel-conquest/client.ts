@@ -65,6 +65,9 @@ let myId = "",
 	seq = 0,
 	lastChangeAt = 0;
 let direction: Direction = "idle";
+// Heading used to choose the prefetch edge. Kept after release so stopping
+// does not drop the leading margin and churn subscriptions on the next move.
+let prefetchDirection: Direction = "idle";
 let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
 let scale = 8;
@@ -81,11 +84,14 @@ let sessionGeneration = 0;
 let dirty = true;
 let drawnX = Number.NaN;
 let drawnY = Number.NaN;
-let lastSubCell = "";
+let lastSubBounds = "";
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
+// A chunk subscription costs a listen round trip, so keep one extra chunk on
+// the leading edge of travel; idle needs no margin.
+const PREFETCH_CHUNKS = 1;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
 const TAGLINE = "A shared world. One pixel at a time.";
@@ -292,15 +298,12 @@ function ownerAt(x: number, y: number) {
 // ends at once.
 function visibleChunks() {
 	const visible = new Set<number>();
-	const halfWidth = width / scale / 2;
-	const halfHeight = height / scale / 2;
-	const top = Math.max(0, Math.floor((camera.y - halfHeight) / CHUNK) - 1);
+	const { xMin, xMax, yMin, yMax } = subscriptionBounds();
+	const top = Math.max(0, Math.floor(yMin / CHUNK));
 	const bottom = Math.min(
 		Math.ceil(HEIGHT / CHUNK) - 1,
-		Math.floor((camera.y + halfHeight) / CHUNK) + 1,
+		Math.floor(yMax / CHUNK),
 	);
-	const xMin = camera.x - halfWidth,
-		xMax = camera.x + halfWidth;
 	for (let k = Math.floor(xMin / WIDTH); k <= Math.floor(xMax / WIDTH); k++) {
 		const start = Math.max(0, xMin - k * WIDTH),
 			end = Math.min(WIDTH, xMax - k * WIDTH);
@@ -313,8 +316,34 @@ function visibleChunks() {
 	return visible;
 }
 
+// Extend the view one chunk in the direction of travel so a tile is subscribed
+// (and its first row delivered) before its pixels reach the viewport edge. The
+// heading persists while idle so a stop keeps the margin it already paid for.
+function subscriptionBounds() {
+	const halfWidth = width / scale / 2;
+	const halfHeight = height / scale / 2;
+	const margin = PREFETCH_CHUNKS * CHUNK;
+	const heading = direction === "idle" ? prefetchDirection : direction;
+	return {
+		xMin: camera.x - halfWidth - (heading === "left" ? margin : 0),
+		xMax: camera.x + halfWidth + (heading === "right" ? margin : 0),
+		yMin: camera.y - halfHeight - (heading === "up" ? margin : 0),
+		yMax: camera.y + halfHeight + (heading === "down" ? margin : 0),
+	};
+}
+
+function subscriptionKey() {
+	const { xMin, xMax, yMin, yMax } = subscriptionBounds();
+	return `${Math.floor(xMin / CHUNK)},${Math.floor(xMax / CHUNK)},${Math.floor(yMin / CHUNK)},${Math.floor(yMax / CHUNK)}`;
+}
+
 function updateSubscriptions() {
-	if (!client || !playing) return;
+	// The SDK does not retry a listen issued while the transport is down, and a
+	// failed handle would pin its chunk index forever. Record the served bounds
+	// only when a set is served, or an offline key would suppress the first
+	// refresh after reconnect.
+	if (!client || !playing || !online) return;
+	lastSubBounds = subscriptionKey();
 	const visible = visibleChunks();
 	for (const [index, unsub] of subscriptions) {
 		if (visible.has(index)) continue;
@@ -339,12 +368,10 @@ function updateSubscriptions() {
 	}
 }
 
-// Recompute visible tiles only when the camera crosses a chunk cell: chunk
+// Recompute tiles only when the prefetched bounds cross a chunk edge: chunk
 // updates arrive at tick rate and must not rescan subscriptions each time.
 function maybeUpdateSubscriptions() {
-	const cell = `${Math.floor(camera.x / CHUNK)},${Math.floor(camera.y / CHUNK)}`;
-	if (cell === lastSubCell) return;
-	lastSubCell = cell;
+	if (subscriptionKey() === lastSubBounds) return;
 	updateSubscriptions();
 }
 
@@ -417,7 +444,9 @@ function movement() {
 	const next = [...held.values()].at(-1) ?? "idle";
 	if (next === direction) return;
 	direction = next;
+	if (next !== "idle") prefetchDirection = next;
 	publish(true);
+	updateSubscriptions();
 }
 
 function release() {
@@ -605,11 +634,16 @@ element("join").addEventListener("submit", async (event) => {
 		client.on("error", (error) => {
 			connection.textContent = `Connection issue: ${String(error)}`;
 		});
-		client.on("disconnected", () => {
+		// A transient drop only emits "reconnecting" (the SDK resumes on its
+		// own), but input, presence, and subscription setup must stop until
+		// "connected": a listen issued while down is dropped, not queued.
+		const offline = () => {
 			online = false;
 			release();
 			connection.textContent = "Disconnected · Reconnecting…";
-		});
+		};
+		client.on("disconnected", offline);
+		client.on("reconnecting", offline);
 		client.on("connected", () => {
 			if (playing) {
 				online = true;

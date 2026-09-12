@@ -202,6 +202,38 @@ describe("StoreImpl", () => {
 		expect(messages[1]).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
+	test("listen handle follows the subId remapped by reconnect replay", async () => {
+		const { store, tracker, messages } = makeStore([
+			{ type: "ok", id: 1, subId: 7 },
+		]);
+		const unlisten = store.listen("users.u1", () => {});
+		await flushPromises();
+		expect(tracker.get(7)).toBeDefined();
+
+		// Reconnect replay assigns a fresh server subId and remaps the tracker.
+		tracker.reconnect(new Map([[7, 11]]));
+		unlisten();
+
+		expect(tracker.get(11)).toBeUndefined();
+		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 11 });
+	});
+
+	test("subscribe handle follows the subId remapped by reconnect replay", async () => {
+		const { store, tracker, messages } = makeStore(
+			[{ type: "ok", id: 1, subId: 9, value: [] }],
+			await makeReadySchema(),
+		);
+		const handle = store.subscribe("users", {}, () => {});
+		await flushPromises();
+		expect(tracker.get(9)).toBeDefined();
+
+		tracker.reconnect(new Map([[9, 12]]));
+		handle.unsubscribe();
+
+		expect(tracker.get(12)).toBeUndefined();
+		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
+	});
+
 	test("subscribe registers collection view and loadMore dispatches cursor request", async () => {
 		const { store, messages, responseTableIndexes } = makeStore(
 			[
@@ -289,6 +321,63 @@ describe("StoreImpl", () => {
 		);
 		expect(handle.hasMore).toBe(true);
 		expect(snapshots).toEqual([[{ id: "u1", name: "Ada" }]]);
+	});
+
+	test("loadMore discards a page whose subscription was remapped mid-flight", async () => {
+		const { store, tracker, conn } = makeStore(
+			[
+				{
+					type: "ok",
+					id: 1,
+					subId: 9,
+					value: [{ id: "u1", name: "Ada" }],
+					hasMore: true,
+					nextCursor: "next",
+				},
+			],
+			await makeReadySchema(),
+		);
+		const handle = store.subscribe("users", {}, () => {});
+		await flushPromises();
+		await flushTimers();
+		expect(handle.hasMore).toBe(true);
+
+		// Hold the page response so the reconnect remap can land first.
+		let release!: (ok: OkResponse) => void;
+		const deferred = new Promise<OkResponse>((resolve) => {
+			release = resolve;
+		});
+		const dispatch = conn.dispatch.bind(conn);
+		let pendingMessage: OutboundRequest | undefined;
+		conn.dispatch = async (msg, responseTableIndex) => {
+			if (msg.type === "StoreLoadMore") {
+				pendingMessage = msg;
+				return deferred;
+			}
+			return dispatch(msg, responseTableIndex);
+		};
+
+		const loading = handle.loadMore();
+		await flushPromises();
+		expect(pendingMessage).toEqual({
+			type: "StoreLoadMore",
+			subId: 9,
+			nextCursor: "next",
+		});
+
+		// Reconnect replay remaps the subscription while the page is pending.
+		tracker.reconnect(new Map([[9, 12]]));
+		release({
+			type: "ok",
+			id: 2,
+			value: [{ id: "late", name: "Late" }],
+			hasMore: false,
+			nextCursor: null,
+		});
+		await loading;
+
+		expect(handle.hasMore).toBe(true);
+		expect(tracker.get(12)?.materializedView?.records.has("late")).toBe(false);
 	});
 
 	test("set with confirm committed returns a promise that resolves on WriteCommitted event", async () => {

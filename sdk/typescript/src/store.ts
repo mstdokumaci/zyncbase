@@ -175,6 +175,9 @@ export class StoreImpl {
 					command.message,
 					callback,
 					command.segments,
+					(newId) => {
+						state.subId = newId;
+					},
 				);
 				if (ok.value !== undefined) {
 					this.tracker.dispatchInitialSnapshot(
@@ -233,15 +236,15 @@ export class StoreImpl {
 						buildLoadMore(subId, nextCursor),
 						this.conn.schemaDictionary.getTableIndex(collection),
 					);
+					// A reconnect remap or unsubscribe while this page was in
+					// flight makes the response stale: it belongs to the old
+					// subscription and must not touch the new one.
+					if (state.closed || state.subId !== subId) return;
 					state.nextCursor = ok.nextCursor ?? null;
 					state.hasMore = ok.hasMore ?? false;
 					handle.hasMore = state.hasMore;
-					if (state.subId !== null && ok.value !== undefined) {
-						this.tracker.dispatchInitialSnapshot(
-							state.subId,
-							[collection],
-							ok.value,
-						);
+					if (ok.value !== undefined) {
+						this.tracker.dispatchInitialSnapshot(subId, [collection], ok.value);
 					}
 				})();
 				state.inFlight = promise;
@@ -306,7 +309,15 @@ export class StoreImpl {
 		handle.hasMore = state.hasMore;
 		if (state.subId === null) return;
 
-		this.tracker.registerCollection(state.subId, params, callback, comparator);
+		this.tracker.registerCollection(
+			state.subId,
+			params,
+			callback,
+			comparator,
+			(newId) => {
+				state.subId = newId;
+			},
+		);
 		if (ok.value !== undefined) {
 			this.tracker.dispatchInitialSnapshot(
 				state.subId,
