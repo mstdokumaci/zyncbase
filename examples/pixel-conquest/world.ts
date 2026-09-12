@@ -896,16 +896,17 @@ export class World {
 		const x = (index % COLUMNS) * CHUNK,
 			y = Math.floor(index / COLUMNS) * CHUNK;
 		const owners = new Uint8Array(CHUNK * CHUNK * 2);
-		const view = new DataView(owners.buffer);
-		for (let dy = 0; dy < CHUNK; dy++) {
-			for (let dx = 0; dx < CHUNK; dx++) {
-				const code =
-					x + dx < WIDTH && y + dy < HEIGHT
-						? this.owners[(y + dy) * WIDTH + x + dx]
-						: 0;
-				view.setUint16((dy * CHUNK + dx) * 2, code, true);
-			}
-		}
+		const view = new Uint16Array(owners.buffer);
+		const columns = Math.min(CHUNK, WIDTH - x),
+			rows = Math.min(CHUNK, HEIGHT - y);
+		for (let dy = 0; dy < rows; dy++)
+			view.set(
+				this.owners.subarray(
+					(y + dy) * WIDTH + x,
+					(y + dy) * WIDTH + x + columns,
+				),
+				dy * CHUNK,
+			);
 		const dots: Dot[] = [...this.players.values()]
 			.filter((p) => chunkIndex(p.x, p.y) === index)
 			.map(({ id, x, y }) => ({ player_id: id, x, y }));
