@@ -22,7 +22,10 @@ select {
 	font: inherit;
 }
 button,
-a {
+a,
+header,
+#scoreboard,
+footer {
 	-webkit-tap-highlight-color: transparent;
 	-webkit-touch-callout: none;
 	-webkit-user-select: none;
