@@ -84,6 +84,10 @@ export const COUNTRY_COLORS = [
 ];
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
+// Owner bitmaps are canonical little-endian on the wire; a native view skips
+// the per-element decode when the platform and alignment allow it.
+export const LITTLE_ENDIAN =
+	new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
 // Hot per-tick position broadcast, embedded in chunks.dots. Only x/y change
@@ -147,9 +151,11 @@ export function rowId(index: number) {
 export function readOwners(bytes: Uint8Array) {
 	if (bytes.byteLength !== CHUNK * CHUNK * 2)
 		throw new Error("Invalid chunk size");
-	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	return Uint16Array.from({ length: CHUNK * CHUNK }, (_, i) =>
-		view.getUint16(i * 2, true),
+	if (LITTLE_ENDIAN && bytes.byteOffset % 2 === 0)
+		return new Uint16Array(bytes.buffer, bytes.byteOffset, CHUNK * CHUNK);
+	return Uint16Array.from(
+		{ length: CHUNK * CHUNK },
+		(_, i) => bytes[i * 2] | (bytes[i * 2 + 1] << 8),
 	);
 }
 

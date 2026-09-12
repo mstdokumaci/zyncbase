@@ -109,6 +109,15 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	).toBe(false);
 });
 
+test("owner bitmaps decode from misaligned little-endian bytes", () => {
+	// The one-byte offset defeats the native view, forcing the portable path.
+	const bytes = new Uint8Array(CHUNK * CHUNK * 2 + 1);
+	for (let i = 0; i < CHUNK * CHUNK; i++) bytes[2 * i + 1] = i % 251;
+	const owners = readOwners(bytes.subarray(1));
+	expect(owners.length).toBe(CHUNK * CHUNK);
+	for (let i = 0; i < CHUNK * CHUNK; i++) expect(owners[i]).toBe(i % 251);
+});
+
 test("bots share five countries, obey movement costs, and yield to humans without clearing land", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.startBots(0);

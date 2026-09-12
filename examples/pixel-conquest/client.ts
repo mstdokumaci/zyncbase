@@ -14,6 +14,7 @@ import {
 	type Direction,
 	type Dot,
 	HEIGHT,
+	LITTLE_ENDIAN,
 	MAX_COUNTRIES,
 	NAMESPACE,
 	playerName,
@@ -31,7 +32,7 @@ function element<T extends HTMLElement>(id: string): T {
 	return result as T;
 }
 const canvas = element<HTMLCanvasElement>("map");
-const context = canvas.getContext("2d");
+const context = canvas.getContext("2d", { alpha: false });
 if (!context) throw new Error("Your browser needs Canvas support");
 const ctx = context;
 const connection = element("connection");
@@ -71,7 +72,14 @@ let width = innerWidth,
 	height = innerHeight;
 let lastOwnDot = 0;
 let locating = false;
-let lastHeartbeat = 0;
+// Dirty-frame rendering: the scene repaints only when something it draws
+// changes. Presence heartbeat runs on its own timer, not as a frame side
+// effect, so it survives idle frames.
+let dirty = true;
+let drawnX = Number.NaN;
+let drawnY = Number.NaN;
+let lastSubCell = "";
+let heartbeat: ReturnType<typeof setInterval> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
@@ -187,21 +195,43 @@ function resize() {
 	canvas.height = Math.round(height * ratio);
 	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 	ctx.imageSmoothingEnabled = false;
+	dirty = true;
 	if (playing) updateSubscriptions();
 }
 addEventListener("resize", resize);
 resize();
 
-function chunkImage(owners: Uint16Array) {
-	const image = document.createElement("canvas");
-	image.width = image.height = CHUNK;
+// One scratch ImageData reused by every chunk update: putImageData copies
+// synchronously, so a single buffer avoids per-tick allocations. Colors are
+// packed once per country code; the cache is dropped when the palette changes.
+const chunkImageData = new ImageData(CHUNK, CHUNK);
+const chunkPixels = new Uint32Array(chunkImageData.data.buffer);
+const chunkColors = new Map<number, number>();
+
+function packedColor(code: number) {
+	let color = chunkColors.get(code);
+	if (color === undefined) {
+		const hex = countries.get(code)?.color ?? "#b7c4bb";
+		const r = Number.parseInt(hex.slice(1, 3), 16);
+		const g = Number.parseInt(hex.slice(3, 5), 16);
+		const b = Number.parseInt(hex.slice(5, 7), 16);
+		color = LITTLE_ENDIAN
+			? ((0xff << 24) | (b << 16) | (g << 8) | r) >>> 0
+			: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
+		chunkColors.set(code, color);
+	}
+	return color;
+}
+
+function chunkImage(owners: Uint16Array, canvas?: HTMLCanvasElement) {
+	const image = canvas ?? document.createElement("canvas");
+	if (!canvas) image.width = image.height = CHUNK;
 	const draw = image.getContext("2d");
 	if (!draw) throw new Error("Canvas unavailable");
-	for (let i = 0; i < owners.length; i++) {
-		if (!owners[i]) continue;
-		draw.fillStyle = countries.get(owners[i])?.color ?? "#b7c4bb";
-		draw.fillRect(i % CHUNK, Math.floor(i / CHUNK), 1, 1);
-	}
+	chunkPixels.fill(0);
+	for (let i = 0; i < owners.length; i++)
+		if (owners[i]) chunkPixels[i] = packedColor(owners[i]);
+	draw.putImageData(chunkImageData, 0, 0);
 	return image;
 }
 
@@ -218,7 +248,13 @@ function receive(row: ChunkRow) {
 	if (!Number.isSafeInteger(index)) return;
 	const dots = readDots(row.dots);
 	const owners = readOwners(row.owners);
-	chunks.set(index, { dots, owners, image: chunkImage(owners) });
+	const previous = chunks.get(index);
+	chunks.set(index, {
+		dots,
+		owners,
+		image: chunkImage(owners, previous?.image),
+	});
+	dirty = true;
 	const self = dots.find((dot) => dot.player_id === myId);
 	const now = performance.now();
 	const moving = online ? direction : "idle";
@@ -237,7 +273,7 @@ function receive(row: ChunkRow) {
 	const country = countries.get(myCountry());
 	element("coordinates").textContent =
 		`${country?.name ?? name} · ${self.x}, ${self.y}`;
-	updateSubscriptions();
+	maybeUpdateSubscriptions();
 }
 
 function ownerAt(x: number, y: number) {
@@ -291,10 +327,22 @@ function updateSubscriptions() {
 		const unsub = client.store.listen(["chunks", String(index)], (row) => {
 			if (!subscriptions.has(key)) return;
 			if (row) receive(row as ChunkRow);
-			else chunks.delete(key);
+			else {
+				chunks.delete(key);
+				dirty = true;
+			}
 		});
 		subscriptions.set(index, unsub);
 	}
+}
+
+// Recompute visible tiles only when the camera crosses a chunk cell: chunk
+// updates arrive at tick rate and must not rescan subscriptions each time.
+function maybeUpdateSubscriptions() {
+	const cell = `${Math.floor(camera.x / CHUNK)},${Math.floor(camera.y / CHUNK)}`;
+	if (cell === lastSubCell) return;
+	lastSubCell = cell;
+	updateSubscriptions();
 }
 
 function scoreboard(rows: Country[]) {
@@ -338,8 +386,12 @@ function scoreboard(rows: Country[]) {
 				return li;
 			}),
 	);
-	if (paletteChanged)
-		for (const chunk of chunks.values()) chunk.image = chunkImage(chunk.owners);
+	if (paletteChanged) {
+		chunkColors.clear();
+		dirty = true;
+		for (const chunk of chunks.values())
+			chunk.image = chunkImage(chunk.owners, chunk.image);
+	}
 }
 
 function publish(changed = false) {
@@ -395,7 +447,10 @@ window.addEventListener("keyup", (event) => {
 	}
 });
 addEventListener("blur", release);
-document.addEventListener("visibilitychange", release);
+document.addEventListener("visibilitychange", () => {
+	release();
+	dirty = true;
+});
 addEventListener("pagehide", () => {
 	release();
 	client?.disconnect();
@@ -422,6 +477,7 @@ function zoom(change: number) {
 	if (!playing) return;
 	scale = Math.min(16, Math.max(2, scale + change));
 	element("zoom-label").textContent = `${scale}×`;
+	dirty = true;
 	updateSubscriptions();
 }
 element("zoom-in").addEventListener("click", () => zoom(2));
@@ -429,6 +485,8 @@ element("zoom-out").addEventListener("click", () => zoom(-2));
 
 function returnToLobby(message: string) {
 	clearTimeout(admissionTimer);
+	clearInterval(heartbeat);
+	heartbeat = undefined;
 	client?.disconnect();
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
@@ -442,6 +500,7 @@ function returnToLobby(message: string) {
 	element("direction-pad").hidden = true;
 	element("error").textContent = message;
 	connection.textContent = "Ready when you are.";
+	dirty = true;
 	updateCountryChoice();
 	void checkHealth();
 }
@@ -479,6 +538,7 @@ async function locate() {
 			me.lastY < HEIGHT
 		) {
 			camera = { x: me.lastX + 0.5, y: me.lastY + 0.5 };
+			dirty = true;
 			updateSubscriptions();
 		}
 	} catch (error) {
@@ -579,12 +639,20 @@ element("join").addEventListener("submit", async (event) => {
 			players.clear();
 			for (const row of rows as UserRow[]) players.set(row.id, row);
 			scoreboard(latestCountries);
+			dirty = true;
 		});
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
 		updateSubscriptions();
 		zoom(0);
+		dirty = true;
+		clearInterval(heartbeat);
+		heartbeat = setInterval(() => {
+			if (!playing || !online) return;
+			publish();
+			void locate();
+		}, 500);
 		connection.textContent = "Connected · Finding your dot…";
 		void locate();
 	} catch (error) {
@@ -595,15 +663,28 @@ element("join").addEventListener("submit", async (event) => {
 	}
 });
 
+const visibleDots = new Map<string, Dot>();
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: draw the map layers and local-player marker in their visual order.
 function draw(now: number) {
 	requestAnimationFrame(draw);
 	const elapsed = now - lastFrame;
 	// Allow timestamp rounding at the frame boundary without accumulating drift.
 	if (elapsed + 0.1 < FRAME_MS) return;
-	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
 	const position = motion?.position(now);
-	if (position) camera = { x: position.x + 0.5, y: position.y + 0.5 };
+	// Idle frames are identical: repaint only when the camera moved or a
+	// mutation (chunk, roster, palette, resize) marked the scene dirty.
+	const moved =
+		position !== undefined && (position.x !== drawnX || position.y !== drawnY);
+	if (!dirty && !moved) return;
+	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
+	dirty = false;
+	if (position) {
+		drawnX = position.x;
+		drawnY = position.y;
+		camera = { x: position.x + 0.5, y: position.y + 0.5 };
+	}
+	maybeUpdateSubscriptions();
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
 	const left = width / 2 - camera.x * zoom;
 	const top = height / 2 - camera.y * zoom;
@@ -623,7 +704,7 @@ function draw(now: number) {
 			WIDTH * zoom,
 			HEIGHT * zoom,
 		);
-	const dots = new Map<string, Dot>();
+	visibleDots.clear();
 	for (const [index, chunk] of chunks) {
 		const chunkX = (index % COLUMNS) * CHUNK,
 			chunkY = Math.floor(index / COLUMNS) * CHUNK;
@@ -639,15 +720,15 @@ function draw(now: number) {
 				CHUNK * zoom,
 				CHUNK * zoom,
 			);
-		for (const dot of chunk.dots) dots.set(dot.player_id, dot);
+		for (const dot of chunk.dots) visibleDots.set(dot.player_id, dot);
 	}
 	// Draw yourself last so nearby dots and names do not cover your marker.
-	const self = dots.get(myId) ?? motion?.dot;
+	const self = visibleDots.get(myId) ?? motion?.dot;
 	if (self) {
-		dots.delete(self.player_id);
-		dots.set(self.player_id, self);
+		visibleDots.delete(self.player_id);
+		visibleDots.set(self.player_id, self);
 	}
-	for (const dot of dots.values()) {
+	for (const dot of visibleDots.values()) {
 		const key = dot.player_id;
 		// Simple client-side join: hot dot plus its cold roster row. Dots
 		// without a row are mid-join/leave races; draw them neutrally once.
@@ -668,21 +749,35 @@ function draw(now: number) {
 		ctx.lineWidth = 2;
 		ctx.strokeStyle = key === myId ? "#ffe3a0" : "#0d1822";
 		ctx.stroke();
-		if (!isBot && meta?.name) {
-			ctx.fillStyle = key === myId ? "#ffe3a0" : "#bccacb";
-			ctx.font = key === myId ? "bold 11px system-ui" : "10px system-ui";
-			ctx.textAlign = "center";
-			ctx.strokeStyle = "#0d1822";
-			ctx.lineWidth = 3;
-			ctx.lineJoin = "round";
-			ctx.strokeText(meta.name, x, y - zoom - 7, 120);
-			ctx.fillText(meta.name, x, y - zoom - 7, 120);
-		}
 	}
-	if (playing && performance.now() - lastHeartbeat > 500) {
-		lastHeartbeat = performance.now();
-		publish();
-		void locate();
+	// Names in their own pass: font and text state change twice per frame
+	// instead of once per visible player.
+	ctx.textAlign = "center";
+	ctx.lineJoin = "round";
+	ctx.strokeStyle = "#0d1822";
+	ctx.lineWidth = 3;
+	ctx.font = "10px system-ui";
+	ctx.fillStyle = "#bccacb";
+	for (const dot of visibleDots.values()) {
+		if (dot.player_id === myId) continue;
+		const meta = players.get(dot.player_id);
+		if (!meta?.name || meta.is_bot) continue;
+		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
+		const x = left + (dotX + 0.5) * zoom,
+			y = top + (dot.y + 0.5) * zoom;
+		ctx.strokeText(meta.name, x, y - zoom - 7, 120);
+		ctx.fillText(meta.name, x, y - zoom - 7, 120);
+	}
+	const selfMeta = players.get(myId);
+	if (self && selfMeta?.name && !selfMeta.is_bot) {
+		const display = position ?? self;
+		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+		const x = left + (dotX + 0.5) * zoom,
+			y = top + (display.y + 0.5) * zoom;
+		ctx.font = "bold 11px system-ui";
+		ctx.fillStyle = "#ffe3a0";
+		ctx.strokeText(selfMeta.name, x, y - zoom - 7, 120);
+		ctx.fillText(selfMeta.name, x, y - zoom - 7, 120);
 	}
 }
 requestAnimationFrame(draw);
