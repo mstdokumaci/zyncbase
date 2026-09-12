@@ -75,6 +75,8 @@ const SPAWN_OWNED_CELL_BUDGET = 1 << 16;
 const SPAWN_OWN_RADIUS = 32;
 const DEFAULT_SPAWN = { x: 933, y: 276 };
 const GOLDEN_ANGLE = 2.399963229728653;
+// readOwners decodes little-endian, so serialization must too.
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export class World {
 	readonly owners = new Uint16Array(WIDTH * HEIGHT);
@@ -892,21 +894,40 @@ export class World {
 		}
 	}
 
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: index validation plus the LE fast path and portable fallback.
 	chunk(index: number): ChunkRow {
+		if (
+			!Number.isSafeInteger(index) ||
+			index < 0 ||
+			index >= COLUMNS * Math.ceil(HEIGHT / CHUNK)
+		)
+			throw new RangeError("Chunk index is out of range");
 		const x = (index % COLUMNS) * CHUNK,
 			y = Math.floor(index / COLUMNS) * CHUNK;
 		const owners = new Uint8Array(CHUNK * CHUNK * 2);
-		const view = new Uint16Array(owners.buffer);
 		const columns = Math.min(CHUNK, WIDTH - x),
 			rows = Math.min(CHUNK, HEIGHT - y);
-		for (let dy = 0; dy < rows; dy++)
-			view.set(
-				this.owners.subarray(
-					(y + dy) * WIDTH + x,
-					(y + dy) * WIDTH + x + columns,
-				),
-				dy * CHUNK,
-			);
+		if (LITTLE_ENDIAN) {
+			const view = new Uint16Array(owners.buffer);
+			for (let dy = 0; dy < rows; dy++)
+				view.set(
+					this.owners.subarray(
+						(y + dy) * WIDTH + x,
+						(y + dy) * WIDTH + x + columns,
+					),
+					dy * CHUNK,
+				);
+		} else {
+			// Native uint16 writes are not portable; keep the wire format LE.
+			const view = new DataView(owners.buffer);
+			for (let dy = 0; dy < rows; dy++)
+				for (let dx = 0; dx < columns; dx++)
+					view.setUint16(
+						(dy * CHUNK + dx) * 2,
+						this.owners[(y + dy) * WIDTH + x + dx],
+						true,
+					);
+		}
 		const dots: Dot[] = [...this.players.values()]
 			.filter((p) => chunkIndex(p.x, p.y) === index)
 			.map(({ id, x, y }) => ({ player_id: id, x, y }));
