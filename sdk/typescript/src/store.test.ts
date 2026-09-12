@@ -202,6 +202,38 @@ describe("StoreImpl", () => {
 		expect(messages[1]).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
+	test("listen handle follows the subId remapped by reconnect replay", async () => {
+		const { store, tracker, messages } = makeStore([
+			{ type: "ok", id: 1, subId: 7 },
+		]);
+		const unlisten = store.listen("users.u1", () => {});
+		await flushPromises();
+		expect(tracker.get(7)).toBeDefined();
+
+		// Reconnect replay assigns a fresh server subId and remaps the tracker.
+		tracker.reconnect(new Map([[7, 11]]));
+		unlisten();
+
+		expect(tracker.get(11)).toBeUndefined();
+		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 11 });
+	});
+
+	test("subscribe handle follows the subId remapped by reconnect replay", async () => {
+		const { store, tracker, messages } = makeStore(
+			[{ type: "ok", id: 1, subId: 9, value: [] }],
+			await makeReadySchema(),
+		);
+		const handle = store.subscribe("users", {}, () => {});
+		await flushPromises();
+		expect(tracker.get(9)).toBeDefined();
+
+		tracker.reconnect(new Map([[9, 12]]));
+		handle.unsubscribe();
+
+		expect(tracker.get(12)).toBeUndefined();
+		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
+	});
+
 	test("subscribe registers collection view and loadMore dispatches cursor request", async () => {
 		const { store, messages, responseTableIndexes } = makeStore(
 			[

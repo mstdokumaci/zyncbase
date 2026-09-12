@@ -175,6 +175,9 @@ export class StoreImpl {
 					command.message,
 					callback,
 					command.segments,
+					(newId) => {
+						state.subId = newId;
+					},
 				);
 				if (ok.value !== undefined) {
 					this.tracker.dispatchInitialSnapshot(
@@ -306,7 +309,15 @@ export class StoreImpl {
 		handle.hasMore = state.hasMore;
 		if (state.subId === null) return;
 
-		this.tracker.registerCollection(state.subId, params, callback, comparator);
+		this.tracker.registerCollection(
+			state.subId,
+			params,
+			callback,
+			comparator,
+			(newId) => {
+				state.subId = newId;
+			},
+		);
 		if (ok.value !== undefined) {
 			this.tracker.dispatchInitialSnapshot(
 				state.subId,

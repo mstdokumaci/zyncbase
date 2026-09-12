@@ -338,10 +338,12 @@ function subscriptionKey() {
 }
 
 function updateSubscriptions() {
-	// Record the served bounds even when not playing so the next frame does not
-	// retry a refresh that has nothing to do.
+	// The SDK does not retry a listen issued while the transport is down, and a
+	// failed handle would pin its chunk index forever. Record the served bounds
+	// only when a set is served, or an offline key would suppress the first
+	// refresh after reconnect.
+	if (!client || !playing || !online) return;
 	lastSubBounds = subscriptionKey();
-	if (!client || !playing) return;
 	const visible = visibleChunks();
 	for (const [index, unsub] of subscriptions) {
 		if (visible.has(index)) continue;

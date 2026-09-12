@@ -31,6 +31,8 @@ export interface SubscriptionEntry {
 	projection: ListenProjection | null;
 	/** Optional materialized view for collection-level subscriptions. */
 	materializedView?: MaterializedView;
+	/** Updates the caller's handle when a reconnect remaps the server subId. */
+	onRemap?: (newSubId: number) => void;
 }
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
@@ -59,11 +61,13 @@ export class SubscriptionTracker {
 		params: Omit<StoreSubscribe, "id">,
 		callback: (value: JsonValue) => void,
 		segments: string[],
+		onRemap?: (newSubId: number) => void,
 	): void {
 		this.register(subId, {
 			params,
 			callbacks: [callback],
 			projection: createListenProjection(segments),
+			onRemap,
 		});
 	}
 
@@ -72,6 +76,7 @@ export class SubscriptionTracker {
 		params: Omit<StoreSubscribe, "id">,
 		callback: (results: JsonValue[]) => void,
 		comparator?: (a: JsonValue, b: JsonValue) => number,
+		onRemap?: (newSubId: number) => void,
 	): void {
 		this.register(subId, {
 			params,
@@ -81,6 +86,7 @@ export class SubscriptionTracker {
 				records: new Map(),
 				comparator: comparator ?? createCreatedAtComparator(),
 			},
+			onRemap,
 		});
 	}
 
@@ -238,6 +244,8 @@ export class SubscriptionTracker {
 		for (const [oldId, entry] of this.subscriptions.entries()) {
 			const newId = oldToNew.get(oldId);
 			if (newId !== undefined) {
+				// Keep each caller's handle pointing at the live server subId.
+				entry.onRemap?.(newId);
 				remapped.set(newId, entry);
 			} else {
 				// Keep old entry if no new mapping provided (shouldn't happen in normal flow)
