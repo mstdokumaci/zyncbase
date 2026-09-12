@@ -49,7 +49,12 @@
 		</main>
 		<aside id="scoreboard" class="panel" hidden>
 			<p class="eyebrow">THE WORLD SO FAR</p>
-			<h2>Countries <span id="country-count">0</span></h2>
+			<h2>
+				<button id="scoreboard-toggle" type="button" aria-expanded="true" aria-controls="countries">
+					<span>Countries <span id="country-count">0</span></span>
+					<span class="chevron" aria-hidden="true">▾</span>
+				</button>
+			</h2>
 			<ol id="countries"></ol>
 			<p class="small">Your name is gold. Circles are people; squares are bots.<br />Land stays claimed when you leave.</p>
 		</aside>

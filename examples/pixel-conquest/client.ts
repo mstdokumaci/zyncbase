@@ -39,6 +39,8 @@ const connection = element("connection");
 const lobby = element("lobby");
 const countryChoice = element<HTMLSelectElement>("country-choice");
 const countryInput = element<HTMLInputElement>("country");
+const scoreboardPanel = element("scoreboard");
+const scoreboardToggle = element<HTMLButtonElement>("scoreboard-toggle");
 const countries = new Map<number, Country>();
 // Cold roster from the users table, keyed by identity: one row per live
 // player plus 10s grace tombstones. Updated only on admission, chunk
@@ -515,6 +517,15 @@ function zoom(change: number) {
 element("zoom-in").addEventListener("click", () => zoom(2));
 element("zoom-out").addEventListener("click", () => zoom(-2));
 
+function setScoreboardOpen(open: boolean) {
+	scoreboardPanel.classList.toggle("collapsed", !open);
+	scoreboardToggle.setAttribute("aria-expanded", String(open));
+}
+scoreboardToggle.addEventListener("click", () =>
+	setScoreboardOpen(scoreboardPanel.classList.contains("collapsed")),
+);
+setScoreboardOpen(!matchMedia("(pointer: coarse)").matches);
+
 function returnToLobby(message: string) {
 	sessionGeneration++;
 	clearTimeout(admissionTimer);
@@ -529,7 +540,7 @@ function returnToLobby(message: string) {
 	players.clear();
 	playing = online = false;
 	lobby.hidden = false;
-	element("scoreboard").hidden = true;
+	scoreboardPanel.hidden = true;
 	element("direction-pad").hidden = true;
 	element("error").textContent = message;
 	connection.textContent = "Ready when you are.";
@@ -665,7 +676,7 @@ element("join").addEventListener("submit", async (event) => {
 		clearTimeout(admissionTimer);
 		admissionTimer = setTimeout(checkAdmission, 3000);
 		lobby.hidden = true;
-		element("scoreboard").hidden = false;
+		scoreboardPanel.hidden = false;
 		element("direction-pad").hidden = false;
 		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
 			const list = rows as Country[];

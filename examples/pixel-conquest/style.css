@@ -301,6 +301,33 @@ kbd {
 	display: flex;
 	justify-content: space-between;
 }
+.panel h2 button {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	width: 100%;
+	padding: 0;
+	background: none;
+	border: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+}
+.panel h2 .chevron {
+	color: #99acab;
+	font-size: 12px;
+	transition: transform 0.15s;
+}
+.panel.collapsed {
+	width: fit-content;
+	padding: 14px 18px;
+}
+.panel.collapsed .chevron {
+	transform: rotate(-90deg);
+}
+.panel.collapsed > :where(.eyebrow, #countries, .small) {
+	display: none;
+}
 #country-count {
 	color: #99acab;
 	font-size: 13px;
@@ -346,7 +373,7 @@ kbd {
 .direction-pad {
 	position: fixed;
 	bottom: 92px;
-	left: 26px;
+	right: 26px;
 	display: grid;
 	grid-template-columns: repeat(3, 42px);
 	gap: 6px;
