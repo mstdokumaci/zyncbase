@@ -298,6 +298,14 @@ function updateSubscriptions() {
 }
 
 function scoreboard(rows: Country[]) {
+	// ponytail: roster rows include 10s grace tombstones, so a departed player
+	// keeps counting until expiry; filtering needs a live flag from the server.
+	const headcount = new Map<number, number>();
+	for (const player of players.values())
+		headcount.set(
+			player.country_id,
+			(headcount.get(player.country_id) ?? 0) + 1,
+		);
 	const paletteChanged = rows.some(
 		(row) => countries.get(row.code)?.color !== row.color,
 	);
@@ -319,10 +327,14 @@ function scoreboard(rows: Country[]) {
 				const label = document.createElement("span");
 				label.className = "name";
 				label.textContent = country.name;
+				const roster = document.createElement("span");
+				roster.className = "players";
+				roster.title = "Players";
+				roster.textContent = String(headcount.get(country.code) ?? 0);
 				const score = document.createElement("span");
 				score.className = "score";
 				score.textContent = country.count.toLocaleString();
-				li.append(swatch, label, score);
+				li.append(swatch, label, roster, score);
 				return li;
 			}),
 	);
@@ -566,6 +578,7 @@ element("join").addEventListener("submit", async (event) => {
 		playersUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
 			players.clear();
 			for (const row of rows as UserRow[]) players.set(row.id, row);
+			scoreboard(latestCountries);
 		});
 		motion = undefined;
 		camera = { x: 933, y: 276 };
