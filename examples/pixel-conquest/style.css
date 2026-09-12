@@ -331,6 +331,10 @@ kbd {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+#countries .players {
+	font-variant-numeric: tabular-nums;
+	color: #99acab;
+}
 #countries .score {
 	font-variant-numeric: tabular-nums;
 	color: #d5ddcb;
