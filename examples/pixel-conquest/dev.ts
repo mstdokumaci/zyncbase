@@ -139,19 +139,22 @@ export async function startLocalEdge(options: {
 		server.once("error", reject);
 		server.listen(options.port, "127.0.0.1", resolve);
 	});
-	return () =>
+	const address = server.address();
+	const boundPort =
+		typeof address === "object" && address ? address.port : options.port;
+	const stop = () =>
 		new Promise<void>((resolve) => {
 			server.close(() => resolve());
 			for (const socket of sockets) socket.destroy();
 		});
+	return { port: boundPort, stop };
 }
 
 if (import.meta.main) {
 	if (process.env.GAME_TLS_CERT || process.env.GAME_TLS_KEY)
 		throw new Error("Use demo:game:start for deployment with TLS");
-	const port = Number(process.env.GAME_DEV_PORT ?? 8080);
-	const stopEdge = await startLocalEdge({
-		port,
+	const edge = await startLocalEdge({
+		port: Number(process.env.GAME_DEV_PORT ?? 8080),
 		authPort: Number(process.env.GAME_PORT ?? 8081),
 		databasePort: Number(process.env.GAME_DB_PORT ?? 3001),
 		assets: await buildBrowser(),
@@ -172,7 +175,7 @@ if (import.meta.main) {
 				env: {
 					...process.env,
 					GAME_HOST: "127.0.0.1",
-					GAME_ORIGIN: `http://localhost:${port}`,
+					GAME_ORIGIN: `http://localhost:${edge.port}`,
 				},
 				stdout: "inherit",
 				stderr: "inherit",
@@ -183,6 +186,6 @@ if (import.meta.main) {
 		// A scheduled round restart exits 0; respawn unless the user stopped us.
 		if (code === 0 && !stopping) await Bun.sleep(500);
 	} while (code === 0 && !stopping);
-	await stopEdge();
+	await edge.stop();
 	process.exit(stopping ? 0 : code);
 }

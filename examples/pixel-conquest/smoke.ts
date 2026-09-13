@@ -45,14 +45,11 @@ async function eventually<T>(
 }
 
 const dataDir = await mkdtemp(join(tmpdir(), "pixel-conquest-smoke-"));
-// Allocate concurrently so the three listeners are open at once and the OS
-// cannot hand the same ephemeral port to more than one of them.
-const [port, authPort, databasePort] = await Promise.all([
-	freePort(),
-	freePort(),
-	freePort(),
-]);
-const origin = `http://localhost:${port}`;
+// The dev edge binds port 0 and reports its assigned port, so it cannot lose
+// a selection race. The game's two ports are selected while every reservation
+// listener is open (the OS cannot hand the same port to both), and are
+// reselected with a startup retry if the game still loses one before binding.
+let [authPort, databasePort] = await Promise.all([freePort(), freePort()]);
 const useTls = process.argv.includes("--tls");
 const certFile = join(dataDir, "cert.pem");
 const keyFile = join(dataDir, "key.pem");
@@ -87,13 +84,9 @@ assert.deepEqual((await readdir(assets)).sort(), [
 	"index.html",
 	"style.css",
 ]);
-const stopEdge = await startLocalEdge({
-	port,
-	authPort,
-	databasePort,
-	assets,
-	ca: cert,
-});
+const edgeOptions = { port: 0, authPort, databasePort, assets, ca: cert };
+const edge = await startLocalEdge(edgeOptions);
+const origin = `http://localhost:${edge.port}`;
 let processHandle: Bun.Subprocess | undefined;
 let logs = "";
 const clients: ZyncBaseClient[] = [];
@@ -104,8 +97,8 @@ async function capture(stream: ReadableStream<Uint8Array>) {
 		logs = (logs + new TextDecoder().decode(chunk)).slice(-20000);
 }
 
-async function start(reset = false, env: Record<string, string> = {}) {
-	processHandle = Bun.spawn(
+function spawnGame(reset: boolean, env: Record<string, string>) {
+	const handle = Bun.spawn(
 		["bun", join(import.meta.dir, "server.ts"), ...(reset ? ["--reset"] : [])],
 		{
 			env: {
@@ -130,8 +123,12 @@ async function start(reset = false, env: Record<string, string> = {}) {
 			detached: true,
 		},
 	);
-	void capture(processHandle.stdout as ReadableStream<Uint8Array>);
-	void capture(processHandle.stderr as ReadableStream<Uint8Array>);
+	void capture(handle.stdout as ReadableStream<Uint8Array>);
+	void capture(handle.stderr as ReadableStream<Uint8Array>);
+	processHandle = handle;
+}
+
+async function waitForStartup() {
 	await eventually(async () => {
 		if (processHandle?.exitCode != null)
 			throw new Error(`Game exited (${processHandle.exitCode})\n${logs}`);
@@ -141,6 +138,32 @@ async function start(reset = false, env: Record<string, string> = {}) {
 			return false;
 		}
 	}, "game startup");
+}
+
+/** Reselect both child ports after another process stole one pre-bind. */
+async function reselectPorts() {
+	const [nextAuth, nextDatabase] = await Promise.all([freePort(), freePort()]);
+	authPort = nextAuth;
+	databasePort = nextDatabase;
+	edgeOptions.authPort = authPort;
+	edgeOptions.databasePort = databasePort;
+	await Bun.sleep(200);
+}
+
+async function start(reset = false, env: Record<string, string> = {}) {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		spawnGame(reset, env);
+		try {
+			await waitForStartup();
+			return;
+		} catch (error) {
+			if (processHandle?.exitCode == null) throw error;
+			if (!/ListenFailed|EADDRINUSE|address already in use/i.test(logs))
+				throw error;
+			await reselectPorts();
+		}
+	}
+	throw new Error(`Game could not bind its ports after retries\n${logs}`);
 }
 
 async function stop() {
@@ -422,7 +445,7 @@ async function connect(countryName?: string) {
 	assert.equal(payload.session.tokenExpiresAt, jwt.exp);
 	assert.ok(payload.session.tokenExpiresAt > payload.exp);
 	const client = createClient({
-		url: `ws://localhost:${port}/ws`,
+		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token },
 		storeNamespace: NAMESPACE,
 		presenceNamespace: NAMESPACE,
@@ -838,6 +861,6 @@ try {
 	throw error;
 } finally {
 	await stop();
-	await stopEdge();
+	await edge.stop();
 	await rm(dataDir, { recursive: true, force: true });
 }
