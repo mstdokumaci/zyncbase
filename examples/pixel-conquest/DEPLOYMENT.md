@@ -18,15 +18,10 @@ On the FreeBSD VM, from the repository root:
 bun install --frozen-lockfile
 bun run --filter @zyncbase/client build
 zig build -Doptimize=ReleaseFast
-```
-
-On your Mac, from the same checkout/version:
-
-```sh
 bun run demo:game:build
 ```
 
-Only `examples/pixel-conquest/dist/` is uploaded. It contains the HTML, CSS, browser JavaScript and asset headers. Server code, signing secrets and certificates are not part of that build.
+`demo:game:build` writes `examples/pixel-conquest/dist/` with the HTML, CSS, browser JavaScript, asset headers, and the static history viewer. At runtime the game adds generated round results under `dist/history/`, which are part of the deployed assets: keep that directory when rebuilding. Server code, signing secrets, certificates, and Cloudflare credentials are not part of the build.
 
 ## 2. Create the origin certificate
 
@@ -77,8 +72,13 @@ export GAME_DATA_DIR=/home/freebsd/zyncbase/data/pixel-conquest
 export GAME_TLS_CERT=/home/freebsd/.config/pixel-conquest/origin.pem
 export GAME_TLS_KEY=/home/freebsd/.config/pixel-conquest/origin.key
 export NODE_EXTRA_CA_CERTS=/home/freebsd/.config/pixel-conquest/origin-ca.pem
+# Optional: deploy changed assets (including round history) at boot.
+# export CLOUDFLARE_API_TOKEN=...
+# export CLOUDFLARE_ACCOUNT_ID=...
 exec /home/freebsd/.bun/bin/bun examples/pixel-conquest/server.ts
 ```
+
+If you enable the deploy, create the API token with only **Account → Workers Scripts → Edit** and keep it outside the checkout, for example in `/home/freebsd/.config/pixel-conquest/deploy.env` (mode `600`) sourced by `run.sh`. Deploys run at boot, in the background, and only when the asset content hash changed; a failure is logged, retried, and never stops the game.
 
 Adjust the Bun executable path to the result of `command -v bun`. Then:
 
@@ -132,16 +132,18 @@ Under **Rules**, create two **Origin Rules**, each with a **Destination port** o
 
 These overrides affect Cloudflare's connection to the VM. The browser keeps using port 443. Destination-port overrides are available on the Free plan. [Origin Rules](https://developers.cloudflare.com/rules/origin-rules/)
 
-## 7. Upload the frontend from your Mac
+## 7. Publish the frontend from the VM
 
-From the repository root:
+With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set in `run.sh`, every game start compares the content hash of `examples/pixel-conquest/dist/` with the last successful upload and deploys with Wrangler only when it changed. Round results land in `dist/history/`, so each archived round deploys shortly after the game restarts.
+
+The checked-in configuration (`examples/pixel-conquest/wrangler.jsonc`) uploads only the built assets, with no Worker application script. The default Worker name is `pixel-conquest`; change it if that name is already in use in your account. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/) To deploy manually from the VM:
 
 ```sh
-bunx wrangler login
+cd /home/freebsd/zyncbase
 bunx wrangler deploy --config examples/pixel-conquest/wrangler.jsonc
 ```
 
-The checked-in configuration uploads only the built assets, with no Worker application script. The default Worker name is `pixel-conquest`; change it if that name is already in use in your account. The generated `workers.dev` URL can preview assets, but login needs the routed custom hostname configured below. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/)
+Do not run `wrangler deploy` from your Mac after this: it uploads a `dist/` without `history/` and removes published results from the edge.
 
 ## 8. Route assets to the Worker and let backend paths bypass it
 
@@ -180,10 +182,10 @@ If `/session` or `/auth/ticket` returns an asset/404, check the Worker exclusion
 After the foreground check, stop it with Ctrl+C. You can use FreeBSD's supervisor as the `freebsd` user:
 
 ```sh
-daemon -R 5 -P /home/freebsd/.config/pixel-conquest/supervisor.pid -o /home/freebsd/.config/pixel-conquest/game.log /home/freebsd/.config/pixel-conquest/run.sh
+daemon -R 1 -P /home/freebsd/.config/pixel-conquest/supervisor.pid -o /home/freebsd/.config/pixel-conquest/game.log /home/freebsd/.config/pixel-conquest/run.sh
 ```
 
-To stop the supervisor and game, run in `sh`:
+The game exits and restarts by design at every round boundary (2 h) and after ten quiet minutes, recycling the simulation and ZyncBase processes; `daemon` must be allowed to restart it, and `-R 1` keeps that handoff quick. To stop the supervisor and game, run in `sh`:
 
 ```sh
 kill -TERM "$(cat /home/freebsd/.config/pixel-conquest/supervisor.pid)"
@@ -191,4 +193,4 @@ kill -TERM "$(cat /home/freebsd/.config/pixel-conquest/supervisor.pid)"
 
 This survives SSH logout; register the launcher with your existing FreeBSD startup service if it must also start after a VM reboot. [FreeBSD daemon](https://man.freebsd.org/cgi/man.cgi?query=daemon&sektion=8)
 
-For backend updates, stop the game, update the checkout, rebuild the SDK and ReleaseFast executable, then restart. For frontend updates, run `bun run demo:game:build` and the Wrangler deploy command again. The data directory persists across restarts; do not run two simulations against it. Use `bun run demo:game:start --reset` with the deployment environment only when you intentionally want to erase the game world.
+For backend updates, stop the game, update the checkout, rebuild the SDK and ReleaseFast executable, then restart. For frontend updates, run `bun run demo:game:build` on the VM and restart; the server deploys the changed assets (including any accumulated `dist/history/`) at boot. Copy `dist/history/` somewhere safe before wiping `dist/`, or published results are lost. The data directory persists across restarts; do not run two simulations against it. Use `bun run demo:game:start --reset` with the deployment environment only when you intentionally want to erase the game world; history is untouched.

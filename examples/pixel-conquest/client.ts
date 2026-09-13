@@ -14,6 +14,7 @@ import {
 	type Direction,
 	type Dot,
 	HEIGHT,
+	LAND_RGB,
 	LITTLE_ENDIAN,
 	MAX_COUNTRIES,
 	NAMESPACE,
@@ -22,6 +23,7 @@ import {
 	readOwners,
 	terrain,
 	type UserRow,
+	WATER_RGB,
 	WIDTH,
 	wrapX,
 } from "./shared";
@@ -36,6 +38,7 @@ const context = canvas.getContext("2d", { alpha: false });
 if (!context) throw new Error("Your browser needs Canvas support");
 const ctx = context;
 const connection = element("connection");
+const roundChip = element("round");
 const lobby = element("lobby");
 const countryChoice = element<HTMLSelectElement>("country-choice");
 const countryInput = element<HTMLInputElement>("country");
@@ -58,6 +61,11 @@ let online = false;
 let playing = false;
 let joining = false;
 let worldReady = false;
+let roundNumber = 0;
+let roundEndsAt = 0;
+let serverSkew = 0;
+let roundTimer: ReturnType<typeof setTimeout> | undefined;
+let leaving = false;
 let selectedCountryCode: number | undefined;
 let lobbyCountries: Country[] = [];
 let availableSlots = 0;
@@ -97,6 +105,47 @@ const PREFETCH_CHUNKS = 1;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
 const TAGLINE = "A shared world. One pixel at a time.";
+
+function formatDuration(ms: number) {
+	const total = Math.max(0, Math.ceil(ms / 1000));
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const seconds = total % 60;
+	const mm = String(minutes).padStart(2, "0");
+	const ss = String(seconds).padStart(2, "0");
+	return hours ? `${hours}:${mm}:${ss}` : `${minutes}:${ss}`;
+}
+
+function updateRoundLabel() {
+	if (!roundNumber || !roundEndsAt) {
+		roundChip.hidden = true;
+		return;
+	}
+	const remaining = roundEndsAt - (Date.now() + serverSkew);
+	roundChip.hidden = false;
+	roundChip.textContent =
+		remaining > 0
+			? `Round ${roundNumber} · ${formatDuration(remaining)} left`
+			: `Round ${roundNumber} · final seconds`;
+}
+
+// Results live on the Cloudflare Worker, so navigating at the deadline is
+// safe while the simulation restarts; the viewer waits for the deploy.
+function scheduleRoundEnd() {
+	clearTimeout(roundTimer);
+	if (!roundNumber || !roundEndsAt) return;
+	const remaining = roundEndsAt - (Date.now() + serverSkew) + 1200;
+	roundTimer = setTimeout(
+		() => {
+			if (!playing || leaving) return;
+			leaving = true;
+			location.href = `/history.html?round=${roundNumber}`;
+		},
+		Math.max(0, remaining),
+	);
+}
+
+setInterval(updateRoundLabel, 1000);
 
 function updateCountryChoice() {
 	const creating = countryChoice.value === "new";
@@ -167,6 +216,12 @@ async function checkHealth() {
 		});
 		const health = await response.json();
 		if (playing || joining) return;
+		if (typeof health.now === "number") serverSkew = health.now - Date.now();
+		if (health.round) {
+			roundNumber = health.round.number;
+			roundEndsAt = health.round.endsAt;
+			updateRoundLabel();
+		}
 		if (!response.ok || health.ready !== true) throw new Error();
 		worldReady = true;
 		showLobbyCountries(health.countries);
@@ -193,9 +248,10 @@ base.height = HEIGHT;
 const baseContext = base.getContext("2d");
 if (!baseContext) throw new Error("Canvas unavailable");
 const pixels = baseContext.createImageData(WIDTH, HEIGHT);
-for (let i = 0; i < land.length; i++) {
-	pixels.data.set(land[i] ? [80, 87, 94, 255] : [19, 37, 52, 255], i * 4);
-}
+const landColor = [...LAND_RGB, 255];
+const waterColor = [...WATER_RGB, 255];
+for (let i = 0; i < land.length; i++)
+	pixels.data.set(land[i] ? landColor : waterColor, i * 4);
 baseContext.putImageData(pixels, 0, 0);
 
 function resize() {
@@ -531,6 +587,8 @@ setScoreboardOpen(!matchMedia("(pointer: coarse)").matches);
 
 function returnToLobby(message: string) {
 	sessionGeneration++;
+	leaving = false;
+	clearTimeout(roundTimer);
 	clearTimeout(admissionTimer);
 	clearInterval(heartbeat);
 	heartbeat = undefined;
@@ -638,6 +696,12 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		const session = await response.json();
 		if (!response.ok) throw new Error(session.error);
+		if (typeof session.now === "number") serverSkew = session.now - Date.now();
+		if (session.round) {
+			roundNumber = session.round.number;
+			roundEndsAt = session.round.endsAt;
+			updateRoundLabel();
+		}
 		selectedCountryCode = selected?.code ?? session.countryCode;
 		client = createClient({
 			url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
@@ -678,6 +742,7 @@ element("join").addEventListener("submit", async (event) => {
 		playing = online = true;
 		clearTimeout(admissionTimer);
 		admissionTimer = setTimeout(checkAdmission, 3000);
+		scheduleRoundEnd();
 		lobby.hidden = true;
 		scoreboardPanel.hidden = false;
 		element("direction-pad").hidden = false;

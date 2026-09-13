@@ -82,6 +82,9 @@ export const COUNTRY_COLORS = [
 	"#98b858",
 	"#d090b0",
 ];
+// Snapshot and canvas must agree on terrain colors.
+export const LAND_RGB = [80, 87, 94] as const;
+export const WATER_RGB = [19, 37, 52] as const;
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
 // Owner bitmaps are canonical little-endian on the wire; a native view skips
@@ -124,6 +127,19 @@ export type ChunkRow = {
 	owners: Uint8Array;
 	dots: Uint8Array;
 };
+export type RoundInfo = {
+	number: number;
+	startedAt: number;
+	endsAt: number;
+};
+/** Round state persisted in `round.json`; `fresh` means boot wipes before restoring. */
+export type RoundCursor = RoundInfo & { fresh?: boolean };
+
+// Round boundaries are absolute multiples of the period since the Unix epoch,
+// so the default 2 h period lands on even UTC hours and restarts cannot drift.
+export function nextRoundBoundary(now: number, periodMs: number) {
+	return (Math.floor(now / periodMs) + 1) * periodMs;
+}
 
 export function terrain() {
 	const result = new Uint8Array(WIDTH * HEIGHT);

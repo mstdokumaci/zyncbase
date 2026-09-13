@@ -28,6 +28,7 @@ export async function startLocalEdge(options: {
 		["/", ["index.html", "text/html"]],
 		["/client.js", ["client.js", "text/javascript"]],
 		["/style.css", ["style.css", "text/css"]],
+		["/history.html", ["history.html", "text/html"]],
 	]);
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this development-only handler mirrors static and HTTP origin routing.
 	const server = createServer(async (req, res) => {
@@ -40,6 +41,27 @@ export async function startLocalEdge(options: {
 				res.end(bytes);
 			} catch {
 				res.writeHead(500).end("Build browser assets first");
+			}
+			return;
+		}
+		// History is written into the assets directory by the game process and
+		// is a Worker asset in production; the local edge serves it from disk.
+		if (path.startsWith("/history/")) {
+			const name = path.slice("/history/".length);
+			if (!/^(?:\d+\.(?:json|png)|index\.json)$/.test(name)) {
+				res.writeHead(404).end();
+				return;
+			}
+			try {
+				const bytes = await readFile(join(options.assets, "history", name));
+				res.writeHead(200, {
+					"Content-Type": name.endsWith(".png")
+						? "image/png"
+						: "application/json",
+				});
+				res.end(bytes);
+			} catch {
+				res.writeHead(404).end();
 			}
 			return;
 		}
@@ -134,22 +156,33 @@ if (import.meta.main) {
 		databasePort: Number(process.env.GAME_DB_PORT ?? 3001),
 		assets: await buildBrowser(),
 	});
-	const game = Bun.spawn(
-		["bun", join(import.meta.dir, "server.ts"), ...process.argv.slice(2)],
-		{
-			env: {
-				...process.env,
-				GAME_HOST: "127.0.0.1",
-				GAME_ORIGIN: `http://localhost:${port}`,
+	let game: Bun.Subprocess | undefined;
+	let stopping = false;
+	const stopGame = () => {
+		stopping = true;
+		game?.kill("SIGINT");
+	};
+	process.on("SIGINT", stopGame);
+	process.on("SIGTERM", stopGame);
+	let code = 0;
+	do {
+		game = Bun.spawn(
+			["bun", join(import.meta.dir, "server.ts"), ...process.argv.slice(2)],
+			{
+				env: {
+					...process.env,
+					GAME_HOST: "127.0.0.1",
+					GAME_ORIGIN: `http://localhost:${port}`,
+				},
+				stdout: "inherit",
+				stderr: "inherit",
+				detached: true,
 			},
-			stdout: "inherit",
-			stderr: "inherit",
-			detached: true,
-		},
-	);
-	process.on("SIGINT", () => game.kill("SIGINT"));
-	process.on("SIGTERM", () => game.kill("SIGTERM"));
-	const code = await game.exited;
+		);
+		code = await game.exited;
+		// A scheduled round restart exits 0; respawn unless the user stopped us.
+		if (code === 0 && !stopping) await Bun.sleep(500);
+	} while (code === 0 && !stopping);
 	await stopEdge();
-	process.exit(code);
+	process.exit(stopping ? 0 : code);
 }
