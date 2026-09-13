@@ -30,8 +30,12 @@ async function freePort() {
 	return address.port;
 }
 
-async function eventually<T>(check: () => Promise<T>, label: string) {
-	const deadline = Date.now() + 30000;
+async function eventually<T>(
+	check: () => Promise<T>,
+	label: string,
+	timeoutMs = 30000,
+) {
+	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const value = await check();
 		if (value) return value;
@@ -180,6 +184,7 @@ async function startWithRunway(
 		await eventually(
 			async () => processHandle?.exitCode != null,
 			"boundary exit after startup",
+			minRunwayMs + 15_000,
 		);
 	}
 	throw new Error("Could not start the game with enough runway");

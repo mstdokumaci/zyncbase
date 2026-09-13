@@ -89,15 +89,18 @@ test("deploy skips an assets directory without index.html", async () => {
 			called = true;
 			return 0;
 		};
-		expect(
-			await deployIfChanged({
-				assetsDir: assets,
-				stateDir: state,
-				command: ["wrangler", "deploy"],
-				cwd: root,
-				run: runner,
-			}),
-		).toBe("skipped");
+		const options = {
+			assetsDir: assets,
+			stateDir: state,
+			command: ["wrangler", "deploy"],
+			cwd: root,
+			run: runner,
+		};
+		expect(await deployIfChanged(options)).toBe("skipped");
+		expect(called).toBe(false);
+		// A missing assets directory must skip, not throw while hashing.
+		await rm(assets, { recursive: true, force: true });
+		expect(await deployIfChanged(options)).toBe("skipped");
 		expect(called).toBe(false);
 	} finally {
 		await rm(root, { recursive: true, force: true });

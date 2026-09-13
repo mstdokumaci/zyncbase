@@ -52,14 +52,14 @@ export async function deployIfChanged(options: {
 		run = runCommand,
 		log = () => {},
 	} = options;
-	const hash = await computeAssetsHash(assetsDir);
-	const stateFile = join(stateDir, HASH_FILE);
-	const previous = await readFile(stateFile, "utf8").catch(() => "");
-	if (previous.trim() === hash) return "unchanged";
 	if (!(await exists(join(assetsDir, "index.html")))) {
 		log("Deploy skipped: assets directory has no index.html");
 		return "skipped";
 	}
+	const hash = await computeAssetsHash(assetsDir);
+	const stateFile = join(stateDir, HASH_FILE);
+	const previous = await readFile(stateFile, "utf8").catch(() => "");
+	if (previous.trim() === hash) return "unchanged";
 	const code = await run(command, cwd, log);
 	if (code !== 0) {
 		log(`Deploy failed with exit code ${code}`);
