@@ -14,7 +14,7 @@ import {
 	createClient,
 	type JsonValue,
 } from "@zyncbase/client";
-import { deployIfChanged } from "./deploy";
+import { deployIfChanged, publishAssets } from "./deploy";
 import {
 	archiveRound,
 	maxHistoryNumber,
@@ -87,10 +87,12 @@ const assetsDir = resolve(
 	process.env.GAME_ASSETS_DIR ?? join(directory, "dist"),
 );
 const historyDir = join(assetsDir, "history");
+const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
 const deployEnabled =
 	process.env.GAME_DEPLOY !== "0" &&
-	Boolean(process.env.CLOUDFLARE_API_TOKEN) &&
-	Boolean(process.env.CLOUDFLARE_ACCOUNT_ID);
+	Boolean(cloudflareApiToken) &&
+	Boolean(cloudflareAccountId);
 let world = new World(terrain());
 let round: RoundCursor = {
 	number: 1,
@@ -512,20 +514,20 @@ async function endRound(now: number, reason: "boundary" | "idle") {
 	void stop(0);
 }
 
-/** Hash-gated Worker deploy; failures retry a few times and never stop the game. */
+/** Hash-gated Worker publish; failures retry a few times and never stop the game. */
 async function runDeploy(attempt: number) {
+	if (!cloudflareAccountId || !cloudflareApiToken) return;
 	try {
 		const result = await deployIfChanged({
 			assetsDir,
 			stateDir: dataDir,
-			command: [
-				"bunx",
-				"wrangler",
-				"deploy",
-				"--config",
-				join(directory, "wrangler.jsonc"),
-			],
-			cwd: root,
+			publish: (dir) =>
+				publishAssets(dir, {
+					accountId: cloudflareAccountId,
+					apiToken: cloudflareApiToken,
+					configPath: join(directory, "wrangler.jsonc"),
+					log: (message) => console.log(message),
+				}),
 			log: (message) => console.log(message),
 		});
 		if (result === "deployed") console.log("Cloudflare assets deployed.");

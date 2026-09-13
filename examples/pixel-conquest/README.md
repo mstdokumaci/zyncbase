@@ -6,7 +6,7 @@ A small multiplayer territory game using ZyncBase's real presence → store path
 
 Rounds end on absolute two-hour boundaries at even UTC hours. A round is archived only when a human is connected when it ends: the winner, final standings, and a full-map PNG are written to `dist/history/`, then the whole stack (simulation and ZyncBase) restarts. Boot wipes the world and starts the next round, so process memory is recycled every round. A quiet world (no players for ten minutes) restarts early without writing history, and a boundary with nobody online writes nothing either. Round numbers advance only when a round is archived, and the last **20** rounds are kept.
 
-During play the header shows a countdown. At the deadline each client navigates to `/history.html?round=N`; the viewer polls until the round's data has been deployed. Results are Cloudflare Worker static assets, so they load while the simulation restarts. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, boot deploys the assets with Wrangler only when their content hash changed; the game never waits on a deploy and a failed deploy retries in the background.
+During play the header shows a countdown. At the deadline each client navigates to `/history.html?round=N`; the viewer polls until the round's data has been deployed. Results are Cloudflare Worker static assets, so they load while the simulation restarts. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, boot publishes the assets through the Cloudflare Workers API only when their content hash changed; the game never waits on a publish and a failed publish retries in the background. Wrangler and Node are not needed on the VM (wrangler's `workerd` has no FreeBSD build); the Worker name and compatibility date are read from `wrangler.jsonc`.
 
 ## Run locally
 
@@ -47,8 +47,8 @@ Build an uploadable browser directory with `bun run demo:game:build`. Its output
 | `GAME_SERVER_BIN` | `<repo>/zig-out/bin/zyncbase` | Prebuilt ZyncBase executable. |
 | `GAME_ROUND_MS` | `7200000` | Round boundary period; the default aligns with even UTC hours. |
 | `GAME_IDLE_WIPE_MS` | `600000` | Restart a quiet world after this long with no players; `0` disables. |
-| `GAME_ASSETS_DIR` | `examples/pixel-conquest/dist` | Browser assets plus generated history; the Wrangler upload directory. |
-| `GAME_DEPLOY` | Unset | `0` disables the hash-gated Wrangler deploy. |
+| `GAME_ASSETS_DIR` | `examples/pixel-conquest/dist` | Browser assets plus generated history; the Worker publish directory. |
+| `GAME_DEPLOY` | Unset | `0` disables the hash-gated Worker publish. |
 | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Unset | Set both to deploy changed assets at boot (see below). |
 | `GAME_DEV_PORT` | `8080` | Development router port, used only by `demo:game:dev`. |
 
@@ -56,7 +56,7 @@ With TLS, the simulation connects to the hostname from `GAME_ORIGIN` on `GAME_DB
 
 Changing the hostname requires restarting with the matching origin. Player tokens last 24 hours; a server restart or expired token requires rejoining. The round rollover restarts the server by design, so players rejoin through the lobby for the next round.
 
-Once history lives in the Worker assets, the VM is the only deploy source: a `wrangler deploy` from your Mac uploads a `dist/` without `history/` and drops published results from the edge. Build on the VM (or copy `dist/` over intact) and restart; the server deploys on the next boot when the asset hash changed.
+Once history lives in the Worker assets, the VM is the only publish source: a `wrangler deploy` from your Mac uploads a `dist/` without `history/` and drops published results from the edge. Build on the VM (or copy `dist/` over intact) and restart; the server publishes on the next boot when the asset hash changed.
 
 ## Prototype choices
 
@@ -72,7 +72,7 @@ Once history lives in the Worker assets, the VM is the only deploy source: a `wr
 - Admission is capped at 1024 humans and 64 live countries for this demo, with bots yielding space as humans join. These are product limits, **not a measured server capacity**. Newcomers join an existing country once 64 exist; a country with no land and no live players is deleted, freeing its slot and name, while a landless country with live players survives. The lobby polls `/health` for the country roster and disables creation at 64 countries; it disables joining and reports `The world is offline` when the simulation is down. The simulation rechecks admission if the roster changes while joining. No rounds, victory rules, body-blocking, or minimap yet.
 - Countries receive an unused color from a fixed 64-color palette, sampled for separation in OKLab with varied hues and lightness. Colors persist across restarts and become reusable only when their country is deleted. Names in the picker and scoreboard supplement colors; 64 colors alone cannot provide reliable identification for every viewer.
 - Admission is open. `/session` issues player tokens without credentials, while the existing origin check, shared 120-session-per-minute budget, player cap, and store-write permissions remain enforced.
-- Rounds are wall-clock anchored: boundaries are absolute multiples of `GAME_ROUND_MS` (2 h → even UTC hours), so restarts resume the same deadline. A round is archived only when a human is connected when it ends, at most 20 results are kept, and every round end or idle reset exits the process so the supervisor starts a clean simulation and ZyncBase pair. `dist/history/` is the archive and the Wrangler upload source; the view is `history.html`, a static page that polls for results while they deploy.
+- Rounds are wall-clock anchored: boundaries are absolute multiples of `GAME_ROUND_MS` (2 h → even UTC hours), so restarts resume the same deadline. A round is archived only when a human is connected when it ends, at most 20 results are kept, and every round end or idle reset exits the process so the supervisor starts a clean simulation and ZyncBase pair. `dist/history/` is the archive and the Worker publish source; the view is `history.html`, a static page that polls for results while they publish.
 - Bots prefer nearby unclaimed or enemy land, avoid water, and stay near human activity. They use the same movement costs and authoritative store updates as people. This is a simple gameplay opponent, not a simulation of browser connections or network load.
 
 The terminal logs cumulative inputs, ticks, committed flushes, changed chunk writes, chunk payload bytes (before subscriber fan-out), and the latest commit duration. The browser displays input-to-view time measured against its own change clock. These are diagnostic observations, not a throughput benchmark. Measure the complete workload on the VPS, including actual outgoing traffic and overlapping visible-chunk subscriptions, before drawing performance conclusions; FortiEDR makes this development machine unsuitable for that comparison.
