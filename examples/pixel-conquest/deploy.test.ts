@@ -138,7 +138,7 @@ test("publishAssets runs session, upload, and script calls", async () => {
 			`{
 	// Worker identity lives here.
 	"name": "pixel-conquest",
-	"compatibility_date": "2026-09-08",
+	"compatibility_date": "2026-09-08", // inline comments are JSONC too
 	"assets": { "directory": "./dist" }
 }`,
 		);
