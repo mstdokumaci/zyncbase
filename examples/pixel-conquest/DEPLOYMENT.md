@@ -134,16 +134,11 @@ These overrides affect Cloudflare's connection to the VM. The browser keeps usin
 
 ## 7. Publish the frontend from the VM
 
-With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set in `run.sh`, every game start compares the content hash of `examples/pixel-conquest/dist/` with the last successful upload and deploys with Wrangler only when it changed. Round results land in `dist/history/`, so each archived round deploys shortly after the game restarts.
+The game process publishes assets itself through the Cloudflare Workers API, so the VM needs neither wrangler nor Node (wrangler's `workerd` has no FreeBSD build). With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set in `run.sh`, every game start compares the content hash of `examples/pixel-conquest/dist/` with the last successful publish and uploads only when it changed. Round results land in `dist/history/`, so each archived round is published shortly after the game restarts. The log shows `Publishing N assets to Worker "..."` followed by `Cloudflare assets deployed.`; a failed publish is logged and retried every five minutes.
 
-The checked-in configuration (`examples/pixel-conquest/wrangler.jsonc`) uploads only the built assets, with no Worker application script. The default Worker name is `pixel-conquest`; change it if that name is already in use in your account. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/) To deploy manually from the VM:
+The Worker name and compatibility date are read from `examples/pixel-conquest/wrangler.jsonc` (`pixel-conquest` by default); change the name there if it is already in use in your account. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/)
 
-```sh
-cd /home/freebsd/zyncbase
-bunx wrangler deploy --config examples/pixel-conquest/wrangler.jsonc
-```
-
-Do not run `wrangler deploy` from your Mac after this: it uploads a `dist/` without `history/` and removes published results from the edge.
+Do not publish the same Worker from another machine with `wrangler` unless it has the VM's `dist/history/`: an upload without those files removes published results from the edge.
 
 ## 8. Route assets to the Worker and let backend paths bypass it
 
@@ -157,7 +152,7 @@ Keep the proxied AAAA record from step 5. Configure **Workers Routes**, not a Wo
 | `game.example.com/auth/ticket*` | None |
 | `game.example.com/ws*` | None |
 
-The more specific routes with **no Worker** bypass Workers and reach the IPv6 origin through Cloudflare's normal proxy. Origin Rules then select 8443 or 8444. The trailing `*` is required to cover query strings, especially `/ws?ticket=...`. Wrangler's configuration intentionally omits routes so subsequent asset deployments preserve this dashboard setup. [Route matching and exclusions](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior)
+The more specific routes with **no Worker** bypass Workers and reach the IPv6 origin through Cloudflare's normal proxy. Origin Rules then select 8443 or 8444. The trailing `*` is required to cover query strings, especially `/ws?ticket=...`. The checked-in configuration omits routes so publishes never touch this dashboard setup. [Route matching and exclusions](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior)
 
 ## 9. Verify the public deployment
 
