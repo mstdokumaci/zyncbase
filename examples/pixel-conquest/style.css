@@ -93,6 +93,16 @@ header {
 	border-radius: 99px;
 	background: #101b2899;
 }
+.round {
+	margin-left: auto;
+	font-size: 12px;
+	color: #ffe3a0;
+	padding: 9px 14px;
+	border: 1px solid #cadbc51c;
+	border-radius: 99px;
+	background: #101b2899;
+	white-space: nowrap;
+}
 #lobby {
 	position: fixed;
 	inset: 88px 0 80px;
@@ -410,6 +420,10 @@ kbd {
 	.connection {
 		max-width: 150px;
 		font-size: 10px;
+	}
+	.round {
+		font-size: 10px;
+		padding: 7px 10px;
 	}
 	#lobby {
 		inset: 68px 0 70px;

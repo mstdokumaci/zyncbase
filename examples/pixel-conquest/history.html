@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#101b28" />
+		<title>Pixel Conquest · Past rounds</title>
+		<style>
+			:root { color-scheme: dark; }
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background: #0d1822;
+				color: #bccacb;
+				font: 14px/1.55 system-ui, -apple-system, sans-serif;
+			}
+			header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 18px;
+				padding: 18px 42px;
+				background: linear-gradient(#101b28ee, #101b2800);
+				position: sticky;
+				top: 0;
+				backdrop-filter: blur(6px);
+			}
+			.brand {
+				color: inherit;
+				text-decoration: none;
+				font-size: 14px;
+				letter-spacing: 2px;
+			}
+			.brand strong { font-weight: 750; }
+			.mark { color: #f1cb7c; font-size: 22px; margin-right: 6px; }
+			.nav {
+				color: #ffe3a0;
+				font-size: 12px;
+				text-decoration: none;
+				padding: 8px 14px;
+				border: 1px solid #cadbc51c;
+				border-radius: 99px;
+				background: #101b2899;
+			}
+			main {
+				max-width: 980px;
+				margin: 0 auto;
+				padding: 28px 42px 80px;
+			}
+			h1 { font-size: 30px; margin: 0 0 4px; color: #eef4f4; }
+			h2 { font-size: 18px; margin: 0; }
+			.status { color: #8fa3a3; }
+			.eyebrow {
+				font-size: 11px;
+				letter-spacing: 2px;
+				color: #8fa3a3;
+				text-transform: uppercase;
+				margin: 0 0 6px;
+			}
+			.winner {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				margin: 18px 0 26px;
+				padding: 16px 18px;
+				border: 1px solid #cadbc51c;
+				border-radius: 10px;
+				background: #101b2899;
+			}
+			.winner .name { font-size: 22px; color: #ffe3a0; font-weight: 700; }
+			.meta { color: #8fa3a3; font-size: 12px; }
+			.swatch {
+				display: inline-block;
+				width: 14px;
+				height: 14px;
+				border-radius: 3px;
+				vertical-align: -2px;
+				margin-right: 8px;
+			}
+			.map {
+				width: 100%;
+				height: auto;
+				image-rendering: pixelated;
+				border: 1px solid #cadbc51c;
+				border-radius: 8px;
+				background: #131f2c;
+			}
+			table { width: 100%; border-collapse: collapse; margin-top: 26px; }
+			th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #cadbc514; }
+			th { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #8fa3a3; }
+			td.score { text-align: right; font-variant-numeric: tabular-nums; }
+			.bot { color: #8fa3a3; font-size: 11px; margin-left: 6px; }
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+				gap: 16px;
+				margin-top: 22px;
+			}
+			.card {
+				display: block;
+				color: inherit;
+				text-decoration: none;
+				border: 1px solid #cadbc51c;
+				border-radius: 10px;
+				background: #101b2899;
+				overflow: hidden;
+				transition: border-color .15s;
+			}
+			.card:hover { border-color: #ffe3a077; }
+			.card img { width: 100%; height: auto; aspect-ratio: 2 / 1; object-fit: cover; image-rendering: pixelated; background: #131f2c; }
+			.card .body { padding: 10px 12px 12px; }
+			.card .round { font-size: 15px; color: #eef4f4; }
+			.card .line { font-size: 12px; margin-top: 2px; }
+			.actions { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap; }
+			.button {
+				display: inline-block;
+				color: #101b28;
+				background: #ffe3a0;
+				text-decoration: none;
+				font-weight: 600;
+				padding: 10px 18px;
+				border-radius: 8px;
+			}
+			.button.secondary { background: transparent; color: #bccacb; border: 1px solid #cadbc533; }
+			@media (max-width: 700px) {
+				header { padding: 14px 18px; }
+				main { padding: 20px 18px 60px; }
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<a class="brand" href="/" aria-label="Pixel Conquest home"><span class="mark">▦</span> PIXEL <strong>CONQUEST</strong></a>
+			<a class="nav" href="/history.html">Past rounds</a>
+		</header>
+		<main>
+			<p class="status" id="status">Loading…</p>
+			<section id="list" hidden></section>
+			<section id="detail" hidden></section>
+		</main>
+		<script type="module">
+			const status = document.getElementById("status");
+			const list = document.getElementById("list");
+			const detail = document.getElementById("detail");
+			const requested = Number(new URLSearchParams(location.search).get("round"));
+
+			const note = (text) => {
+				status.hidden = false;
+				status.textContent = text;
+				list.hidden = true;
+				detail.hidden = true;
+			};
+			const show = (node) => {
+				status.hidden = true;
+				node.hidden = false;
+			};
+			const element = (tag, className, text) => {
+				const node = document.createElement(tag);
+				if (className) node.className = className;
+				if (text !== undefined) node.textContent = text;
+				return node;
+			};
+			const swatch = (color) => {
+				const span = element("span", "swatch");
+				if (/^#[0-9a-f]{6}$/i.test(color ?? "")) span.style.background = color;
+				return span;
+			};
+			const utc = (ms) =>
+				`${new Date(ms).toISOString().replace("T", " ").slice(0, 16)} UTC`;
+			const duration = (startedAt, endedAt) => {
+				if (!startedAt) return null;
+				const total = Math.max(0, Math.round((endedAt - startedAt) / 1000));
+				const hours = Math.floor(total / 3600);
+				const minutes = Math.floor((total % 3600) / 60);
+				return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+			};
+
+			async function loadRoundResult(round, attempts = 90) {
+				for (let i = 0; i < attempts; i++) {
+					try {
+						const response = await fetch(`./history/${round}.json`, {
+							cache: "no-store",
+						});
+						if (response.ok) return await response.json();
+						if (response.status !== 404) break;
+					} catch {
+						// The deploy or a transient network error; keep waiting.
+					}
+					note(`Publishing results for round ${round}…`);
+					await new Promise((resolve) => setTimeout(resolve, 2000));
+				}
+				return undefined;
+			}
+
+			function renderDetail(result) {
+				detail.replaceChildren();
+				const eyebrow = element("p", "eyebrow", "Final result");
+				const heading = element("h1", undefined, `Round ${result.number}`);
+				detail.append(eyebrow, heading);
+				const lines = [`Ended ${utc(result.endedAt)}`];
+				const length = duration(result.startedAt, result.endedAt);
+				if (length) lines.push(`Lasted ${length}`);
+				lines.push(
+					`${result.humans} ${result.humans === 1 ? "human" : "humans"} at the end`,
+				);
+				detail.append(element("p", "meta", lines.join(" · ")));
+
+				const winner = element("div", "winner");
+				if (result.winner) {
+					winner.append(swatch(result.winner.color));
+					winner.append(element("span", "name", result.winner.name));
+					winner.append(
+						element(
+							"span",
+							"meta",
+							`won with ${result.winner.count.toLocaleString()} pixels`,
+						),
+					);
+				} else {
+					winner.append(element("span", "name", "No territory was claimed"));
+				}
+				detail.append(winner);
+
+				const image = element("img", "map");
+				image.src = `./history/${result.number}.png`;
+				image.alt = `Map of the world at the end of round ${result.number}`;
+				image.loading = "lazy";
+				detail.append(image);
+
+				const table = element("table");
+				const head = element("tr");
+				for (const label of ["#", "Country", "Pixels"]) {
+					head.append(element("th", undefined, label));
+				}
+				table.append(head);
+				result.countries.forEach((country, index) => {
+					const row = element("tr");
+					const rank = element("td", undefined, String(index + 1));
+					const name = element("td");
+					name.append(swatch(country.color), document.createTextNode(country.name));
+					if (country.isBot) name.append(element("span", "bot", "bot"));
+					const score = element("td", "score", country.count.toLocaleString());
+					row.append(rank, name, score);
+					table.append(row);
+				});
+				detail.append(table);
+
+				const actions = element("div", "actions");
+				const again = element("a", "button", "Play the next round");
+				again.href = "/";
+				const all = element("a", "button secondary", "All rounds");
+				all.href = "/history.html";
+				actions.append(again, all);
+				detail.append(actions);
+				document.title = `Round ${result.number} · Pixel Conquest`;
+				show(detail);
+			}
+
+			function renderList(entries) {
+				list.replaceChildren();
+				list.append(element("p", "eyebrow", "The archive"));
+				list.append(element("h1", undefined, "Past rounds"));
+				list.append(
+					element(
+						"p",
+						"meta",
+						"Rounds end every 2 hours at even UTC hours. The last 20 results are kept.",
+					),
+				);
+				const grid = element("div", "grid");
+				for (const entry of entries) {
+					const card = element("a", "card");
+					card.href = `/history.html?round=${entry.number}`;
+					const image = element("img");
+					image.src = `./history/${entry.number}.png`;
+					image.alt = `Map of round ${entry.number}`;
+					image.loading = "lazy";
+					const body = element("div", "body");
+					body.append(element("div", "round", `Round ${entry.number}`));
+					const winner = element("div", "line");
+					if (entry.winner) {
+						winner.append(swatch(entry.winner.color));
+						winner.append(document.createTextNode(`${entry.winner.name} won`));
+					} else {
+						winner.textContent = "No territory claimed";
+					}
+					body.append(winner);
+					body.append(element("div", "line", utc(entry.endedAt)));
+					card.append(image, body);
+					grid.append(card);
+				}
+				list.append(grid);
+				show(list);
+			}
+
+			async function main() {
+				if (requested > 0) {
+					note(`Publishing results for round ${requested}…`);
+					const result = await loadRoundResult(requested);
+					if (!result) {
+						note(
+							`Results for round ${requested} are not available. It may have rotated out of the archive.`,
+						);
+						return;
+					}
+					renderDetail(result);
+					return;
+				}
+				try {
+					const response = await fetch("./history/index.json", {
+						cache: "no-store",
+					});
+					if (!response.ok) throw new Error(String(response.status));
+					const entries = await response.json();
+					if (!Array.isArray(entries) || entries.length === 0) {
+						note(
+							"No finished rounds yet. The first results appear at the next 2-hour boundary.",
+						);
+						return;
+					}
+					renderList(entries);
+				} catch {
+					note("Could not load past rounds. Try again shortly.");
+				}
+			}
+
+			void main();
+		</script>
+	</body>
+</html>

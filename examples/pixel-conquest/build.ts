@@ -12,7 +12,7 @@ export async function buildBrowser(outdir = join(import.meta.dir, "dist")) {
 	if (!bundle.success)
 		throw new AggregateError(bundle.logs, "Browser build failed");
 	await Promise.all(
-		["index.html", "style.css"].map((name) =>
+		["index.html", "style.css", "history.html"].map((name) =>
 			copyFile(join(import.meta.dir, name), join(outdir, name)),
 		),
 	);

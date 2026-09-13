@@ -14,6 +14,15 @@ import {
 	createClient,
 	type JsonValue,
 } from "@zyncbase/client";
+import { deployIfChanged } from "./deploy";
+import {
+	archiveRound,
+	maxHistoryNumber,
+	type RoundResult,
+	type RoundStanding,
+	readRoundCursor,
+	writeRoundCursor,
+} from "./history";
 import {
 	buildPublishOperations,
 	drainPublishState,
@@ -24,12 +33,16 @@ import {
 import {
 	type ChunkRow,
 	type Country,
+	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_PLAYERS,
 	NAMESPACE,
+	nextRoundBoundary,
+	type RoundCursor,
 	RULES,
 	terrain,
 	type UserRow,
+	WIDTH,
 } from "./shared";
 import { World } from "./world";
 
@@ -61,7 +74,34 @@ const databaseUrl = new URL("/ws", origin);
 databaseUrl.protocol = tls ? "wss:" : "ws:";
 if (!tls) databaseUrl.hostname = "127.0.0.1";
 databaseUrl.port = String(databasePort);
-const world = new World(terrain());
+// Rounds end on absolute multiples of this period; 2 h lands on even UTC hours.
+const roundMs = Number(process.env.GAME_ROUND_MS ?? 7_200_000);
+if (!Number.isSafeInteger(roundMs) || roundMs <= 0)
+	throw new Error("GAME_ROUND_MS must be a positive integer");
+// A quiet world resets early so the next visitor starts fresh; 0 disables.
+const idleWipeMs = Number(process.env.GAME_IDLE_WIPE_MS ?? 600_000);
+if (!Number.isSafeInteger(idleWipeMs) || idleWipeMs < 0)
+	throw new Error("GAME_IDLE_WIPE_MS must be a non-negative integer");
+// History is generated into the assets directory so the Worker deploy ships it.
+const assetsDir = resolve(
+	process.env.GAME_ASSETS_DIR ?? join(directory, "dist"),
+);
+const historyDir = join(assetsDir, "history");
+const deployEnabled =
+	process.env.GAME_DEPLOY !== "0" &&
+	Boolean(process.env.CLOUDFLARE_API_TOKEN) &&
+	Boolean(process.env.CLOUDFLARE_ACCOUNT_ID);
+let world = new World(terrain());
+let round: RoundCursor = {
+	number: 1,
+	startedAt: 0,
+	endsAt: 0,
+	fresh: true,
+};
+let ending = false;
+let roundActive = false;
+let emptySince = 0;
+let deployTimer: ReturnType<typeof setTimeout> | undefined;
 let ready = false;
 let stopping = false;
 let inFlight: Promise<void> | null = null;
@@ -95,6 +135,14 @@ function token(role: "player" | "simulation") {
 
 function allowedOrigin(req: IncomingMessage) {
 	return !req.headers.origin || req.headers.origin === origin;
+}
+
+function roundInfo() {
+	return {
+		number: round.number,
+		startedAt: round.startedAt,
+		endsAt: round.endsAt,
+	};
 }
 
 function reply(res: ServerResponse, status: number, body: unknown) {
@@ -149,6 +197,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				players: world.humanCount,
 				bots: world.players.size - world.humanCount,
 				countries: [...world.countries.values()],
+				round: roundInfo(),
+				now: Date.now(),
 			});
 		if (path === "/session" && req.method === "POST") {
 			if (!ready) return reply(res, 503, { error: "The world is starting" });
@@ -168,6 +218,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				return reply(res, 409, {
 					error: "The world is full. Try again after someone leaves.",
 				});
+			roundActive = true;
 			let country: Country | undefined;
 			if (Object.hasOwn(input, "countryName")) {
 				country = world.country(input.countryName);
@@ -192,6 +243,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 			return reply(res, 200, {
 				token: token("player"),
 				countryCode: country?.code,
+				round: roundInfo(),
+				now: Date.now(),
 			});
 		}
 		return reply(res, 404, { error: "Not found" });
@@ -346,16 +399,159 @@ async function publish(forceRosters = false) {
 
 let tick: ReturnType<typeof setInterval> | undefined;
 let statistics: ReturnType<typeof setInterval> | undefined;
+
+function totalClaimed() {
+	let total = 0;
+	for (const country of world.countries.values()) total += country.count;
+	return total;
+}
+
+function standings(): RoundStanding[] {
+	return [...world.countries.values()]
+		.filter((country) => country.count > 0)
+		.map(({ name, color, count, is_bot }) => ({
+			name,
+			color,
+			count,
+			isBot: is_bot,
+		}))
+		.sort((a, b) => b.count - a.count);
+}
+
+async function archiveWorld(
+	number: number,
+	startedAt: number | null,
+	endedAt: number,
+) {
+	const countries = standings();
+	const humans = world.humanCount;
+	const result: RoundResult = {
+		number,
+		startedAt,
+		endedAt,
+		humans,
+		bots: world.players.size - humans,
+		winner: countries[0] ?? null,
+		countries,
+	};
+	const colors = new Map(
+		[...world.countries].map(([code, country]) => [code, country.color]),
+	);
+	await archiveRound(
+		historyDir,
+		result,
+		world.owners,
+		world.land,
+		colors,
+		WIDTH,
+		HEIGHT,
+	);
+	console.log(
+		`Round ${number} archived: ${countries.length} countries, ${humans} humans.`,
+	);
+}
+
+async function wipeWorldRows(
+	countries: Country[],
+	chunks: ChunkRow[],
+	users: UserRow[],
+	meta: { id: string }[],
+) {
+	const operations: BatchOperation[] = [
+		...chunks.map((row) => ({
+			op: "remove" as const,
+			path: ["chunks", row.id],
+		})),
+		...users.map((row) => ({
+			op: "remove" as const,
+			path: ["users", row.id],
+		})),
+		...countries.map((row) => ({
+			op: "remove" as const,
+			path: ["countries", row.id],
+		})),
+		...meta.map((row) => ({ op: "remove" as const, path: ["meta", row.id] })),
+	];
+	if (!operations.length) return;
+	await runPublishBatches(
+		(batch) => client.store.batch(batch, { confirm: "committed" }),
+		operations,
+	);
+}
+
+function startRound(number: number) {
+	const now = Date.now();
+	round = { number, startedAt: now, endsAt: nextRoundBoundary(now, roundMs) };
+	return writeRoundCursor(dataDir, round);
+}
+
+/** Archive when a scheduled round had a human, then exit; boot wipes. */
+async function endRound(now: number, reason: "boundary" | "idle") {
+	if (reason === "boundary" && world.humanCount > 0) {
+		await archiveWorld(round.number, round.startedAt, round.endsAt);
+		round = {
+			number: round.number + 1,
+			startedAt: now,
+			endsAt: nextRoundBoundary(now, roundMs),
+			fresh: true,
+		};
+	} else {
+		round = {
+			number: round.number,
+			startedAt: now,
+			endsAt: nextRoundBoundary(now, roundMs),
+			fresh: true,
+		};
+	}
+	await writeRoundCursor(dataDir, round);
+	console.log(
+		reason === "boundary"
+			? "Round ended; restarting."
+			: "Idle reset; restarting.",
+	);
+	void stop(0);
+}
+
+/** Hash-gated Worker deploy; failures retry a few times and never stop the game. */
+async function runDeploy(attempt: number) {
+	try {
+		const result = await deployIfChanged({
+			assetsDir,
+			stateDir: dataDir,
+			command: [
+				"bunx",
+				"wrangler",
+				"deploy",
+				"--config",
+				join(directory, "wrangler.jsonc"),
+			],
+			cwd: root,
+			log: (message) => console.log(message),
+		});
+		if (result === "deployed") console.log("Cloudflare assets deployed.");
+		else if (result === "failed" && attempt < 6) scheduleDeploy(attempt + 1);
+	} catch (error) {
+		console.error("Deploy failed:", error);
+		if (attempt < 6) scheduleDeploy(attempt + 1);
+	}
+}
+
+function scheduleDeploy(attempt: number) {
+	deployTimer = setTimeout(() => void runDeploy(attempt), 300_000);
+	deployTimer.unref();
+}
 async function stop(code = 0) {
 	if (stopping) return;
 	stopping = true;
 	ready = false;
 	clearInterval(tick);
 	clearInterval(statistics);
+	clearTimeout(deployTimer);
 	front.close();
 	for (const socket of connections) socket.destroy();
 	try {
-		if (code === 0) {
+		// A round end already archived the world; the next boot wipes it.
+		if (code === 0 && !ending) {
 			await inFlight;
 			for (const id of world.players.keys())
 				world.remove(id, performance.now());
@@ -405,31 +601,36 @@ try {
 	const chunks = (await allRows("chunks")) as ChunkRow[];
 	const users = (await allRows("users")) as UserRow[];
 	const meta = (await allRows("meta")) as { id: string; nextCode: number }[];
+	const savedRound = await readRoundCursor(dataDir);
+	const maxHistory = await maxHistoryNumber(historyDir);
+	const startup = Date.now();
 	if (process.argv.includes("--reset")) {
-		const operations: BatchOperation[] = [
-			...chunks.map((row) => ({
-				op: "remove" as const,
-				path: ["chunks", row.id],
-			})),
-			...users.map((row) => ({
-				op: "remove" as const,
-				path: ["users", row.id],
-			})),
-			...countries.map((row) => ({
-				op: "remove" as const,
-				path: ["countries", row.id],
-			})),
-			...meta.map((row) => ({
-				op: "remove" as const,
-				path: ["meta", row.id],
-			})),
-		];
-		for (let i = 0; i < operations.length; i += 100)
-			await client.store.batch(operations.slice(i, i + 100), {
-				confirm: "committed",
-			});
+		await wipeWorldRows(countries, chunks, users, meta);
+		await startRound(Math.max(maxHistory + 1, savedRound?.number ?? 0));
 		console.log("World reset.");
-	} else world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+	} else if (savedRound?.fresh) {
+		await wipeWorldRows(countries, chunks, users, meta);
+		await startRound(Math.max(savedRound.number, maxHistory + 1));
+	} else if (!savedRound || startup >= savedRound.endsAt) {
+		// The round expired while the process was down: archive its final map.
+		world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+		let number = Math.max(savedRound?.number ?? 0, maxHistory + 1);
+		if (totalClaimed() > 0) {
+			await archiveWorld(
+				number,
+				savedRound?.startedAt ?? null,
+				savedRound?.endsAt ?? startup,
+			);
+			number += 1;
+		}
+		await wipeWorldRows(countries, chunks, users, meta);
+		world = new World(terrain());
+		await startRound(number);
+	} else {
+		world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+		round = savedRound;
+	}
+	roundActive = totalClaimed() > 0;
 	// Rows surviving the restart are already committed; only later creations
 	// need the force-flush above.
 	for (const code of world.countries.keys()) persistedCountries.add(code);
@@ -443,7 +644,7 @@ try {
 	});
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: both SDK snapshot and delta shapes reconcile the same player set.
 	client.presence.subscribeChanges((batch) => {
-		if (stopping) return;
+		if (stopping || ending) return;
 		const now = performance.now();
 		if (batch.type === "snapshot") {
 			const connected = new Set(batch.users.map((user) => user.userId));
@@ -458,8 +659,32 @@ try {
 		}
 	});
 	ready = true;
+	if (deployEnabled) void runDeploy(0);
 	tick = setInterval(() => {
-		if (inFlight || stopping) return;
+		if (inFlight || stopping || ending) return;
+		const now = Date.now();
+		if (world.humanCount > 0) {
+			roundActive = true;
+			emptySince = 0;
+		} else if (roundActive && !emptySince) {
+			emptySince = now;
+		}
+		const reason =
+			now >= round.endsAt
+				? ("boundary" as const)
+				: idleWipeMs > 0 && emptySince && now - emptySince >= idleWipeMs
+					? ("idle" as const)
+					: undefined;
+		if (reason) {
+			ending = true;
+			ready = false;
+			inFlight = endRound(now, reason)
+				.catch(failed)
+				.finally(() => {
+					inFlight = null;
+				});
+			return;
+		}
 		world.tick(performance.now());
 		inFlight = publish()
 			.catch(failed)
@@ -473,6 +698,7 @@ try {
 				JSON.stringify({
 					players: world.humanCount,
 					bots: world.players.size - world.humanCount,
+					round: round.number,
 					ticks: world.ticks,
 					inputs: world.inputMessages,
 					flushes,
@@ -484,7 +710,7 @@ try {
 		10000,
 	);
 	console.log(
-		`\nPixel Conquest: ${origin}\nData: ${dataDir}\nStop with Ctrl+C.\n`,
+		`\nPixel Conquest: ${origin}\nData: ${dataDir}\nAssets: ${assetsDir}\nStop with Ctrl+C.\n`,
 	);
 } catch (error) {
 	failed(error);

@@ -247,12 +247,14 @@ try {
 				stderr: Bun.file(join(output, "server-errors.log")),
 			},
 		);
-		closeEdge = await startLocalEdge({
-			port,
-			authPort: port + 1,
-			databasePort: port + 2,
-			assets,
-		});
+		closeEdge = (
+			await startLocalEdge({
+				port,
+				authPort: port + 1,
+				databasePort: port + 2,
+				assets,
+			})
+		).stop;
 	}
 	await until(async () => {
 		try {

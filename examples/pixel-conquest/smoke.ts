@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,8 +30,12 @@ async function freePort() {
 	return address.port;
 }
 
-async function eventually<T>(check: () => Promise<T>, label: string) {
-	const deadline = Date.now() + 30000;
+async function eventually<T>(
+	check: () => Promise<T>,
+	label: string,
+	timeoutMs = 30000,
+) {
+	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const value = await check();
 		if (value) return value;
@@ -41,10 +45,11 @@ async function eventually<T>(check: () => Promise<T>, label: string) {
 }
 
 const dataDir = await mkdtemp(join(tmpdir(), "pixel-conquest-smoke-"));
-const port = await freePort(),
-	authPort = await freePort(),
-	databasePort = await freePort();
-const origin = `http://localhost:${port}`;
+// The dev edge binds port 0 and reports its assigned port, so it cannot lose
+// a selection race. The game's two ports are selected while every reservation
+// listener is open (the OS cannot hand the same port to both), and are
+// reselected with a startup retry if the game still loses one before binding.
+let [authPort, databasePort] = await Promise.all([freePort(), freePort()]);
 const useTls = process.argv.includes("--tls");
 const certFile = join(dataDir, "cert.pem");
 const keyFile = join(dataDir, "key.pem");
@@ -75,16 +80,13 @@ const assets = await buildBrowser(join(dataDir, "assets"));
 assert.deepEqual((await readdir(assets)).sort(), [
 	"_headers",
 	"client.js",
+	"history.html",
 	"index.html",
 	"style.css",
 ]);
-const stopEdge = await startLocalEdge({
-	port,
-	authPort,
-	databasePort,
-	assets,
-	ca: cert,
-});
+const edgeOptions = { port: 0, authPort, databasePort, assets, ca: cert };
+const edge = await startLocalEdge(edgeOptions);
+const origin = `http://localhost:${edge.port}`;
 let processHandle: Bun.Subprocess | undefined;
 let logs = "";
 const clients: ZyncBaseClient[] = [];
@@ -95,12 +97,15 @@ async function capture(stream: ReadableStream<Uint8Array>) {
 		logs = (logs + new TextDecoder().decode(chunk)).slice(-20000);
 }
 
-async function start(reset = false, env: Record<string, string> = {}) {
-	processHandle = Bun.spawn(
+function spawnGame(reset: boolean, env: Record<string, string>) {
+	const handle = Bun.spawn(
 		["bun", join(import.meta.dir, "server.ts"), ...(reset ? ["--reset"] : [])],
 		{
 			env: {
 				...process.env,
+				GAME_DEPLOY: "0",
+				GAME_IDLE_WIPE_MS: "0",
+				GAME_ASSETS_DIR: assets,
 				...env,
 				GAME_PORT: String(authPort),
 				GAME_DB_PORT: String(databasePort),
@@ -118,8 +123,12 @@ async function start(reset = false, env: Record<string, string> = {}) {
 			detached: true,
 		},
 	);
-	void capture(processHandle.stdout as ReadableStream<Uint8Array>);
-	void capture(processHandle.stderr as ReadableStream<Uint8Array>);
+	void capture(handle.stdout as ReadableStream<Uint8Array>);
+	void capture(handle.stderr as ReadableStream<Uint8Array>);
+	processHandle = handle;
+}
+
+async function waitForStartup() {
 	await eventually(async () => {
 		if (processHandle?.exitCode != null)
 			throw new Error(`Game exited (${processHandle.exitCode})\n${logs}`);
@@ -131,6 +140,32 @@ async function start(reset = false, env: Record<string, string> = {}) {
 	}, "game startup");
 }
 
+/** Reselect both child ports after another process stole one pre-bind. */
+async function reselectPorts() {
+	const [nextAuth, nextDatabase] = await Promise.all([freePort(), freePort()]);
+	authPort = nextAuth;
+	databasePort = nextDatabase;
+	edgeOptions.authPort = authPort;
+	edgeOptions.databasePort = databasePort;
+	await Bun.sleep(200);
+}
+
+async function start(reset = false, env: Record<string, string> = {}) {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		spawnGame(reset, env);
+		try {
+			await waitForStartup();
+			return;
+		} catch (error) {
+			if (processHandle?.exitCode == null) throw error;
+			if (!/ListenFailed|EADDRINUSE|address already in use/i.test(logs))
+				throw error;
+			await reselectPorts();
+		}
+	}
+	throw new Error(`Game could not bind its ports after retries\n${logs}`);
+}
+
 async function stop() {
 	for (const timer of timers.splice(0)) clearInterval(timer);
 	for (const client of clients.splice(0)) client.disconnect();
@@ -139,6 +174,248 @@ async function stop() {
 	process.kill(-processHandle.pid, "SIGINT");
 	const code = await processHandle.exited;
 	assert.equal(code, 0, logs);
+}
+
+async function healthState(): Promise<{
+	ready: boolean;
+	players: number;
+	bots: number;
+	now: number;
+	round: { number: number; startedAt: number; endsAt: number };
+}> {
+	return await (await fetch(`${origin}/health`)).json();
+}
+
+/**
+ * Starts the game and waits until the next round boundary is at least
+ * `minRunwayMs` away, restarting when a boundary lands during startup.
+ */
+async function startWithRunway(
+	env: Record<string, string>,
+	minRunwayMs: number,
+	reset = false,
+): Promise<{ number: number; startedAt: number; endsAt: number }> {
+	for (let attempt = 0; attempt < 6; attempt++) {
+		try {
+			await start(reset, env);
+		} catch {
+			// The boundary landed before startup finished; wait for the exit.
+			await eventually(
+				async () => processHandle?.exitCode != null,
+				"boundary exit during startup",
+			);
+			continue;
+		}
+		const health = await healthState();
+		if (health.round.endsAt - health.now >= minRunwayMs) return health.round;
+		await eventually(
+			async () => processHandle?.exitCode != null,
+			"boundary exit after startup",
+			minRunwayMs + 15_000,
+		);
+	}
+	throw new Error("Could not start the game with enough runway");
+}
+
+async function claimedAnyLand(client: ZyncBaseClient) {
+	const rows = await chunks(client);
+	return rows.some((row) => row.owners.some((byte) => byte !== 0));
+}
+
+async function runLifecycle() {
+	// 1. A scheduled boundary with a human archives a round and restarts.
+	await stop();
+	const roundInPlay = await startWithRunway(
+		{ GAME_ROUND_MS: "20000" },
+		10_000,
+		true,
+	);
+	const player = await connect("Rounders");
+	const heartbeat = () => {
+		try {
+			player.client.presence.set({
+				name: "Rounder",
+				countryCode: player.countryCode,
+				direction: "right",
+				seq: 1,
+			});
+		} catch {
+			// The server is exiting; the archive was already written.
+		}
+	};
+	heartbeat();
+	const heartbeatTimer = setInterval(heartbeat, 500);
+	timers.push(heartbeatTimer);
+	await eventually(
+		async () => claimedAnyLand(player.client),
+		"player claims land before the boundary",
+	);
+	await eventually(
+		async () => processHandle?.exitCode != null,
+		"boundary restarts the process",
+	);
+	clearInterval(heartbeatTimer);
+	assert.equal(processHandle?.exitCode, 0);
+	const historyDir = join(assets, "history");
+	const saved = JSON.parse(
+		await readFile(join(historyDir, `${roundInPlay.number}.json`), "utf8"),
+	);
+	assert.equal(saved.number, roundInPlay.number);
+	assert.ok(
+		saved.humans >= 1,
+		"the archive records the human present at the end",
+	);
+	assert.ok(saved.winner, "the archive records a winner");
+	const index = JSON.parse(
+		await readFile(join(historyDir, "index.json"), "utf8"),
+	);
+	assert.equal(index[0].number, roundInPlay.number);
+	// The next boot wipes the world and serves results through the edge.
+	const next = await startWithRunway({ GAME_ROUND_MS: "20000" }, 10_000);
+	assert.equal(next.number, roundInPlay.number + 1);
+	assert.equal((await fetch(`${origin}/history.html`)).status, 200);
+	assert.equal(
+		(await fetch(`${origin}/history/${roundInPlay.number}.json`)).status,
+		200,
+	);
+	const png = await fetch(`${origin}/history/${roundInPlay.number}.png`);
+	assert.equal(png.status, 200);
+	assert.equal(png.headers.get("content-type"), "image/png");
+	const wiped = await connect();
+	assert.ok(
+		(await chunks(wiped.client)).every((row) =>
+			row.owners.every((byte) => byte === 0),
+		),
+		"boot after an archive starts a clean world",
+	);
+	console.log("PASS: scheduled boundary archives, restarts, and wipes");
+
+	// 2. An idle reset restarts without touching the archive or round number.
+	await stop();
+	const idleRound = await startWithRunway(
+		{ GAME_ROUND_MS: "120000", GAME_IDLE_WIPE_MS: "1500" },
+		30_000,
+		true,
+	);
+	const idler = await connect("Idlers");
+	const idleHeartbeat = () => {
+		try {
+			idler.client.presence.set({
+				name: "Idler",
+				countryCode: idler.countryCode,
+				direction: "right",
+				seq: 1,
+			});
+		} catch {
+			// The server is exiting.
+		}
+	};
+	idleHeartbeat();
+	const idleTimer = setInterval(idleHeartbeat, 500);
+	timers.push(idleTimer);
+	await eventually(
+		async () => claimedAnyLand(idler.client),
+		"idle player claims land",
+	);
+	clearInterval(idleTimer);
+	idler.client.disconnect();
+	await eventually(
+		async () => processHandle?.exitCode != null,
+		"idle reset restarts the process",
+	);
+	assert.equal(processHandle?.exitCode, 0);
+	const afterIdle = await startWithRunway(
+		{ GAME_ROUND_MS: "120000", GAME_IDLE_WIPE_MS: "0" },
+		30_000,
+	);
+	assert.equal(
+		afterIdle.number,
+		idleRound.number,
+		"idle keeps the round number",
+	);
+	assert.ok(
+		!(await readdir(historyDir)).includes(`${idleRound.number}.json`),
+		"idle reset writes no history",
+	);
+	console.log("PASS: idle reset restarts quietly");
+
+	// 3. A boundary without humans also writes no history.
+	await stop();
+	const emptyRound = await startWithRunway(
+		{ GAME_ROUND_MS: "15000" },
+		5000,
+		true,
+	);
+	await eventually(
+		async () => processHandle?.exitCode != null,
+		"empty boundary restarts the process",
+	);
+	const afterEmpty = await startWithRunway({ GAME_ROUND_MS: "15000" }, 5000);
+	assert.equal(
+		afterEmpty.number,
+		emptyRound.number,
+		"an empty boundary keeps the round number",
+	);
+	assert.ok(
+		!(await readdir(historyDir)).includes(`${emptyRound.number}.json`),
+		"an empty boundary writes no history",
+	);
+	console.log("PASS: quiet boundaries write no history");
+
+	// 4. A round whose boundary passed while the process was down is archived
+	// by the next boot before the fresh world starts.
+	await stop();
+	const crashed = await startWithRunway(
+		{ GAME_ROUND_MS: "120000" },
+		30_000,
+		true,
+	);
+	const crasher = await connect("Crashers");
+	const crashHeartbeat = () => {
+		try {
+			crasher.client.presence.set({
+				name: "Crasher",
+				countryCode: crasher.countryCode,
+				direction: "right",
+				seq: 1,
+			});
+		} catch {
+			// The server is exiting.
+		}
+	};
+	crashHeartbeat();
+	const crashTimer = setInterval(crashHeartbeat, 500);
+	timers.push(crashTimer);
+	await eventually(
+		async () => claimedAnyLand(crasher.client),
+		"crash-test player claims land",
+	);
+	clearInterval(crashTimer);
+	await stop();
+	const cursorPath = join(dataDir, "round.json");
+	const cursor = JSON.parse(await readFile(cursorPath, "utf8"));
+	await writeFile(
+		cursorPath,
+		JSON.stringify({ ...cursor, endsAt: Date.now() - 1000 }),
+	);
+	const recovered = await startWithRunway({ GAME_ROUND_MS: "120000" }, 30_000);
+	assert.equal(
+		recovered.number,
+		crashed.number + 1,
+		"an expired round archives at boot",
+	);
+	assert.ok(
+		(await readdir(historyDir)).includes(`${crashed.number}.json`),
+		"the expired round's final map is archived",
+	);
+	const cleaned = await connect();
+	assert.ok(
+		(await chunks(cleaned.client)).every((row) =>
+			row.owners.every((byte) => byte === 0),
+		),
+		"the expired round's world is wiped at boot",
+	);
+	console.log("PASS: an expired round archives at boot and wipes");
 }
 
 async function connect(countryName?: string) {
@@ -168,7 +445,7 @@ async function connect(countryName?: string) {
 	assert.equal(payload.session.tokenExpiresAt, jwt.exp);
 	assert.ok(payload.session.tokenExpiresAt > payload.exp);
 	const client = createClient({
-		url: `ws://localhost:${port}/ws`,
+		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token },
 		storeNamespace: NAMESPACE,
 		presenceNamespace: NAMESPACE,
@@ -195,14 +472,25 @@ async function chunks(client: ZyncBaseClient) {
 
 try {
 	await start();
-	const { countries: lobbyCountries, ...health } = await (
-		await fetch(`${origin}/health`)
-	).json();
+	const {
+		countries: lobbyCountries,
+		round: lobbyRound,
+		now: healthNow,
+		...health
+	} = await (await fetch(`${origin}/health`)).json();
 	assert.deepEqual(health, {
 		ready: true,
 		players: 0,
 		bots: 10,
 	});
+	assert.equal(typeof healthNow, "number");
+	assert.equal(typeof lobbyRound.number, "number");
+	assert.equal(
+		lobbyRound.endsAt % 7_200_000,
+		0,
+		"round boundaries land on even UTC hours",
+	);
+	assert.ok(lobbyRound.endsAt > healthNow);
 	assert.equal(lobbyCountries.length, 5, "lobby lists countries before login");
 	assert.equal(
 		new Set(lobbyCountries.map((country: Country) => country.color)).size,
@@ -567,11 +855,12 @@ try {
 	console.log(
 		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
 	);
+	if (!useTls) await runLifecycle();
 } catch (error) {
 	console.error(logs);
 	throw error;
 } finally {
 	await stop();
-	await stopEdge();
+	await edge.stop();
 	await rm(dataDir, { recursive: true, force: true });
 }

@@ -2,6 +2,12 @@
 
 A small multiplayer territory game using ZyncBase's real presence → store path. The browser sends direction input; a Bun simulation determines movement and ownership. Browsers receive territory and player dots together through map-chunk subscriptions.
 
+## Rounds and history
+
+Rounds end on absolute two-hour boundaries at even UTC hours. A round is archived only when a human is connected when it ends: the winner, final standings, and a full-map PNG are written to `dist/history/`, then the whole stack (simulation and ZyncBase) restarts. Boot wipes the world and starts the next round, so process memory is recycled every round. A quiet world (no players for ten minutes) restarts early without writing history, and a boundary with nobody online writes nothing either. Round numbers advance only when a round is archived, and the last **20** rounds are kept.
+
+During play the header shows a countdown. At the deadline each client navigates to `/history.html?round=N`; the viewer polls until the round's data has been deployed. Results are Cloudflare Worker static assets, so they load while the simulation restarts. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, boot deploys the assets with Wrangler only when their content hash changed; the game never waits on a deploy and a failed deploy retries in the background.
+
 ## Run locally
 
 From the repository root, with Zig 0.16, Bun, OpenSSL, and the repository's native build prerequisites installed:
@@ -21,13 +27,7 @@ The launch command builds the SDK and a ReleaseFast ZyncBase executable, then st
 bun run demo:game:dev
 ```
 
-Stop with Ctrl+C. Territory is stored in `data/pixel-conquest/`. To clear the world, stop the running game first, then run:
-
-```sh
-bun run demo:game:dev --reset
-```
-
-The reset removes game chunks and countries and starts a fresh game. It does not touch other ZyncBase data directories.
+Stop with Ctrl+C. Territory is stored in `data/pixel-conquest/`; generated history and assets live in `examples/pixel-conquest/dist/history/`. The world resets on its own every round; to force a fresh world at the next start, run `bun run demo:game:dev --reset`. The reset removes game chunks and countries and starts a fresh round. It does not touch other ZyncBase data directories or the history archive.
 
 ## Cloudflare and VPS
 
@@ -45,11 +45,18 @@ Build an uploadable browser directory with `bun run demo:game:build`. Its output
 | `NODE_EXTRA_CA_CERTS` | Unset | CA PEM trusted by the simulation's HTTPS/WSS client. |
 | `GAME_DATA_DIR` | `<repo>/data/pixel-conquest` | Persistent game data. Run one simulation against a data directory. |
 | `GAME_SERVER_BIN` | `<repo>/zig-out/bin/zyncbase` | Prebuilt ZyncBase executable. |
+| `GAME_ROUND_MS` | `7200000` | Round boundary period; the default aligns with even UTC hours. |
+| `GAME_IDLE_WIPE_MS` | `600000` | Restart a quiet world after this long with no players; `0` disables. |
+| `GAME_ASSETS_DIR` | `examples/pixel-conquest/dist` | Browser assets plus generated history; the Wrangler upload directory. |
+| `GAME_DEPLOY` | Unset | `0` disables the hash-gated Wrangler deploy. |
+| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Unset | Set both to deploy changed assets at boot (see below). |
 | `GAME_DEV_PORT` | `8080` | Development router port, used only by `demo:game:dev`. |
 
 With TLS, the simulation connects to the hostname from `GAME_ORIGIN` on `GAME_DB_PORT`. Map that hostname to `::1` in the VM's `/etc/hosts` so simulation traffic stays local while certificate verification stays enabled. Without TLS it connects to `127.0.0.1`.
 
-Changing the hostname requires restarting with the matching origin. Player tokens last 24 hours; a server restart or expired token requires rejoining. Territory remains owned by the country.
+Changing the hostname requires restarting with the matching origin. Player tokens last 24 hours; a server restart or expired token requires rejoining. The round rollover restarts the server by design, so players rejoin through the lobby for the next round.
+
+Once history lives in the Worker assets, the VM is the only deploy source: a `wrangler deploy` from your Mac uploads a `dist/` without `history/` and drops published results from the edge. Build on the VM (or copy `dist/` over intact) and restart; the server deploys on the next boot when the asset hash changed.
 
 ## Prototype choices
 
@@ -65,6 +72,7 @@ Changing the hostname requires restarting with the matching origin. Player token
 - Admission is capped at 1024 humans and 64 live countries for this demo, with bots yielding space as humans join. These are product limits, **not a measured server capacity**. Newcomers join an existing country once 64 exist; a country with no land and no live players is deleted, freeing its slot and name, while a landless country with live players survives. The lobby polls `/health` for the country roster and disables creation at 64 countries; it disables joining and reports `The world is offline` when the simulation is down. The simulation rechecks admission if the roster changes while joining. No rounds, victory rules, body-blocking, or minimap yet.
 - Countries receive an unused color from a fixed 64-color palette, sampled for separation in OKLab with varied hues and lightness. Colors persist across restarts and become reusable only when their country is deleted. Names in the picker and scoreboard supplement colors; 64 colors alone cannot provide reliable identification for every viewer.
 - Admission is open. `/session` issues player tokens without credentials, while the existing origin check, shared 120-session-per-minute budget, player cap, and store-write permissions remain enforced.
+- Rounds are wall-clock anchored: boundaries are absolute multiples of `GAME_ROUND_MS` (2 h → even UTC hours), so restarts resume the same deadline. A round is archived only when a human is connected when it ends, at most 20 results are kept, and every round end or idle reset exits the process so the supervisor starts a clean simulation and ZyncBase pair. `dist/history/` is the archive and the Wrangler upload source; the view is `history.html`, a static page that polls for results while they deploy.
 - Bots prefer nearby unclaimed or enemy land, avoid water, and stay near human activity. They use the same movement costs and authoritative store updates as people. This is a simple gameplay opponent, not a simulation of browser connections or network load.
 
 The terminal logs cumulative inputs, ticks, committed flushes, changed chunk writes, chunk payload bytes (before subscriber fan-out), and the latest commit duration. The browser displays input-to-view time measured against its own change clock. These are diagnostic observations, not a throughput benchmark. Measure the complete workload on the VPS, including actual outgoing traffic and overlapping visible-chunk subscriptions, before drawing performance conclusions; FortiEDR makes this development machine unsuitable for that comparison.
@@ -79,7 +87,7 @@ bunx biome check --write --error-on-warnings
 bun run lint
 ```
 
-`test:game` checks movement costs, visual sub-steps and corrections, stop/resume behavior, chunk boundaries, input expiry, map data, player-name validation, bot teams and replacement counts, and restart reconciliation. Its real-server smoke checks use isolated temporary databases and a development router mirroring Cloudflare. They exercise plaintext and IPv6/TLS origins (with a temporary trusted certificate generated by OpenSSL), and SDK clients to check open admission, named dots, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset.
+`test:game` checks movement costs, visual sub-steps and corrections, stop/resume behavior, chunk boundaries, input expiry, map data, player-name validation, bot teams and replacement counts, restart reconciliation, round-boundary math, snapshot PNG encoding, archive pruning, and the deploy hash gate. Its real-server smoke checks use isolated temporary databases and a development router mirroring Cloudflare. They exercise plaintext and IPv6/TLS origins (with a temporary trusted certificate generated by OpenSSL), and SDK clients to check open admission, named dots, subscriptions, write restrictions, disconnect cleanup, bot retirement and return, persistence, and manual reset. The plaintext run also drives the round lifecycle: a scheduled boundary with a human archives a round and wipes on boot, an idle reset restarts without history or a new number, and a quiet boundary writes nothing.
 
 The enclosure tests exhaust all 4 × 4 ownership masks against an independent boundary flood and check capture, defense, water, restart, and tick batching. Performance checks verify that ordinary extensions skip scans, local searches share a 1,024-cell budget per country, and large closures use one fallback scan, independently of publication. To print median step times as well:
 
