@@ -238,7 +238,7 @@ async function apiCall(
 
 async function readWorkerConfig(configPath: string) {
 	const source = await readFile(configPath, "utf8");
-	const parsed = JSON.parse(stripJsonComments(source)) as {
+	const parsed = Bun.JSONC.parse(source) as {
 		name?: unknown;
 		compatibility_date?: unknown;
 	};
@@ -250,10 +250,6 @@ async function readWorkerConfig(configPath: string) {
 	)
 		throw new Error("wrangler.jsonc is missing compatibility_date");
 	return { name: parsed.name, compatibilityDate: parsed.compatibility_date };
-}
-
-function stripJsonComments(source: string) {
-	return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
 function mimeType(path: string) {
