@@ -45,9 +45,13 @@ async function eventually<T>(
 }
 
 const dataDir = await mkdtemp(join(tmpdir(), "pixel-conquest-smoke-"));
-const port = await freePort(),
-	authPort = await freePort(),
-	databasePort = await freePort();
+// Allocate concurrently so the three listeners are open at once and the OS
+// cannot hand the same ephemeral port to more than one of them.
+const [port, authPort, databasePort] = await Promise.all([
+	freePort(),
+	freePort(),
+	freePort(),
+]);
 const origin = `http://localhost:${port}`;
 const useTls = process.argv.includes("--tls");
 const certFile = join(dataDir, "cert.pem");
