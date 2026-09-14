@@ -79,6 +79,14 @@ let direction: Direction = "idle";
 // Heading used to choose the prefetch edge. Kept after release so stopping
 // does not drop the leading margin and churn subscriptions on the next move.
 let prefetchDirection: Direction = "idle";
+// Alternation: when two orthogonal directions are held (keyboard) or the
+// joystick provides a diagonal vector, we alternate between the two axes
+// on each confirmed server move instead of using a timer — this avoids
+// leaking credit across direction changes on the server.
+let altDirections: Direction[] = [];
+let altIndex = 0;
+let joystickVector = { x: 0, y: 0 };
+let lastSentDirection: Direction = "idle";
 let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
 let scale = 8;
@@ -311,6 +319,42 @@ function toMotion(dot: Dot): MotionDot {
 	return { ...dot, country_id: myCountry() };
 }
 
+function positionChanged(a: Dot, b: Dot) {
+	return a.x !== b.x || a.y !== b.y || a.player_id !== b.player_id;
+}
+
+function isConsistentMove(from: Dot, to: Dot, dir: Direction): boolean {
+	let dx = to.x - from.x;
+	dx -= WIDTH * Math.round(dx / WIDTH);
+	const dy = to.y - from.y;
+	switch (dir) {
+		case "left":
+			return dx < 0 && dy === 0;
+		case "right":
+			return dx > 0 && dy === 0;
+		case "up":
+			return dx === 0 && dy < 0;
+		case "down":
+			return dx === 0 && dy > 0;
+		default:
+			return false;
+	}
+}
+
+function updateSelfMotion(self: MotionDot, now: number) {
+	const moving = online ? direction : "idle";
+	if (motion) {
+		const confirmed =
+			positionChanged(self, motion.dot) &&
+			online &&
+			isConsistentMove(motion.dot, self, lastSentDirection);
+		motion.update(self, moving, now);
+		if (confirmed) onMoveConfirmed();
+		return;
+	}
+	motion = new LocalMotion(self, moving, now, land, ownerAt);
+}
+
 function receive(row: ChunkRow) {
 	const index = Number(row.id);
 	if (!Number.isSafeInteger(index)) return;
@@ -325,9 +369,8 @@ function receive(row: ChunkRow) {
 	dirty = true;
 	const self = dots.find((dot) => dot.player_id === myId);
 	const now = performance.now();
-	const moving = online ? direction : "idle";
 	const selfMotion = self ? toMotion(self) : undefined;
-	if (motion && selfMotion) motion.update(selfMotion, moving, now);
+	if (selfMotion) updateSelfMotion(selfMotion, now);
 	if (!self || !selfMotion) return;
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
@@ -335,7 +378,6 @@ function receive(row: ChunkRow) {
 		connection.textContent = `Live · ${Math.max(0, now - lastChangeAt)} ms input → view`;
 	}
 	lastOwnDot = now;
-	if (!motion) motion = new LocalMotion(selfMotion, moving, now, land, ownerAt);
 	const position = motion.position(lastOwnDot);
 	camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	const country = countries.get(myCountry());
@@ -499,19 +541,105 @@ function publish(changed = false) {
 	});
 }
 
-function movement() {
-	const next = [...held.values()].at(-1) ?? "idle";
+function setDirection(next: Direction) {
 	if (next === direction) return;
 	direction = next;
+	lastSentDirection = next;
 	if (next !== "idle") prefetchDirection = next;
 	publish(true);
 	updateSubscriptions();
 }
 
+// Called when the server confirms we actually moved (position changed in a
+// chunk update). Alternate to the next direction in the sequence so each
+// axis gets its full terrain cost before switching.
+function onMoveConfirmed() {
+	if (altDirections.length < 2) return;
+	// Joystick: weighted random based on analog magnitude so the cadence
+	// matches the stick angle. Keyboard: simple 50/50 toggle.
+	if (joystickVector.x !== 0 || joystickVector.y !== 0) {
+		const ax = Math.abs(joystickVector.x);
+		const ay = Math.abs(joystickVector.y);
+		const total = ax + ay;
+		altIndex = total > 0 && Math.random() * total >= ax ? 1 : 0;
+	} else {
+		altIndex = (altIndex + 1) % altDirections.length;
+	}
+	setDirection(altDirections[altIndex]);
+}
+
+// Recompute alternation state from keyboard held keys.
+function heldAxes(): { x: number; y: number } {
+	let x = 0,
+		y = 0;
+	for (const dir of held.values()) {
+		if (dir === "left") x = -1;
+		else if (dir === "right") x = 1;
+		else if (dir === "up") y = -1;
+		else if (dir === "down") y = 1;
+	}
+	return { x, y };
+}
+
+function axisDir(axis: "x" | "y", sign: number): Direction {
+	if (axis === "x") return sign > 0 ? "right" : "left";
+	return sign > 0 ? "down" : "up";
+}
+
+function updateKeyboardInput() {
+	const { x, y } = heldAxes();
+	if (x !== 0 && y !== 0) {
+		const h = axisDir("x", x);
+		const v = axisDir("y", y);
+		if (altDirections[0] === h && altDirections[1] === v) return;
+		altDirections = [h, v];
+		altIndex = 0;
+		setDirection(h);
+		return;
+	}
+	altDirections = [];
+	altIndex = 0;
+	if (x !== 0) setDirection(axisDir("x", x));
+	else if (y !== 0) setDirection(axisDir("y", y));
+	else setDirection("idle");
+}
+
+// Joystick sends a normalized vector. We pick the two dominant cardinal
+// axes and use weighted random selection on each confirmed move.
+function updateJoystickInput() {
+	const ax = Math.abs(joystickVector.x);
+	const ay = Math.abs(joystickVector.y);
+	if (ax < 0.15 && ay < 0.15) {
+		altDirections = [];
+		joystickVector = { x: 0, y: 0 };
+		setDirection("idle");
+		return;
+	}
+	const h = joystickVector.x > 0 ? "right" : "left";
+	const v = joystickVector.y > 0 ? "down" : "up";
+	if (ax >= ay * 2) {
+		// Mostly horizontal: go straight.
+		altDirections = [];
+		setDirection(h);
+	} else if (ay >= ax * 2) {
+		// Mostly vertical: go straight.
+		altDirections = [];
+		setDirection(v);
+	} else {
+		// Diagonal: alternate weighted by the analog magnitude.
+		altDirections = [h, v];
+		altIndex = 0;
+		setDirection(h);
+	}
+}
+
 function release() {
 	held.clear();
-	direction = "idle";
-	publish(true);
+	altDirections = [];
+	altIndex = 0;
+	joystickVector = { x: 0, y: 0 };
+	lastSentDirection = "idle";
+	setDirection("idle");
 }
 
 const keys: Record<string, Direction> = {
@@ -529,12 +657,12 @@ window.addEventListener("keydown", (event) => {
 	event.preventDefault();
 	if (event.repeat) return;
 	held.set(event.code, keys[event.code]);
-	movement();
+	updateKeyboardInput();
 });
 window.addEventListener("keyup", (event) => {
 	if (held.delete(event.code)) {
 		event.preventDefault();
-		movement();
+		updateKeyboardInput();
 	}
 });
 addEventListener("blur", release);
@@ -579,14 +707,17 @@ function startJoystick() {
 	});
 	joystick = stick;
 	stick.on("move", (evt) => {
-		held.delete("joystick");
-		const next: Direction = evt.data.direction?.angle ?? "idle";
-		if (next !== "idle") held.set("joystick", next);
-		movement();
+		const vector = evt.data.vector;
+		if (vector) {
+			joystickVector = { x: vector.x, y: -vector.y };
+			updateJoystickInput();
+		}
 	});
 	stick.on("end", () => {
-		held.delete("joystick");
-		movement();
+		joystickVector = { x: 0, y: 0 };
+		altDirections = [];
+		altIndex = 0;
+		setDirection("idle");
 	});
 }
 
