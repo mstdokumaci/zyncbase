@@ -573,9 +573,9 @@ function startJoystick() {
 		position: { top: "50%", left: "50%" },
 		size: 130,
 		threshold: 0.15,
-		color: "#506773",
+		color: { front: "#eef0e8", back: "#101b28b8" },
 		fadeTime: 150,
-		restOpacity: 0.6,
+		restOpacity: 1,
 	});
 	joystick = stick;
 	stick.on("move", (evt) => {
