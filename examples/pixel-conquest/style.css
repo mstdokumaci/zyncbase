@@ -413,12 +413,15 @@ kbd {
 	opacity: 1 !important;
 	box-shadow: 0 2px 6px #00000066;
 }
-.joystick.flash {
-	animation: joystick-flash 0.8s ease-in-out 3;
+.joystick.flash .front {
+	animation: joystick-vibrate 0.3s ease-in-out 6;
 }
-@keyframes joystick-flash {
-	50% {
-		opacity: 0.35;
+@keyframes joystick-vibrate {
+	25% {
+		translate: -4px 0;
+	}
+	75% {
+		translate: 4px 0;
 	}
 }
 @media (max-width: 800px) {
