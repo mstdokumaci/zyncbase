@@ -566,15 +566,50 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(
 		});
 }
 
-function zoom(change: number) {
+function setScale(next: number) {
 	if (!playing) return;
-	scale = Math.min(16, Math.max(2, scale + change));
+	const clamped = Math.min(16, Math.max(2, Math.round(next)));
+	if (clamped === scale) return;
+	scale = clamped;
 	element("zoom-label").textContent = `${scale}×`;
 	dirty = true;
 	updateSubscriptions();
 }
+function zoom(change: number) {
+	setScale(scale + change);
+}
 element("zoom-in").addEventListener("click", () => zoom(2));
 element("zoom-out").addEventListener("click", () => zoom(-2));
+
+// Pinch maps two-finger spread to integer scale steps so pixels stay crisp.
+// The camera stays player-centred, so there is no focal point to track.
+let pinchStart = 0;
+let pinchScale = 8;
+const touchGap = (touches: TouchList) =>
+	Math.hypot(
+		touches[0].clientX - touches[1].clientX,
+		touches[0].clientY - touches[1].clientY,
+	);
+canvas.addEventListener("touchstart", (event) => {
+	if (event.touches.length !== 2) return;
+	pinchStart = touchGap(event.touches);
+	pinchScale = scale;
+});
+canvas.addEventListener(
+	"touchmove",
+	(event) => {
+		if (!pinchStart || event.touches.length !== 2) return;
+		event.preventDefault();
+		const gap = touchGap(event.touches);
+		if (gap > 0) setScale(pinchScale * (gap / pinchStart));
+	},
+	{ passive: false },
+);
+const endPinch = (event: TouchEvent) => {
+	if (event.touches.length < 2) pinchStart = 0;
+};
+canvas.addEventListener("touchend", endPinch);
+canvas.addEventListener("touchcancel", endPinch);
 
 function setScoreboardOpen(open: boolean) {
 	scoreboardPanel.classList.toggle("collapsed", !open);

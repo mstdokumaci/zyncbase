@@ -52,6 +52,7 @@ button:disabled {
 	width: 100vw;
 	height: 100dvh;
 	image-rendering: pixelated;
+	touch-action: none;
 }
 header,
 footer {
@@ -89,6 +90,10 @@ header {
 	font-size: 22px;
 	line-height: 1;
 	margin-right: 6px;
+}
+.brand-text {
+	display: flex;
+	gap: 7px;
 }
 .connection {
 	font-size: 11px;
@@ -455,5 +460,41 @@ kbd {
 	}
 	.intro {
 		line-height: 1.4;
+	}
+}
+@media (max-width: 480px) {
+	.brand-text {
+		flex-direction: column;
+		gap: 0;
+	}
+	#lobby {
+		align-items: flex-start;
+		padding-top: 16px;
+	}
+	.welcome {
+		margin: 0 auto;
+	}
+}
+@media (max-width: 380px) {
+	.actions {
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 6px;
+	}
+	.round,
+	.nav {
+		padding: 4px 10px;
+		line-height: 1.2;
+	}
+}
+@media (max-width: 800px) and (pointer: coarse) {
+	footer {
+		display: none;
+	}
+	#lobby {
+		inset: 68px 0 0;
+	}
+	.direction-pad {
+		bottom: 20px;
 	}
 }
