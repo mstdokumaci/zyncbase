@@ -344,13 +344,12 @@ function isConsistentMove(from: Dot, to: Dot, dir: Direction): boolean {
 function updateSelfMotion(self: MotionDot, now: number) {
 	const moving = online ? direction : "idle";
 	if (motion) {
-		if (
+		const confirmed =
 			positionChanged(self, motion.dot) &&
 			online &&
-			isConsistentMove(motion.dot, self, lastSentDirection)
-		)
-			onMoveConfirmed();
+			isConsistentMove(motion.dot, self, lastSentDirection);
 		motion.update(self, moving, now);
+		if (confirmed) onMoveConfirmed();
 		return;
 	}
 	motion = new LocalMotion(self, moving, now, land, ownerAt);
