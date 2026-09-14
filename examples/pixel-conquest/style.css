@@ -10,6 +10,8 @@
 }
 body {
 	margin: 0;
+}
+body:has(#map) {
 	overflow: hidden;
 }
 [hidden] {
@@ -74,27 +76,44 @@ header {
 	gap: 7px;
 	color: inherit;
 	text-decoration: none;
+	font-family: "Avenir Next", ui-sans-serif, system-ui, sans-serif;
 	font-size: 14px;
 	letter-spacing: 2px;
+	line-height: 1.2;
 }
 .brand strong {
-	font-weight: 750;
+	font-weight: 600;
 }
 .mark {
 	color: #f1cb7c;
-	font-size: 30px;
-	margin-right: 7px;
+	font-size: 22px;
+	line-height: 1;
+	margin-right: 6px;
 }
 .connection {
+	font-size: 11px;
+	color: #99acab;
+	white-space: nowrap;
+}
+.actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-left: auto;
+}
+.nav {
+	font-family: "Avenir Next", ui-sans-serif, system-ui, sans-serif;
 	font-size: 12px;
-	color: #b9c7c7;
+	color: #ffe3a0;
+	text-decoration: none;
 	padding: 9px 14px;
 	border: 1px solid #cadbc51c;
 	border-radius: 99px;
 	background: #101b2899;
+	white-space: nowrap;
+	line-height: normal;
 }
 .round {
-	margin-left: auto;
 	font-size: 12px;
 	color: #ffe3a0;
 	padding: 9px 14px;
@@ -109,7 +128,6 @@ header {
 	padding: 36px max(7vw, 36px);
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 60px;
 	overflow: auto;
 	background: linear-gradient(
@@ -122,6 +140,7 @@ header {
 .welcome {
 	width: 390px;
 	flex-shrink: 0;
+	margin-right: auto;
 }
 .eyebrow {
 	color: #e1bd77;
@@ -131,7 +150,7 @@ header {
 	margin: 0 0 18px;
 }
 h1 {
-	font-size: clamp(56px, 6vw, 88px);
+	font-size: clamp(40px, min(6vw, 7.5vh), 88px);
 	letter-spacing: -5px;
 	font-weight: 500;
 	line-height: 0.95;
@@ -144,14 +163,18 @@ h1 em {
 }
 .intro {
 	color: #bccacb;
-	max-width: 330px;
-	line-height: 1.7;
+	max-width: 360px;
+	line-height: 1.5;
 	font-size: 15px;
 }
 form {
 	margin: 28px 0 12px;
 	display: grid;
 	gap: 10px;
+}
+.field {
+	display: grid;
+	gap: 5px;
 }
 label {
 	color: #d5dcd7;
@@ -165,29 +188,24 @@ select {
 	padding: 13px 15px;
 	border-radius: 5px;
 	font-size: 13px;
-	margin-bottom: 8px;
 	width: 100%;
 }
 input::placeholder {
 	color: #8e9fa6;
 }
 #country-slots {
-	margin: -8px 0 4px;
+	margin: -4px 0 2px;
 }
 #country-preview {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	margin-bottom: 8px;
 }
 #country-preview .swatch {
 	width: 18px;
 	height: 18px;
 	border: 1px solid #ffffff60;
 	flex-shrink: 0;
-}
-#new-country input {
-	margin-top: 10px;
 }
 .primary {
 	background: #f1cb7c;
@@ -212,51 +230,6 @@ input::placeholder {
 	font-size: 13px;
 	margin: 0;
 	min-height: 18px;
-}
-.field-notes {
-	align-self: flex-end;
-	max-width: 315px;
-	background: #101b28d9;
-	padding: 28px;
-	border: 1px solid #abc1ae29;
-	border-radius: 8px;
-	margin-bottom: 50px;
-}
-h2 {
-	font-size: 19px;
-	font-weight: 500;
-	margin: 0 0 18px;
-}
-.field-notes > p:not(.eyebrow) {
-	color: #b2c2c3;
-	font-size: 12px;
-	line-height: 1.8;
-}
-.speed-row {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	font-size: 11px;
-	margin: 17px 0;
-}
-.speed-row > span:first-child {
-	flex: 1;
-}
-.speed-row b {
-	width: 40px;
-	text-align: right;
-	font-weight: 400;
-	color: #a9bdc0;
-}
-.speed {
-	color: #e1bd77;
-	letter-spacing: -2px;
-}
-.speed.fast {
-	color: #95cba2;
-}
-.speed.slow {
-	color: #d88e84;
 }
 footer {
 	bottom: 0;
@@ -417,11 +390,17 @@ kbd {
 		font-size: 11px;
 		letter-spacing: 1px;
 	}
+	.mark {
+		font-size: 22px;
+	}
 	.connection {
-		max-width: 150px;
-		font-size: 10px;
+		display: none;
 	}
 	.round {
+		font-size: 10px;
+		padding: 7px 10px;
+	}
+	.nav {
 		font-size: 10px;
 		padding: 7px 10px;
 	}
@@ -433,13 +412,6 @@ kbd {
 	.welcome {
 		width: min(100%, 390px);
 		margin: auto;
-	}
-	.field-notes {
-		display: none;
-	}
-	h1 {
-		font-size: 58px;
-		margin: 12px 0;
 	}
 	.panel {
 		top: 78px;
@@ -469,16 +441,19 @@ kbd {
 @media (max-height: 700px) {
 	#lobby {
 		align-items: flex-start;
-		padding-top: 12px;
-	}
-	h1 {
-		font-size: 54px;
-		margin: 15px 0;
-	}
-	form {
-		margin-top: 14px;
+		padding-top: 10px;
 	}
 	.eyebrow {
-		margin-bottom: 8px;
+		margin-bottom: 6px;
+	}
+	h1 {
+		margin: 10px 0;
+	}
+	form {
+		margin: 14px 0 8px;
+		gap: 8px;
+	}
+	.intro {
+		line-height: 1.4;
 	}
 }
