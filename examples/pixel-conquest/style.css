@@ -263,13 +263,45 @@ kbd {
 	border-radius: 4px;
 	font-size: 10px;
 }
+.controls-hint {
+	position: fixed;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 28px;
+	pointer-events: none;
+	opacity: 0;
+	z-index: 3;
+}
+.controls-hint .keys {
+	display: flex;
+	gap: 6px;
+}
+.controls-hint kbd {
+	width: 34px;
+	height: 38px;
+	font-size: 15px;
+}
+.controls-hint.flash {
+	animation: controls-hint-flash 0.9s ease-in-out 3;
+}
+@keyframes controls-hint-flash {
+	0%,
+	100% {
+		opacity: 0;
+	}
+	25%,
+	75% {
+		opacity: 1;
+	}
+}
 .zoom {
 	display: flex;
 	gap: 12px;
 	align-items: center;
 }
-.zoom button,
-.direction-pad button {
+.zoom button {
 	background: #1d2f3d;
 	border: 1px solid #506773;
 	border-radius: 5px;
@@ -364,27 +396,22 @@ kbd {
 	font-weight: 700;
 	color: #fff;
 }
-.direction-pad {
+.joystick {
 	position: fixed;
 	bottom: 92px;
 	right: 26px;
-	display: grid;
-	grid-template-columns: repeat(3, 42px);
-	gap: 6px;
-}
-.direction-pad button {
-	width: 42px;
-	height: 42px;
+	width: 130px;
+	height: 130px;
+	z-index: 2;
 	touch-action: none;
 }
-.direction-pad button:first-child {
-	grid-column: 2;
+.joystick.flash {
+	animation: joystick-flash 0.8s ease-in-out 3;
 }
-.direction-pad button:nth-child(2) {
-	grid-column: 1;
-}
-.direction-pad button:active {
-	background: #506773;
+@keyframes joystick-flash {
+	50% {
+		opacity: 0.35;
+	}
 }
 @media (max-width: 800px) {
 	header {
@@ -494,7 +521,7 @@ kbd {
 	#lobby {
 		inset: 68px 0 0;
 	}
-	.direction-pad {
-		bottom: 20px;
+	.joystick {
+		bottom: calc(20px + env(safe-area-inset-bottom, 0px));
 	}
 }

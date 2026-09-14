@@ -17,7 +17,8 @@
     "lint:fix": "zsort fix . --ban-prefix ./ --ban-prefix src/ && zig fmt src"
   },
   "dependencies": {
-    "@zyncbase/client": "workspace:*"
+    "@zyncbase/client": "workspace:*",
+    "nipplejs": "^1.0.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.10",

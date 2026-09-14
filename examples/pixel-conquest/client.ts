@@ -3,6 +3,7 @@ import {
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
+import nipplejs from "nipplejs";
 import { LocalMotion, type MotionDot } from "./motion";
 import {
 	CHUNK,
@@ -545,25 +546,54 @@ addEventListener("pagehide", () => {
 	release();
 	client?.disconnect();
 });
-for (const button of document.querySelectorAll<HTMLButtonElement>(
-	"[data-direction]",
-)) {
-	button.addEventListener("pointerdown", (event) => {
-		button.setPointerCapture(event.pointerId);
-		held.set(
-			`pointer:${event.pointerId}`,
-			button.dataset.direction as Direction,
-		);
+// Touch players get a fixed nipplejs stick. Its `move` event carries the
+// 45°-bucketed direction and drops it below the threshold, so recentering
+// the stick stops movement without waiting for release.
+let joystick: ReturnType<typeof nipplejs.create> | undefined;
+
+function flash(target: HTMLElement) {
+	target.classList.remove("flash");
+	target.getBoundingClientRect();
+	target.classList.add("flash");
+	target.addEventListener(
+		"animationend",
+		() => target.classList.remove("flash"),
+		{ once: true },
+	);
+}
+
+function startJoystick() {
+	const zone = element("joystick");
+	zone.hidden = false;
+	flash(zone);
+	const stick = nipplejs.create({
+		zone,
+		mode: "static",
+		// Static mode anchors the base at this position; centering it in the zone.
+		position: { top: "50%", left: "50%" },
+		size: 130,
+		threshold: 0.15,
+		color: "#506773",
+		fadeTime: 150,
+		restOpacity: 0.6,
+	});
+	joystick = stick;
+	stick.on("move", (evt) => {
+		held.delete("joystick");
+		const next: Direction = evt.data.direction?.angle ?? "idle";
+		if (next !== "idle") held.set("joystick", next);
 		movement();
 	});
-	button.addEventListener("touchstart", (event) => event.preventDefault(), {
-		passive: false,
+	stick.on("end", () => {
+		held.delete("joystick");
+		movement();
 	});
-	for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
-		button.addEventListener(type, (event) => {
-			held.delete(`pointer:${(event as PointerEvent).pointerId}`);
-			movement();
-		});
+}
+
+function stopJoystick() {
+	joystick?.destroy();
+	joystick = undefined;
+	element("joystick").hidden = true;
 }
 
 function setScale(next: number) {
@@ -637,7 +667,7 @@ function returnToLobby(message: string) {
 	playing = online = false;
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
-	element("direction-pad").hidden = true;
+	stopJoystick();
 	element("error").textContent = message;
 	connection.textContent = "Ready when you are.";
 	dirty = true;
@@ -780,7 +810,8 @@ element("join").addEventListener("submit", async (event) => {
 		scheduleRoundEnd();
 		lobby.hidden = true;
 		scoreboardPanel.hidden = false;
-		element("direction-pad").hidden = false;
+		if (matchMedia("(pointer: coarse)").matches) startJoystick();
+		else flash(element("controls-hint"));
 		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
 			const list = rows as Country[];
 			latestCountries = list;

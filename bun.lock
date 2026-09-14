@@ -5,6 +5,7 @@
     "": {
       "dependencies": {
         "@zyncbase/client": "workspace:*",
+        "nipplejs": "^1.0.4",
       },
       "devDependencies": {
         "@biomejs/biome": "2.4.10",
@@ -58,6 +59,8 @@
     "bun-types": ["bun-types@1.3.11", "", { "dependencies": { "@types/node": "*" } }, "sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg=="],
 
     "fast-check": ["fast-check@3.23.2", "", { "dependencies": { "pure-rand": "^6.1.0" } }, "sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A=="],
+
+    "nipplejs": ["nipplejs@1.0.4", "", {}, "sha512-YtvRZDuyWQ+tOj0nUjfnZt4ZQmJVWfK9+yPmV5OXpQ4k4AkOGcSfKvSXbPNkV0ERqc4eakkBSZ7/Wyx1y6h/Sg=="],
 
     "pure-rand": ["pure-rand@6.1.0", "", {}, "sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA=="],
 
