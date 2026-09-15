@@ -240,8 +240,10 @@ try {
 					GAME_DATA_DIR: join(output, "data"),
 					GAME_PROFILE_OUTPUT: join(output, "server.json"),
 					// Profiling ramp: admit quickly instead of pacing 1024
-					// sessions over ten minutes at the public demo budget.
+					// sessions over ten minutes at the public demo budget,
+					// and lift the per-network cap the ramp would trip.
 					GAME_SESSION_BUDGET: "100000",
+					GAME_PLAYERS_PER_IP: "0",
 				},
 				stdout: Bun.file(join(output, "server.log")),
 				stderr: Bun.file(join(output, "server-errors.log")),
