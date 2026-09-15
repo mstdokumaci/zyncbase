@@ -51,11 +51,11 @@ export class JoystickSteering {
 		}
 		const h = x > 0 ? "right" : "left";
 		const v = y > 0 ? "down" : "up";
-		if (ax >= ay * 2) {
+		if (ax >= ay * 3) {
 			this.reset();
 			return h;
 		}
-		if (ay >= ax * 2) {
+		if (ay >= ax * 3) {
 			this.reset();
 			return v;
 		}
