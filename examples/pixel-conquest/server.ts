@@ -186,8 +186,10 @@ if (!Number.isSafeInteger(countryLeaseMs) || countryLeaseMs < 0)
 	throw new Error("GAME_COUNTRY_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
-// Per-network player cap. 0 disables it; a round-robin or scripted client can
-// already defeat any IP limit, so this is a fairness guard, not security.
+// Per-network player cap. 0 disables it. A token outlives its pending lease
+// and a presence leave, so a scripted client can wait either out and connect
+// uncounted: a fairness guard, not security. Hard enforcement would live in
+// ZyncBase's connection layer, which sees every socket.
 const playersPerIp = Number(process.env.GAME_PLAYERS_PER_IP ?? 5);
 if (!Number.isSafeInteger(playersPerIp) || playersPerIp < 0)
 	throw new Error("GAME_PLAYERS_PER_IP must be a non-negative integer");
