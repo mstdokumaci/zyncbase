@@ -114,6 +114,13 @@ let lastFrame = 0;
 const OFFLINE = "The world is offline";
 const TAGLINE = "One pixel at a time.";
 
+// Quiet connection states fade out while playing (CSS keeps .warn visible):
+// only trouble should pull attention away from the map.
+function setConnection(text: string, warn = false) {
+	connection.textContent = text;
+	connection.classList.toggle("warn", warn);
+}
+
 function formatDuration(ms: number) {
 	const total = Math.max(0, Math.ceil(ms / 1000));
 	const hours = Math.floor(total / 3600);
@@ -131,6 +138,7 @@ function updateRoundLabel() {
 	}
 	const remaining = roundEndsAt - (Date.now() + serverSkew);
 	roundChip.hidden = false;
+	roundChip.classList.toggle("urgent", remaining <= 30_000);
 	roundChip.textContent =
 		remaining > 0
 			? `Round ${roundNumber} · ${formatDuration(remaining)} left`
@@ -239,15 +247,14 @@ async function checkHealth() {
 		showLobbyCountries(health.countries);
 		if (element("error").textContent === OFFLINE)
 			element("error").textContent = "";
-		if (connection.textContent.startsWith(OFFLINE))
-			connection.textContent = TAGLINE;
+		if (connection.textContent.startsWith(OFFLINE)) setConnection(TAGLINE);
 	} catch {
 		if (playing || joining) return;
 		worldReady = false;
 		countryChoice.disabled = true;
 		updateCountryChoice();
 		element("error").textContent = OFFLINE;
-		connection.textContent = `${OFFLINE} · Retrying…`;
+		setConnection(`${OFFLINE} · Retrying…`, true);
 	}
 }
 void checkHealth();
@@ -378,7 +385,7 @@ function receive(row: ChunkRow) {
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
 		// First sighting acks our input.
-		connection.textContent = TAGLINE;
+		setConnection(TAGLINE);
 	}
 	lastOwnDot = now;
 	const position = motion.position(lastOwnDot);
@@ -628,8 +635,24 @@ const keys: Record<string, Direction> = {
 	KeyD: "right",
 	ArrowRight: "right",
 };
+// Keyboard fallback for zoom now that the on-screen buttons are gone.
+const zoomKeys: Record<string, number> = {
+	Equal: 1,
+	Minus: -1,
+	NumpadAdd: 1,
+	NumpadSubtract: -1,
+};
 window.addEventListener("keydown", (event) => {
-	if (!playing || !online || !keys[event.code]) return;
+	if (!playing || !online) return;
+	// Browser shortcuts (zoom, select all, save) must keep working.
+	if (event.ctrlKey || event.metaKey) return;
+	const zoomStep = zoomKeys[event.code];
+	if (zoomStep !== undefined) {
+		event.preventDefault();
+		zoom(zoomStep);
+		return;
+	}
+	if (!keys[event.code]) return;
 	event.preventDefault();
 	if (event.repeat) return;
 	held.set(event.code, keys[event.code]);
@@ -641,10 +664,19 @@ window.addEventListener("keyup", (event) => {
 		updateKeyboardInput();
 	}
 });
+// Gameplay input self-heals: extensions, devtools, browser modals, and other
+// tabs can steal focus, so reclaim it whenever the page gets it back and
+// clear stale keys whenever it is lost.
+function focusMap() {
+	if (playing) canvas.focus({ preventScroll: true });
+}
 addEventListener("blur", release);
+addEventListener("focus", focusMap);
+canvas.addEventListener("pointerdown", focusMap);
 document.addEventListener("visibilitychange", () => {
 	release();
 	dirty = true;
+	if (!document.hidden) focusMap();
 });
 addEventListener("pagehide", () => {
 	release();
@@ -705,15 +737,31 @@ function setScale(next: number) {
 	const clamped = Math.min(16, Math.max(2, Math.round(next)));
 	if (clamped === scale) return;
 	scale = clamped;
-	element("zoom-label").textContent = `${scale}×`;
 	dirty = true;
 	updateSubscriptions();
 }
 function zoom(change: number) {
 	setScale(scale + change);
 }
-element("zoom-in").addEventListener("click", () => zoom(2));
-element("zoom-out").addEventListener("click", () => zoom(-2));
+// Wheel is the desktop zoom. Trackpads fire a burst of tiny deltas, so
+// accumulate until one notch-worth before stepping; ctrl+wheel is the
+// browser's own pinch zoom and stays untouched.
+let wheelAccum = 0;
+canvas.addEventListener(
+	"wheel",
+	(event) => {
+		if (!playing || event.ctrlKey) return;
+		event.preventDefault();
+		const unit =
+			event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
+		wheelAccum += event.deltaY * unit;
+		if (Math.abs(wheelAccum) >= 80) {
+			zoom(wheelAccum > 0 ? -1 : 1);
+			wheelAccum = 0;
+		}
+	},
+	{ passive: false },
+);
 
 // Pinch maps two-finger spread to integer scale steps so pixels stay crisp.
 // The camera stays player-centred, so there is no focal point to track.
@@ -752,6 +800,10 @@ function setScoreboardOpen(open: boolean) {
 scoreboardToggle.addEventListener("click", () =>
 	setScoreboardOpen(scoreboardPanel.classList.contains("collapsed")),
 );
+// Mouse clicks on HUD controls must not pull focus off the game surface.
+scoreboardToggle.addEventListener("pointerdown", (event) => {
+	if (event.pointerType === "mouse") event.preventDefault();
+});
 setScoreboardOpen(!matchMedia("(pointer: coarse)").matches);
 
 function returnToLobby(message: string) {
@@ -773,7 +825,7 @@ function returnToLobby(message: string) {
 	scoreboardPanel.hidden = true;
 	stopJoystick();
 	element("error").textContent = message;
-	connection.textContent = "Ready when you are.";
+	setConnection("Ready when you are.");
 	dirty = true;
 	updateCountryChoice();
 	void checkHealth();
@@ -818,7 +870,7 @@ async function locate() {
 		}
 	} catch (error) {
 		if (generation === sessionGeneration)
-			connection.textContent = `Connection interrupted: ${String(error)}`;
+			setConnection(`Connection interrupted: ${String(error)}`, true);
 	} finally {
 		locating = false;
 	}
@@ -879,7 +931,7 @@ element("join").addEventListener("submit", async (event) => {
 			presenceNamespace: NAMESPACE,
 		});
 		client.on("error", (error) => {
-			connection.textContent = `Connection issue: ${String(error)}`;
+			setConnection(`Connection issue: ${String(error)}`, true);
 		});
 		// A transient drop only emits "reconnecting" (the SDK resumes on its
 		// own), but input, presence, and subscription setup must stop until
@@ -887,7 +939,7 @@ element("join").addEventListener("submit", async (event) => {
 		const offline = () => {
 			online = false;
 			release();
-			connection.textContent = "Disconnected · Reconnecting…";
+			setConnection("Disconnected · Reconnecting…", true);
 		};
 		client.on("disconnected", offline);
 		client.on("reconnecting", offline);
@@ -895,7 +947,7 @@ element("join").addEventListener("submit", async (event) => {
 			if (playing) {
 				online = true;
 				release();
-				connection.textContent = "Connected · Finding your dot…";
+				setConnection("Connected · Finding your dot…");
 				void locate();
 			}
 		});
@@ -914,6 +966,7 @@ element("join").addEventListener("submit", async (event) => {
 		scheduleRoundEnd();
 		lobby.hidden = true;
 		scoreboardPanel.hidden = false;
+		canvas.focus({ preventScroll: true });
 		if (matchMedia("(pointer: coarse)").matches) startJoystick();
 		else flash(element("controls-hint"));
 		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
@@ -939,10 +992,13 @@ element("join").addEventListener("submit", async (event) => {
 		clearInterval(heartbeat);
 		heartbeat = setInterval(() => {
 			if (!playing || !online) return;
+			// The find bar and some browser modals swallow blur: clear held keys
+			// whenever the document itself lost focus.
+			if (!document.hasFocus()) release();
 			publish();
 			void locate();
 		}, 500);
-		connection.textContent = "Connected · Finding your dot…";
+		setConnection("Connected · Finding your dot…");
 		void locate();
 	} catch (error) {
 		returnToLobby(error instanceof Error ? error.message : String(error));
@@ -1045,7 +1101,7 @@ function draw(now: number) {
 	ctx.lineJoin = "round";
 	ctx.strokeStyle = "#0d1822";
 	ctx.lineWidth = 3;
-	ctx.font = "10px system-ui";
+	ctx.font = "10px Silkscreen, monospace";
 	ctx.fillStyle = "#bccacb";
 	for (const dot of visibleDots.values()) {
 		if (dot.player_id === myPlayerId) continue;
@@ -1063,10 +1119,16 @@ function draw(now: number) {
 		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
 		const x = left + (dotX + 0.5) * zoom,
 			y = top + (display.y + 0.5) * zoom;
-		ctx.font = "bold 11px system-ui";
+		ctx.font = "bold 11px Silkscreen, monospace";
 		ctx.fillStyle = "#ffe3a0";
 		ctx.strokeText(selfMeta.name, x, y - zoom - 7, 120);
 		ctx.fillText(selfMeta.name, x, y - zoom - 7, 120);
 	}
 }
 requestAnimationFrame(draw);
+
+// Canvas text does not repaint when a webfont finishes loading: mark the
+// scene dirty once the display face lands.
+void document.fonts.ready.then(() => {
+	dirty = true;
+});
