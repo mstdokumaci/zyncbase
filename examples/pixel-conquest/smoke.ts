@@ -416,6 +416,64 @@ async function runLifecycle() {
 		"the expired round's world is wiped at boot",
 	);
 	console.log("PASS: an expired round archives at boot and wipes");
+
+	// 5. A played round archives at its boundary even when every human left.
+	await stop();
+	const leftRound = await startWithRunway(
+		{ GAME_ROUND_MS: "30000" },
+		15_000,
+		true,
+	);
+	const leaver = await connect("Leavers");
+	const leaveHeartbeat = () => {
+		try {
+			leaver.client.presence.set({
+				name: "Leaver",
+				country_id: leaver.countryId,
+				direction: "right",
+				seq: 1,
+			});
+		} catch {
+			// The server is exiting.
+		}
+	};
+	leaveHeartbeat();
+	const leaveTimer = setInterval(leaveHeartbeat, 500);
+	timers.push(leaveTimer);
+	await eventually(
+		async () => claimedAnyLand(leaver.client),
+		"departing player claims land",
+	);
+	clearInterval(leaveTimer);
+	leaver.client.disconnect();
+	await eventually(async () => {
+		try {
+			return (await healthState()).players === 0;
+		} catch {
+			return false;
+		}
+	}, "player leaves before the boundary");
+	await eventually(
+		async () => processHandle?.exitCode != null,
+		"boundary after the player left restarts the process",
+	);
+	assert.equal(processHandle?.exitCode, 0);
+	const savedLeft = JSON.parse(
+		await readFile(join(historyDir, `${leftRound.number}.json`), "utf8"),
+	);
+	assert.equal(savedLeft.number, leftRound.number);
+	assert.equal(
+		savedLeft.humans,
+		0,
+		"the archive records the round after its humans left",
+	);
+	const afterLeft = await startWithRunway({ GAME_ROUND_MS: "30000" }, 15_000);
+	assert.equal(
+		afterLeft.number,
+		leftRound.number + 1,
+		"a played round advances even after its humans left",
+	);
+	console.log("PASS: a played round archives after its humans leave");
 }
 
 async function connect(countryName?: string) {
