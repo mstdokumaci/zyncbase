@@ -568,9 +568,9 @@ function startRound(number: number) {
 	return writeRoundCursor(dataDir, round);
 }
 
-/** Archive when a scheduled round had a human, then exit; boot wipes. */
+/** Archive when a scheduled round produced a claimed map, then exit; boot wipes. */
 async function endRound(now: number, reason: "boundary" | "idle") {
-	if (reason === "boundary" && world.humanCount > 0) {
+	if (reason === "boundary" && totalClaimed() > 0) {
 		await archiveWorld(round.number, round.startedAt, round.endsAt);
 		round = {
 			number: round.number + 1,
