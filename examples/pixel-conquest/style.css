@@ -449,47 +449,73 @@ input::placeholder {
 }
 .controls-hint {
 	position: fixed;
-	inset: 0;
+	left: 50%;
+	top: 50%;
+	translate: -50% -50%;
+	width: max-content;
+	max-width: calc(100vw - 24px);
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	justify-content: center;
-	gap: 22px 28px;
-	padding: 24px;
+	gap: clamp(14px, 2.4vh, 22px) clamp(22px, 3vw, 36px);
+	padding: clamp(18px, 3vh, 28px) clamp(22px, 4vw, 40px);
+	background: #0d1822f2;
+	border: 3px solid var(--gold);
+	box-shadow: var(--hard-shadow);
 	pointer-events: none;
 	opacity: 0;
 	z-index: 4;
 }
 .controls-hint .keys {
-	display: flex;
+	display: grid;
+	grid-template-columns: repeat(3, auto);
 	gap: 6px;
+}
+.keys-move kbd:nth-child(1),
+.keys-arrows kbd:nth-child(2) {
+	grid-area: 1 / 2;
+}
+.keys-move kbd:nth-child(2),
+.keys-arrows kbd:nth-child(1) {
+	grid-area: 2 / 1;
+}
+.keys-move kbd:nth-child(3),
+.keys-arrows kbd:nth-child(3) {
+	grid-area: 2 / 2;
+}
+.keys-move kbd:nth-child(4),
+.keys-arrows kbd:nth-child(4) {
+	grid-area: 2 / 3;
 }
 kbd {
 	display: inline-grid;
 	place-items: center;
-	width: 34px;
-	height: 38px;
-	border: 2px solid var(--line);
-	border-bottom-width: 4px;
+	width: clamp(42px, 5.6vh, 56px);
+	height: clamp(46px, 6.2vh, 60px);
+	border: 3px solid #7d929699;
+	border-bottom-width: 6px;
+	background: #16263a;
+	color: var(--ink);
 	font-family: var(--font-pixel);
-	font-size: 13px;
+	font-size: clamp(15px, 2.2vh, 20px);
 }
 .zoom-hint {
 	font-family: var(--font-pixel);
-	font-size: 11px;
+	font-size: clamp(12px, 1.9vh, 14px);
 	letter-spacing: 1px;
-	color: var(--muted);
+	color: var(--dim);
 }
 .controls-hint.flash {
-	animation: controls-hint-flash 0.9s ease-in-out 3;
+	animation: controls-hint-flash 1s ease-in-out 2;
 }
 @keyframes controls-hint-flash {
 	0%,
 	100% {
 		opacity: 0;
 	}
-	25%,
-	75% {
+	12%,
+	74% {
 		opacity: 1;
 	}
 }
@@ -618,5 +644,33 @@ kbd {
 	}
 	.joystick {
 		bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+	}
+}
+
+/* Reduced motion: motion collapses to static states, and the hint appears
+   once with a fade-only hold so onboarding information is not lost. */
+@media (prefers-reduced-motion: reduce) {
+	.round.urgent {
+		animation: none;
+		color: #ff6b5e;
+		border-color: #ff6b5e;
+	}
+	.joystick.flash .front {
+		animation: none;
+	}
+	.controls-hint.flash {
+		animation: controls-hint-hold 2.4s ease-out 1 both;
+	}
+	@keyframes controls-hint-hold {
+		0% {
+			opacity: 0;
+		}
+		10%,
+		75% {
+			opacity: 1;
+		}
+		100% {
+			opacity: 0;
+		}
 	}
 }

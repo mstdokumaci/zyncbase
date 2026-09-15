@@ -644,6 +644,8 @@ const zoomKeys: Record<string, number> = {
 };
 window.addEventListener("keydown", (event) => {
 	if (!playing || !online) return;
+	// Browser shortcuts (zoom, select all, save) must keep working.
+	if (event.ctrlKey || event.metaKey) return;
 	const zoomStep = zoomKeys[event.code];
 	if (zoomStep !== undefined) {
 		event.preventDefault();
