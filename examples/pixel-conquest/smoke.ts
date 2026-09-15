@@ -771,8 +771,12 @@ try {
 	await stop();
 	// Only this start creates reserved-but-abandoned countries (the cap test
 	// below), so shorten the lease here; earlier starts keep the default so a
-	// real admission cannot race the reaper.
-	await start(true, { GAME_COUNTRY_LEASE_MS: "500" });
+	// real admission cannot race the reaper. That test opens dozens of
+	// sessions from one address, so it disables the per-network cap.
+	await start(true, {
+		GAME_COUNTRY_LEASE_MS: "500",
+		GAME_PLAYERS_PER_IP: "0",
+	});
 	const clean = await connect();
 	assert.ok(
 		(await chunks(clean.client)).every((row) =>
@@ -857,6 +861,57 @@ try {
 	);
 	console.log(
 		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
+	);
+	await stop();
+	// Per-network admission: a connected player holds its slot, a leave frees it.
+	await start(true, { GAME_PLAYERS_PER_IP: "1" });
+	const askSession = (ip?: string) =>
+		fetch(`${origin}/session`, {
+			method: "POST",
+			...(ip ? { headers: { "X-Forwarded-For": ip } } : {}),
+		});
+	const solo = await connect();
+	assert.equal(
+		(await askSession()).status,
+		429,
+		"a second session from one network is rejected",
+	);
+	solo.client.disconnect();
+	await eventually(
+		async () => (await askSession()).status === 200,
+		"a leave frees the network slot",
+	);
+	await stop();
+	// The same IPv6 /64 shares its five slots whatever the notation; abandoned
+	// admissions expire, and a different /64 keeps its own pool.
+	await start(true, {
+		GAME_PLAYERS_PER_IP: "5",
+		GAME_COUNTRY_LEASE_MS: "500",
+	});
+	for (const ip of [
+		"2001:db8:1:1::1",
+		"2001:0DB8:0001:0001:0:0:0:2",
+		"2001:db8:1:1:abcd::3",
+		"2001:db8:1:1::4",
+		"2001:db8:1:1::5",
+	])
+		assert.equal((await askSession(ip)).status, 200, `same /64 admits ${ip}`);
+	assert.equal(
+		(await askSession("2001:db8:1:1::6")).status,
+		429,
+		"the sixth address in a /64 is rejected",
+	);
+	assert.equal(
+		(await askSession("2001:db8:1:2::1")).status,
+		200,
+		"a different /64 is admitted",
+	);
+	await eventually(
+		async () => (await askSession("2001:db8:1:1::6")).status === 200,
+		"abandoned sessions expire",
+	);
+	console.log(
+		"PASS: per-network player limit, IPv6 /64 grouping, lease and leave release",
 	);
 	if (!useTls) await runLifecycle();
 } catch (error) {

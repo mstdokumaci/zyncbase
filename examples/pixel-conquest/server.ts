@@ -128,11 +128,11 @@ const ROSTER_PUBLISH_EVERY_TICKS = 10;
 const persistedCountries = new Set<number>();
 const connections = new Set<Duplex>();
 
-function token(role: "player" | "simulation") {
+function token(role: "player" | "simulation", sub = `${role}:${randomUUID()}`) {
 	const now = Math.floor(Date.now() / 1000);
 	const encode = (value: unknown) =>
 		Buffer.from(JSON.stringify(value)).toString("base64url");
-	const payload = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: `${role}:${randomUUID()}`, role, iat: now, exp: now + 86400 })}`;
+	const payload = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub, role, iat: now, exp: now + 86400 })}`;
 	return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
 }
 
@@ -186,6 +186,72 @@ if (!Number.isSafeInteger(countryLeaseMs) || countryLeaseMs < 0)
 	throw new Error("GAME_COUNTRY_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
+// Per-network player cap. 0 disables it; a round-robin or scripted client can
+// already defeat any IP limit, so this is a fairness guard, not security.
+const playersPerIp = Number(process.env.GAME_PLAYERS_PER_IP ?? 5);
+if (!Number.isSafeInteger(playersPerIp) || playersPerIp < 0)
+	throw new Error("GAME_PLAYERS_PER_IP must be a non-negative integer");
+// Sessions counted per network until the player leaves: held at admission,
+// admitted by presence, released on leave or when the browser never connects.
+const ipSessions = new Map<string, Set<string>>();
+const sessionKeys = new Map<string, string>();
+const sessionLeases = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Network key: IPv4 exact, IPv6 grouped by /64 so rotating interface ids
+ * share one pool. Cloudflare sets cf-connecting-ip and strips client copies. */
+function clientKey(req: IncomingMessage) {
+	const header =
+		req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"];
+	const raw =
+		(Array.isArray(header) ? header[0] : header)?.split(",")[0]?.trim() ||
+		req.socket.remoteAddress ||
+		"unknown";
+	const ip = raw.toLowerCase().replace(/^::ffff:/, "");
+	if (!ip.includes(":")) return ip;
+	const [head, tail = ""] = ip.split("::");
+	const h = head ? head.split(":") : [];
+	const t = tail ? tail.split(":").filter(Boolean) : [];
+	const full = [
+		...h,
+		...Array(Math.max(0, 8 - h.length - t.length)).fill("0"),
+		...t,
+	];
+	return `${full
+		.slice(0, 4)
+		.map((part) => Number.parseInt(part, 16).toString(16))
+		.join(":")}::/64`;
+}
+
+function holdSession(key: string, sub: string) {
+	let subs = ipSessions.get(key);
+	if (!subs) {
+		subs = new Set();
+		ipSessions.set(key, subs);
+	}
+	subs.add(sub);
+	sessionKeys.set(sub, key);
+	// An abandoned admission frees its slot after the same grace as a country.
+	sessionLeases.set(
+		sub,
+		setTimeout(() => releaseSession(sub), countryLeaseMs).unref(),
+	);
+}
+
+function admitSession(sub: string) {
+	clearTimeout(sessionLeases.get(sub));
+	sessionLeases.delete(sub);
+}
+
+function releaseSession(sub: string) {
+	clearTimeout(sessionLeases.get(sub));
+	sessionLeases.delete(sub);
+	const key = sessionKeys.get(sub);
+	if (key === undefined) return;
+	sessionKeys.delete(sub);
+	const subs = ipSessions.get(key);
+	subs?.delete(sub);
+	if (!subs?.size) ipSessions.delete(key);
+}
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 	try {
@@ -221,6 +287,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				return reply(res, 409, {
 					error: "The world is full. Try again after someone leaves.",
 				});
+			const key = clientKey(req);
+			if (playersPerIp && (ipSessions.get(key)?.size ?? 0) >= playersPerIp)
+				return reply(res, 429, {
+					error: `Only ${playersPerIp} players can join from one network.`,
+				});
 			roundActive = true;
 			let country: Country | undefined;
 			if (Object.hasOwn(input, "countryName")) {
@@ -243,8 +314,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					world.maybeDeleteCountry(countryId);
 				}, countryLeaseMs).unref();
 			}
+			// Held only on success: rejected country requests must not burn a slot.
+			const sub = `player:${randomUUID()}`;
+			holdSession(key, sub);
 			return reply(res, 200, {
-				token: token("player"),
+				token: token("player", sub),
 				country_id: country?.country_id,
 				round: roundInfo(),
 				now: Date.now(),
@@ -661,11 +735,21 @@ try {
 			const connected = new Set(batch.users.map((user) => user.userId));
 			for (const [id, player] of world.players)
 				if (!player.is_bot && !connected.has(id)) world.remove(id, now);
-			for (const user of batch.users) world.input(user.userId, user.data, now);
+			for (const user of batch.users) {
+				world.input(user.userId, user.data, now);
+				admitSession(user.userId);
+			}
+			for (const sub of sessionKeys.keys())
+				if (!connected.has(sub)) releaseSession(sub);
 		} else {
 			for (const change of batch.changes) {
-				if (change.type === "leave") world.remove(change.userId, now);
-				else world.input(change.entry.userId, change.entry.data, now);
+				if (change.type === "leave") {
+					world.remove(change.userId, now);
+					releaseSession(change.userId);
+				} else {
+					world.input(change.entry.userId, change.entry.data, now);
+					admitSession(change.entry.userId);
+				}
 			}
 		}
 	});
