@@ -4,7 +4,7 @@ import {
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import nipplejs from "nipplejs";
-import { LocalMotion, type MotionDot, mixDiagonalAxis } from "./motion";
+import { JoystickSteering, LocalMotion, type MotionDot } from "./motion";
 import {
 	CHUNK,
 	type ChunkRow,
@@ -85,9 +85,7 @@ let prefetchDirection: Direction = "idle";
 // leaking credit across direction changes on the server.
 let altDirections: Direction[] = [];
 let altIndex = 0;
-let joystickVector = { x: 0, y: 0 };
-// Carried remainder of the deterministic joystick axis mixer.
-let joystickPhase = 0;
+const joystickSteering = new JoystickSteering();
 let lastSentDirection: Direction = "idle";
 let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -556,20 +554,15 @@ function setDirection(next: Direction) {
 // chunk update). Alternate to the next direction in the sequence so each
 // axis gets its full terrain cost before switching.
 function onMoveConfirmed() {
-	if (altDirections.length < 2) return;
-	// Joystick: advance a deterministic mixed sequence so the cadence matches
-	// the stick angle. Keyboard: simple 50/50 toggle.
-	if (joystickVector.x !== 0 || joystickVector.y !== 0) {
-		const next = mixDiagonalAxis(
-			Math.abs(joystickVector.x),
-			Math.abs(joystickVector.y),
-			joystickPhase,
-		);
-		joystickPhase = next.phase;
-		altIndex = next.index;
-	} else {
-		altIndex = (altIndex + 1) % altDirections.length;
+	// Joystick: advance the deterministic mixed sequence so the cadence
+	// matches the stick angle. Keyboard: simple 50/50 toggle.
+	const stick = joystickSteering.confirmed();
+	if (stick) {
+		setDirection(stick);
+		return;
 	}
+	if (altDirections.length < 2) return;
+	altIndex = (altIndex + 1) % altDirections.length;
 	setDirection(altDirections[altIndex]);
 }
 
@@ -609,45 +602,21 @@ function updateKeyboardInput() {
 	else setDirection("idle");
 }
 
-// Joystick sends a normalized vector. We pick the two dominant cardinal
-// axes and use weighted random selection on each confirmed move.
-function updateJoystickInput() {
-	const ax = Math.abs(joystickVector.x);
-	const ay = Math.abs(joystickVector.y);
-	if (ax < 0.15 && ay < 0.15) {
-		altDirections = [];
-		joystickVector = { x: 0, y: 0 };
-		setDirection("idle");
-		return;
-	}
-	const h = joystickVector.x > 0 ? "right" : "left";
-	const v = joystickVector.y > 0 ? "down" : "up";
-	if (ax >= ay * 2) {
-		// Mostly horizontal: go straight.
-		altDirections = [];
-		setDirection(h);
-	} else if (ay >= ax * 2) {
-		// Mostly vertical: go straight.
-		altDirections = [];
-		setDirection(v);
-	} else {
-		// Diagonal: alternate weighted by the analog magnitude. Touchmove keeps
-		// firing while the stick is held, so keep the pair (and the carried
-		// phase) intact; rebuilding it here pins the direction back to the
-		// horizontal axis before the server can complete a vertical step.
-		if (altDirections[0] === h && altDirections[1] === v) return;
-		altDirections = [h, v];
-		altIndex = 0;
-		joystickPhase = 0;
-		setDirection(h);
-	}
+// Joystick sends a screen-space vector; the steering state machine owns the
+// diagonal sequence so held-stick move events do not restart it.
+function updateJoystickInput(x: number, y: number) {
+	const next = joystickSteering.move(x, y);
+	if (next === undefined) return;
+	altDirections = [];
+	altIndex = 0;
+	setDirection(next);
 }
 
 function release() {
 	held.clear();
 	altDirections = [];
 	altIndex = 0;
-	joystickVector = { x: 0, y: 0 };
+	joystickSteering.release();
 	lastSentDirection = "idle";
 	setDirection("idle");
 }
@@ -718,13 +687,10 @@ function startJoystick() {
 	joystick = stick;
 	stick.on("move", (evt) => {
 		const vector = evt.data.vector;
-		if (vector) {
-			joystickVector = { x: vector.x, y: -vector.y };
-			updateJoystickInput();
-		}
+		if (vector) updateJoystickInput(vector.x, -vector.y);
 	});
 	stick.on("end", () => {
-		joystickVector = { x: 0, y: 0 };
+		joystickSteering.release();
 		altDirections = [];
 		altIndex = 0;
 		setDirection("idle");

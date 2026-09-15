@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { LocalMotion, type MotionDot, mixDiagonalAxis } from "./motion";
+import {
+	JoystickSteering,
+	LocalMotion,
+	type MotionDot,
+	mixDiagonalAxis,
+} from "./motion";
 import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
@@ -21,6 +26,30 @@ test("diagonal mixing alternates deterministically for any stick angle", () => {
 		}
 		expect(picked).toEqual([...expected]);
 	}
+});
+
+test("held joystick diagonals keep their sequence across repeated move events", () => {
+	const steering = new JoystickSteering();
+	// Push up-right: the horizontal axis is dispatched immediately.
+	expect(steering.move(0.71, -0.71)).toBe("right");
+	// A held stick emits a stream of near-identical vectors; none of them may
+	// restart the sequence.
+	expect(steering.move(0.72, -0.7)).toBeUndefined();
+	expect(steering.move(0.7, -0.72)).toBeUndefined();
+	// The dispatched horizontal step is consumed, so the first confirmation
+	// flips to vertical and 45° strict-alternates from there.
+	expect(steering.confirmed()).toBe("up");
+	expect(steering.confirmed()).toBe("right");
+	expect(steering.confirmed()).toBe("up");
+	// Sliding back to a mostly-horizontal push goes straight and clears it.
+	expect(steering.move(0.95, -0.1)).toBe("right");
+	expect(steering.confirmed()).toBeUndefined();
+	// Below the dead zone the stick is idle.
+	expect(steering.move(0.05, 0.05)).toBe("idle");
+	expect(steering.confirmed()).toBeUndefined();
+	// Direction flips rebuild the sequence and dispatch the new horizontal.
+	expect(steering.move(-0.71, -0.71)).toBe("left");
+	expect(steering.confirmed()).toBe("up");
 });
 
 test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
