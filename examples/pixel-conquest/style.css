@@ -118,6 +118,9 @@ header {
 	white-space: nowrap;
 	line-height: normal;
 }
+body:has(#lobby[hidden]) .nav {
+	display: none;
+}
 .round {
 	font-size: 12px;
 	color: #ffe3a0;
@@ -245,14 +248,6 @@ footer {
 	color: #b5c4c3;
 	font-size: 11px;
 }
-.instructions {
-	display: flex;
-	gap: 5px;
-	align-items: center;
-}
-.instructions span {
-	margin-left: 10px;
-}
 kbd {
 	display: inline-grid;
 	place-items: center;
@@ -300,6 +295,7 @@ kbd {
 	display: flex;
 	gap: 12px;
 	align-items: center;
+	margin-left: auto;
 }
 .zoom button {
 	background: #1d2f3d;
@@ -476,9 +472,6 @@ kbd {
 	}
 	footer {
 		padding: 12px 18px;
-	}
-	.instructions {
-		display: none;
 	}
 }
 @media (max-height: 700px) {

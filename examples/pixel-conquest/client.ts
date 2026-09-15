@@ -73,8 +73,7 @@ let availableSlots = 0;
 let myPlayerId = "",
 	name = "",
 	nickname = "",
-	seq = 0,
-	lastChangeAt = 0;
+	seq = 0;
 let direction: Direction = "idle";
 // Heading used to choose the prefetch edge. Kept after release so stopping
 // does not drop the leading margin and churn subscriptions on the next move.
@@ -113,7 +112,7 @@ const FRAME_MS = 1000 / 30;
 const PREFETCH_CHUNKS = 1;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
-const TAGLINE = "A shared world. One pixel at a time.";
+const TAGLINE = "One pixel at a time.";
 
 function formatDuration(ms: number) {
 	const total = Math.max(0, Math.ceil(ms / 1000));
@@ -378,15 +377,12 @@ function receive(row: ChunkRow) {
 	if (!self || !selfMotion) return;
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
-		// First sighting acks our input; latency uses our own change clock.
-		connection.textContent = `Live · ${Math.max(0, now - lastChangeAt)} ms input → view`;
+		// First sighting acks our input.
+		connection.textContent = TAGLINE;
 	}
 	lastOwnDot = now;
 	const position = motion.position(lastOwnDot);
 	camera = { x: position.x + 0.5, y: position.y + 0.5 };
-	const country = countries.get(myCountryId());
-	element("coordinates").textContent =
-		`${country?.name ?? name} · ${self.x}, ${self.y}`;
 	maybeUpdateSubscriptions();
 }
 
@@ -533,10 +529,7 @@ function publish(changed = false) {
 	if (changed)
 		motion?.update(motion.dot, online ? direction : "idle", performance.now());
 	if (!online || !client) return;
-	if (changed) {
-		seq++;
-		lastChangeAt = performance.now();
-	}
+	if (changed) seq++;
 	client.presence.set({
 		name: nickname,
 		country_id: selectedCountryId,

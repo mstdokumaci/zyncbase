@@ -323,8 +323,8 @@ try {
 	await page.locator("#player-name").fill("Observer");
 	const joinStart = performance.now();
 	await page.locator("#join-button").click();
-	await page.waitForFunction(() =>
-		document.getElementById("connection")?.textContent?.startsWith("Live"),
+	await page.waitForFunction(
+		() => document.getElementById("lobby")?.hidden === true,
 	);
 	const startup = {
 		navigationToLiveMs: performance.now() - navigationStart,

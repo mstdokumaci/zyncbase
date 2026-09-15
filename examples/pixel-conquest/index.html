@@ -11,8 +11,7 @@
 </head>
 
 <body>
-	<canvas id="map"
-		aria-label="Live territory map. Your coordinates and territory are shown in the status panels."></canvas>
+	<canvas id="map" aria-label="Live territory map. Your territory is shown in the status panel."></canvas>
 	<header>
 		<a class="brand" href="/" aria-label="Pixel Conquest home"><span class="mark">▦</span><span
 				class="brand-text">PIXEL <strong>CONQUEST</strong></span></a>
@@ -26,7 +25,7 @@
 		<section class="welcome">
 			<p class="eyebrow">A SMALL WORLD. BIG AMBITIONS.</p>
 			<h1>Leave your<br /><em>mark.</em></h1>
-			<p class="intro">Surround land to claim it. Join a country or start your own — no account needed. New round
+			<p class="intro">Surround land to claim it. Join a country or start your own, no account needed. New round
 				every 2 hours.</p>
 			<form id="join">
 				<div class="field">
@@ -55,7 +54,6 @@
 		</section>
 	</main>
 	<aside id="scoreboard" class="panel" hidden>
-		<p class="eyebrow">THE WORLD SO FAR</p>
 		<h2>
 			<button id="scoreboard-toggle" type="button" aria-expanded="true" aria-controls="countries">
 				<span>Countries <span id="country-count">0</span></span>
@@ -63,13 +61,8 @@
 			</button>
 		</h2>
 		<ol id="countries"></ol>
-		<p class="small">Your name is gold. Circles are people; squares are bots.<br />Land stays claimed when you
-			leave.</p>
 	</aside>
 	<footer>
-		<div class="instructions"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Hold to move · Release to
-				stop</span></div>
-		<div id="coordinates">2000 × 1000 · A world to explore</div>
 		<div class="zoom"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><span
 				id="zoom-label">MAP</span><button id="zoom-in" type="button" aria-label="Zoom in">+</button></div>
 	</footer>
