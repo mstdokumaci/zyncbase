@@ -6,27 +6,29 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
 	<meta name="theme-color" content="#101b28" />
 	<title>Pixel Conquest</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link rel="stylesheet" href="/style.css" />
 	<script type="module" src="/client.js"></script>
 </head>
 
 <body>
-	<canvas id="map" aria-label="Live territory map. Your territory is shown in the status panel."></canvas>
-	<header>
-		<a class="brand" href="/" aria-label="Pixel Conquest home"><span class="mark">▦</span><span
-				class="brand-text">PIXEL <strong>CONQUEST</strong></span></a>
+	<canvas id="map" tabindex="-1"
+		aria-label="Live territory map. Your territory is shown in the status panel."></canvas>
+	<div class="hud">
+		<span class="round" id="round" hidden></span>
 		<span class="connection" id="connection" role="status">One pixel at a time.</span>
-		<div class="actions">
-			<span class="round" id="round" hidden></span>
+	</div>
+	<main id="lobby">
+		<div class="lobby-top">
+			<a class="brand" href="/" aria-label="Pixel Conquest home"><span class="mark">▦</span><span
+					class="brand-text">PIXEL <strong>CONQUEST</strong></span></a>
 			<a class="nav" href="/history.html">Past rounds</a>
 		</div>
-	</header>
-	<main id="lobby">
 		<section class="welcome">
-			<p class="eyebrow">A SMALL WORLD. BIG AMBITIONS.</p>
-			<h1>Leave your<br /><em>mark.</em></h1>
-			<p class="intro">Surround land to claim it. Join a country or start your own, no account needed. New round
-				every 2 hours.</p>
+			<p class="eyebrow">MOVE · SURROUND · CLAIM</p>
+			<h1>Claim the <em>map.</em></h1>
+			<p class="intro">Surround land to claim it. Biggest empire at the buzzer wins. New round every 2 hours.</p>
 			<form id="join">
 				<div class="field">
 					<label for="country-choice">Your country</label>
@@ -48,7 +50,7 @@
 					<input id="player-name" name="player-name" placeholder="How others see you" required maxlength="16"
 						autocomplete="nickname" />
 				</div>
-				<button class="primary" id="join-button" type="submit" disabled>Enter the world <span>↗</span></button>
+				<button class="primary" id="join-button" type="submit" disabled>Deploy ▶</button>
 				<p id="error" class="error" role="alert"></p>
 			</form>
 		</section>
@@ -62,14 +64,11 @@
 		</h2>
 		<ol id="countries"></ol>
 	</aside>
-	<footer>
-		<div class="zoom"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><span
-				id="zoom-label">MAP</span><button id="zoom-in" type="button" aria-label="Zoom in">+</button></div>
-	</footer>
 	<nav class="joystick" id="joystick" aria-label="Movement joystick" hidden></nav>
 	<div class="controls-hint" id="controls-hint" aria-hidden="true">
 		<span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>
 		<span class="keys"><kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd></span>
+		<span class="zoom-hint">SCROLL TO ZOOM</span>
 	</div>
 </body>
 
