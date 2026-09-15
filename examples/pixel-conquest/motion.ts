@@ -15,6 +15,84 @@ const steps = {
 	right: [1, 0],
 };
 
+// Deterministic axis mixing for joystick diagonals: accumulate the minority
+// axis's share of the vector and take it whenever the accumulated share fills
+// one step. A 45° push strict-alternates; other angles get a fixed, evenly
+// spaced pattern. Random selection here read as dropped input and visible runs.
+export function mixDiagonalAxis(ax: number, ay: number, phase: number) {
+	const total = ax + ay;
+	if (!(total > 0)) return { index: 0 as const, phase };
+	phase += ay / total;
+	return phase >= 1
+		? { index: 1 as const, phase: phase - 1 }
+		: { index: 0 as const, phase };
+}
+
+// Joystick steering state machine. A held stick emits a stream of move events;
+// the diagonal axis sequence and its carried phase must survive them, or every
+// event restarts the alternation and the vertical axis never gets enough
+// server ticks to land.
+export class JoystickSteering {
+	private x = 0;
+	private y = 0;
+	private directions: Direction[] = [];
+	private phase = 0;
+
+	// Feed a screen-space vector (y grows downward). Returns the direction to
+	// dispatch when the axes change, or undefined while the sequence holds.
+	move(x: number, y: number): Direction | undefined {
+		this.x = x;
+		this.y = y;
+		const ax = Math.abs(x),
+			ay = Math.abs(y);
+		if (ax < 0.15 && ay < 0.15) {
+			this.reset();
+			return "idle";
+		}
+		const h = x > 0 ? "right" : "left";
+		const v = y > 0 ? "down" : "up";
+		if (ax >= ay * 2) {
+			this.reset();
+			return h;
+		}
+		if (ay >= ax * 2) {
+			this.reset();
+			return v;
+		}
+		if (this.directions[0] === h && this.directions[1] === v) return undefined;
+		this.directions = [h, v];
+		// Consume the step dispatched now so the first confirmation alternates
+		// instead of repeating the horizontal axis.
+		const next = mixDiagonalAxis(ax, ay, 0);
+		this.phase = next.phase;
+		return this.directions[next.index];
+	}
+
+	// A server move was confirmed. Returns the next axis of the diagonal, or
+	// undefined when the current input is not a diagonal.
+	confirmed(): Direction | undefined {
+		if (this.directions.length < 2) return undefined;
+		const next = mixDiagonalAxis(
+			Math.abs(this.x),
+			Math.abs(this.y),
+			this.phase,
+		);
+		this.phase = next.phase;
+		return this.directions[next.index];
+	}
+
+	release() {
+		this.x = 0;
+		this.y = 0;
+		this.reset();
+	}
+
+	private reset() {
+		this.directions = [];
+		this.phase = 0;
+	}
+}
+
 // Render-side position: hot dot plus its cold country, joined from the
 // users roster at receive time. Dots alone carry no identity metadata.
 export type MotionDot = Dot & { country_id: number };

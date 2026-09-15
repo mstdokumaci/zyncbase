@@ -1,10 +1,56 @@
 import { expect, test } from "bun:test";
-import { LocalMotion, type MotionDot } from "./motion";
+import {
+	JoystickSteering,
+	LocalMotion,
+	type MotionDot,
+	mixDiagonalAxis,
+} from "./motion";
 import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
 const dot: MotionDot = { player_id: "me", country_id: 1, x: 31, y: 10 };
 const land = new Uint8Array(WIDTH * HEIGHT);
+
+test("diagonal mixing alternates deterministically for any stick angle", () => {
+	for (const [ax, ay, expected] of [
+		[1, 1, [0, 1, 0, 1]],
+		[3, 1, [0, 0, 0, 1]],
+		[1, 3, [0, 1, 1, 1]],
+	] as const) {
+		let phase = 0;
+		const picked: number[] = [];
+		for (let step = 0; step < expected.length; step++) {
+			const next = mixDiagonalAxis(ax, ay, phase);
+			phase = next.phase;
+			picked.push(next.index);
+		}
+		expect(picked).toEqual([...expected]);
+	}
+});
+
+test("held joystick diagonals keep their sequence across repeated move events", () => {
+	const steering = new JoystickSteering();
+	// Push up-right: the horizontal axis is dispatched immediately.
+	expect(steering.move(0.71, -0.71)).toBe("right");
+	// A held stick emits a stream of near-identical vectors; none of them may
+	// restart the sequence.
+	expect(steering.move(0.72, -0.7)).toBeUndefined();
+	expect(steering.move(0.7, -0.72)).toBeUndefined();
+	// The dispatched horizontal step is consumed, so the first confirmation
+	// flips to vertical and 45° strict-alternates from there.
+	expect(steering.confirmed()).toBe("up");
+	expect(steering.confirmed()).toBe("right");
+	expect(steering.confirmed()).toBe("up");
+	// Sliding back to a mostly-horizontal push goes straight and clears it.
+	expect(steering.move(0.95, -0.1)).toBe("right");
+	expect(steering.confirmed()).toBeUndefined();
+	// Below the dead zone the stick is idle.
+	expect(steering.move(0.05, 0.05)).toBe("idle");
+	expect(steering.confirmed()).toBeUndefined();
+	// Direction flips rebuild the sequence and dispatch the new horizontal.
+	expect(steering.move(-0.71, -0.71)).toBe("left");
+	expect(steering.confirmed()).toBe("up");
+});
 
 test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
 	const terrain = land.slice();
