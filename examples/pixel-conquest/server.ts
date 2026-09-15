@@ -38,10 +38,11 @@ import {
 	MAX_PLAYERS,
 	NAMESPACE,
 	nextRoundBoundary,
+	type PlayerRow,
 	type RoundCursor,
 	RULES,
+	rowId,
 	terrain,
-	type UserRow,
 	WIDTH,
 } from "./shared";
 import { World } from "./world";
@@ -183,7 +184,7 @@ const countryLeaseMs = Number(
 );
 if (!Number.isSafeInteger(countryLeaseMs) || countryLeaseMs < 0)
 	throw new Error("GAME_COUNTRY_LEASE_MS must be a non-negative integer");
-// Latest reservation generation per country code; stale timers no-op.
+// Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -233,18 +234,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 						error: "That country is reserved for bots.",
 					});
 				// Release an unused slot if the browser never completes admission.
-				const code = country.code;
-				const lease = (countryLeases.get(code) ?? 0) + 1;
-				countryLeases.set(code, lease);
+				const countryId = country.country_id;
+				const lease = (countryLeases.get(countryId) ?? 0) + 1;
+				countryLeases.set(countryId, lease);
 				setTimeout(() => {
-					if (countryLeases.get(code) !== lease) return;
-					countryLeases.delete(code);
-					world.maybeDeleteCountry(code);
+					if (countryLeases.get(countryId) !== lease) return;
+					countryLeases.delete(countryId);
+					world.maybeDeleteCountry(countryId);
 				}, countryLeaseMs).unref();
 			}
 			return reply(res, 200, {
 				token: token("player"),
-				countryCode: country?.code,
+				country_id: country?.country_id,
 				round: roundInfo(),
 				now: Date.now(),
 			});
@@ -332,15 +333,15 @@ async function allRows(collection: string) {
 }
 
 // The allocator mark rides in the first batch with the country removes so
-// a retired code and its tombstone commit atomically: crash before batch 1
-// retries everything, crash after keeps the mark past every retired code.
+// a retired id and its tombstone commit atomically: crash before batch 1
+// retries everything, crash after keeps the mark past every retired id.
 function allocatorOp(): BatchOperation[] {
 	if (world.allocatorMark === lastPublishedMark) return [];
 	return [
 		{
 			op: "set" as const,
 			path: ["meta", "allocator"],
-			value: { nextCode: world.allocatorMark },
+			value: { next_country_id: world.allocatorMark },
 		},
 	];
 }
@@ -349,15 +350,16 @@ function allocatorOp(): BatchOperation[] {
  * writes never reference a row that has not landed yet. */
 function shouldPublishRosters(force: boolean) {
 	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
-	for (const code of world.dirtyCountries)
-		if (!persistedCountries.has(code)) return true;
+	for (const countryId of world.dirtyCountries)
+		if (!persistedCountries.has(countryId)) return true;
 	return false;
 }
 
 /** Roster rows whose write has landed; also advances the allocator mark. */
 function recordRosterCommit(snapshot: PublishSnapshot) {
-	for (const code of snapshot.countries) persistedCountries.add(code);
-	for (const code of snapshot.removed) persistedCountries.delete(code);
+	for (const countryId of snapshot.countries) persistedCountries.add(countryId);
+	for (const countryId of snapshot.removed)
+		persistedCountries.delete(countryId);
 	lastPublishedMark = world.allocatorMark;
 }
 
@@ -437,7 +439,10 @@ async function archiveWorld(
 		countries,
 	};
 	const colors = new Map(
-		[...world.countries].map(([code, country]) => [code, country.color]),
+		[...world.countries].map(([countryId, country]) => [
+			countryId,
+			country.color,
+		]),
 	);
 	await archiveRound(
 		historyDir,
@@ -456,7 +461,7 @@ async function archiveWorld(
 async function wipeWorldRows(
 	countries: Country[],
 	chunks: ChunkRow[],
-	users: UserRow[],
+	playerRows: PlayerRow[],
 	meta: { id: string }[],
 ) {
 	const operations: BatchOperation[] = [
@@ -464,13 +469,13 @@ async function wipeWorldRows(
 			op: "remove" as const,
 			path: ["chunks", row.id],
 		})),
-		...users.map((row) => ({
+		...playerRows.map((row) => ({
 			op: "remove" as const,
 			path: ["users", row.id],
 		})),
 		...countries.map((row) => ({
 			op: "remove" as const,
-			path: ["countries", row.id],
+			path: ["countries", rowId(row.country_id)],
 		})),
 		...meta.map((row) => ({ op: "remove" as const, path: ["meta", row.id] })),
 	];
@@ -601,21 +606,24 @@ try {
 	await client.connect();
 	const countries = (await allRows("countries")) as Country[];
 	const chunks = (await allRows("chunks")) as ChunkRow[];
-	const users = (await allRows("users")) as UserRow[];
-	const meta = (await allRows("meta")) as { id: string; nextCode: number }[];
+	const playerRows = (await allRows("users")) as PlayerRow[];
+	const meta = (await allRows("meta")) as {
+		id: string;
+		next_country_id: number;
+	}[];
 	const savedRound = await readRoundCursor(dataDir);
 	const maxHistory = await maxHistoryNumber(historyDir);
 	const startup = Date.now();
 	if (process.argv.includes("--reset")) {
-		await wipeWorldRows(countries, chunks, users, meta);
+		await wipeWorldRows(countries, chunks, playerRows, meta);
 		await startRound(Math.max(maxHistory + 1, savedRound?.number ?? 0));
 		console.log("World reset.");
 	} else if (savedRound?.fresh) {
-		await wipeWorldRows(countries, chunks, users, meta);
+		await wipeWorldRows(countries, chunks, playerRows, meta);
 		await startRound(Math.max(savedRound.number, maxHistory + 1));
 	} else if (!savedRound || startup >= savedRound.endsAt) {
 		// The round expired while the process was down: archive its final map.
-		world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+		world.restore(countries, chunks, playerRows, meta[0]?.next_country_id ?? 0);
 		let number = Math.max(savedRound?.number ?? 0, maxHistory + 1);
 		if (totalClaimed() > 0) {
 			await archiveWorld(
@@ -625,17 +633,18 @@ try {
 			);
 			number += 1;
 		}
-		await wipeWorldRows(countries, chunks, users, meta);
+		await wipeWorldRows(countries, chunks, playerRows, meta);
 		world = new World(terrain());
 		await startRound(number);
 	} else {
-		world.restore(countries, chunks, users, meta[0]?.nextCode ?? 0);
+		world.restore(countries, chunks, playerRows, meta[0]?.next_country_id ?? 0);
 		round = savedRound;
 	}
 	roundActive = totalClaimed() > 0;
 	// Rows surviving the restart are already committed; only later creations
 	// need the force-flush above.
-	for (const code of world.countries.keys()) persistedCountries.add(code);
+	for (const countryId of world.countries.keys())
+		persistedCountries.add(countryId);
 	world.startBots(performance.now());
 	// A restart can need more reconciliation than one normal movement batch.
 	// Force the roster flush: startup reconciliation must be complete, not throttled.

@@ -103,20 +103,21 @@ export type Dot = {
 };
 // Cold roster row, stored in the users table keyed by identity: written on
 // admission, refreshed on chunk crossing and on leave (tombstone with final
-// position for grace reconnects), removed on expiry. lastX/lastY always name
+// position for grace reconnects), removed on expiry. last_x/last_y always name
 // the chunk the player is (or was) in, so locate() can jump straight to it
 // with one direct read.
-export type UserRow = {
+export type PlayerRow = {
 	id: string;
 	name?: string;
 	country_id: number;
 	is_bot: boolean;
-	lastX: number;
-	lastY: number;
+	last_x: number;
+	last_y: number;
 };
+// A country's numeric identity: referenced by PlayerRow.country_id and written
+// into the owners bitmap. Its row key in the countries table is the string form.
 export type Country = {
-	id: string;
-	code: number;
+	country_id: number;
 	name: string;
 	color: string;
 	count: number;

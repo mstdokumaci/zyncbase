@@ -12,8 +12,8 @@ import {
 	type Country,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	type PlayerRow,
 	readDots,
-	type UserRow,
 } from "./shared";
 
 async function freePort() {
@@ -235,7 +235,7 @@ async function runLifecycle() {
 		try {
 			player.client.presence.set({
 				name: "Rounder",
-				countryCode: player.countryCode,
+				country_id: player.countryId,
 				direction: "right",
 				seq: 1,
 			});
@@ -302,7 +302,7 @@ async function runLifecycle() {
 		try {
 			idler.client.presence.set({
 				name: "Idler",
-				countryCode: idler.countryCode,
+				country_id: idler.countryId,
 				direction: "right",
 				seq: 1,
 			});
@@ -375,7 +375,7 @@ async function runLifecycle() {
 		try {
 			crasher.client.presence.set({
 				name: "Crasher",
-				countryCode: crasher.countryCode,
+				country_id: crasher.countryId,
 				direction: "right",
 				seq: 1,
 			});
@@ -425,8 +425,8 @@ async function connect(countryName?: string) {
 		body: JSON.stringify(countryName === undefined ? {} : { countryName }),
 	});
 	assert.equal(response.status, 200);
-	const { token, countryCode } = await response.json();
-	if (countryName !== undefined) assert.equal(typeof countryCode, "number");
+	const { token, country_id: countryId } = await response.json();
+	if (countryName !== undefined) assert.equal(typeof countryId, "number");
 	const ticketResponse = await fetch(`${origin}/auth/ticket`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${token}` },
@@ -461,7 +461,7 @@ async function connect(countryName?: string) {
 		id = client.presence.localUserId ?? "";
 	}
 	assert.ok(id, "scope setup resolves our own identity");
-	return { client, id, countryCode };
+	return { client, id, countryId };
 }
 
 async function chunks(client: ZyncBaseClient) {
@@ -544,14 +544,14 @@ try {
 	// Subscribe before any presence is set: the admitted rows must arrive as
 	// deltas, not the initial snapshot (the browser creates the roster
 	// subscription before its first presence.set too).
-	const subscribed = new Map<string, UserRow>();
+	const subscribed = new Map<string, PlayerRow>();
 	bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
 		subscribed.clear();
-		for (const row of rows as UserRow[]) subscribed.set(row.id, row);
+		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
 	const input = {
 		name: "Ａlice",
-		countryCode: alice.countryCode,
+		country_id: alice.countryId,
 		direction: "idle",
 		seq: 1,
 	};
@@ -560,7 +560,7 @@ try {
 	timers.push(setInterval(send, 500));
 	bob.client.presence.set({
 		name: "Bob",
-		countryCode: bob.countryCode,
+		country_id: bob.countryId,
 		direction: "idle",
 		seq: 1,
 	});
@@ -574,7 +574,7 @@ try {
 			.find((dot) => dot.player_id === alice.id);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
-			((await client.store.query("users", { limit: 2048 })) as UserRow[]).map(
+			((await client.store.query("users", { limit: 2048 })) as PlayerRow[]).map(
 				(row) => [row.id, row],
 			),
 		);
@@ -590,9 +590,9 @@ try {
 		async () => subscribed.get(alice.id)?.name === "Alice",
 		"users subscription receives live roster deltas",
 	);
-	assert.equal(aliceRow.country_id, alice.countryCode);
+	assert.equal(aliceRow.country_id, alice.countryId);
 	assert.equal(aliceRow.is_bot, false);
-	assert.deepEqual([aliceRow.lastX, aliceRow.lastY], [first.x, first.y]);
+	assert.deepEqual([aliceRow.last_x, aliceRow.last_y], [first.x, first.y]);
 	await eventually(
 		async () =>
 			visible
@@ -607,14 +607,14 @@ try {
 	assert.ok(north, "new countries appear in the lobby");
 	assert.equal(north.is_bot, false, "human countries are not flagged as bots");
 	assert.equal(
-		north.code,
-		alice.countryCode,
-		"session returns the persisted country code",
+		north.country_id,
+		alice.countryId,
+		"session returns the persisted country id",
 	);
 	const teammate = await connect();
 	teammate.client.presence.set({
 		name: "Teammate",
-		countryCode: north.code,
+		country_id: north.country_id,
 		direction: "idle",
 		seq: 1,
 	});
@@ -623,8 +623,9 @@ try {
 			visible
 				.flatMap((row) => readDots(row.dots))
 				.some((dot) => dot.player_id === teammate.id) &&
-			(await rosterOf(bob.client)).get(teammate.id)?.country_id === north.code,
-		"lobby selection joins an existing country by code",
+			(await rosterOf(bob.client)).get(teammate.id)?.country_id ===
+				north.country_id,
+		"lobby selection joins an existing country by id",
 	);
 	teammate.client.disconnect();
 	await eventually(
@@ -668,7 +669,7 @@ try {
 	);
 	await assert.rejects(
 		alice.client.store.create("countries", {
-			code: 99,
+			country_id: 99,
 			name: "Cheat",
 			color: "red",
 			count: 999,
@@ -735,7 +736,7 @@ try {
 	const restoredRoster = await rosterOf(returning.client);
 	// Reads materialize absent optional fields as explicit nulls; identity
 	// stubs (connected-but-never-admitted clients) carry no roster data.
-	const isStub = (row: UserRow) => row.country_id == null;
+	const isStub = (row: PlayerRow) => row.country_id == null;
 	assert.ok(
 		![alice.id, bob.id, teammate.id].some((id) => restoredRoster.has(id)),
 		"stale human roster rows purged on restart",
@@ -751,11 +752,13 @@ try {
 	)) as unknown as Country[];
 	for (const country of savedCountries) {
 		assert.equal(
-			restoredCountries.find((saved) => saved.code === country.code)?.count,
+			restoredCountries.find((saved) => saved.country_id === country.country_id)
+				?.count,
 			country.count,
 		);
 		assert.equal(
-			restoredCountries.find((saved) => saved.code === country.code)?.color,
+			restoredCountries.find((saved) => saved.country_id === country.country_id)
+				?.color,
 			country.color,
 		);
 	}

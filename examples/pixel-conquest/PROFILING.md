@@ -383,7 +383,7 @@ decisions are untouched.
 
 - `chunks.dots[]` shrinks from full `Dot{id,name,code,x,y,seq,sentAt,bot}`
   to `{player_id,x,y}`; identity moves to `users` rows themselves
-  (`name`, `country_id`, `is_bot`, `lastX/lastY`), subscribed once and
+  (`name`, `country_id`, `is_bot`, `last_x/last_y`), subscribed once and
   joined client-side at render. `chunks.index`/`occupied` columns are
   dropped (`id` is the index; dirtiness on restore comes from decoding
   dots). Departed players keep their row 10 s (tombstone with final

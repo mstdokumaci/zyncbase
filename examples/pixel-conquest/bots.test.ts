@@ -111,9 +111,9 @@ test("bot scoring matches executed routes, including revisits, coastal returns a
 					}
 				}
 				const actual: number[][] = [];
-				world.stepCost = (code, current, next, owner) => {
+				world.stepCost = (countryId, current, next, owner) => {
 					actual.push([current, next, owner ?? world.owners[next]]);
-					return stepCost(code, current, next, owner);
+					return stepCost(countryId, current, next, owner);
 				};
 				const ownersBefore = world.owners.slice();
 				expect(planBot(world, bot)).toEqual({ patch, cells: bestCells });

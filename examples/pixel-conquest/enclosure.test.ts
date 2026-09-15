@@ -13,8 +13,10 @@ type Pixel = [number, number, number];
 
 // Independent four-neighbor boundary flood; deliberately no scanline logic.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the independent reference flood explicit for comparison with the scanline implementation.
-function referenceFill(owners: Uint16Array, width: number, code: number) {
-	const labels = Uint8Array.from(owners, (owner) => (owner === code ? 2 : 0));
+function referenceFill(owners: Uint16Array, width: number, countryId: number) {
+	const labels = Uint8Array.from(owners, (owner) =>
+		owner === countryId ? 2 : 0,
+	);
 	const queue: number[] = [];
 	const visit = (cell: number) => {
 		if (labels[cell] !== 0) return;
@@ -165,9 +167,9 @@ test("scanline scratch buffers grow and can be reused across countries and shape
 			random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
 			owners[i] = shape === 0 ? (i % width) % 2 : (random >>> 16) % 3;
 		}
-		for (const code of [1, 2])
-			expect(filler.fill(owners, code, bounds)).toEqual(
-				referenceFill(owners, width, code),
+		for (const countryId of [1, 2])
+			expect(filler.fill(owners, countryId, bounds)).toEqual(
+				referenceFill(owners, width, countryId),
 			);
 	}
 });
@@ -209,34 +211,34 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	for (const [x, y] of water) land[y * WIDTH + x] = 0;
 	const seed = new World(land);
-	for (const code of [1, 2])
-		seed.countries.set(code, {
-			id: String(code),
-			code,
-			name: String(code),
+	for (const countryId of [1, 2])
+		seed.countries.set(countryId, {
+			country_id: countryId,
+			name: String(countryId),
 			color: "old",
 			count: 0,
 			is_bot: false,
 		});
 	const chunks = new Set<number>();
-	for (const [x, y, code] of pixels) {
-		seed.owners[y * WIDTH + x] = code;
+	for (const [x, y, countryId] of pixels) {
+		seed.owners[y * WIDTH + x] = countryId;
 		chunks.add(chunkIndex(x, y));
 	}
 	const world = new World(land);
 	const owned = new Set<number>(pixels.map((pixel) => pixel[2]));
 	world.restore(
-		[...seed.countries.values()].filter((country) => owned.has(country.code)),
+		[...seed.countries.values()].filter((country) =>
+			owned.has(country.country_id),
+		),
 		[...chunks].map((index) => seed.chunk(index)),
 	);
 	// Production restore prunes landless countries as abandoned, so
 	// re-register test identities that own no pixels yet as setup-only state.
-	for (const code of [1, 2])
-		if (!world.countries.has(code))
-			world.countries.set(code, {
-				id: String(code),
-				code,
-				name: String(code),
+	for (const countryId of [1, 2])
+		if (!world.countries.has(countryId))
+			world.countries.set(countryId, {
+				country_id: countryId,
+				name: String(countryId),
 				color: "old",
 				count: 0,
 				is_bot: false,
@@ -249,14 +251,14 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 			id,
 			{
 				name: id,
-				countryCode: country,
+				country_id: country,
 				direction,
 				seq: ++seq,
 			},
 			now,
 		);
-	const actor = (id: string, code: number, x: number, y: number) => {
-		input(id, code, "idle");
+	const actor = (id: string, countryId: number, x: number, y: number) => {
+		input(id, countryId, "idle");
 		const player = world.players.get(id);
 		if (!player) throw new Error("Missing player");
 		player.x = x;
@@ -273,7 +275,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 		const cost = world.stepCost(player.country_id, from, from + offset);
 		input(id, player.country_id, direction);
 		for (let i = 0; i < cost; i++) world.tick(++now);
-		input(id, player.code, "idle");
+		input(id, player.country_id, "idle");
 	};
 	return {
 		world,
@@ -577,8 +579,7 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 		],
 	);
 	world.countries.set(3, {
-		id: "3",
-		code: 3,
+		country_id: 3,
 		name: "3",
 		color: "red",
 		count: 0,
@@ -586,15 +587,15 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 	});
 	const reference = new World(world.land);
 	for (const country of world.countries.values())
-		reference.countries.set(country.code, { ...country });
+		reference.countries.set(country.country_id, { ...country });
 	const referenceClaim = Reflect.get(reference, "claim").bind(reference);
-	Reflect.set(reference, "claim", (cell: number, code: number) => {
+	Reflect.set(reference, "claim", (cell: number, countryId: number) => {
 		const owner = reference.owners[cell];
-		const changed = reference.land[cell] && owner !== code;
-		referenceClaim(cell, code);
+		const changed = reference.land[cell] && owner !== countryId;
+		referenceClaim(cell, countryId);
 		if (changed) {
 			const pending = Reflect.get(reference, "enclosureCountries");
-			pending.set(code, null);
+			pending.set(countryId, null);
 			if (owner) pending.set(owner, null);
 		}
 	});
@@ -606,9 +607,9 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 	for (let tick = 0; tick < 1000; tick++) {
 		for (let move = 0; move < 8; move++) {
 			const cell = (30 + (next() % 8)) * WIDTH + 30 + (next() % 8);
-			const code = 1 + (next() % 3);
-			Reflect.get(world, "claim").call(world, cell, code);
-			Reflect.get(reference, "claim").call(reference, cell, code);
+			const countryId = 1 + (next() % 3);
+			Reflect.get(world, "claim").call(world, cell, countryId);
+			Reflect.get(reference, "claim").call(reference, cell, countryId);
 		}
 		world.tick(tick);
 		reference.tick(tick);
@@ -625,8 +626,8 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 			(_, i) => (29 + Math.floor(i / 10)) * WIDTH + 29 + (i % 10),
 		);
 		const owners = Uint16Array.from(cells, (cell) => world.owners[cell]);
-		for (const code of world.countries.keys()) {
-			const labels = referenceFill(owners, 10, code);
+		for (const countryId of world.countries.keys()) {
+			const labels = referenceFill(owners, 10, countryId);
 			expect(
 				cells.filter((cell, i) => world.land[cell] && labels[i] === 0),
 			).toEqual([]);

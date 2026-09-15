@@ -62,9 +62,9 @@ await mkdir(output, { recursive: true });
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep deterministic geometry and population setup together, outside measured code.
 function fixture() {
 	const seed = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
-	const starts: { code: number; x: number; y: number }[] = [];
-	const paint = (x: number, y: number, code: number) => {
-		seed.owners[y * WIDTH + x] = code;
+	const starts: { countryId: number; x: number; y: number }[] = [];
+	const paint = (x: number, y: number, countryId: number) => {
+		seed.owners[y * WIDTH + x] = countryId;
 		seed.dirtyChunks.add(chunkIndex(x, y));
 	};
 	for (let i = 0; i < countryCount; i++) {
@@ -80,9 +80,9 @@ function fixture() {
 			}
 		}
 		const border = left + (values.shape === "compact" ? 287 : 31);
-		starts.push({ code: i + 1, x: border, y: top + 100 });
+		starts.push({ countryId: i + 1, x: border, y: top + 100 });
 		const rival = ((i + 1) % countryCount) + 1;
-		starts.push({ code: rival, x: border + 6, y: top + 100 });
+		starts.push({ countryId: rival, x: border + 6, y: top + 100 });
 		if (values.shape === "fragmented") {
 			for (let y = 98; y <= 102; y++)
 				for (let x = 35; x <= 39; x++) paint(left + x, top + y, rival);
@@ -91,8 +91,7 @@ function fixture() {
 	const world = new World(seed.land);
 	world.restore(
 		Array.from({ length: countryCount }, (_, i) => ({
-			id: rowId(i + 1),
-			code: i + 1,
+			country_id: i + 1,
 			name: `Country ${i + 1}`,
 			color: "red",
 			count: 0,
@@ -105,10 +104,10 @@ function fixture() {
 		world.players.set(id, {
 			id,
 			name: values.mode === "bots" ? undefined : `Player ${i}`,
-			country_id: start.code,
+			country_id: start.countryId,
 			is_bot: values.mode === "bots",
-			lastX: start.x,
-			lastY: start.y,
+			last_x: start.x,
+			last_y: start.y,
 			x: start.x,
 			y: start.y,
 			seq: 0,
@@ -116,7 +115,7 @@ function fixture() {
 			credit: 0,
 			heardAt: 0,
 		});
-		world.dirtyUsers.add(id);
+		world.dirtyPlayerRows.add(id);
 	}
 	if (values.mode === "bots") {
 		// Benchmark-only population policy: keep 40 bots without a human sentinel.
@@ -137,12 +136,12 @@ function verify(world: World) {
 	assert.equal(world.players.size, countryCount * 2);
 	assert.equal(world.countries.size, countryCount);
 	const counts = new Uint32Array(countryCount + 1);
-	for (const code of world.owners) {
-		assert(code <= countryCount);
-		counts[code]++;
+	for (const countryId of world.owners) {
+		assert(countryId <= countryCount);
+		counts[countryId]++;
 	}
 	for (const country of world.countries.values())
-		assert.equal(country.count, counts[country.code]);
+		assert.equal(country.count, counts[country.country_id]);
 	for (const player of world.players.values())
 		assert(
 			player.x >= 0 && player.x < WIDTH && player.y >= 0 && player.y < HEIGHT,
@@ -163,14 +162,19 @@ function steer(world: World, tick: number) {
 // Match server.ts: full dirty chunk rows, country rows, player rows, then committed batches.
 function changes(world: World) {
 	const chunks = [...world.dirtyChunks].map((index) => world.chunk(index));
-	const operations: BatchOperation[] = [...world.dirtyCountries].map((code) => {
-		const country = world.countries.get(code);
-		assert(country);
-		const { id, ...value } = country;
-		return { op: "set", path: ["countries", id], value };
-	});
-	for (const id of world.dirtyUsers) {
-		const row = world.userRow(id);
+	const operations: BatchOperation[] = [...world.dirtyCountries].map(
+		(countryId) => {
+			const country = world.countries.get(countryId);
+			assert(country);
+			return {
+				op: "set",
+				path: ["countries", rowId(country.country_id)],
+				value: country,
+			};
+		},
+	);
+	for (const id of world.dirtyPlayerRows) {
+		const row = world.playerRow(id);
 		assert(row);
 		operations.push({ op: "set", path: ["users", id], value: row });
 	}
@@ -178,7 +182,7 @@ function changes(world: World) {
 		operations.push({ op: "set", path: ["chunks", id], value });
 	world.dirtyChunks.clear();
 	world.dirtyCountries.clear();
-	world.dirtyUsers.clear();
+	world.dirtyPlayerRows.clear();
 	return {
 		operations,
 		chunks: chunks.length,
@@ -252,7 +256,8 @@ async function run(client?: ZyncBaseClient) {
 				world.dirtyChunks.add(
 					chunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
 				);
-		for (const code of world.countries.keys()) world.dirtyCountries.add(code);
+		for (const countryId of world.countries.keys())
+			world.dirtyCountries.add(countryId);
 		const initial = changes(world).operations;
 		for (let i = 0; i < initial.length; i += 100)
 			await commitBatch(client, initial.slice(i, i + 100));

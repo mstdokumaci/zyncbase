@@ -185,13 +185,13 @@ async function addPeer(codes: number[]) {
 	assert(response.ok, `Session ${admitted + 1} failed: ${response.status}`);
 	const session = (await response.json()) as {
 		token: string;
-		countryCode?: number;
+		country_id?: number;
 	};
 	if (creating) {
-		assert(session.countryCode);
-		codes.push(session.countryCode);
+		assert(session.country_id);
+		codes.push(session.country_id);
 	}
-	const countryCode = creating
+	const countryId = creating
 		? (codes.at(-1) as number)
 		: codes[admitted % codes.length];
 	const shard = Math.floor((admitted - 1) / 64);
@@ -204,7 +204,7 @@ async function addPeer(codes: number[]) {
 		index: admitted,
 		url: peerUrl,
 		token: session.token,
-		countryCode,
+		country_id: countryId,
 		width,
 		height,
 		zoom,
@@ -331,7 +331,8 @@ try {
 	for (let current = 8; current !== zoom; current += zoom > 8 ? 2 : -2)
 		await page.locator(zoom > 8 ? "#zoom-in" : "#zoom-out").click();
 	const codes = [
-		(await health()).countries.find((row) => row.name === "Profile 1")?.code,
+		(await health()).countries.find((row) => row.name === "Profile 1")
+			?.country_id,
 	];
 	assert(codes[0]);
 

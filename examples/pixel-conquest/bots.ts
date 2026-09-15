@@ -66,7 +66,7 @@ function isAllLand(world: World, left: number, top: number) {
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the step body is written out at the three walk sites so cost/cur stay in locals.
 function scoreCells(
 	world: World,
-	code: number,
+	countryId: number,
 	from: number,
 	route: number[],
 	reverse: boolean,
@@ -93,10 +93,10 @@ function scoreCells(
 			else y += Math.sign(ty - y);
 			const next = y * WIDTH + x;
 			cost += world.stepCost(
-				code,
+				countryId,
 				cur,
 				next,
-				painted.has(next) ? code : owners[next],
+				painted.has(next) ? countryId : owners[next],
 			);
 			if (land[next]) painted.add(next);
 			cur = next;
@@ -105,20 +105,20 @@ function scoreCells(
 	for (let k = 1; k < route.length; k++) {
 		const next = reverse ? route[last - k] : route[k];
 		cost += world.stepCost(
-			code,
+			countryId,
 			cur,
 			next,
-			painted.has(next) ? code : owners[next],
+			painted.has(next) ? countryId : owners[next],
 		);
 		if (land[next]) painted.add(next);
 		cur = next;
 	}
 	if (loop) {
 		cost += world.stepCost(
-			code,
+			countryId,
 			cur,
 			entry,
-			painted.has(entry) ? code : owners[entry],
+			painted.has(entry) ? countryId : owners[entry],
 		);
 	} else if (from === entry) {
 		const exit = reverse ? route[0] : route[last];
@@ -132,10 +132,10 @@ function scoreCells(
 				else ry += Math.sign(fy - ry);
 				const next = ry * WIDTH + rx;
 				cost += world.stepCost(
-					code,
+					countryId,
 					cur,
 					next,
-					painted.has(next) ? code : owners[next],
+					painted.has(next) ? countryId : owners[next],
 				);
 				if (land[next]) painted.add(next);
 				cur = next;
@@ -152,8 +152,8 @@ export function planBot(
 	bot: { id: string; x: number; y: number; country_id: number },
 ): BotPlan | undefined {
 	const rival = [...world.countries.values()]
-		.filter((country) => country.code !== bot.country_id)
-		.sort((a, b) => b.count - a.count)[0]?.code;
+		.filter((country) => country.country_id !== bot.country_id)
+		.sort((a, b) => b.count - a.count)[0]?.country_id;
 	const reserved = new Set(
 		[...world.players.values()]
 			.filter(
