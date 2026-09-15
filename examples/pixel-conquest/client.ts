@@ -19,11 +19,11 @@ import {
 	LITTLE_ENDIAN,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	type PlayerRow,
 	playerName,
 	readDots,
 	readOwners,
 	terrain,
-	type UserRow,
 	WATER_RGB,
 	WIDTH,
 	wrapX,
@@ -49,8 +49,8 @@ const countries = new Map<number, Country>();
 // Cold roster from the users table, keyed by identity: one row per live
 // player plus 10s grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
-const players = new Map<string, UserRow>();
-let playersUnsub: SubscriptionHandle | undefined;
+const roster = new Map<string, PlayerRow>();
+let rosterUnsub: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
@@ -67,10 +67,10 @@ let roundEndsAt = 0;
 let serverSkew = 0;
 let roundTimer: ReturnType<typeof setTimeout> | undefined;
 let leaving = false;
-let selectedCountryCode: number | undefined;
+let selectedCountryId: number | undefined;
 let lobbyCountries: Country[] = [];
 let availableSlots = 0;
-let myId = "",
+let myPlayerId = "",
 	name = "",
 	nickname = "",
 	seq = 0,
@@ -159,7 +159,7 @@ setInterval(updateRoundLabel, 1000);
 function updateCountryChoice() {
 	const creating = countryChoice.value === "new";
 	const country = lobbyCountries.find(
-		(country) => String(country.code) === countryChoice.value,
+		(country) => String(country.country_id) === countryChoice.value,
 	);
 	element("new-country").hidden = !creating;
 	countryInput.disabled = !creating;
@@ -185,14 +185,18 @@ function showLobbyCountries(all: Country[]) {
 	if (
 		countryChoice.options.length === 1 ||
 		rows.length !== lobbyCountries.length ||
-		rows.some((country, i) => country.code !== lobbyCountries[i]?.code)
+		rows.some(
+			(country, i) => country.country_id !== lobbyCountries[i]?.country_id,
+		)
 	) {
 		const selected = countryChoice.value;
 		const create = new Option("＋ Create a country", "new");
 		create.disabled = slots === 0;
 		countryChoice.replaceChildren(
 			new Option("Choose a country…", ""),
-			...rows.map((country) => new Option(country.name, String(country.code))),
+			...rows.map(
+				(country) => new Option(country.name, String(country.country_id)),
+			),
 			create,
 		);
 		countryChoice.value = selected;
@@ -279,22 +283,22 @@ resize();
 
 // One scratch ImageData reused by every chunk update: putImageData copies
 // synchronously, so a single buffer avoids per-tick allocations. Colors are
-// packed once per country code; the cache is dropped when the palette changes.
+// packed once per country id; the cache is dropped when the palette changes.
 const chunkImageData = new ImageData(CHUNK, CHUNK);
 const chunkPixels = new Uint32Array(chunkImageData.data.buffer);
 const chunkColors = new Map<number, number>();
 
-function packedColor(code: number) {
-	let color = chunkColors.get(code);
+function packedColor(countryId: number) {
+	let color = chunkColors.get(countryId);
 	if (color === undefined) {
-		const hex = countries.get(code)?.color ?? "#b7c4bb";
+		const hex = countries.get(countryId)?.color ?? "#b7c4bb";
 		const r = Number.parseInt(hex.slice(1, 3), 16);
 		const g = Number.parseInt(hex.slice(3, 5), 16);
 		const b = Number.parseInt(hex.slice(5, 7), 16);
 		color = LITTLE_ENDIAN
 			? ((0xff << 24) | (b << 16) | (g << 8) | r) >>> 0
 			: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
-		chunkColors.set(code, color);
+		chunkColors.set(countryId, color);
 	}
 	return color;
 }
@@ -311,12 +315,12 @@ function chunkImage(owners: Uint16Array, canvas?: HTMLCanvasElement) {
 	return image;
 }
 
-function myCountry(): number {
-	return players.get(myId)?.country_id ?? selectedCountryCode ?? 0;
+function myCountryId(): number {
+	return roster.get(myPlayerId)?.country_id ?? selectedCountryId ?? 0;
 }
 
 function toMotion(dot: Dot): MotionDot {
-	return { ...dot, country_id: myCountry() };
+	return { ...dot, country_id: myCountryId() };
 }
 
 function positionChanged(a: Dot, b: Dot) {
@@ -367,7 +371,7 @@ function receive(row: ChunkRow) {
 		image: chunkImage(owners, previous?.image),
 	});
 	dirty = true;
-	const self = dots.find((dot) => dot.player_id === myId);
+	const self = dots.find((dot) => dot.player_id === myPlayerId);
 	const now = performance.now();
 	const selfMotion = self ? toMotion(self) : undefined;
 	if (selfMotion) updateSelfMotion(selfMotion, now);
@@ -380,7 +384,7 @@ function receive(row: ChunkRow) {
 	lastOwnDot = now;
 	const position = motion.position(lastOwnDot);
 	camera = { x: position.x + 0.5, y: position.y + 0.5 };
-	const country = countries.get(myCountry());
+	const country = countries.get(myCountryId());
 	element("coordinates").textContent =
 		`${country?.name ?? name} · ${self.x}, ${self.y}`;
 	maybeUpdateSubscriptions();
@@ -480,16 +484,16 @@ function scoreboard(rows: Country[]) {
 	// ponytail: roster rows include 10s grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
 	const headcount = new Map<number, number>();
-	for (const player of players.values())
+	for (const player of roster.values())
 		headcount.set(
 			player.country_id,
 			(headcount.get(player.country_id) ?? 0) + 1,
 		);
 	const paletteChanged = rows.some(
-		(row) => countries.get(row.code)?.color !== row.color,
+		(row) => countries.get(row.country_id)?.color !== row.color,
 	);
 	countries.clear();
-	for (const row of rows) countries.set(row.code, row);
+	for (const row of rows) countries.set(row.country_id, row);
 	element("country-count").textContent = String(rows.length);
 	element("countries").replaceChildren(
 		...rows
@@ -506,14 +510,14 @@ function scoreboard(rows: Country[]) {
 				const label = document.createElement("span");
 				label.className = "name";
 				label.textContent = country.name;
-				const roster = document.createElement("span");
-				roster.className = "players";
-				roster.title = "Players";
-				roster.textContent = String(headcount.get(country.code) ?? 0);
+				const members = document.createElement("span");
+				members.className = "players";
+				members.title = "Players";
+				members.textContent = String(headcount.get(country.country_id) ?? 0);
 				const score = document.createElement("span");
 				score.className = "score";
 				score.textContent = country.count.toLocaleString();
-				li.append(swatch, label, roster, score);
+				li.append(swatch, label, members, score);
 				return li;
 			}),
 	);
@@ -535,7 +539,7 @@ function publish(changed = false) {
 	}
 	client.presence.set({
 		name: nickname,
-		countryCode: selectedCountryCode,
+		country_id: selectedCountryId,
 		direction,
 		seq,
 	});
@@ -768,9 +772,9 @@ function returnToLobby(message: string) {
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
-	playersUnsub?.unsubscribe();
-	playersUnsub = undefined;
-	players.clear();
+	rosterUnsub?.unsubscribe();
+	rosterUnsub = undefined;
+	roster.clear();
 	playing = online = false;
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
@@ -786,8 +790,8 @@ function returnToLobby(message: string) {
 function checkAdmission() {
 	if (!playing || lastOwnDot !== 0) return;
 	if (
-		selectedCountryCode !== undefined &&
-		!latestCountries.some((country) => country.code === selectedCountryCode)
+		selectedCountryId !== undefined &&
+		!latestCountries.some((country) => country.country_id === selectedCountryId)
 	) {
 		returnToLobby("That country is no longer available. Choose another one.");
 		return;
@@ -803,19 +807,19 @@ async function locate() {
 		// O(1) self-locate: our own roster row names our chunk (spawn cell on
 		// admission, chunk-entry cell after crossings, final cell as a grace
 		// tombstone). No table scan; the visible-ring subscriptions deliver us.
-		const me = (await client.store.get(["users", myId])) as unknown as
-			| UserRow
+		const me = (await client.store.get(["users", myPlayerId])) as unknown as
+			| PlayerRow
 			| undefined;
 		if (
 			me &&
-			Number.isSafeInteger(me.lastX) &&
-			Number.isSafeInteger(me.lastY) &&
-			me.lastX >= 0 &&
-			me.lastX < WIDTH &&
-			me.lastY >= 0 &&
-			me.lastY < HEIGHT
+			Number.isSafeInteger(me.last_x) &&
+			Number.isSafeInteger(me.last_y) &&
+			me.last_x >= 0 &&
+			me.last_x < WIDTH &&
+			me.last_y >= 0 &&
+			me.last_y < HEIGHT
 		) {
-			camera = { x: me.lastX + 0.5, y: me.lastY + 0.5 };
+			camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
 			dirty = true;
 			updateSubscriptions();
 		}
@@ -840,9 +844,9 @@ element("join").addEventListener("submit", async (event) => {
 	try {
 		nickname = playerName(element<HTMLInputElement>("player-name").value);
 		const selected = lobbyCountries.find(
-			(country) => String(country.code) === countryChoice.value,
+			(country) => String(country.country_id) === countryChoice.value,
 		);
-		selectedCountryCode = selected?.code;
+		selectedCountryId = selected?.country_id;
 		if (countryChoice.value === "new") {
 			if (availableSlots === 0)
 				throw new Error(
@@ -874,7 +878,7 @@ element("join").addEventListener("submit", async (event) => {
 			roundEndsAt = session.round.endsAt;
 			updateRoundLabel();
 		}
-		selectedCountryCode = selected?.code ?? session.countryCode;
+		selectedCountryId = selected?.country_id ?? session.country_id;
 		client = createClient({
 			url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
 			auth: { token: session.token },
@@ -905,12 +909,12 @@ element("join").addEventListener("submit", async (event) => {
 		await client.connect();
 		// Identity comes from scope setup, not a table scan: the users table
 		// now holds every roster row, so limit:1 would return anyone.
-		myId = client.presence.localUserId ?? "";
-		for (let i = 0; i < 30 && !myId; i++) {
+		myPlayerId = client.presence.localUserId ?? "";
+		for (let i = 0; i < 30 && !myPlayerId; i++) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
-			myId = client.presence.localUserId ?? "";
+			myPlayerId = client.presence.localUserId ?? "";
 		}
-		if (!myId) throw new Error("Could not resolve your player identity");
+		if (!myPlayerId) throw new Error("Could not resolve your player identity");
 		playing = online = true;
 		clearTimeout(admissionTimer);
 		admissionTimer = setTimeout(checkAdmission, 3000);
@@ -926,10 +930,10 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		playersUnsub?.unsubscribe();
-		playersUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
-			players.clear();
-			for (const row of rows as UserRow[]) players.set(row.id, row);
+		rosterUnsub?.unsubscribe();
+		rosterUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
+			roster.clear();
+			for (const row of rows as PlayerRow[]) roster.set(row.id, row);
 			scoreboard(latestCountries);
 			dirty = true;
 		});
@@ -1015,7 +1019,7 @@ function draw(now: number) {
 		for (const dot of chunk.dots) visibleDots.set(dot.player_id, dot);
 	}
 	// Draw yourself last so nearby dots and names do not cover your marker.
-	const self = visibleDots.get(myId) ?? motion?.dot;
+	const self = visibleDots.get(myPlayerId) ?? motion?.dot;
 	if (self) {
 		visibleDots.delete(self.player_id);
 		visibleDots.set(self.player_id, self);
@@ -1024,10 +1028,10 @@ function draw(now: number) {
 		const key = dot.player_id;
 		// Simple client-side join: hot dot plus its cold roster row. Dots
 		// without a row are mid-join/leave races; draw them neutrally once.
-		const meta = players.get(key);
+		const meta = roster.get(key);
 		const isBot = meta?.is_bot ?? false;
 		const display =
-			key === myId && position ? { x: position.x, y: position.y } : dot;
+			key === myPlayerId && position ? { x: position.x, y: position.y } : dot;
 		// Draw the dot in whichever world copy is nearest the camera.
 		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
 		const x = left + (dotX + 0.5) * zoom,
@@ -1039,7 +1043,7 @@ function draw(now: number) {
 		ctx.fillStyle = (meta && countries.get(meta.country_id)?.color) ?? "white";
 		ctx.fill();
 		ctx.lineWidth = 2;
-		ctx.strokeStyle = key === myId ? "#ffe3a0" : "#0d1822";
+		ctx.strokeStyle = key === myPlayerId ? "#ffe3a0" : "#0d1822";
 		ctx.stroke();
 	}
 	// Names in their own pass: font and text state change twice per frame
@@ -1051,8 +1055,8 @@ function draw(now: number) {
 	ctx.font = "10px system-ui";
 	ctx.fillStyle = "#bccacb";
 	for (const dot of visibleDots.values()) {
-		if (dot.player_id === myId) continue;
-		const meta = players.get(dot.player_id);
+		if (dot.player_id === myPlayerId) continue;
+		const meta = roster.get(dot.player_id);
 		if (!meta?.name || meta.is_bot) continue;
 		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
 		const x = left + (dotX + 0.5) * zoom,
@@ -1060,7 +1064,7 @@ function draw(now: number) {
 		ctx.strokeText(meta.name, x, y - zoom - 7, 120);
 		ctx.fillText(meta.name, x, y - zoom - 7, 120);
 	}
-	const selfMeta = players.get(myId);
+	const selfMeta = roster.get(myPlayerId);
 	if (self && selfMeta?.name && !selfMeta.is_bot) {
 		const display = position ?? self;
 		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);

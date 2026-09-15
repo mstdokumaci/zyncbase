@@ -28,8 +28,7 @@ function workload(size: number, rotated: boolean, shape: string) {
 	world.restore(
 		[
 			{
-				id: "1",
-				code: 1,
+				country_id: 1,
 				name: "Benchmark",
 				color: "red",
 				count: 0,
@@ -42,7 +41,7 @@ function workload(size: number, rotated: boolean, shape: string) {
 		"walker",
 		{
 			name: "Walker",
-			countryCode: 1,
+			country_id: 1,
 			direction: "idle",
 			seq: 0,
 		},

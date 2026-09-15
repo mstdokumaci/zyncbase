@@ -6,7 +6,7 @@ import type { Bounds } from "./filler";
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the local ring once, counting groups that contain a side-neighbor.
 export function mayEnclose(
 	owners: Uint16Array,
-	code: number,
+	countryId: number,
 	cell: number,
 	width: number,
 ) {
@@ -28,13 +28,13 @@ export function mayEnclose(
 		cell + width - 1,
 		cell - 1,
 	];
-	const wall = ring.findIndex((neighbor) => owners[neighbor] === code);
+	const wall = ring.findIndex((neighbor) => owners[neighbor] === countryId);
 	if (wall === -1) return false;
 	let groups = 0,
 		side = false;
 	for (let i = 1; i <= ring.length; i++) {
 		const index = (wall + i) % ring.length;
-		if (owners[ring[index]] === code) {
+		if (owners[ring[index]] === countryId) {
 			if (side && ++groups > 1) return true;
 			side = false;
 		} else if (index % 2 === 1) side = true;
@@ -47,12 +47,12 @@ export function mayEnclose(
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: four bounded rays avoid allocation and stop at the first country pixel.
 export function hasStraightExit(
 	owners: Uint16Array,
-	code: number,
+	countryId: number,
 	cell: number,
 	width: number,
 	bounds: Bounds,
 ) {
-	if (owners[cell] === code) return false;
+	if (owners[cell] === countryId) return false;
 	const x = cell % width,
 		y = Math.floor(cell / width);
 	if (
@@ -67,16 +67,16 @@ export function hasStraightExit(
 	const top = bounds.top * width + x,
 		bottom = bounds.bottom * width + x;
 	let cur = cell;
-	while (cur > left && owners[cur - 1] !== code) cur--;
+	while (cur > left && owners[cur - 1] !== countryId) cur--;
 	if (cur === left) return true;
 	cur = cell;
-	while (cur < right && owners[cur + 1] !== code) cur++;
+	while (cur < right && owners[cur + 1] !== countryId) cur++;
 	if (cur === right) return true;
 	cur = cell;
-	while (cur > top && owners[cur - width] !== code) cur -= width;
+	while (cur > top && owners[cur - width] !== countryId) cur -= width;
 	if (cur === top) return true;
 	cur = cell;
-	while (cur < bottom && owners[cur + width] !== code) cur += width;
+	while (cur < bottom && owners[cur + width] !== countryId) cur += width;
 	return cur === bottom;
 }
 
@@ -91,7 +91,7 @@ const localOutside = new Set<number>();
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the bounded flood proves each component open or closed before returning captures.
 export function localEnclosures(
 	owners: Uint16Array,
-	code: number,
+	countryId: number,
 	starts: Set<number>,
 	bounds: Bounds,
 	width: number,
@@ -100,11 +100,15 @@ export function localEnclosures(
 	const holes = new Set<number>();
 	localOutside.clear();
 	for (const start of starts) {
-		if (owners[start] === code || holes.has(start) || localOutside.has(start))
+		if (
+			owners[start] === countryId ||
+			holes.has(start) ||
+			localOutside.has(start)
+		)
 			continue;
 		// Gains and bulk captures also queue exterior cells. Reuse the loss gate
 		// before a broad open component can exhaust the local flood budget.
-		if (hasStraightExit(owners, code, start, width, bounds)) {
+		if (hasStraightExit(owners, countryId, start, width, bounds)) {
 			localOutside.add(start);
 			continue;
 		}
@@ -128,7 +132,7 @@ export function localEnclosures(
 				break;
 			}
 			for (const next of [cell - width, cell + 1, cell + width, cell - 1]) {
-				if (owners[next] === code || localSeen.has(next)) continue;
+				if (owners[next] === countryId || localSeen.has(next)) continue;
 				if (localOutside.has(next)) {
 					open = true;
 					break;

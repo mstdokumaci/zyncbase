@@ -23,11 +23,11 @@ import {
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
 	PLAYER_GRACE_MS,
+	type PlayerRow,
 	playerName,
 	RULES,
 	readOwners,
 	rowId,
-	type UserRow,
 	WIDTH,
 	wrapX,
 } from "./shared";
@@ -37,8 +37,8 @@ type Player = {
 	name?: string;
 	country_id: number;
 	is_bot: boolean;
-	lastX: number;
-	lastY: number;
+	last_x: number;
+	last_y: number;
 	x: number;
 	y: number;
 	seq: number;
@@ -85,18 +85,18 @@ export class World {
 	readonly dirtyChunks = new Set<number>();
 	readonly dirtyCountries = new Set<number>();
 	readonly dirtyRemovedCountries = new Set<number>();
-	readonly dirtyUsers = new Set<string>();
-	readonly dirtyRemovedUsers = new Set<string>();
+	readonly dirtyPlayerRows = new Set<string>();
+	readonly dirtyRemovedPlayerRows = new Set<string>();
 	// Departed players kept briefly for same-id grace reconnects: store row
 	// (with final position) lingers, live map entry is gone immediately so
 	// ghosts never draw, block spawns, or pin countries.
 	private readonly graveyard = new Map<
 		string,
-		{ row: UserRow; expires: number }
+		{ row: PlayerRow; expires: number }
 	>();
 	inputMessages = 0;
 	ticks = 0;
-	private nextCode = 1;
+	private nextCountryId = 1;
 	private botsEnabled = false;
 	// Human spawn cursor: drives round-robin center selection and the golden-
 	// angle spiral inside each region.
@@ -116,14 +116,14 @@ export class World {
 	}
 
 	/** Cold roster value for publishing (id rides in the path, not the body). */
-	userRow(id: string): Omit<UserRow, "id"> | undefined {
+	playerRow(id: string): Omit<PlayerRow, "id"> | undefined {
 		const player = this.players.get(id);
 		if (player) {
-			const row: Omit<UserRow, "id"> = {
+			const row: Omit<PlayerRow, "id"> = {
 				country_id: player.country_id,
 				is_bot: player.is_bot,
-				lastX: player.lastX,
-				lastY: player.lastY,
+				last_x: player.last_x,
+				last_y: player.last_y,
 			};
 			if (player.name !== undefined) row.name = player.name;
 			return row;
@@ -134,9 +134,9 @@ export class World {
 		return row;
 	}
 
-	/** Next unallocated country code; persisted so retired codes never repeat. */
+	/** Next unallocated country id; persisted so retired ids never repeat. */
 	get allocatorMark() {
-		return this.nextCode;
+		return this.nextCountryId;
 	}
 
 	startBots(now: number) {
@@ -182,25 +182,24 @@ export class World {
 		countries: Country[],
 		chunks: ChunkRow[],
 		players: { id: string }[] = [],
-		persistedNextCode = 0,
+		persistedNextCountryId = 0,
 	) {
 		for (const country of countries) {
-			const { id, code, name, color, is_bot } = country;
-			this.countries.set(code, {
-				id,
-				code,
+			const { country_id, name, color, is_bot } = country;
+			this.countries.set(country_id, {
+				country_id,
 				name,
 				color,
 				count: 0,
 				is_bot,
 			});
-			this.dirtyCountries.add(country.code);
+			this.dirtyCountries.add(country_id);
 		}
-		// The allocator mark lives outside the country rows so retired codes
+		// The allocator mark lives outside the country rows so retired ids
 		// stay retired: restore it before pruning, never recompute it from
 		// the survivors alone.
-		this.nextCode = Math.max(
-			persistedNextCode,
+		this.nextCountryId = Math.max(
+			persistedNextCountryId,
 			Math.max(0, ...this.countries.keys()) + 1,
 		);
 		for (const chunk of chunks) {
@@ -226,9 +225,9 @@ export class World {
 					if (!country)
 						throw new Error("Saved territory has an unknown country");
 					country.count++;
-					this.extendBounds(country.code, py * WIDTH + px);
-					this.changedCountries.add(country.code);
-					this.enclosureCountries.set(country.code, null);
+					this.extendBounds(country.country_id, py * WIDTH + px);
+					this.changedCountries.add(country.country_id);
+					this.enclosureCountries.set(country.country_id, null);
 				}
 			}
 			// Positions don't survive a restart (live map starts empty), so any
@@ -238,14 +237,14 @@ export class World {
 		}
 		// Stale roster rows (including grace tombstones) never survive a
 		// restart: the live map is empty, so queue them all for removal.
-		for (const player of players) this.dirtyRemovedUsers.add(player.id);
+		for (const player of players) this.dirtyRemovedPlayerRows.add(player.id);
 		// No players exist yet after a restart, so zero-land countries are
 		// abandoned by definition: drop them and free their names for reuse.
-		for (const [code, country] of this.countries) {
+		for (const [countryId, country] of this.countries) {
 			if (country.count === 0) {
-				this.countries.delete(code);
-				this.dirtyCountries.delete(code);
-				this.dirtyRemovedCountries.add(code);
+				this.countries.delete(countryId);
+				this.dirtyCountries.delete(countryId);
+				this.dirtyRemovedCountries.add(countryId);
 			}
 		}
 		this.fillEnclosures();
@@ -259,42 +258,41 @@ export class World {
 		if (existing) return existing;
 		// Newcomers join existing countries once the world is full of them.
 		if (this.countries.size >= MAX_COUNTRIES) return undefined;
-		// Codes never repeat, so a removed row and a later row never collide
+		// Ids never repeat, so a removed row and a later row never collide
 		// inside one publication batch.
-		const code = this.nextCode++;
-		if (code > 65535)
+		const countryId = this.nextCountryId++;
+		if (countryId > 65535)
 			throw new Error("Country storage is full; reset the world");
 		const used = new Set([...this.countries.values()].map((c) => c.color));
 		const color = COUNTRY_COLORS.find((color) => !used.has(color));
 		if (!color) throw new Error("No country colors available");
 		const country = {
-			id: rowId(code),
-			code,
+			country_id: countryId,
 			name,
 			color,
 			count: 0,
 			is_bot: isBot,
 		};
-		this.countries.set(code, country);
-		this.dirtyCountries.add(code);
+		this.countries.set(countryId, country);
+		this.dirtyCountries.add(countryId);
 		return country;
 	}
 
 	// A country with no land and no live holders is gone: its slot and name
 	// become available for newcomers. Zero-land countries with live players
 	// stay, so roaming dots keep their identity.
-	maybeDeleteCountry(code: number) {
-		const country = this.countries.get(code);
+	maybeDeleteCountry(countryId: number) {
+		const country = this.countries.get(countryId);
 		if (!country || country.count !== 0) return;
 		// Grace tombstones never pin a country: only live holders count.
 		for (const player of this.players.values())
-			if (player.country_id === code) return;
-		this.countries.delete(code);
-		this.bounds.delete(code);
-		this.enclosureCountries.delete(code);
-		this.changedCountries.delete(code);
-		this.dirtyCountries.delete(code);
-		this.dirtyRemovedCountries.add(code);
+			if (player.country_id === countryId) return;
+		this.countries.delete(countryId);
+		this.bounds.delete(countryId);
+		this.enclosureCountries.delete(countryId);
+		this.changedCountries.delete(countryId);
+		this.dirtyCountries.delete(countryId);
+		this.dirtyRemovedCountries.add(countryId);
 	}
 
 	// First center is the historical northern-Italy start where bots spawn;
@@ -392,11 +390,11 @@ export class World {
 
 	// Humans reinforce their country: own land first, then a live teammate,
 	// then the regional round-robin. Bots spread over the first regions by
-	// country code so every region has an early opponent.
-	private spawnAnchor(code: number, bot: boolean, team: number) {
+	// country id so every region has an early opponent.
+	private spawnAnchor(countryId: number, bot: boolean, team: number) {
 		if (bot) {
 			const region = this.spawnCenters[
-				(code - 1) % this.spawnCenters.length
+				(countryId - 1) % this.spawnCenters.length
 			] as { x: number; y: number };
 			const angle = (team * Math.PI * 2) / botCountries.length - Math.PI / 2;
 			return {
@@ -406,18 +404,18 @@ export class World {
 			};
 		}
 		const teammates = [...this.players.values()].filter(
-			(player) => player.country_id === code,
+			(player) => player.country_id === countryId,
 		);
 		const mate =
 			teammates.find(
-				(player) => this.owners[player.y * WIDTH + player.x] === code,
+				(player) => this.owners[player.y * WIDTH + player.x] === countryId,
 			) ?? teammates[0];
 		if (mate)
 			return {
 				...this.spiralAnchor(mate, teammates.length),
-				own: this.owners[mate.y * WIDTH + mate.x] === code,
+				own: this.owners[mate.y * WIDTH + mate.x] === countryId,
 			};
-		const owned = this.findOwnedCell(code);
+		const owned = this.findOwnedCell(countryId);
 		if (owned !== undefined)
 			return {
 				...this.spiralAnchor(
@@ -430,8 +428,8 @@ export class World {
 	}
 
 	/** First owned cell within the country's cached bounds, capped for safety. */
-	private findOwnedCell(code: number) {
-		const box = this.bounds.get(code);
+	private findOwnedCell(countryId: number) {
+		const box = this.bounds.get(countryId);
 		if (!box) return undefined;
 		let budget = SPAWN_OWNED_CELL_BUDGET;
 		for (let y = box.top; y <= box.bottom; y++) {
@@ -440,7 +438,7 @@ export class World {
 				cell <= y * WIDTH + box.right;
 				cell++
 			) {
-				if (this.owners[cell] === code) return cell;
+				if (this.owners[cell] === countryId) return cell;
 				if (--budget <= 0) return undefined;
 			}
 		}
@@ -449,7 +447,7 @@ export class World {
 
 	/** Bucket players by 16px cells so a spacing test is constant time. */
 	private spacingBuckets(
-		code: number,
+		countryId: number,
 		extra?: { x: number; y: number; radiusSq: number },
 	) {
 		const buckets = new Map<
@@ -468,7 +466,7 @@ export class World {
 		// Humans and bots share one spacing rule; the round-robin spawn
 		// regions keep each region sparse enough for it to fit.
 		for (const other of this.players.values())
-			add(other.x, other.y, (code === other.country_id ? 12 : 28) ** 2);
+			add(other.x, other.y, (countryId === other.country_id ? 12 : 28) ** 2);
 		if (extra) add(extra.x, extra.y, extra.radiusSq);
 		return buckets;
 	}
@@ -512,16 +510,16 @@ export class World {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search first preserves spacing, then admits players on cramped land.
-	private spawn(code: number, bot: boolean, team: number) {
+	private spawn(countryId: number, bot: boolean, team: number) {
 		const center = [...this.players.values()].find(
 			(player) => !player.is_bot,
 		) ?? { ...DEFAULT_SPAWN };
-		const anchor = this.spawnAnchor(code, bot, team);
+		const anchor = this.spawnAnchor(countryId, bot, team);
 		const occupied = new Set(
 			[...this.players.values()].map((p) => p.y * WIDTH + p.x),
 		);
 		const buckets = this.spacingBuckets(
-			code,
+			countryId,
 			bot ? { x: center.x, y: center.y, radiusSq: 28 * 28 } : undefined,
 		);
 		// Humans reinforcing a country prefer its own cells; bots keep the
@@ -565,7 +563,7 @@ export class World {
 							this.land[y * WIDTH + x] &&
 							!occupied.has(y * WIDTH + x) &&
 							(!pass.spaced || this.fitsSpacing(buckets, x, y)) &&
-							(!pass.own || this.owners[y * WIDTH + x] === code),
+							(!pass.own || this.owners[y * WIDTH + x] === countryId),
 					);
 					if (position) return position;
 				}
@@ -577,7 +575,7 @@ export class World {
 	// Same-id grace reconnects resume their tombstone cell when it is still
 	// free land; otherwise they fall through to the normal ring search.
 	private spawnAt(
-		code: number,
+		countryId: number,
 		bot: boolean,
 		team: number,
 		now: number,
@@ -586,8 +584,8 @@ export class World {
 		const grave = this.graveyard.get(id);
 		if (grave) {
 			this.graveyard.delete(id);
-			this.dirtyRemovedUsers.delete(id);
-			const { lastX: x, lastY: y } = grave.row;
+			this.dirtyRemovedPlayerRows.delete(id);
+			const { last_x: x, last_y: y } = grave.row;
 			if (
 				x >= 0 &&
 				x < WIDTH &&
@@ -596,15 +594,15 @@ export class World {
 				this.land[y * WIDTH + x] &&
 				![...this.players.values()].some((p) => p.x === x && p.y === y)
 			)
-				return this.makePlayer(id, code, bot, x, y, now);
+				return this.makePlayer(id, countryId, bot, x, y, now);
 		}
-		const position = this.spawn(code, bot, team);
-		return this.makePlayer(id, code, bot, position.x, position.y, now);
+		const position = this.spawn(countryId, bot, team);
+		return this.makePlayer(id, countryId, bot, position.x, position.y, now);
 	}
 
 	private makePlayer(
 		id: string,
-		code: number,
+		countryId: number,
 		bot: boolean,
 		x: number,
 		y: number,
@@ -612,10 +610,10 @@ export class World {
 	): Player {
 		const player: Player = {
 			id,
-			country_id: code,
+			country_id: countryId,
 			is_bot: bot,
-			lastX: x,
-			lastY: y,
+			last_x: x,
+			last_y: y,
 			x,
 			y,
 			seq: -1,
@@ -625,13 +623,13 @@ export class World {
 		};
 		this.players.set(id, player);
 		this.dirtyChunks.add(chunkIndex(x, y));
-		this.dirtyUsers.add(id);
+		this.dirtyPlayerRows.add(id);
 		return player;
 	}
 
 	private add(id: string, country: Country, now: number, bot = false) {
 		return this.spawnAt(
-			country.code,
+			country.country_id,
 			bot,
 			botCountries.indexOf(country.name),
 			now,
@@ -648,8 +646,8 @@ export class World {
 		let player = this.players.get(id);
 		if (!player) {
 			if (this.humanCount >= MAX_PLAYERS) return;
-			if (!Number.isSafeInteger(data.countryCode)) return;
-			const country = this.countries.get(Number(data.countryCode));
+			if (!Number.isSafeInteger(data.country_id)) return;
+			const country = this.countries.get(Number(data.country_id));
 			if (!country || country.is_bot) return;
 			let nickname: string;
 			try {
@@ -679,16 +677,16 @@ export class World {
 		// from the removal time (not last contact), so silent-timeout removals
 		// get the full grace window too. It is purely in-memory; the row shape
 		// never changes, so rejoin overwrites it with no field-clearing hazards.
-		const row: UserRow = {
+		const row: PlayerRow = {
 			id: player.id,
 			country_id: player.country_id,
 			is_bot: player.is_bot,
-			lastX: player.x,
-			lastY: player.y,
+			last_x: player.x,
+			last_y: player.y,
 		};
 		if (player.name !== undefined) row.name = player.name;
 		this.graveyard.set(id, { row, expires: now + PLAYER_GRACE_MS });
-		this.dirtyUsers.add(id);
+		this.dirtyPlayerRows.add(id);
 		this.maybeDeleteCountry(player.country_id);
 	}
 
@@ -703,7 +701,7 @@ export class World {
 			if (now - player.heardAt > INPUT_LEASE_MS) player.direction = "idle";
 			this.move(player);
 		}
-		// Expire grace tombstones whose owners never came back. Live rejoins
+		// Expire grace tombstones whose players never came back. Live rejoins
 		// cancel by deleting the graveyard entry (and any stale queued remove).
 		this.sweepGraveyard(now);
 		this.tickBots(now);
@@ -714,7 +712,7 @@ export class World {
 		for (const [id, grave] of this.graveyard) {
 			if (now < grave.expires) continue;
 			this.graveyard.delete(id);
-			if (!this.players.has(id)) this.dirtyRemovedUsers.add(id);
+			if (!this.players.has(id)) this.dirtyRemovedPlayerRows.add(id);
 		}
 	}
 
@@ -732,9 +730,15 @@ export class World {
 		}
 	}
 
-	stepCost(code: number, from: number, to: number, owner = this.owners[to]) {
+	stepCost(
+		countryId: number,
+		from: number,
+		to: number,
+		owner = this.owners[to],
+	) {
 		let cost = RULES.neutral;
-		if (this.land[to] && owner) cost = owner === code ? RULES.own : RULES.enemy;
+		if (this.land[to] && owner)
+			cost = owner === countryId ? RULES.own : RULES.enemy;
 		if (this.land[from] !== this.land[to]) cost += RULES.crossing;
 		return cost;
 	}
@@ -765,9 +769,9 @@ export class World {
 		// enough for O(1) locate, quiet enough to keep the cold subscription
 		// cold. ponytail: per-tick sync if locate ever misses on fast movers.
 		if (after !== before) {
-			player.lastX = x;
-			player.lastY = y;
-			this.dirtyUsers.add(player.id);
+			player.last_x = x;
+			player.last_y = y;
+			this.dirtyPlayerRows.add(player.id);
 		}
 		if (!this.land[to] || owner === player.country_id) return;
 		this.claim(to, player.country_id);
@@ -781,56 +785,57 @@ export class World {
 		}
 		// Keep entries until the pass ends: captures can append affected countries,
 		// but each country runs at most once, in first-change order.
-		for (const code of this.changedCountries) {
+		for (const countryId of this.changedCountries) {
 			if (
-				!this.enclosureCountries.has(code) ||
-				!this.countries.get(code)?.count
+				!this.enclosureCountries.has(countryId) ||
+				!this.countries.get(countryId)?.count
 			)
 				continue;
-			const box = this.bounds.get(code);
+			const box = this.bounds.get(countryId);
 			if (!box) continue;
-			const starts = this.enclosureCountries.get(code);
+			const starts = this.enclosureCountries.get(countryId);
 			// A processed country needs no more candidates from its own captures.
-			this.enclosureCountries.set(code, null);
+			this.enclosureCountries.set(countryId, null);
 			const local = starts
-				? localEnclosures(this.owners, code, starts, box, WIDTH)
+				? localEnclosures(this.owners, countryId, starts, box, WIDTH)
 				: undefined;
 			if (local) {
-				for (const cell of local) this.claim(cell, code, true);
+				for (const cell of local) this.claim(cell, countryId, true);
 				continue;
 			}
 			// Filling only grows a country inside its original bounds. Other
 			// countries only shrink, so these bounds stay safe throughout the pass.
-			const labels = this.filler.fill(this.owners, code, box);
+			const labels = this.filler.fill(this.owners, countryId, box);
 			for (let y = box.top; y <= box.bottom; y++) {
 				const end = y * WIDTH + box.right;
 				for (let cell = y * WIDTH + box.left; cell <= end; cell++)
 					if (labels[cell] === 0 && this.land[cell])
-						this.claim(cell, code, true);
+						this.claim(cell, countryId, true);
 			}
 		}
 		this.changedCountries.clear();
 		this.enclosureCountries.clear();
 	}
 
-	private queueEnclosure(code: number, cell: number) {
-		let starts = this.enclosureCountries.get(code);
+	private queueEnclosure(countryId: number, cell: number) {
+		let starts = this.enclosureCountries.get(countryId);
 		if (starts === null) return;
 		if (!starts) {
 			starts = new Set();
-			this.enclosureCountries.set(code, starts);
+			this.enclosureCountries.set(countryId, starts);
 		}
 		if (starts.size === LOCAL_SEARCH_BUDGET)
-			this.enclosureCountries.set(code, null);
+			this.enclosureCountries.set(countryId, null);
 		else starts.add(cell);
 	}
 
-	private extendBounds(code: number, cell: number) {
+	private extendBounds(countryId: number, cell: number) {
 		// bounds only grow; recompute after losses if loose bounds become costly.
 		const x = cell % WIDTH,
 			y = Math.floor(cell / WIDTH);
-		const box = this.bounds.get(code);
-		if (!box) this.bounds.set(code, { left: x, right: x, top: y, bottom: y });
+		const box = this.bounds.get(countryId);
+		if (!box)
+			this.bounds.set(countryId, { left: x, right: x, top: y, bottom: y });
 		else {
 			box.left = Math.min(box.left, x);
 			box.right = Math.max(box.right, x);
@@ -840,29 +845,29 @@ export class World {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: update both owners and collect bounded enclosure candidates at their shared mutation point.
-	private claim(cell: number, code: number, fromFill = false) {
+	private claim(cell: number, countryId: number, fromFill = false) {
 		const owner = this.owners[cell];
-		if (!this.land[cell] || owner === code) return;
-		this.owners[cell] = code;
-		this.extendBounds(code, cell);
-		this.changedCountries.add(code);
-		const starts = this.enclosureCountries.get(code);
+		if (!this.land[cell] || owner === countryId) return;
+		this.owners[cell] = countryId;
+		this.extendBounds(countryId, cell);
+		this.changedCountries.add(countryId);
+		const starts = this.enclosureCountries.get(countryId);
 		if (
 			starts !== null &&
 			// A later claim can consume a queued start while its hole still exists.
-			(starts?.has(cell) || mayEnclose(this.owners, code, cell, WIDTH))
+			(starts?.has(cell) || mayEnclose(this.owners, countryId, cell, WIDTH))
 		) {
 			const x = cell % WIDTH;
-			if (cell >= WIDTH) this.queueEnclosure(code, cell - WIDTH);
-			if (x < WIDTH - 1) this.queueEnclosure(code, cell + 1);
+			if (cell >= WIDTH) this.queueEnclosure(countryId, cell - WIDTH);
+			if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
 			if (cell < this.owners.length - WIDTH)
-				this.queueEnclosure(code, cell + WIDTH);
-			if (x > 0) this.queueEnclosure(code, cell - 1);
+				this.queueEnclosure(countryId, cell + WIDTH);
+			if (x > 0) this.queueEnclosure(countryId, cell - 1);
 		}
 		this.dirtyChunks.add(chunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)));
-		const country = this.countries.get(code);
+		const country = this.countries.get(countryId);
 		if (country) country.count++;
-		this.dirtyCountries.add(code);
+		this.dirtyCountries.add(countryId);
 		if (!owner) return;
 		const previous = this.countries.get(owner);
 		if (previous) previous.count--;

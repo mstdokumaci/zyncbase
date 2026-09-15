@@ -10,8 +10,8 @@ export type PublishSnapshot = {
 	chunks: number[];
 	countries: number[];
 	removed: number[];
-	users: string[];
-	removedUsers: string[];
+	playerRows: string[];
+	removedPlayerRows: string[];
 };
 
 /** Snapshot the world's dirty sets and clear them for the next tick. */
@@ -27,15 +27,15 @@ export function drainPublishState(
 		chunks: [...world.dirtyChunks],
 		countries: rosters ? [...world.dirtyCountries] : [],
 		removed: rosters ? [...world.dirtyRemovedCountries] : [],
-		users: rosters ? [...world.dirtyUsers] : [],
-		removedUsers: rosters ? [...world.dirtyRemovedUsers] : [],
+		playerRows: rosters ? [...world.dirtyPlayerRows] : [],
+		removedPlayerRows: rosters ? [...world.dirtyRemovedPlayerRows] : [],
 	};
 	world.dirtyChunks.clear();
 	if (rosters) {
 		world.dirtyCountries.clear();
 		world.dirtyRemovedCountries.clear();
-		world.dirtyUsers.clear();
-		world.dirtyRemovedUsers.clear();
+		world.dirtyPlayerRows.clear();
+		world.dirtyRemovedPlayerRows.clear();
 	}
 	return snapshot;
 }
@@ -46,10 +46,13 @@ export function restorePublishState(
 	snapshot: PublishSnapshot,
 ): void {
 	for (const index of snapshot.chunks) world.dirtyChunks.add(index);
-	for (const code of snapshot.countries) world.dirtyCountries.add(code);
-	for (const code of snapshot.removed) world.dirtyRemovedCountries.add(code);
-	for (const id of snapshot.users) world.dirtyUsers.add(id);
-	for (const id of snapshot.removedUsers) world.dirtyRemovedUsers.add(id);
+	for (const countryId of snapshot.countries)
+		world.dirtyCountries.add(countryId);
+	for (const countryId of snapshot.removed)
+		world.dirtyRemovedCountries.add(countryId);
+	for (const id of snapshot.playerRows) world.dirtyPlayerRows.add(id);
+	for (const id of snapshot.removedPlayerRows)
+		world.dirtyRemovedPlayerRows.add(id);
 }
 
 /** Build committed-batch operations from a snapshot; removes go first. */
@@ -59,32 +62,32 @@ export function buildPublishOperations(
 	extra: BatchOperation[] = [],
 ): BatchOperation[] {
 	const countries = snapshot.countries
-		.map((code) => world.countries.get(code))
+		.map((countryId) => world.countries.get(countryId))
 		.filter((c) => c !== undefined);
 	// Stale tombstone expiry loses to a live rejoin: rejoins clear their
 	// queued remove in spawnAt, and this filter covers any drain/build gap.
-	const removedUsers = snapshot.removedUsers.filter(
+	const removedPlayerRows = snapshot.removedPlayerRows.filter(
 		(id) => !world.players.has(id),
 	);
-	const users = snapshot.users
-		.map((id) => ({ id, row: world.userRow(id) }))
+	const playerRows = snapshot.playerRows
+		.map((id) => ({ id, row: world.playerRow(id) }))
 		.filter((entry) => entry.row !== undefined);
 	return [
 		...extra,
-		...snapshot.removed.map((code) => ({
+		...snapshot.removed.map((countryId) => ({
 			op: "remove" as const,
-			path: ["countries", rowId(code)],
+			path: ["countries", rowId(countryId)],
 		})),
-		...removedUsers.map((id) => ({
+		...removedPlayerRows.map((id) => ({
 			op: "remove" as const,
 			path: ["users", id],
 		})),
-		...countries.map(({ id, ...value }) => ({
+		...countries.map((country) => ({
 			op: "set" as const,
-			path: ["countries", id],
-			value,
+			path: ["countries", rowId(country.country_id)],
+			value: country,
 		})),
-		...users.map(({ id, row }) => ({
+		...playerRows.map(({ id, row }) => ({
 			op: "set" as const,
 			path: ["users", id],
 			value: row,

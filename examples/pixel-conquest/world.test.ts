@@ -29,8 +29,9 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 			{
 				name: id,
 				direction,
-				countryCode:
-					world.players.get(id)?.country_id ?? world.country(country)?.code,
+				country_id:
+					world.players.get(id)?.country_id ??
+					world.country(country)?.country_id,
 				seq: ++seq,
 			},
 			now,
@@ -126,7 +127,7 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 	for (const country of world.countries.values())
 		expect(
 			[...world.players.values()].filter(
-				(player) => player.country_id === country.code,
+				(player) => player.country_id === country.country_id,
 			),
 		).toHaveLength(2);
 	const bot = world.players.get("bot-0");
@@ -143,7 +144,7 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 			`human:${i}`,
 			{
 				name: `Human ${i}`,
-				countryCode: world.country("Humans")?.code,
+				country_id: world.country("Humans")?.country_id,
 				direction: "idle",
 				seq: 1,
 			},
@@ -195,11 +196,11 @@ test("input validation, borders, and expired input stop movement; map mask is de
 	const data = {
 		name: "Player",
 		direction: "right",
-		countryCode: world.country("Test")?.code,
+		country_id: world.country("Test")?.country_id,
 		seq: 1,
 	};
 	world.input("invalid", { ...data, direction: "__proto__" }, 0);
-	world.input("invalid", { ...data, countryCode: 999 }, 0);
+	world.input("invalid", { ...data, country_id: 999 }, 0);
 	expect(() => world.country("\u0000")).toThrow();
 	expect(world.players.size).toBe(0);
 	world.input("valid", data, 0);
@@ -245,7 +246,7 @@ test("country creation stops at 64 live countries and freed names are reusable",
 			{
 				name: id,
 				direction: "idle",
-				countryCode: world.country(country)?.code,
+				country_id: world.country(country)?.country_id,
 				seq: 1,
 			},
 			now,
@@ -255,10 +256,10 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	enter("late", "Newcomer");
 	expect(world.players.has("late")).toBe(false);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
-	const countryCode = world.players.get("founder:0")?.country_id;
+	const countryId = world.players.get("founder:0")?.country_id;
 	world.input(
 		"ally",
-		{ name: "Ally", countryCode, direction: "idle", seq: 1 },
+		{ name: "Ally", country_id: countryId, direction: "idle", seq: 1 },
 		now,
 	);
 	expect(world.players.has("ally")).toBe(true);
@@ -275,12 +276,12 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	expect(world.countries.size).toBe(MAX_COUNTRIES - 1);
 	expect(world.dirtyRemovedCountries).toEqual(new Set([freed]));
 	// A stale or malformed selection must never create a country by its old name.
-	for (const countryCode of [freed, "1", null, 1.5]) {
+	for (const countryId of [freed, "1", null, 1.5]) {
 		world.input(
 			"stale",
 			{
 				name: "Stale",
-				countryCode,
+				country_id: countryId,
 				country: "Nation 0",
 				direction: "idle",
 				seq: 1,
@@ -289,7 +290,7 @@ test("country creation stops at 64 live countries and freed names are reusable",
 		);
 		expect(world.players.has("stale")).toBe(false);
 	}
-	// The freed name founds a fresh country with a never-reused code.
+	// The freed name founds a fresh country with a never-reused id.
 	enter("reborn", "Nation 0");
 	const reborn = world.players.get("reborn");
 	if (!reborn) throw new Error("Rejoin missing");
@@ -307,7 +308,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 			String(i),
 			{
 				name: String(i),
-				countryCode: world.country(String(i))?.code,
+				country_id: world.country(String(i))?.country_id,
 				direction: "idle",
 				seq: 1,
 			},
@@ -317,7 +318,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 		const country = world.countries.get(i + 1);
 		if (!country) throw new Error("Country missing");
 		country.count = 1;
-		world.owners[i] = country.code;
+		world.owners[i] = country.country_id;
 	}
 	const retired = world.countries.get(18);
 	if (!retired) throw new Error("Country missing");
@@ -328,7 +329,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 		"replacement",
 		{
 			name: "New Player",
-			countryCode: world.country("Replacement")?.code,
+			country_id: world.country("Replacement")?.country_id,
 			direction: "idle",
 			seq: 1,
 		},
@@ -338,7 +339,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 	if (!replacement) throw new Error("Replacement missing");
 	expect(replacement.color).toBe(retired.color);
 	replacement.count = 1;
-	world.owners[17] = replacement.code;
+	world.owners[17] = replacement.country_id;
 	const rows = [...world.countries.values()];
 	expect(new Set(rows.map((country) => country.color)).size).toBe(
 		MAX_COUNTRIES,
@@ -355,13 +356,15 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 		"teammate",
 		{
 			name: "Teammate",
-			countryCode: replacement.code,
+			country_id: replacement.country_id,
 			direction: "idle",
 			seq: 1,
 		},
 		0,
 	);
-	expect(restored.players.get("teammate")?.country_id).toBe(replacement.code);
+	expect(restored.players.get("teammate")?.country_id).toBe(
+		replacement.country_id,
+	);
 });
 
 test("capturing the last cell deletes only abandoned countries", () => {
@@ -373,7 +376,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 		{
 			name: "Alice",
 			direction: "idle",
-			countryCode: world.country("Alpha")?.code,
+			country_id: world.country("Alpha")?.country_id,
 			seq: 1,
 		},
 		now,
@@ -383,7 +386,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 		{
 			name: "Bob",
 			direction: "idle",
-			countryCode: world.country("Beta")?.code,
+			country_id: world.country("Beta")?.country_id,
 			seq: 1,
 		},
 		now,
@@ -403,7 +406,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 		{
 			name: "Bob",
 			direction: "right",
-			countryCode: b.country_id,
+			country_id: b.country_id,
 			seq: 2,
 		},
 		now,
@@ -428,7 +431,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 		{
 			name: "Founder",
 			direction: "right",
-			countryCode: src.country("Keep")?.code,
+			country_id: src.country("Keep")?.country_id,
 			seq: 1,
 		},
 		now,
@@ -440,8 +443,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	const chunks = [...src.dirtyChunks].map((index) => src.chunk(index));
 	const rows = [...src.countries.values()];
 	rows.push({
-		id: "999",
-		code: 999,
+		country_id: 999,
 		name: "Ghost",
 		color: "#ffffff",
 		count: 0,
@@ -457,7 +459,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 		{
 			name: "Newcomer",
 			direction: "idle",
-			countryCode: dst.country("Fresh")?.code,
+			country_id: dst.country("Fresh")?.country_id,
 			seq: 1,
 		},
 		now,
@@ -466,7 +468,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	// skipping codes is harmless, reusing them is not).
 	expect(dst.players.get("n")?.country_id).toBe(1000);
 	// Deletion publishes as a remove, and the persisted mark keeps the
-	// retired code retired across the restart: no reuse.
+	// retired id retired across the restart: no reuse.
 	const fresh = dst.players.get("n");
 	if (!fresh) throw new Error("Fresh missing");
 	const retired = fresh.country_id;
@@ -487,7 +489,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 		{
 			name: "More",
 			direction: "idle",
-			countryCode: dst2.country("More")?.code,
+			country_id: dst2.country("More")?.country_id,
 			seq: 1,
 		},
 		now,
@@ -498,7 +500,7 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 test("human names are required, limited to 16 characters, and published separately from countries", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
-		countryCode: world.country("North")?.code,
+		country_id: world.country("North")?.country_id,
 		direction: "idle",
 		seq: 1,
 	};
@@ -535,16 +537,16 @@ test("human names are required, limited to 16 characters, and published separate
 			x: player.x,
 			y: player.y,
 		});
-		expect(world.userRow(player.id)?.name).toBe(
+		expect(world.playerRow(player.id)?.name).toBe(
 			player.id === "alice" ? "Alice Smith" : "Bob",
 		);
 	}
-	expect(world.dirtyUsers.has("alice")).toBe(true);
-	expect(world.dirtyUsers.has("bob")).toBe(true);
+	expect(world.dirtyPlayerRows.has("alice")).toBe(true);
+	expect(world.dirtyPlayerRows.has("bob")).toBe(true);
 	// A name belongs to this admission; later movement cannot rename its dot.
 	world.input("alice", { ...data, name: "Changed", seq: 2 }, 1);
 	expect(alice.name).toBe("Alice Smith");
-	expect(world.userRow("alice")?.name).toBe("Alice Smith");
+	expect(world.playerRow("alice")?.name).toBe("Alice Smith");
 	world.startBots(1);
 	expect(
 		[...world.players.values()]
@@ -562,19 +564,21 @@ test("presence only joins country codes and unused country reservations can be r
 	const abandoned = world.country("Abandoned");
 	const occupied = world.country("Occupied");
 	if (!abandoned || !occupied) throw new Error("Countries missing");
-	world.input("alice", { ...data, countryCode: occupied.code }, 0);
-	world.maybeDeleteCountry(abandoned.code);
-	world.maybeDeleteCountry(occupied.code);
-	expect(world.countries.has(abandoned.code)).toBe(false);
-	expect(world.countries.has(occupied.code)).toBe(true);
-	expect(world.country("Next")?.code).toBeGreaterThan(occupied.code);
+	world.input("alice", { ...data, country_id: occupied.country_id }, 0);
+	world.maybeDeleteCountry(abandoned.country_id);
+	world.maybeDeleteCountry(occupied.country_id);
+	expect(world.countries.has(abandoned.country_id)).toBe(false);
+	expect(world.countries.has(occupied.country_id)).toBe(true);
+	expect(world.country("Next")?.country_id).toBeGreaterThan(
+		occupied.country_id,
+	);
 });
 
 test("leave keeps a 10s tombstone row so same-id reconnects resume in place", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Alice",
-		countryCode: world.country("North")?.code,
+		country_id: world.country("North")?.country_id,
 		direction: "idle",
 		seq: 1,
 	};
@@ -583,12 +587,12 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 	if (!player) throw new Error("Player missing");
 	const [x, y] = [player.x, player.y];
 	// Roster row tracks the spawn cell for O(1) locate.
-	expect(world.userRow("alice")).toMatchObject({
+	expect(world.playerRow("alice")).toMatchObject({
 		name: "Alice",
 		country_id: player.country_id,
 		is_bot: false,
-		lastX: x,
-		lastY: y,
+		last_x: x,
+		last_y: y,
 	});
 	world.remove("alice", 0);
 	// Dots vanish immediately but the row lingers with its final position.
@@ -598,23 +602,23 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 			(dot) => dot.player_id === "alice",
 		),
 	).toBe(false);
-	expect(world.userRow("alice")).toMatchObject({ lastX: x, lastY: y });
-	expect(world.dirtyUsers.has("alice")).toBe(true);
-	expect(world.dirtyRemovedUsers.has("alice")).toBe(false);
+	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
+	expect(world.dirtyPlayerRows.has("alice")).toBe(true);
+	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
 	// Tombstones never pin countries or consume the human cap.
 	expect(world.humanCount).toBe(0);
 	// Leaving deleted landless North; the lobby re-issues it on rejoin while
 	// the tombstone still restores the exact cell.
-	const revived = world.country("North")?.code;
-	world.input("alice", { ...data, countryCode: revived, seq: 2 }, 1);
+	const revived = world.country("North")?.country_id;
+	world.input("alice", { ...data, country_id: revived, seq: 2 }, 1);
 	const returned = world.players.get("alice");
 	expect([returned?.x, returned?.y]).toEqual([x, y]);
-	expect(world.dirtyRemovedUsers.has("alice")).toBe(false);
+	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
 	// After the window the row is queued for removal.
 	world.remove("alice", 1);
 	world.tick(1 + PLAYER_GRACE_MS);
-	expect(world.userRow("alice")).toBeUndefined();
-	expect(world.dirtyRemovedUsers.has("alice")).toBe(true);
+	expect(world.playerRow("alice")).toBeUndefined();
+	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 	const drained = drainPublishState(world);
 	const ops = buildPublishOperations(world, drained);
 	expect(ops).toContainEqual({ op: "remove", path: ["users", "alice"] });
@@ -624,7 +628,7 @@ test("silent-timeout removal still grants the full grace window on reconnect", (
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Alice",
-		countryCode: world.country("North")?.code,
+		country_id: world.country("North")?.country_id,
 		direction: "idle",
 		seq: 1,
 	};
@@ -637,31 +641,31 @@ test("silent-timeout removal still grants the full grace window on reconnect", (
 	const removedAt = INPUT_LEASE_MS * 5 + 1;
 	world.tick(removedAt);
 	expect(world.players.has("alice")).toBe(false);
-	expect(world.userRow("alice")).toMatchObject({ lastX: x, lastY: y });
+	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
 	// A tick past the old heardAt-based expiry must NOT collect the row.
 	world.tick(removedAt + 2000);
-	expect(world.userRow("alice")).toMatchObject({ lastX: x, lastY: y });
-	expect(world.dirtyRemovedUsers.has("alice")).toBe(false);
+	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
+	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
 	// Reconnect inside the removal-based window but past the old
 	// heardAt-based one: the exact cell must resume, not a fresh spawn.
 	const rejoinAt = removedAt + PLAYER_GRACE_MS - 5000;
-	const revived = world.country("North")?.code;
-	world.input("alice", { ...data, countryCode: revived, seq: 2 }, rejoinAt);
+	const revived = world.country("North")?.country_id;
+	world.input("alice", { ...data, country_id: revived, seq: 2 }, rejoinAt);
 	const returned = world.players.get("alice");
 	expect([returned?.x, returned?.y]).toEqual([x, y]);
 	expect(returned?.country_id).toBe(revived);
 	// And a tombstone left alone still expires on schedule.
 	world.remove("alice", rejoinAt);
 	world.tick(rejoinAt + PLAYER_GRACE_MS + 1);
-	expect(world.userRow("alice")).toBeUndefined();
-	expect(world.dirtyRemovedUsers.has("alice")).toBe(true);
+	expect(world.playerRow("alice")).toBeUndefined();
+	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 });
 
 test("crossing a chunk boundary refreshes the roster position, plain moves do not", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Walker",
-		countryCode: world.country("North")?.code,
+		country_id: world.country("North")?.country_id,
 		direction: "right",
 		seq: 1,
 	};
@@ -670,13 +674,13 @@ test("crossing a chunk boundary refreshes the roster position, plain moves do no
 	if (!player) throw new Error("Player missing");
 	player.x = CHUNK - 1;
 	player.y = 10;
-	player.lastX = CHUNK - 1;
-	player.lastY = 10;
-	world.dirtyUsers.clear();
+	player.last_x = CHUNK - 1;
+	player.last_y = 10;
+	world.dirtyPlayerRows.clear();
 	world.tick(1);
 	// Still inside the chunk: no roster write.
 	expect(chunkIndex(player.x, player.y)).toBe(chunkIndex(CHUNK - 1, 10));
-	expect(world.dirtyUsers.has("walker")).toBe(false);
+	expect(world.dirtyPlayerRows.has("walker")).toBe(false);
 	player.x = CHUNK - 1;
 	world.input("walker", { ...data, seq: 2 }, 2);
 	for (let now = 3; now < 3 + RULES.neutral * 2 + 10; now++) {
@@ -684,8 +688,11 @@ test("crossing a chunk boundary refreshes the roster position, plain moves do no
 		if (player.x === CHUNK) break;
 	}
 	expect(player.x).toBe(CHUNK);
-	expect(world.userRow("walker")).toMatchObject({ lastX: CHUNK, lastY: 10 });
-	expect(world.dirtyUsers.has("walker")).toBe(true);
+	expect(world.playerRow("walker")).toMatchObject({
+		last_x: CHUNK,
+		last_y: 10,
+	});
+	expect(world.dirtyPlayerRows.has("walker")).toBe(true);
 });
 
 test("restore clears persisted dots and queues stale roster rows for removal", () => {
@@ -696,7 +703,7 @@ test("restore clears persisted dots and queues stale roster rows for removal", (
 		{
 			name: "Alice",
 			direction: "idle",
-			countryCode: src.country("North")?.code,
+			country_id: src.country("North")?.country_id,
 			seq: 1,
 		},
 		0,
@@ -710,7 +717,7 @@ test("restore clears persisted dots and queues stale roster rows for removal", (
 	// Positions never survive a restart; stale dots republish empty.
 	for (const index of dst.dirtyChunks)
 		expect(readDots(dst.chunk(index).dots)).toEqual([]);
-	expect(dst.dirtyRemovedUsers).toEqual(new Set(["alice", "bot-0"]));
+	expect(dst.dirtyRemovedPlayerRows).toEqual(new Set(["alice", "bot-0"]));
 });
 
 test("human spawns spread out instead of stacking on one chunk", () => {
@@ -722,7 +729,7 @@ test("human spawns spread out instead of stacking on one chunk", () => {
 			`human:${i}`,
 			{
 				name: `Human ${i}`,
-				countryCode: country.code,
+				country_id: country.country_id,
 				direction: "idle",
 				seq: 1,
 			},
@@ -749,7 +756,7 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 			id,
 			{
 				name: id,
-				countryCode: country.code,
+				country_id: country.country_id,
 				direction: "idle",
 				seq: 1,
 			},
@@ -766,7 +773,8 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	// Give the country a patch of land: joiners must prefer it.
 	for (let dy = -16; dy <= 16; dy++)
 		for (let dx = -16; dx <= 16; dx++)
-			world.owners[(founder.y + dy) * WIDTH + founder.x + dx] = country.code;
+			world.owners[(founder.y + dy) * WIDTH + founder.x + dx] =
+				country.country_id;
 	country.count = 33 * 33;
 	(
 		world as unknown as {
@@ -775,7 +783,7 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 				{ left: number; right: number; top: number; bottom: number }
 			>;
 		}
-	).bounds.set(country.code, {
+	).bounds.set(country.country_id, {
 		left: founder.x - 16,
 		right: founder.x + 16,
 		top: founder.y - 16,
@@ -785,7 +793,7 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	const reinforcement = world.players.get("reinforcement");
 	if (!reinforcement) throw new Error("Missing reinforcement");
 	expect(world.owners[reinforcement.y * WIDTH + reinforcement.x]).toBe(
-		country.code,
+		country.country_id,
 	);
 	// Abandoned territory still pulls its country's next player home.
 	world.remove("founder", 0);
@@ -794,10 +802,12 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	join("returning", PLAYER_GRACE_MS * 10);
 	const returning = world.players.get("returning");
 	if (!returning) throw new Error("Missing returning player");
-	expect(world.owners[returning.y * WIDTH + returning.x]).toBe(country.code);
+	expect(world.owners[returning.y * WIDTH + returning.x]).toBe(
+		country.country_id,
+	);
 });
 
-test("humans cannot join bot countries, even with a forged code", () => {
+test("humans cannot join bot countries, even with a forged country id", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const bot = world.country("Bot · Amber", true);
 	if (!bot) throw new Error("Missing bot country");
@@ -810,7 +820,7 @@ test("humans cannot join bot countries, even with a forged code", () => {
 			id,
 			{
 				name: id,
-				countryCode: bot.code,
+				country_id: bot.country_id,
 				direction: "idle",
 				seq: 1,
 			},
@@ -821,11 +831,11 @@ test("humans cannot join bot countries, even with a forged code", () => {
 		"human",
 		{
 			name: "Human",
-			countryCode: human.code,
+			country_id: human.country_id,
 			direction: "idle",
 			seq: 1,
 		},
 		0,
 	);
-	expect(world.players.get("human")?.country_id).toBe(human.code);
+	expect(world.players.get("human")?.country_id).toBe(human.country_id);
 });

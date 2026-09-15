@@ -37,7 +37,7 @@ export class HoleFiller {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Milazzo rectangular-block spine with deferred fringe seeds.
-	fill(owners: Uint16Array, code: number, bounds: Bounds): Uint8Array {
+	fill(owners: Uint16Array, countryId: number, bounds: Bounds): Uint8Array {
 		const labels = this.labels,
 			width = this.width,
 			height = this.height;
@@ -48,7 +48,7 @@ export class HoleFiller {
 		for (let y = top; y <= bottom; y++) {
 			const end = y * width + right;
 			for (let cell = y * width + left; cell <= end; cell++)
-				labels[cell] = owners[cell] === code ? 2 : 0;
+				labels[cell] = owners[cell] === countryId ? 2 : 0;
 		}
 		this.top = 0;
 		this.seedEdge(top * width + left, 1, right - left + 1);

@@ -10,12 +10,12 @@ let times: number[] = [];
 let areas: number[] = [];
 let fillMs = 0;
 
-HoleFiller.prototype.fill = function (owners, code, bounds) {
+HoleFiller.prototype.fill = function (owners, countryId, bounds) {
 	areas.push(
 		(bounds.right - bounds.left + 1) * (bounds.bottom - bounds.top + 1),
 	);
 	const started = performance.now();
-	const result = fill.call(this, owners, code, bounds);
+	const result = fill.call(this, owners, countryId, bounds);
 	fillMs += performance.now() - started;
 	return result;
 };
@@ -33,12 +33,12 @@ World.prototype.tick = function (now) {
 	if (this.ticks % 1200) return;
 	const tight = new Map<number, Bounds>();
 	for (let cell = 0; cell < this.owners.length; cell++) {
-		const code = this.owners[cell];
-		if (!code) continue;
+		const countryId = this.owners[cell];
+		if (!countryId) continue;
 		const x = cell % WIDTH;
 		const y = Math.floor(cell / WIDTH);
-		const box = tight.get(code);
-		if (!box) tight.set(code, { left: x, right: x, top: y, bottom: y });
+		const box = tight.get(countryId);
+		if (!box) tight.set(countryId, { left: x, right: x, top: y, bottom: y });
 		else {
 			box.left = Math.min(box.left, x);
 			box.right = Math.max(box.right, x);
@@ -50,20 +50,20 @@ World.prototype.tick = function (now) {
 	const countries = (
 		this as unknown as { countries: Map<number, { count: number }> }
 	).countries;
-	const boxes = [...tight].map(([code, box]) => {
-		const grown = stored.get(code);
+	const boxes = [...tight].map(([countryId, box]) => {
+		const grown = stored.get(countryId);
 		assert(grown);
 		assert(grown.left <= box.left && grown.right >= box.right);
 		assert(grown.top <= box.top && grown.bottom >= box.bottom);
 		const area = (b: Bounds) => (b.right - b.left + 1) * (b.bottom - b.top + 1);
-		return { code, storedArea: area(grown), tightArea: area(box) };
+		return { countryId, storedArea: area(grown), tightArea: area(box) };
 	});
 	const surplusZeroCount: number[] = [];
-	for (const code of stored.keys()) {
-		if (tight.has(code)) continue;
-		const count = countries.get(code)?.count ?? 0;
+	for (const countryId of stored.keys()) {
+		if (tight.has(countryId)) continue;
+		const count = countries.get(countryId)?.count ?? 0;
 		assert.equal(count, 0);
-		surplusZeroCount.push(code);
+		surplusZeroCount.push(countryId);
 	}
 	times.sort((a, b) => a - b);
 	areas.sort((a, b) => a - b);

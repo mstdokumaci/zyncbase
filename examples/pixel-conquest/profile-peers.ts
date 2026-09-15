@@ -6,13 +6,13 @@ import {
 	COLUMNS,
 	HEIGHT,
 	NAMESPACE,
+	type PlayerRow,
 	readDots,
-	type UserRow,
 } from "./shared";
 
 type Peer = {
 	client: ZyncBaseClient;
-	input: { name: string; countryCode: number; direction: string; seq: number };
+	input: { name: string; country_id: number; direction: string; seq: number };
 	subscriptions: Map<number, () => void>;
 	x: number;
 	y: number;
@@ -31,7 +31,7 @@ type Command = {
 	zoom: number;
 	url: string;
 	token: string;
-	countryCode: number;
+	country_id: number;
 	moving: boolean;
 };
 const peers: Peer[] = [];
@@ -106,15 +106,15 @@ async function readSpawn(peer: Peer) {
 	if (!id) return undefined;
 	try {
 		const me = (await peer.client.store.get(["users", id])) as unknown as
-			| UserRow
+			| PlayerRow
 			| undefined;
 		if (
 			!me ||
-			!Number.isSafeInteger(me.lastX) ||
-			!Number.isSafeInteger(me.lastY)
+			!Number.isSafeInteger(me.last_x) ||
+			!Number.isSafeInteger(me.last_y)
 		)
 			return undefined;
-		return { x: me.lastX, y: me.lastY };
+		return { x: me.last_x, y: me.last_y };
 	} catch {
 		return undefined;
 	}
@@ -183,7 +183,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				subscriptions: new Map(),
 				input: {
 					name: `Player ${data.index + 1}`,
-					countryCode: data.countryCode,
+					country_id: data.country_id,
 					direction: "idle",
 					seq: 0,
 				},

@@ -33,23 +33,29 @@ test("a chunk's dots cap can hold every player in one chunk", async () => {
 
 test("a chunks-only drain holds roster rows back for the slower flush", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
-	const code = world.country("Hold")?.code;
-	assert(code);
+	const countryId = world.country("Hold")?.country_id;
+	assert(countryId);
 	world.dirtyChunks.add(7);
 	const partial = drainPublishState(world, { rosters: false });
 	expect(partial.chunks).toEqual([7]);
 	expect(partial.countries).toEqual([]);
-	expect(partial.users).toEqual([]);
+	expect(partial.playerRows).toEqual([]);
 	expect(world.dirtyChunks.size).toBe(0);
 	// Held entries keep their latest values until the roster flush drains them.
-	expect(world.dirtyCountries.has(code)).toBe(true);
+	expect(world.dirtyCountries.has(countryId)).toBe(true);
 	const full = drainPublishState(world);
-	expect(full.countries).toEqual([code]);
+	expect(full.countries).toEqual([countryId]);
 	expect(world.dirtyCountries.size).toBe(0);
 	expect(buildPublishOperations(world, full)).toContainEqual({
 		op: "set",
-		path: ["countries", String(code)],
-		value: { code, name: "Hold", color: "#ef4444", count: 0, is_bot: false },
+		path: ["countries", String(countryId)],
+		value: {
+			country_id: countryId,
+			name: "Hold",
+			color: "#ef4444",
+			count: 0,
+			is_bot: false,
+		},
 	});
 });
 test("a rejected batch restores every drained entry so retry resends all", async () => {
@@ -59,7 +65,7 @@ test("a rejected batch restores every drained entry so retry resends all", async
 		{
 			name: "Keeper",
 			direction: "idle",
-			countryCode: world.country("Keep")?.code,
+			country_id: world.country("Keep")?.country_id,
 			seq: 1,
 		},
 		0,
@@ -69,7 +75,7 @@ test("a rejected batch restores every drained entry so retry resends all", async
 		{
 			name: "Ghost",
 			direction: "idle",
-			countryCode: world.country("Ghost")?.code,
+			country_id: world.country("Ghost")?.country_id,
 			seq: 1,
 		},
 		0,
@@ -78,18 +84,18 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	const ghost = [...world.dirtyRemovedCountries];
 	expect(ghost).toHaveLength(1);
 	// The ghost's dots vanish but its roster row lingers as a tombstone.
-	expect(world.dirtyUsers.has("keeper")).toBe(true);
-	expect(world.dirtyUsers.has("ghost")).toBe(true);
-	expect(world.dirtyRemovedUsers.size).toBe(0);
+	expect(world.dirtyPlayerRows.has("keeper")).toBe(true);
+	expect(world.dirtyPlayerRows.has("ghost")).toBe(true);
+	expect(world.dirtyRemovedPlayerRows.size).toBe(0);
 	// More than one 500-operation batch of chunk writes.
 	for (let i = 0; i < 520; i++) world.dirtyChunks.add(i);
 	const snapshot = drainPublishState(world);
 	expect(world.dirtyChunks.size).toBe(0);
 	expect(world.dirtyCountries.size).toBe(0);
 	expect(world.dirtyRemovedCountries.size).toBe(0);
-	expect(world.dirtyUsers.size).toBe(0);
-	expect(world.dirtyRemovedUsers.size).toBe(0);
-	expect(new Set(snapshot.users)).toEqual(new Set(["keeper", "ghost"]));
+	expect(world.dirtyPlayerRows.size).toBe(0);
+	expect(world.dirtyRemovedPlayerRows.size).toBe(0);
+	expect(new Set(snapshot.playerRows)).toEqual(new Set(["keeper", "ghost"]));
 	const operations = buildPublishOperations(world, snapshot);
 	expect(operations.length).toBeGreaterThan(100);
 	expect(operations[0]).toEqual({
@@ -99,12 +105,12 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(operations).toContainEqual({
 		op: "set",
 		path: ["users", "keeper"],
-		value: world.userRow("keeper"),
+		value: world.playerRow("keeper"),
 	});
 	expect(operations).toContainEqual({
 		op: "set",
 		path: ["users", "ghost"],
-		value: world.userRow("ghost"),
+		value: world.playerRow("ghost"),
 	});
 
 	const sent: BatchOperation[][] = [];
@@ -127,8 +133,10 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(world.dirtyChunks.size).toBe(snapshot.chunks.length);
 	expect(world.dirtyCountries.size).toBe(snapshot.countries.length);
 	expect(world.dirtyRemovedCountries).toEqual(new Set(snapshot.removed));
-	expect(world.dirtyUsers).toEqual(new Set(snapshot.users));
-	expect(world.dirtyRemovedUsers).toEqual(new Set(snapshot.removedUsers));
+	expect(world.dirtyPlayerRows).toEqual(new Set(snapshot.playerRows));
+	expect(world.dirtyRemovedPlayerRows).toEqual(
+		new Set(snapshot.removedPlayerRows),
+	);
 
 	const retried: BatchOperation[][] = [];
 	const retry = async (batch: BatchOperation[]) => {
@@ -140,8 +148,8 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(world.dirtyChunks.size).toBe(0);
 	expect(world.dirtyCountries.size).toBe(0);
 	expect(world.dirtyRemovedCountries.size).toBe(0);
-	expect(world.dirtyUsers.size).toBe(0);
-	expect(world.dirtyRemovedUsers.size).toBe(0);
+	expect(world.dirtyPlayerRows.size).toBe(0);
+	expect(world.dirtyRemovedPlayerRows.size).toBe(0);
 });
 
 test("every slice is dispatched before the first one settles", async () => {
