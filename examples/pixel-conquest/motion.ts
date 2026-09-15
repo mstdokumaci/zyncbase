@@ -15,6 +15,19 @@ const steps = {
 	right: [1, 0],
 };
 
+// Deterministic axis mixing for joystick diagonals: accumulate the minority
+// axis's share of the vector and take it whenever the accumulated share fills
+// one step. A 45° push strict-alternates; other angles get a fixed, evenly
+// spaced pattern. Random selection here read as dropped input and visible runs.
+export function mixDiagonalAxis(ax: number, ay: number, phase: number) {
+	const total = ax + ay;
+	if (!(total > 0)) return { index: 0 as const, phase };
+	phase += ay / total;
+	return phase >= 1
+		? { index: 1 as const, phase: phase - 1 }
+		: { index: 0 as const, phase };
+}
+
 // Render-side position: hot dot plus its cold country, joined from the
 // users roster at receive time. Dots alone carry no identity metadata.
 export type MotionDot = Dot & { country_id: number };

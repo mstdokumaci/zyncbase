@@ -4,7 +4,7 @@ import {
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import nipplejs from "nipplejs";
-import { LocalMotion, type MotionDot } from "./motion";
+import { LocalMotion, type MotionDot, mixDiagonalAxis } from "./motion";
 import {
 	CHUNK,
 	type ChunkRow,
@@ -86,6 +86,8 @@ let prefetchDirection: Direction = "idle";
 let altDirections: Direction[] = [];
 let altIndex = 0;
 let joystickVector = { x: 0, y: 0 };
+// Carried remainder of the deterministic joystick axis mixer.
+let joystickPhase = 0;
 let lastSentDirection: Direction = "idle";
 let motion: LocalMotion | undefined;
 let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -555,13 +557,16 @@ function setDirection(next: Direction) {
 // axis gets its full terrain cost before switching.
 function onMoveConfirmed() {
 	if (altDirections.length < 2) return;
-	// Joystick: weighted random based on analog magnitude so the cadence
-	// matches the stick angle. Keyboard: simple 50/50 toggle.
+	// Joystick: advance a deterministic mixed sequence so the cadence matches
+	// the stick angle. Keyboard: simple 50/50 toggle.
 	if (joystickVector.x !== 0 || joystickVector.y !== 0) {
-		const ax = Math.abs(joystickVector.x);
-		const ay = Math.abs(joystickVector.y);
-		const total = ax + ay;
-		altIndex = total > 0 && Math.random() * total >= ax ? 1 : 0;
+		const next = mixDiagonalAxis(
+			Math.abs(joystickVector.x),
+			Math.abs(joystickVector.y),
+			joystickPhase,
+		);
+		joystickPhase = next.phase;
+		altIndex = next.index;
 	} else {
 		altIndex = (altIndex + 1) % altDirections.length;
 	}
@@ -626,9 +631,14 @@ function updateJoystickInput() {
 		altDirections = [];
 		setDirection(v);
 	} else {
-		// Diagonal: alternate weighted by the analog magnitude.
+		// Diagonal: alternate weighted by the analog magnitude. Touchmove keeps
+		// firing while the stick is held, so keep the pair (and the carried
+		// phase) intact; rebuilding it here pins the direction back to the
+		// horizontal axis before the server can complete a vertical step.
+		if (altDirections[0] === h && altDirections[1] === v) return;
 		altDirections = [h, v];
 		altIndex = 0;
+		joystickPhase = 0;
 		setDirection(h);
 	}
 }

@@ -1,10 +1,27 @@
 import { expect, test } from "bun:test";
-import { LocalMotion, type MotionDot } from "./motion";
+import { LocalMotion, type MotionDot, mixDiagonalAxis } from "./motion";
 import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
 const dot: MotionDot = { player_id: "me", country_id: 1, x: 31, y: 10 };
 const land = new Uint8Array(WIDTH * HEIGHT);
+
+test("diagonal mixing alternates deterministically for any stick angle", () => {
+	for (const [ax, ay, expected] of [
+		[1, 1, [0, 1, 0, 1]],
+		[3, 1, [0, 0, 0, 1]],
+		[1, 3, [0, 1, 1, 1]],
+	] as const) {
+		let phase = 0;
+		const picked: number[] = [];
+		for (let step = 0; step < expected.length; step++) {
+			const next = mixDiagonalAxis(ax, ay, phase);
+			phase = next.phase;
+			picked.push(next.index);
+		}
+		expect(picked).toEqual([...expected]);
+	}
+});
 
 test("a 500 ms crossing animates by elapsed time and waits at one unconfirmed pixel", () => {
 	const terrain = land.slice();
