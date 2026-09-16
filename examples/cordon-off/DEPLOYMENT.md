@@ -1,4 +1,4 @@
-# Pixel Conquest on FreeBSD with Cloudflare
+# Cordon Off on FreeBSD with Cloudflare
 
 Use one browser-facing origin, `https://game.example.com`. Replace that hostname, the VM IPv6 address, and `/home/freebsd` below with your values.
 
@@ -21,27 +21,27 @@ zig build -Doptimize=ReleaseFast
 bun run demo:game:build
 ```
 
-`demo:game:build` writes `examples/pixel-conquest/dist/` with the HTML, CSS, browser JavaScript, asset headers, and the static history viewer. At runtime the game adds generated round results under `dist/history/`, which are part of the deployed assets: keep that directory when rebuilding. Server code, signing secrets, certificates, and Cloudflare credentials are not part of the build.
+`demo:game:build` writes `examples/cordon-off/dist/` with the HTML, CSS, browser JavaScript, asset headers, and the static history viewer. At runtime the game adds generated round results under `dist/history/`, which are part of the deployed assets: keep that directory when rebuilding. Server code, signing secrets, certificates, and Cloudflare credentials are not part of the build.
 
 ## 2. Create the origin certificate
 
 In your Cloudflare zone, open **SSL/TLS → Origin Server → Create Certificate**. Generate an **RSA** key and a certificate covering `game.example.com`. Save the certificate and private key in **PEM** format on the VM:
 
-- `/home/freebsd/.config/pixel-conquest/origin.pem`
-- `/home/freebsd/.config/pixel-conquest/origin.key`
+- `/home/freebsd/.config/cordon-off/origin.pem`
+- `/home/freebsd/.config/cordon-off/origin.key`
 
 Create the directory first and make it private:
 
 ```sh
-mkdir -p /home/freebsd/.config/pixel-conquest
-chmod 700 /home/freebsd/.config/pixel-conquest
+mkdir -p /home/freebsd/.config/cordon-off
+chmod 700 /home/freebsd/.config/cordon-off
 ```
 
 After saving the files:
 
 ```sh
-chmod 600 /home/freebsd/.config/pixel-conquest/origin.pem /home/freebsd/.config/pixel-conquest/origin.key
-fetch -o /home/freebsd/.config/pixel-conquest/origin-ca.pem https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem
+chmod 600 /home/freebsd/.config/cordon-off/origin.pem /home/freebsd/.config/cordon-off/origin.key
+fetch -o /home/freebsd/.config/cordon-off/origin-ca.pem https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem
 ```
 
 The CA file is public. It lets the simulation verify ZyncBase's certificate locally. If you chose an ECC certificate, download `origin_ca_ecc_root.pem` instead. Keep the private key on the VM and record the certificate's expiry; restart the game after replacing certificates. [Origin CA instructions](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/)
@@ -58,7 +58,7 @@ The simulator uses `wss://game.example.com:8443/ws`. This entry keeps it on loop
 
 ## 4. Start the VM services
 
-Create `/home/freebsd/.config/pixel-conquest/run.sh` with:
+Create `/home/freebsd/.config/cordon-off/run.sh` with:
 
 ```sh
 #!/bin/sh
@@ -68,30 +68,30 @@ export GAME_ORIGIN=https://game.example.com
 export GAME_HOST=::
 export GAME_PORT=8444
 export GAME_DB_PORT=8443
-export GAME_DATA_DIR=/home/freebsd/zyncbase/data/pixel-conquest
-export GAME_TLS_CERT=/home/freebsd/.config/pixel-conquest/origin.pem
-export GAME_TLS_KEY=/home/freebsd/.config/pixel-conquest/origin.key
-export NODE_EXTRA_CA_CERTS=/home/freebsd/.config/pixel-conquest/origin-ca.pem
+export GAME_DATA_DIR=/home/freebsd/zyncbase/data/cordon-off
+export GAME_TLS_CERT=/home/freebsd/.config/cordon-off/origin.pem
+export GAME_TLS_KEY=/home/freebsd/.config/cordon-off/origin.key
+export NODE_EXTRA_CA_CERTS=/home/freebsd/.config/cordon-off/origin-ca.pem
 # Optional: deploy changed assets (including round history) at boot.
 # export CLOUDFLARE_API_TOKEN=...
 # export CLOUDFLARE_ACCOUNT_ID=...
-exec /home/freebsd/.bun/bin/bun examples/pixel-conquest/server.ts
+exec /home/freebsd/.bun/bin/bun examples/cordon-off/server.ts
 ```
 
-If you enable the deploy, create the API token with only **Account → Workers Scripts → Edit** and keep it outside the checkout, for example in `/home/freebsd/.config/pixel-conquest/deploy.env` (mode `600`) sourced by `run.sh`. Deploys run at boot, in the background, and only when the asset content hash changed; a failure is logged, retried, and never stops the game.
+If you enable the deploy, create the API token with only **Account → Workers Scripts → Edit** and keep it outside the checkout, for example in `/home/freebsd/.config/cordon-off/deploy.env` (mode `600`) sourced by `run.sh`. Deploys run at boot, in the background, and only when the asset content hash changed; a failure is logged, retried, and never stops the game.
 
 Adjust the Bun executable path to the result of `command -v bun`. Then:
 
 ```sh
-chmod 700 /home/freebsd/.config/pixel-conquest/run.sh
-/home/freebsd/.config/pixel-conquest/run.sh
+chmod 700 /home/freebsd/.config/cordon-off/run.sh
+/home/freebsd/.config/cordon-off/run.sh
 ```
 
 The launcher starts ZyncBase and the simulation together. Keep this running during the remaining setup. From a second VM session, check:
 
 ```sh
 sockstat -6 -l
-curl --cacert /home/freebsd/.config/pixel-conquest/origin-ca.pem https://game.example.com:8444/health
+curl --cacert /home/freebsd/.config/cordon-off/origin-ca.pem https://game.example.com:8444/health
 ```
 
 Expect listeners on 8443 and 8444 and a health response with `"ready":true`. These ports do not require root. If startup reports certificate errors, check the PEM pair, CA file and `/etc/hosts` entry.
@@ -134,9 +134,9 @@ These overrides affect Cloudflare's connection to the VM. The browser keeps usin
 
 ## 7. Publish the frontend from the VM
 
-The game process publishes assets itself through the Cloudflare Workers API, so the VM needs neither wrangler nor Node (wrangler's `workerd` has no FreeBSD build). With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set in `run.sh`, every game start compares the content hash of `examples/pixel-conquest/dist/` with the last successful publish and uploads only when it changed. Round results land in `dist/history/`, so each archived round is published shortly after the game restarts. The log shows `Publishing N assets to Worker "..."` followed by `Cloudflare assets deployed.`; a failed publish is logged and retried every five minutes.
+The game process publishes assets itself through the Cloudflare Workers API, so the VM needs neither wrangler nor Node (wrangler's `workerd` has no FreeBSD build). With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set in `run.sh`, every game start compares the content hash of `examples/cordon-off/dist/` with the last successful publish and uploads only when it changed. Round results land in `dist/history/`, so each archived round is published shortly after the game restarts. The log shows `Publishing N assets to Worker "..."` followed by `Cloudflare assets deployed.`; a failed publish is logged and retried every five minutes.
 
-The Worker name and compatibility date are read from `examples/pixel-conquest/wrangler.jsonc` (`pixel-conquest` by default); change the name there if it is already in use in your account. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/)
+The Worker name and compatibility date are read from `examples/cordon-off/wrangler.jsonc` (`cordon-off` by default); change the name there if it is already in use in your account. [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/)
 
 Do not publish the same Worker from another machine with `wrangler` unless it has the VM's `dist/history/`: an upload without those files removes published results from the edge.
 
@@ -146,7 +146,7 @@ Keep the proxied AAAA record from step 5. Configure **Workers Routes**, not a Wo
 
 | Route pattern | Worker |
 | --- | --- |
-| `game.example.com/*` | `pixel-conquest` |
+| `game.example.com/*` | `cordon-off` |
 | `game.example.com/session*` | None |
 | `game.example.com/health*` | None |
 | `game.example.com/auth/ticket*` | None |
@@ -177,13 +177,13 @@ If `/session` or `/auth/ticket` returns an asset/404, check the Worker exclusion
 After the foreground check, stop it with Ctrl+C. You can use FreeBSD's supervisor as the `freebsd` user:
 
 ```sh
-daemon -R 1 -P /home/freebsd/.config/pixel-conquest/supervisor.pid -o /home/freebsd/.config/pixel-conquest/game.log /home/freebsd/.config/pixel-conquest/run.sh
+daemon -R 1 -P /home/freebsd/.config/cordon-off/supervisor.pid -o /home/freebsd/.config/cordon-off/game.log /home/freebsd/.config/cordon-off/run.sh
 ```
 
 The game exits and restarts by design at every round boundary (2 h) and after ten quiet minutes, recycling the simulation and ZyncBase processes; `daemon` must be allowed to restart it, and `-R 1` keeps that handoff quick. To stop the supervisor and game, run in `sh`:
 
 ```sh
-kill -TERM "$(cat /home/freebsd/.config/pixel-conquest/supervisor.pid)"
+kill -TERM "$(cat /home/freebsd/.config/cordon-off/supervisor.pid)"
 ```
 
 This survives SSH logout; register the launcher with your existing FreeBSD startup service if it must also start after a VM reboot. [FreeBSD daemon](https://man.freebsd.org/cgi/man.cgi?query=daemon&sektion=8)

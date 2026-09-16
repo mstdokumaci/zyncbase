@@ -137,7 +137,7 @@ test("publishAssets runs session, upload, and script calls", async () => {
 			configPath,
 			`{
 	// Worker identity lives here.
-	"name": "pixel-conquest",
+	"name": "cordon-off",
 	"compatibility_date": "2026-09-08", // inline comments are JSONC too
 	"assets": { "directory": "./dist" }
 }`,
@@ -170,7 +170,7 @@ test("publishAssets runs session, upload, and script calls", async () => {
 					{ status: 201 },
 				);
 			}
-			if (url.endsWith("/workers/scripts/pixel-conquest")) {
+			if (url.endsWith("/workers/scripts/cordon-off")) {
 				return new Response(JSON.stringify({ success: true, result: {} }), {
 					status: 200,
 				});
@@ -187,7 +187,7 @@ test("publishAssets runs session, upload, and script calls", async () => {
 		expect(calls).toHaveLength(3);
 
 		expect(calls[0]?.url).toBe(
-			"https://api.cloudflare.com/client/v4/accounts/acct/workers/scripts/pixel-conquest/assets-upload-session",
+			"https://api.cloudflare.com/client/v4/accounts/acct/workers/scripts/cordon-off/assets-upload-session",
 		);
 		expect(calls[0]?.init.method).toBe("POST");
 		expect(new Headers(calls[0]?.init.headers).get("Authorization")).toBe(
@@ -214,7 +214,7 @@ test("publishAssets runs session, upload, and script calls", async () => {
 		expect((uploadForm.get(pngHash) as Blob).type).toStartWith("image/png");
 
 		expect(calls[2]?.url).toBe(
-			"https://api.cloudflare.com/client/v4/accounts/acct/workers/scripts/pixel-conquest",
+			"https://api.cloudflare.com/client/v4/accounts/acct/workers/scripts/cordon-off",
 		);
 		expect(calls[2]?.init.method).toBe("PUT");
 		expect(new Headers(calls[2]?.init.headers).get("Authorization")).toBe(

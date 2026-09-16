@@ -167,14 +167,15 @@ body:has(#lobby:not([hidden])) .connection {
 	font-weight: 700;
 }
 .mark {
-	color: var(--gold);
-	font-size: 22px;
-	line-height: 1;
+	width: 16px;
+	height: 16px;
+	border: 2px solid var(--gold);
 	margin-right: 4px;
 }
 .brand-text {
 	display: flex;
 	gap: 7px;
+	text-transform: uppercase;
 }
 .nav {
 	font-family: var(--font-pixel);
@@ -568,7 +569,8 @@ kbd {
 		letter-spacing: 1px;
 	}
 	.mark {
-		font-size: 18px;
+		width: 13px;
+		height: 13px;
 		margin-right: 2px;
 	}
 	.brand-text {

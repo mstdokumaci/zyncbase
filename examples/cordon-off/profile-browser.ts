@@ -28,7 +28,7 @@ const { values } = parseArgs({
 		port: { type: "string", default: "18080" },
 		output: {
 			type: "string",
-			default: `test-artifacts/pixel-conquest-profile/browser-${Date.now()}`,
+			default: `test-artifacts/cordon-off-profile/browser-${Date.now()}`,
 		},
 	},
 });

@@ -44,7 +44,7 @@ async function eventually<T>(
 	throw new Error(`Timed out: ${label}`);
 }
 
-const dataDir = await mkdtemp(join(tmpdir(), "pixel-conquest-smoke-"));
+const dataDir = await mkdtemp(join(tmpdir(), "cordon-off-smoke-"));
 // The dev edge binds port 0 and reports its assigned port, so it cannot lose
 // a selection race. The game's two ports are selected while every reservation
 // listener is open (the OS cannot hand the same port to both), and are

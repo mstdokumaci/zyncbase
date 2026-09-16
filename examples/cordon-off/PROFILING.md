@@ -1,4 +1,4 @@
-# Pixel Conquest enclosure profiling
+# Cordon Off enclosure profiling
 
 Measured September 9, 2026 with Bun 1.4.0, macOS x64, Intel Core i9-9880H. Baseline: `9f6c5982240aa73c0960d056453db3f25ee95227`.
 
@@ -46,20 +46,20 @@ Scripted movers follow deterministic box routes without AI planning. Bot mode us
 Run from the repository root with installed workspace dependencies:
 
 ```sh
-bun examples/pixel-conquest/profile.ts --mode scripted --shape fragmented --output test-artifacts/pixel-conquest-profile/repeat-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --output test-artifacts/pixel-conquest-profile/repeat-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape compact --output test-artifacts/pixel-conquest-profile/repeat-1
+bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output test-artifacts/cordon-off-profile/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/repeat-1
 ```
 
-Repeat into separate directories. For the baseline, use the same harness in a separate checkout of the baseline commit above, with that checkout's original `world.ts` and `enclosure.ts`. The recorded baseline source snapshot differs only in import paths needed to run beside the candidate. Final raw results are in `test-artifacts/pixel-conquest-profile/mr-{baseline,candidate}-{1,2,3}/`; these are generated local artifacts, not committed source.
+Repeat into separate directories. For the baseline, use the same harness in a separate checkout of the baseline commit above, with that checkout's original `world.ts` and `enclosure.ts`. The recorded baseline source snapshot differs only in import paths needed to run beside the candidate. Final raw results are in `test-artifacts/cordon-off-profile/mr-{baseline,candidate}-{1,2,3}/`; these are generated local artifacts, not committed source.
 
 Additional controls:
 
 ```sh
-bun examples/pixel-conquest/profile.ts --countries 4 --mode bots --shape fragmented
-bun examples/pixel-conquest/profile.ts --mode bots --profile
-bun examples/pixel-conquest/profile.ts --mode bots --publish
-GAME_BENCH=1 bun test examples/pixel-conquest/enclosure.perf.test.ts
+bun examples/cordon-off/profile.ts --countries 4 --mode bots --shape fragmented
+bun examples/cordon-off/profile.ts --mode bots --profile
+bun examples/cordon-off/profile.ts --mode bots --publish
+GAME_BENCH=1 bun test examples/cordon-off/enclosure.perf.test.ts
 ```
 
 `--ticks`, `--warmup`, and `--output` control run length and artifact placement. `--profile` saves Bun's function summary, bytecode summary, and sampling traces in `.profile.json`; run sampling separately from timing. `--publish` uses an isolated real ZyncBase database, the game schema, test authorization, the SDK, and committed acknowledgments, paced at 20 Hz. It requires the repository's native build prerequisites. No browser subscribers, presence inputs, TLS, or subscriber fan-out are simulated.
@@ -116,7 +116,7 @@ over a long session before it can be tied to the production load.
 
 ## Validation
 
-`bun test examples/pixel-conquest` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Bot scoring is compared with materialized reference routes for both directions and approach orders, revisits, coastal returns, ties, and world borders. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
+`bun test examples/cordon-off` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Bot scoring is compared with materialized reference routes for both directions and approach orders, revisits, coastal returns, ties, and world borders. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
 
 ## Fresh profile: 2026-09-09
 
@@ -234,10 +234,10 @@ separately with `--profile` into `fresh-20260909/sampled`. Additional runs:
 
 ```sh
 bun run --filter @zyncbase/client build
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/fresh-20260909/published
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --profile --output test-artifacts/pixel-conquest-profile/fresh-20260909/long
-bun --preload ./examples/pixel-conquest/diagnostics.preload.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/fresh-20260909/long/diagnostic
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/cordon-off-profile/fresh-20260909/published
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/fresh-20260909/long
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --profile --output test-artifacts/cordon-off-profile/fresh-20260909/long
+bun --preload ./examples/cordon-off/diagnostics.preload.ts examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/fresh-20260909/long/diagnostic
 ```
 
 The diagnostic preload is a tracked source file; earlier captures referenced a
@@ -362,13 +362,13 @@ on repeat 2. Run builds, tests and sampling outside these timing intervals.
 Use a separate checkout at the baseline commit for the baseline commands.
 
 ```sh
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape compact --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
-bun examples/pixel-conquest/profile.ts --mode scripted --shape fragmented --output test-artifacts/pixel-conquest-profile/iteration-20260910/repeat-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/iteration-20260910/long-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --profile --output test-artifacts/pixel-conquest-profile/iteration-20260910/sampled
-bun --preload ./examples/pixel-conquest/diagnostics.preload.ts examples/pixel-conquest/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/pixel-conquest-profile/iteration-20260910/diagnostic
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/iteration-20260910/published
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/iteration-20260910/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/iteration-20260910/repeat-1
+bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output test-artifacts/cordon-off-profile/iteration-20260910/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/iteration-20260910/long-1
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --profile --output test-artifacts/cordon-off-profile/iteration-20260910/sampled
+bun --preload ./examples/cordon-off/diagnostics.preload.ts examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/iteration-20260910/diagnostic
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/cordon-off-profile/iteration-20260910/published
 ```
 
 Generated artifacts are gitignored; the reproduction above uses
@@ -437,14 +437,14 @@ per chunk) and raises the 16 KB dots cap from ~120 to ~250 dots per chunk.
 ### Reproduction
 
 ```sh
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
-bun examples/pixel-conquest/profile.ts --mode bots --shape compact --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
-bun examples/pixel-conquest/profile.ts --mode scripted --shape fragmented --output test-artifacts/pixel-conquest-profile/slim-dots/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/slim-dots/repeat-1
+bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/slim-dots/repeat-1
+bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output test-artifacts/cordon-off-profile/slim-dots/repeat-1
 bun run --filter @zyncbase/client build
-bun examples/pixel-conquest/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/pixel-conquest-profile/slim-dots/published
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/cordon-off-profile/slim-dots/published
 ```
 
-Repeat into `repeat-{1,2,3}`. For the baseline, stash the `examples/pixel-conquest`
+Repeat into `repeat-{1,2,3}`. For the baseline, stash the `examples/cordon-off`
 worktree and rerun into `slim-dots-baseline/`; the pre-change fragmented-bot
 and compact checksums match the September 10 values (`68e5f484…`, `adbc1537…`).
 The scripted baseline checksum (`bcf99f91…`) differs from the September 10
@@ -548,8 +548,8 @@ needed to attribute what remains. Next payload lever: stop resending the 2 KB
 ```sh
 bun run --filter @zyncbase/client build
 zig build -Doptimize=ReleaseFast
-bun examples/pixel-conquest/profile-browser.ts --players 1,32,128,256,512,1024 --seconds 30 --output test-artifacts/pixel-conquest-profile/browser-1024
-bun test examples/pixel-conquest
+bun examples/cordon-off/profile-browser.ts --players 1,32,128,256,512,1024 --seconds 30 --output test-artifacts/cordon-off-profile/browser-1024
+bun test examples/cordon-off
 bun run test:game
 ```
 
@@ -616,14 +616,14 @@ Snapshot the baseline before editing, then run alternating variants from the
 repo root so both resolve the shared Zig binary and `tests/e2e` paths:
 
 ```sh
-cp -R examples/pixel-conquest test-artifacts/pc-baseline   # before editing
+cp -R examples/cordon-off test-artifacts/co-baseline   # before editing
 # implement the publish changes, then:
-cp -R examples/pixel-conquest test-artifacts/pc-candidate
-bun test-artifacts/pc-baseline/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-b
-bun test-artifacts/pc-candidate/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-c
+cp -R examples/cordon-off test-artifacts/co-candidate
+bun test-artifacts/co-baseline/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-b
+bun test-artifacts/co-candidate/profile-browser.ts --players 128,256,512,1024 --seconds 30 --output test-artifacts/ab/runs/p1-c
 ```
 
-Validation: `bun test examples/pixel-conquest` (56 pass, including a new test
+Validation: `bun test examples/cordon-off` (56 pass, including a new test
 asserting every slice is dispatched before the first settles; it fails against
 the serial implementation), `bun run test:game` (plaintext and IPv6/TLS),
 `bun run lint` and `bunx biome check --write --error-on-warnings` all pass.
