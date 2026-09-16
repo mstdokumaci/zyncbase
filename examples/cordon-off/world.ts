@@ -1,4 +1,4 @@
-import { type BotPlan, planBot } from "./bots";
+import { BOT_SIDES, type BotPlan, enemyRays, planBot, roamPlan } from "./bots";
 import {
 	hasStraightExit,
 	LOCAL_SEARCH_BUDGET,
@@ -101,6 +101,9 @@ export class World {
 	// Human spawn cursor: drives round-robin center selection and the golden-
 	// angle spiral inside each region.
 	private spawnCount = 0;
+	// Bot jitter (patch size, roam direction, pauses). Seeded so profile runs
+	// stay reproducible and their checksums remain comparable.
+	private rng = 0x9e3779b9;
 	private readonly filler = new HoleFiller(WIDTH, HEIGHT);
 	private readonly bounds = new Map<number, Bounds>();
 	private readonly changedCountries = new Set<number>();
@@ -156,11 +159,86 @@ export class World {
 		}
 	}
 
+	private random() {
+		this.rng = (Math.imul(this.rng, 1664525) + 1013904223) >>> 0;
+		return this.rng / 0x1_0000_0000;
+	}
+
+	/** Usually a beat; occasionally a visible pause, like re-reading the map. */
+	private pauseTicks() {
+		return this.random() < 0.25
+			? 10 + Math.floor(this.random() * 20)
+			: Math.floor(this.random() * 4);
+	}
+
+	/** Never picks a vertical direction that a pole would empty. */
+	private roamDirection(player: Player): Exclude<Direction, "idle"> {
+		const directions: Exclude<Direction, "idle">[] = [
+			"up",
+			"down",
+			"left",
+			"right",
+		];
+		const open = directions.filter(
+			(direction) =>
+				(direction !== "up" || player.y > 0) &&
+				(direction !== "down" || player.y < HEIGHT - 1),
+		);
+		return open[Math.floor(this.random() * open.length)] as Exclude<
+			Direction,
+			"idle"
+		>;
+	}
+
+	private pickSide() {
+		return BOT_SIDES[Math.floor(this.random() * BOT_SIDES.length)] ?? 9;
+	}
+
+	/** A roam ends at its goal: claimable land for seek, safe land for flee. */
+	private roamAhead(player: Player) {
+		const plan = player.plan;
+		const ahead = plan?.cells[0];
+		if (!plan?.roam || ahead === undefined || !this.land[ahead]) return;
+		const owner = this.owners[ahead];
+		const done =
+			plan.roam === "seek"
+				? owner !== player.country_id
+				: owner === 0 || owner === player.country_id;
+		if (!done) return;
+		player.plan = undefined;
+		player.thinkAt = this.ticks;
+	}
+
+	/**
+	 * Cut off inside enemy land: run for safe ground instead of painting.
+	 * A fresh escape picks a random heading; chained segments keep it straight.
+	 */
+	private escape(player: Player) {
+		const plan = player.plan;
+		if (plan?.roam === "flee" && plan.cells.length) return;
+		if (enemyRays(this, player) < 7) return;
+		const direction =
+			plan?.roam === "flee" && player.direction !== "idle"
+				? player.direction
+				: this.roamDirection(player);
+		player.plan = roamPlan(player, this.pickSide(), direction, "flee");
+		player.thinkAt = this.ticks + 20;
+	}
+
+	/** Plan a sweep, or roam when the local window has nothing left to claim. */
+	private think(player: Player) {
+		if (player.plan?.cells.length || this.ticks < (player.thinkAt ?? 0)) return;
+		const side = this.pickSide();
+		player.plan =
+			planBot(this, player, side) ??
+			roamPlan(player, side, this.roamDirection(player));
+		player.thinkAt = this.ticks + 20;
+	}
+
 	private steerBot(player: Player) {
-		if (!player.plan?.cells.length && this.ticks >= (player.thinkAt ?? 0)) {
-			player.plan = planBot(this, player);
-			player.thinkAt = this.ticks + 20;
-		}
+		this.roamAhead(player);
+		this.escape(player);
+		this.think(player);
 		const next = player.plan?.cells[0];
 		if (next === undefined) {
 			player.direction = "idle";
@@ -716,6 +794,15 @@ export class World {
 		}
 	}
 
+	private advancePlan(player: Player) {
+		const plan = player.plan;
+		if (!plan || plan.cells[0] !== player.y * WIDTH + player.x) return;
+		plan.cells.shift();
+		// A finished roam keeps moving; only a finished sweep pauses.
+		if (!plan.cells.length && !plan.roam)
+			player.thinkAt = this.ticks + this.pauseTicks();
+	}
+
 	private tickBots(now: number) {
 		if (!this.botsEnabled) return;
 		this.populateBots(now);
@@ -725,8 +812,7 @@ export class World {
 			if (!player.is_bot) continue;
 			if (!player.credit) this.steerBot(player);
 			this.move(player);
-			if (player.plan?.cells[0] === player.y * WIDTH + player.x)
-				player.plan.cells.shift();
+			this.advancePlan(player);
 		}
 	}
 

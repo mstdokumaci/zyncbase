@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { planBot } from "./bots";
 import { buildPublishOperations, drainPublishState } from "./publish";
 import {
 	CHUNK,
@@ -183,6 +184,65 @@ test("bots share five countries, obey movement costs, and yield to humans withou
 			(dot) => world.players.get(dot.player_id)?.is_bot,
 		),
 	).toBe(true);
+});
+
+test("a bot boxed in by its own territory roams out instead of idling", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	const bot = world.players.get("bot-0");
+	if (!bot) throw new Error("Missing bot");
+	const start = { x: bot.x, y: bot.y };
+	// Wider than planBot's ±4 patch window at the largest square size, so
+	// every candidate patch is already this country's land.
+	for (let y = bot.y - 80; y <= bot.y + 80; y++)
+		for (let x = bot.x - 80; x <= bot.x + 80; x++)
+			world.owners[y * WIDTH + x] = bot.country_id;
+	expect(planBot(world, bot)).toBeUndefined();
+	world.input(
+		"human:0",
+		{
+			name: "Human 0",
+			country_id: world.country("Humans")?.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	for (
+		let tick = 0;
+		tick < 40 && bot.x === start.x && bot.y === start.y;
+		tick++
+	)
+		world.tick(tick + 1);
+	expect([bot.x, bot.y]).not.toEqual([start.x, start.y]);
+});
+
+test("a bot captured in enemy land flees instead of painting there", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	const bot = world.players.get("bot-0");
+	const enemy = world.country("Enemy");
+	if (!bot || !enemy) throw new Error("Missing bot or enemy");
+	const start = { x: bot.x, y: bot.y };
+	for (let y = bot.y - 20; y <= bot.y + 20; y++)
+		for (let x = bot.x - 20; x <= bot.x + 20; x++)
+			world.owners[y * WIDTH + x] = enemy.country_id;
+	// The normal planner still sees gain here; only the flee check gets out.
+	expect(planBot(world, bot)).toBeDefined();
+	world.input(
+		"human:0",
+		{
+			name: "Human 0",
+			country_id: world.country("Humans")?.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	const escaped = () =>
+		Math.abs(bot.x - start.x) > 20 || Math.abs(bot.y - start.y) > 20;
+	for (let tick = 0; tick < 200 && !escaped(); tick++) world.tick(tick + 1);
+	expect(escaped()).toBe(true);
 });
 
 test("input validation, borders, and expired input stop movement; map mask is deterministic", () => {
