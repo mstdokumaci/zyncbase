@@ -4,7 +4,12 @@ import {
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import nipplejs from "nipplejs";
-import { JoystickSteering, LocalMotion, type MotionDot } from "./motion";
+import {
+	approach,
+	JoystickSteering,
+	LocalMotion,
+	type MotionDot,
+} from "./motion";
 import {
 	CHUNK,
 	type ChunkRow,
@@ -107,6 +112,8 @@ let heartbeat: ReturnType<typeof setInterval> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
+// Camera catch-up time constant. Bigger = lazier trailing behind the dot.
+const CAMERA_TAU = 120;
 // A chunk subscription costs a listen round trip, so keep one extra chunk on
 // the leading edge of travel; idle needs no margin.
 const PREFETCH_CHUNKS = 1;
@@ -388,8 +395,6 @@ function receive(row: ChunkRow) {
 		setConnection(TAGLINE);
 	}
 	lastOwnDot = now;
-	const position = motion.position(lastOwnDot);
-	camera = { x: position.x + 0.5, y: position.y + 0.5 };
 	maybeUpdateSubscriptions();
 }
 
@@ -864,8 +869,14 @@ async function locate() {
 			me.last_y >= 0 &&
 			me.last_y < HEIGHT
 		) {
-			camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
-			dirty = true;
+			// The camera is the subscription focus, so this move re-targets the
+			// listening ring. Only do it before a local dot exists: the located
+			// cell is the chunk entry, up to CHUNK-1 cells off, so it must not
+			// fight draw()'s eased follow once motion owns the view.
+			if (!motion) {
+				camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
+				dirty = true;
+			}
 			updateSubscriptions();
 		}
 	} catch (error) {
@@ -1021,13 +1032,24 @@ function draw(now: number) {
 	// mutation (chunk, roster, palette, resize) marked the scene dirty.
 	const moved =
 		position !== undefined && (position.x !== drawnX || position.y !== drawnY);
-	if (!dirty && !moved) return;
+	// The camera keeps easing after the dot stops: stay active until it has
+	// settled exactly on the target.
+	const settling =
+		position !== undefined &&
+		(camera.x !== position.x + 0.5 || camera.y !== position.y + 0.5);
+	if (!dirty && !moved && !settling) {
+		// Keep the easing clock current: elapsed must never span an idle pause,
+		// or the first frame after it would ease by the whole pause at once.
+		lastFrame = now;
+		return;
+	}
 	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
 	dirty = false;
 	if (position) {
 		drawnX = position.x;
 		drawnY = position.y;
-		camera = { x: position.x + 0.5, y: position.y + 0.5 };
+		camera.x = approach(camera.x, position.x + 0.5, elapsed, CAMERA_TAU);
+		camera.y = approach(camera.y, position.y + 0.5, elapsed, CAMERA_TAU);
 	}
 	maybeUpdateSubscriptions();
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);

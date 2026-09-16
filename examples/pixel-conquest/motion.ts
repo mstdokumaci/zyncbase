@@ -28,6 +28,21 @@ export function mixDiagonalAxis(ax: number, ay: number, phase: number) {
 		: { index: 0 as const, phase };
 }
 
+// Frame-rate-independent exponential approach toward a target. A gap wider
+// than half a world is a camera re-anchor (canonical locate vs. unrolled world
+// copies), not motion: snap instead of panning through WIDTH cells of map.
+export function approach(
+	current: number,
+	target: number,
+	elapsed: number,
+	tau: number,
+) {
+	if (Math.abs(target - current) > WIDTH / 2) return target;
+	const next = current + (target - current) * (1 - Math.exp(-elapsed / tau));
+	// Land exactly so callers can detect a settled value without epsilon.
+	return Math.abs(target - next) < 0.01 ? target : next;
+}
+
 // Joystick steering state machine. A held stick emits a stream of move events;
 // the diagonal axis sequence and its carried phase must survive them, or every
 // event restarts the alternation and the vertical axis never gets enough
@@ -51,11 +66,11 @@ export class JoystickSteering {
 		}
 		const h = x > 0 ? "right" : "left";
 		const v = y > 0 ? "down" : "up";
-		if (ax >= ay * 3) {
+		if (ax >= ay * 5) {
 			this.reset();
 			return h;
 		}
-		if (ay >= ax * 3) {
+		if (ay >= ax * 5) {
 			this.reset();
 			return v;
 		}

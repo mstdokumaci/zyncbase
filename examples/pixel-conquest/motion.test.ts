@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+	approach,
 	JoystickSteering,
 	LocalMotion,
 	type MotionDot,
@@ -200,4 +201,17 @@ test("crossing the seam unrolls the camera and walking back stays continuous", (
 	expect(motion.position(200).x).toBe(WIDTH + 1);
 	expect(motion.position(250).x).toBe(WIDTH);
 	expect(motion.position(300).x).toBe(WIDTH - 1);
+});
+
+test("camera approach eases, settles exactly, and snaps cross-world re-anchors", () => {
+	const eased = approach(0, 1, 33, 90);
+	expect(eased).toBeGreaterThan(0);
+	expect(eased).toBeLessThan(1);
+	// More elapsed time moves closer, without overshooting.
+	expect(approach(0, 1, 16, 90)).toBeLessThan(eased);
+	expect(approach(0.9, 1, 1000, 90)).toBe(1);
+	// Within a hundredth of a cell it lands exactly so the render loop settles.
+	expect(approach(0.999, 1, 16, 90)).toBe(1);
+	// Canonical locate vs. unrolled world copies: snap, do not pan through WIDTH.
+	expect(approach(5, WIDTH + 5.5, 16, 90)).toBe(WIDTH + 5.5);
 });
