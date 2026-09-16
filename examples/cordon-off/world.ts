@@ -244,7 +244,11 @@ export class World {
 			player.direction = "idle";
 			return;
 		}
-		const dx = (next % WIDTH) - player.x;
+		let dx = (next % WIDTH) - player.x;
+		// The world wraps horizontally: a planned step across the seam must
+		// steer the short way (0 -> WIDTH-1 is left, not right).
+		if (dx > WIDTH / 2) dx -= WIDTH;
+		else if (dx < -WIDTH / 2) dx += WIDTH;
 		const dy = Math.floor(next / WIDTH) - player.y;
 		player.direction = dx
 			? dx > 0

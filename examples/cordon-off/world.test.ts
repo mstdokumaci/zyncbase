@@ -245,6 +245,37 @@ test("a bot captured in enemy land flees instead of painting there", () => {
 	expect(escaped()).toBe(true);
 });
 
+test("a planned step across the seam steers the short way", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	const bot = world.players.get("bot-0");
+	if (!bot) throw new Error("Missing bot");
+	world.input(
+		"human:0",
+		{
+			name: "Human 0",
+			country_id: world.country("Humans")?.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	const row = 100;
+	// Own the destination so one tick pays the own-territory move cost, and use
+	// a plan without `roam` so the steering check sees it before think() does.
+	const cross = (from: number, to: number, now: number) => {
+		world.owners[row * WIDTH + to] = bot.country_id;
+		bot.x = from;
+		bot.y = row;
+		bot.credit = 0;
+		bot.plan = { patch: -1, cells: [row * WIDTH + to] };
+		world.tick(now);
+		expect([bot.x, bot.y]).toEqual([to, row]);
+	};
+	cross(0, WIDTH - 1, 1);
+	cross(WIDTH - 1, 0, 2);
+});
+
 test("input validation, borders, and expired input stop movement; map mask is deterministic", () => {
 	const land = terrain();
 	expect(land.reduce((sum, cell) => sum + cell, 0)).toBe(661453);

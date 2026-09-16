@@ -37,7 +37,8 @@ const edgeScratch: number[] = new Array(MAX_SIDE * 4 - 4);
 const paintedFlags = new Uint32Array(WIDTH * HEIGHT);
 let paintedToken = 0;
 function beginScoring() {
-	if (++paintedToken === 0) {
+	paintedToken = (paintedToken + 1) >>> 0;
+	if (paintedToken === 0) {
 		paintedFlags.fill(0);
 		paintedToken = 1;
 	}
