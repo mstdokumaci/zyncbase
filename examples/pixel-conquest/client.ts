@@ -1037,17 +1037,19 @@ function draw(now: number) {
 	const settling =
 		position !== undefined &&
 		(camera.x !== position.x + 0.5 || camera.y !== position.y + 0.5);
-	if (!dirty && !moved && !settling) return;
+	if (!dirty && !moved && !settling) {
+		// Keep the easing clock current: elapsed must never span an idle pause,
+		// or the first frame after it would ease by the whole pause at once.
+		lastFrame = now;
+		return;
+	}
 	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
 	dirty = false;
 	if (position) {
 		drawnX = position.x;
 		drawnY = position.y;
-		// Clamp the step so the first move after a long pause eases for one
-		// frame instead of jumping: elapsed there spans the whole pause.
-		const ease = Math.min(elapsed, FRAME_MS);
-		camera.x = approach(camera.x, position.x + 0.5, ease, CAMERA_TAU);
-		camera.y = approach(camera.y, position.y + 0.5, ease, CAMERA_TAU);
+		camera.x = approach(camera.x, position.x + 0.5, elapsed, CAMERA_TAU);
+		camera.y = approach(camera.y, position.y + 0.5, elapsed, CAMERA_TAU);
 	}
 	maybeUpdateSubscriptions();
 	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
