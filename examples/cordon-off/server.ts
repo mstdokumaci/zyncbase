@@ -54,7 +54,7 @@ const databasePort = Number(process.env.GAME_DB_PORT ?? 3001);
 const host = process.env.GAME_HOST ?? "127.0.0.1";
 const origin = process.env.GAME_ORIGIN ?? "http://localhost:8080";
 const dataDir = resolve(
-	process.env.GAME_DATA_DIR ?? join(root, "data/pixel-conquest"),
+	process.env.GAME_DATA_DIR ?? join(root, "data/cordon-off"),
 );
 const secret = randomBytes(32).toString("hex");
 const certFile = process.env.GAME_TLS_CERT;
@@ -348,7 +348,7 @@ await new Promise<void>((resolve, reject) => {
 });
 
 await mkdir(dataDir, { recursive: true });
-const runtime = await mkdtemp(join(tmpdir(), "pixel-conquest-"));
+const runtime = await mkdtemp(join(tmpdir(), "cordon-off-"));
 const configPath = join(runtime, "config.json");
 await writeFile(
 	configPath,
@@ -807,7 +807,7 @@ try {
 		10000,
 	);
 	console.log(
-		`\nPixel Conquest: ${origin}\nData: ${dataDir}\nAssets: ${assetsDir}\nStop with Ctrl+C.\n`,
+		`\nCordon Off: ${origin}\nData: ${dataDir}\nAssets: ${assetsDir}\nStop with Ctrl+C.\n`,
 	);
 } catch (error) {
 	failed(error);

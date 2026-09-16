@@ -9,8 +9,8 @@
 		"includes": [
 			"sdk/typescript/**",
 			"tests/e2e/**",
-			"examples/pixel-conquest/**",
-			"!!examples/pixel-conquest/land.json",
+			"examples/cordon-off/**",
+			"!!examples/cordon-off/land.json",
 			"!!vendor"
 		],
 		"ignoreUnknown": true

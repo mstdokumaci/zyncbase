@@ -1,4 +1,4 @@
-# Pixel Conquest
+# Cordon Off
 
 A small multiplayer territory game using ZyncBase's real presence → store path. The browser sends direction input; a Bun simulation determines movement and ownership. Browsers receive territory and player dots together through map-chunk subscriptions.
 
@@ -27,13 +27,13 @@ The launch command builds the SDK and a ReleaseFast ZyncBase executable, then st
 bun run demo:game:dev
 ```
 
-Stop with Ctrl+C. Territory is stored in `data/pixel-conquest/`; generated history and assets live in `examples/pixel-conquest/dist/history/`. The world resets on its own every round; to force a fresh world at the next start, run `bun run demo:game:dev --reset`. The reset removes game chunks and countries and starts a fresh round. It does not touch other ZyncBase data directories or the history archive.
+Stop with Ctrl+C. Territory is stored in `data/cordon-off/`; generated history and assets live in `examples/cordon-off/dist/history/`. The world resets on its own every round; to force a fresh world at the next start, run `bun run demo:game:dev --reset`. The reset removes game chunks and countries and starts a fresh round. It does not touch other ZyncBase data directories or the history archive.
 
 ## Cloudflare and VPS
 
 Follow [the FreeBSD + Cloudflare setup](./DEPLOYMENT.md). One public origin serves browser assets from Cloudflare, sends `/session` and `/health` to Bun, and sends `/auth/ticket` and `/ws` directly to ZyncBase over IPv6/TLS. The production Bun process runs the simulation and token issuer; it does not relay database connections or serve browser files.
 
-Build an uploadable browser directory with `bun run demo:game:build`. Its output is `examples/pixel-conquest/dist/`. Start the VM processes with `bun run demo:game:start`. The development command `demo:game:dev` supplies local routing on port 8080 and is not used on the VM.
+Build an uploadable browser directory with `bun run demo:game:build`. Its output is `examples/cordon-off/dist/`. Start the VM processes with `bun run demo:game:start`. The development command `demo:game:dev` supplies local routing on port 8080 and is not used on the VM.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -43,11 +43,11 @@ Build an uploadable browser directory with `bun run demo:game:build`. Its output
 | `GAME_DB_PORT` | `3001` | ZyncBase ticket/WebSocket port. Deployment example: `8443`. |
 | `GAME_TLS_CERT`, `GAME_TLS_KEY` | Unset | PEM certificate and key for both listeners. Set both to enable TLS. |
 | `NODE_EXTRA_CA_CERTS` | Unset | CA PEM trusted by the simulation's HTTPS/WSS client. |
-| `GAME_DATA_DIR` | `<repo>/data/pixel-conquest` | Persistent game data. Run one simulation against a data directory. |
+| `GAME_DATA_DIR` | `<repo>/data/cordon-off` | Persistent game data. Run one simulation against a data directory. |
 | `GAME_SERVER_BIN` | `<repo>/zig-out/bin/zyncbase` | Prebuilt ZyncBase executable. |
 | `GAME_ROUND_MS` | `7200000` | Round boundary period; the default aligns with even UTC hours. |
 | `GAME_IDLE_WIPE_MS` | `600000` | Restart a quiet world after this long with no players; `0` disables. |
-| `GAME_ASSETS_DIR` | `examples/pixel-conquest/dist` | Browser assets plus generated history; the Worker publish directory. |
+| `GAME_ASSETS_DIR` | `examples/cordon-off/dist` | Browser assets plus generated history; the Worker publish directory. |
 | `GAME_DEPLOY` | Unset | `0` disables the hash-gated Worker publish. |
 | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Unset | Set both to deploy changed assets at boot (see below). |
 | `GAME_DEV_PORT` | `8080` | Development router port, used only by `demo:game:dev`. |
@@ -92,7 +92,7 @@ bun run lint
 The enclosure tests exhaust all 4 × 4 ownership masks against an independent boundary flood and check capture, defense, water, restart, and tick batching. Performance checks verify that ordinary extensions skip scans, local searches share a 1,024-cell budget per country, and large closures use one fallback scan, independently of publication. To print median step times as well:
 
 ```sh
-GAME_BENCH=1 bun test examples/pixel-conquest/enclosure.perf.test.ts
+GAME_BENCH=1 bun test examples/cordon-off/enclosure.perf.test.ts
 ```
 
 Fixtures cover small and large U-shaped countries, a rotated U, a solid square, and a large loop closure. Timings exclude fixture setup and call-count instrumentation, use two warmups and seven samples, and measure simulation only. [PROFILING.md](./PROFILING.md) records the 20-country, 40-mover comparison; full-world scans have predictable linear work but their cost still grows with the number of affected countries.

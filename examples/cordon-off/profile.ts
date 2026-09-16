@@ -39,7 +39,7 @@ const { values } = parseArgs({
 		profile: { type: "boolean", default: false },
 		output: {
 			type: "string",
-			default: "test-artifacts/pixel-conquest-profile",
+			default: "test-artifacts/cordon-off-profile",
 		},
 	},
 });
@@ -363,7 +363,7 @@ async function run(client?: ZyncBaseClient) {
 
 if (values.publish) {
 	buildServerIfNeeded();
-	const ctx = await createE2ETestContext("pixel-conquest-profile");
+	const ctx = await createE2ETestContext("cordon-off-profile");
 	await withServer(
 		ctx,
 		{

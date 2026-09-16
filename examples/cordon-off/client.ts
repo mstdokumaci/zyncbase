@@ -119,10 +119,9 @@ const CAMERA_TAU = 120;
 const PREFETCH_CHUNKS = 1;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
-const TAGLINE = "One pixel at a time.";
 
-// Quiet connection states fade out while playing (CSS keeps .warn visible):
-// only trouble should pull attention away from the map.
+// Only warn states render (CSS hides .connection otherwise): only trouble
+// should pull attention away from the map.
 function setConnection(text: string, warn = false) {
 	connection.textContent = text;
 	connection.classList.toggle("warn", warn);
@@ -254,7 +253,7 @@ async function checkHealth() {
 		showLobbyCountries(health.countries);
 		if (element("error").textContent === OFFLINE)
 			element("error").textContent = "";
-		if (connection.textContent.startsWith(OFFLINE)) setConnection(TAGLINE);
+		if (connection.textContent.startsWith(OFFLINE)) setConnection("");
 	} catch {
 		if (playing || joining) return;
 		worldReady = false;
@@ -392,7 +391,7 @@ function receive(row: ChunkRow) {
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
 		// First sighting acks our input.
-		setConnection(TAGLINE);
+		setConnection("");
 	}
 	lastOwnDot = now;
 	maybeUpdateSubscriptions();
@@ -830,7 +829,7 @@ function returnToLobby(message: string) {
 	scoreboardPanel.hidden = true;
 	stopJoystick();
 	element("error").textContent = message;
-	setConnection("Ready when you are.");
+	setConnection("");
 	dirty = true;
 	updateCountryChoice();
 	void checkHealth();
@@ -958,7 +957,7 @@ element("join").addEventListener("submit", async (event) => {
 			if (playing) {
 				online = true;
 				release();
-				setConnection("Connected · Finding your dot…");
+				setConnection("");
 				void locate();
 			}
 		});
@@ -1009,7 +1008,7 @@ element("join").addEventListener("submit", async (event) => {
 			publish();
 			void locate();
 		}, 500);
-		setConnection("Connected · Finding your dot…");
+		setConnection("");
 		void locate();
 	} catch (error) {
 		returnToLobby(error instanceof Error ? error.message : String(error));
