@@ -32,6 +32,17 @@ function approach(from: number, to: number, horizontalFirst: boolean) {
 
 const areaScratch: number[] = new Array(MAX_SIDE * MAX_SIDE);
 const edgeScratch: number[] = new Array(MAX_SIDE * 4 - 4);
+// Cells the candidate plan would paint, tracked per scoring. A generation
+// stamp avoids both Set hashing and clearing: each scoring gets a fresh token.
+const paintedFlags = new Uint32Array(WIDTH * HEIGHT);
+let paintedToken = 0;
+function beginScoring() {
+	if (++paintedToken === 0) {
+		paintedFlags.fill(0);
+		paintedToken = 1;
+	}
+	return paintedToken;
+}
 // Length is reset to the requested side on every call; callers fill every
 // entry before scoring, so a later larger patch overwrites the stale tail.
 function fillPerimeter(
@@ -88,8 +99,8 @@ function scoreCells(
 	reverse: boolean,
 	horizontalFirst: boolean,
 	loop: boolean,
-	painted: Set<number>,
 ) {
+	const painted = beginScoring();
 	const owners = world.owners,
 		land = world.land;
 	let cost = 0;
@@ -103,57 +114,43 @@ function scoreCells(
 		y = Math.floor(cur / WIDTH);
 	const tx = entry % WIDTH,
 		ty = Math.floor(entry / WIDTH);
-	for (const horizontal of [horizontalFirst, !horizontalFirst]) {
+	for (let pass = 0; pass < 2; pass++) {
+		const horizontal = pass === 0 ? horizontalFirst : !horizontalFirst;
 		while (horizontal ? x !== tx : y !== ty) {
-			if (horizontal) x += Math.sign(tx - x);
-			else y += Math.sign(ty - y);
+			if (horizontal) x += tx > x ? 1 : -1;
+			else y += ty > y ? 1 : -1;
 			const next = y * WIDTH + x;
-			cost += world.stepCost(
-				countryId,
-				cur,
-				next,
-				painted.has(next) ? countryId : owners[next],
-			);
-			if (land[next]) painted.add(next);
+			const owner = paintedFlags[next] === painted ? countryId : owners[next];
+			cost += world.stepCost(countryId, cur, next, owner);
+			if (land[next]) paintedFlags[next] = painted;
 			cur = next;
 		}
 	}
 	for (let k = 1; k < route.length; k++) {
 		const next = reverse ? route[last - k] : route[k];
-		cost += world.stepCost(
-			countryId,
-			cur,
-			next,
-			painted.has(next) ? countryId : owners[next],
-		);
-		if (land[next]) painted.add(next);
+		const owner = paintedFlags[next] === painted ? countryId : owners[next];
+		cost += world.stepCost(countryId, cur, next, owner);
+		if (land[next]) paintedFlags[next] = painted;
 		cur = next;
 	}
 	if (loop) {
-		cost += world.stepCost(
-			countryId,
-			cur,
-			entry,
-			painted.has(entry) ? countryId : owners[entry],
-		);
+		const owner = paintedFlags[entry] === painted ? countryId : owners[entry];
+		cost += world.stepCost(countryId, cur, entry, owner);
 	} else if (from === entry) {
 		const exit = reverse ? route[0] : route[last];
 		let rx = exit % WIDTH,
 			ry = Math.floor(exit / WIDTH);
 		const fx = from % WIDTH,
 			fy = Math.floor(from / WIDTH);
-		for (const horizontal of [horizontalFirst, !horizontalFirst]) {
+		for (let pass = 0; pass < 2; pass++) {
+			const horizontal = pass === 0 ? horizontalFirst : !horizontalFirst;
 			while (horizontal ? rx !== fx : ry !== fy) {
-				if (horizontal) rx += Math.sign(fx - rx);
-				else ry += Math.sign(fy - ry);
+				if (horizontal) rx += fx > rx ? 1 : -1;
+				else ry += fy > ry ? 1 : -1;
 				const next = ry * WIDTH + rx;
-				cost += world.stepCost(
-					countryId,
-					cur,
-					next,
-					painted.has(next) ? countryId : owners[next],
-				);
-				if (land[next]) painted.add(next);
+				const owner = paintedFlags[next] === painted ? countryId : owners[next];
+				cost += world.stepCost(countryId, cur, next, owner);
+				if (land[next]) paintedFlags[next] = painted;
 				cur = next;
 			}
 		}
@@ -216,7 +213,8 @@ export function planBot(
 			const route = loop
 				? fillPerimeter(edgeScratch, left, top, side)
 				: areaScratch;
-			for (const reverse of [false, true]) {
+			for (let r = 0; r < 2; r++) {
+				const reverse = r === 1;
 				const entry = reverse ? (route.at(-1) as number) : route[0];
 				const lowerBound =
 					Math.abs((entry % WIDTH) - bot.x) +
@@ -224,7 +222,8 @@ export function planBot(
 					route.length -
 					1 +
 					(loop ? 1 : 0);
-				for (const horizontalFirst of [true, false]) {
+				for (let h = 0; h < 2; h++) {
+					const horizontalFirst = h === 0;
 					if (bestGain && gain * bestCost <= bestGain * lowerBound) continue;
 					const cost = scoreCells(
 						world,
@@ -234,7 +233,6 @@ export function planBot(
 						reverse,
 						horizontalFirst,
 						loop,
-						new Set<number>(),
 					);
 					if (gain * bestCost > bestGain * cost) {
 						bestGain = gain;
