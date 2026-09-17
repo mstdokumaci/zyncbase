@@ -539,7 +539,7 @@ try {
 	assert.deepEqual(health, {
 		ready: true,
 		players: 0,
-		bots: 10,
+		bots: 0,
 	});
 	assert.equal(typeof healthNow, "number");
 	assert.equal(typeof lobbyRound.number, "number");
@@ -549,19 +549,10 @@ try {
 		"round boundaries land on even UTC hours",
 	);
 	assert.ok(lobbyRound.endsAt > healthNow);
-	assert.equal(lobbyCountries.length, 5, "lobby lists countries before login");
 	assert.equal(
-		new Set(lobbyCountries.map((country: Country) => country.color)).size,
-		5,
-	);
-	assert.ok(
-		lobbyCountries.every((country: Country) =>
-			COUNTRY_COLORS.includes(country.color),
-		),
-	);
-	assert.ok(
-		lobbyCountries.every((country: Country) => country.is_bot === true),
-		"starting countries are bot countries",
+		lobbyCountries.length,
+		0,
+		"bot countries wait until a point has its first human",
 	);
 	assert.equal((await fetch(origin)).status, 200);
 	assert.equal((await fetch(`${origin}/client.js`)).status, 200);
@@ -685,10 +676,23 @@ try {
 				north.country_id,
 		"lobby selection joins an existing country by id",
 	);
-	teammate.client.disconnect();
 	await eventually(
-		async () => (await (await fetch(`${origin}/health`)).json()).bots === 9,
-		"two humans replace one bot",
+		async () => (await (await fetch(`${origin}/health`)).json()).bots === 3,
+		"a point's second human leaves one bot",
+	);
+	teammate.client.disconnect();
+	const botRoster = await eventually(async () => {
+		const state = await (await fetch(`${origin}/health`)).json();
+		return state.bots === 4 ? (state.countries as Country[]) : undefined;
+	}, "the point's second bot returns when its second human leaves");
+	assert.equal(
+		botRoster.filter((country) => country.is_bot).length,
+		2,
+		"each occupied point has its own bot country",
+	);
+	assert.ok(
+		botRoster.every((country) => COUNTRY_COLORS.includes(country.color)),
+		"bot country colors come from the palette",
 	);
 	console.log(
 		`PASS: open admission, identity, player names, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, presence → store subscription`,
@@ -748,16 +752,14 @@ try {
 	const observer = await connect();
 	await eventually(async () => {
 		const health = await (await fetch(`${origin}/health`)).json();
-		return health.players === 0 && health.bots === 10;
-	}, "bots return when humans leave");
+		return health.players === 0 && health.bots === 0;
+	}, "an empty world holds no bots");
 	await eventually(async () => {
 		const dots = (await chunks(observer.client)).flatMap((row) =>
 			readDots(row.dots),
 		);
-		if (dots.length !== 10) return false;
-		const roster = await rosterOf(observer.client);
-		return dots.every((dot) => roster.get(dot.player_id)?.is_bot === true);
-	}, "idle bot state committed");
+		return dots.length === 0;
+	}, "bot dots cleared without humans");
 	// Country rows publish on a slower cadence than chunk writes, so a just-
 	// frozen world can still have a roster flush pending. Snapshot only once
 	// two reads across a flush interval agree, or the saved counts may lag the
@@ -785,11 +787,8 @@ try {
 			row.owners,
 		);
 	assert.ok(
-		restoredChunks.every((row) => {
-			const dots = readDots(row.dots);
-			return dots.every((dot) => dot.player_id.startsWith("bot-"));
-		}),
-		"stale human dots cleared, bot dots republished slim",
+		restoredChunks.every((row) => readDots(row.dots).length === 0),
+		"restart clears every dot: no humans, so no bots",
 	);
 	const restoredRoster = await rosterOf(returning.client);
 	// Reads materialize absent optional fields as explicit nulls; identity
@@ -803,7 +802,7 @@ try {
 		[...restoredRoster.values()].every(
 			(row) => row.is_bot === true || isStub(row),
 		),
-		"only bots and fieldless identity stubs remain",
+		"only fieldless identity stubs remain without humans",
 	);
 	const restoredCountries = (await returning.client.store.query(
 		"countries",
@@ -844,18 +843,17 @@ try {
 	const fresh = (await clean.client.store.query(
 		"countries",
 	)) as unknown as Country[];
-	assert.equal(fresh.length, 5);
-	assert.ok(fresh.every((country) => country.count === 0));
-	assert.ok(
-		fresh.every((country) => country.is_bot === true),
-		"reset repopulates bot countries",
+	assert.equal(
+		fresh.length,
+		0,
+		"reset defers bot countries until a human arrives",
 	);
-	// Reset clears territory and the roster, then bots immediately repopulate
-	// (plus this client's own fieldless identity row).
+	// Reset clears territory and the roster; bot countries appear lazily with
+	// their point's first human, so only this client's fieldless stub remains.
 	const resetRoster = await rosterOf(clean.client);
 	assert.equal(
 		[...resetRoster.values()].filter((row) => row.is_bot === true).length,
-		10,
+		0,
 	);
 	assert.ok(
 		[...resetRoster.values()].every(
@@ -879,7 +877,7 @@ try {
 		(
 			await fetch(`${origin}/session`, {
 				method: "POST",
-				body: JSON.stringify({ countryName: "Bot · Amber" }),
+				body: JSON.stringify({ countryName: "Polandia" }),
 			})
 		).status,
 		409,
