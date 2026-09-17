@@ -8,7 +8,6 @@ import {
 	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
-	MAX_PLAYERS,
 	PLAYER_GRACE_MS,
 	playerName,
 	RULES,
@@ -18,6 +17,21 @@ import {
 	WIDTH,
 } from "./shared";
 import { World } from "./world";
+
+/** Bots spawn with a point's first human, so tests admit one first. */
+function joinHuman(world: World, id: string) {
+	world.input(
+		id,
+		{
+			name: id,
+			country_id: world.country("Humans")?.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	return world.players.get(id);
+}
 
 test("movement pays destination cost, preserves cooldowns, and survives chunk/restart boundaries", () => {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
@@ -120,75 +134,120 @@ test("owner bitmaps decode from misaligned little-endian bytes", () => {
 	for (let i = 0; i < CHUNK * CHUNK; i++) expect(owners[i]).toBe(i % 251);
 });
 
-test("bots share five countries, obey movement costs, and yield to humans without clearing land", () => {
+test("bots join a point's first human, thin out as it crowds, and return when it empties", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.startBots(0);
-	expect(world.players.size).toBe(10);
-	expect(world.countries.size).toBe(5);
-	for (const country of world.countries.values())
-		expect(
-			[...world.players.values()].filter(
-				(player) => player.country_id === country.country_id,
-			),
-		).toHaveLength(2);
-	const bot = world.players.get("bot-0");
-	const retiring = world.players.get("bot-9");
-	if (!bot || !retiring) throw new Error("Missing bots");
-	bot.x = 100;
-	bot.y = 100;
-	world.tick(INPUT_LEASE_MS * 10);
-	expect([bot.x, bot.y]).toEqual([100, 100]);
-	expect(world.players.size).toBe(10);
-	const now = INPUT_LEASE_MS * 10 + 1;
-	const join = (i: number) =>
+	expect(world.players.size).toBe(0);
+	expect(world.countries.size).toBe(0);
+	let now = INPUT_LEASE_MS * 10;
+	const join = (id: string) =>
 		world.input(
-			`human:${i}`,
+			id,
 			{
-				name: `Human ${i}`,
+				name: id,
 				country_id: world.country("Humans")?.country_id,
 				direction: "idle",
 				seq: 1,
 			},
 			now,
 		);
-	join(0);
+	const bots = () =>
+		[...world.players.values()].filter((player) => player.is_bot);
+	// The first human at the point brings both of its bots, sharing one bot
+	// country that is not the human's.
+	join("one");
 	world.tick(now);
-	expect(world.players.size).toBe(11);
-	expect([bot.x, bot.y]).toEqual([100, 100]);
-	world.tick(now + 1);
+	const first = world.players.get("one");
+	expect(bots()).toHaveLength(2);
+	expect(world.countries.size).toBe(2);
+	expect(bots()[0]?.country_id).toBe(bots()[1]?.country_id);
+	expect(bots()[0]?.country_id).not.toBe(first?.country_id);
+	// The pair joins like same-country reinforcements: the first bot settles
+	// at the nearest legal cross-country distance, the second beside it.
+	const [left, right] = bots();
+	if (!first || !left || !right) throw new Error("Missing bots");
+	expect(
+		Math.max(
+			Math.hypot(left.x - first.x, left.y - first.y),
+			Math.hypot(right.x - first.x, right.y - first.y),
+		),
+	).toBeLessThan(64);
+	expect(Math.hypot(left.x - right.x, left.y - right.y)).toBeLessThan(48);
+	// Bots move and claim land once a human is around.
+	const bot = world.players.get("bot-0");
+	if (!bot) throw new Error("Missing bot");
+	bot.x = 100;
+	bot.y = 100;
+	world.tick(++now);
 	expect(Math.abs(bot.x - 100) + Math.abs(bot.y - 100)).toBe(1);
 	expect(world.owners[bot.y * WIDTH + bot.x]).toBe(bot.country_id);
+	// Teammates inherit the point: two or three humans leave one bot, a
+	// fourth retires it without clearing its land.
+	join("two");
+	world.tick(++now);
+	expect(bots()).toHaveLength(1);
+	join("three");
+	world.tick(++now);
+	expect(bots()).toHaveLength(1);
+	join("four");
+	world.tick(++now);
+	expect(bots()).toHaveLength(0);
+	const botCountry = world.countries.get(bot.country_id);
+	if (!botCountry) throw new Error("Missing bot country");
+	expect(botCountry.count).toBeGreaterThan(0);
+	expect(world.owners[bot.y * WIDTH + bot.x]).toBe(bot.country_id);
+	// Leaving crowds bots return, and an empty point holds none.
+	world.remove("four", now);
+	world.tick(++now);
+	expect(bots()).toHaveLength(1);
+	// With no live teammate, the shared chain drops the returning bot on its
+	// country's own land instead of back at the spawn point.
+	const returned = bots()[0];
+	if (!returned) throw new Error("Missing returned bot");
+	expect(world.owners[returned.y * WIDTH + returned.x]).toBe(bot.country_id);
+	expect(Math.hypot(returned.x - bot.x, returned.y - bot.y)).toBeLessThan(64);
+	world.remove("three", now);
+	world.tick(++now);
+	expect(bots()).toHaveLength(1);
+	world.remove("two", now);
+	world.tick(++now);
+	expect(bots()).toHaveLength(2);
+	world.remove("one", now);
+	world.tick(++now);
+	expect(bots()).toHaveLength(0);
+});
 
-	world.owners[0] = retiring.country_id;
-	join(1);
-	world.tick(now + 2);
-	expect(world.humanCount).toBe(2);
-	expect(world.players.has("bot-9")).toBe(false);
-	expect(world.players.size).toBe(11);
-	expect(world.owners[0]).toBe(retiring.country_id);
-	world.remove("human:1", now + 2);
-	world.tick(now + 3);
-	expect(world.players.get("bot-9")?.country_id).toBe(retiring.country_id);
-	expect(world.countries.size).toBe(6);
-	for (let i = 1; i < MAX_PLAYERS + 1; i++) join(i);
-	world.tick(now + 4);
-	expect(world.humanCount).toBe(MAX_PLAYERS);
-	expect([...world.players.values()].some((player) => player.is_bot)).toBe(
-		false,
-	);
-	world.tick(now + INPUT_LEASE_MS * 6);
-	expect(world.humanCount).toBe(0);
-	expect(world.players.size).toBe(10);
-	expect(
-		readDots(world.chunk(chunkIndex(933, 276)).dots).every(
-			(dot) => world.players.get(dot.player_id)?.is_bot,
-		),
-	).toBe(true);
+test("spawn points unlock in waves as earlier points fill", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	const join = (id: string) => {
+		world.input(
+			id,
+			{
+				name: id,
+				country_id: world.country(id)?.country_id,
+				direction: "idle",
+				seq: 1,
+			},
+			0,
+		);
+		return world.players.get(id);
+	};
+	// The first three founders claim one early point each.
+	expect([0, 1, 2].map((i) => join(`f:${i}`)?.point)).toEqual([0, 1, 2]);
+	// A fourth point appears only after the first three are in use.
+	expect(join("f:3")?.point).toBe(3);
+	for (let i = 4; i < 24; i++) join(`f:${i}`);
+	// All six wave-2 points hold four humans, so the next founder reaches the
+	// third wave: Yulara in Australia.
+	expect(join("f:24")?.point).toBe(6);
 });
 
 test("a bot boxed in by its own territory roams out instead of idling", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.startBots(0);
+	joinHuman(world, "human:0");
+	world.tick(0);
 	const bot = world.players.get("bot-0");
 	if (!bot) throw new Error("Missing bot");
 	const start = { x: bot.x, y: bot.y };
@@ -198,16 +257,6 @@ test("a bot boxed in by its own territory roams out instead of idling", () => {
 		for (let x = bot.x - 80; x <= bot.x + 80; x++)
 			world.owners[y * WIDTH + x] = bot.country_id;
 	expect(planBot(world, bot)).toBeUndefined();
-	world.input(
-		"human:0",
-		{
-			name: "Human 0",
-			country_id: world.country("Humans")?.country_id,
-			direction: "idle",
-			seq: 1,
-		},
-		0,
-	);
 	for (
 		let tick = 0;
 		tick < 40 && bot.x === start.x && bot.y === start.y;
@@ -220,6 +269,8 @@ test("a bot boxed in by its own territory roams out instead of idling", () => {
 test("a bot captured in enemy land flees instead of painting there", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.startBots(0);
+	joinHuman(world, "human:0");
+	world.tick(0);
 	const bot = world.players.get("bot-0");
 	const enemy = world.country("Enemy");
 	if (!bot || !enemy) throw new Error("Missing bot or enemy");
@@ -229,16 +280,6 @@ test("a bot captured in enemy land flees instead of painting there", () => {
 			world.owners[y * WIDTH + x] = enemy.country_id;
 	// The normal planner still sees gain here; only the flee check gets out.
 	expect(planBot(world, bot)).toBeDefined();
-	world.input(
-		"human:0",
-		{
-			name: "Human 0",
-			country_id: world.country("Humans")?.country_id,
-			direction: "idle",
-			seq: 1,
-		},
-		0,
-	);
 	const escaped = () =>
 		Math.abs(bot.x - start.x) > 20 || Math.abs(bot.y - start.y) > 20;
 	for (let tick = 0; tick < 200 && !escaped(); tick++) world.tick(tick + 1);
@@ -248,18 +289,10 @@ test("a bot captured in enemy land flees instead of painting there", () => {
 test("a planned step across the seam steers the short way", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.startBots(0);
+	joinHuman(world, "human:0");
+	world.tick(0);
 	const bot = world.players.get("bot-0");
 	if (!bot) throw new Error("Missing bot");
-	world.input(
-		"human:0",
-		{
-			name: "Human 0",
-			country_id: world.country("Humans")?.country_id,
-			direction: "idle",
-			seq: 1,
-		},
-		0,
-	);
 	const row = 100;
 	// Own the destination so one tick pays the own-territory move cost, and use
 	// a plan without `roam` so the steering check sees it before think() does.
@@ -900,7 +933,7 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 
 test("humans cannot join bot countries, even with a forged country id", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
-	const bot = world.country("Bot · Amber", true);
+	const bot = world.country("Polandia", true);
 	if (!bot) throw new Error("Missing bot country");
 	expect(bot.is_bot).toBe(true);
 	const human = world.country("North");

@@ -491,18 +491,19 @@ before snapshotting; the old immediate read raced the held-back roster.
 
 Spawn anchors no longer stack on one point:
 
-- Eight regions are farthest-point samples over chunks at least 60% land and
-  128 px from the map edge; the seed is the historical northern-Italy start.
-- Founding a new country round-robins humans across the regions, then spirals
-  (golden angle, 16 px anchor spacing) inside the chosen one.
-- A human joining an existing country anchors on a teammate standing on its
-  land, else the first owned cell within the country's cached bounds (scan
-  capped at 65,536 cells), else a live teammate, else the regional spiral. A
-  separate pass requires the chosen cell to be own territory, bounded to a
+- Nine spawn points unlock in three waves: Warsaw/Zurich/Moscow, then
+  Ulaanbaatar/Riyadh/Bangui once those are in use, then Yulara/Brasília/Denver
+  once the first six points each hold four humans.
+- Founding a new country round-robins humans across the active points, then
+  spirals (golden angle, 16 px anchor spacing) inside the chosen one.
+- Humans and bots share one anchor chain: a live teammate standing on the
+  country's land, else any live teammate, else the first owned cell in the
+  country's cached bounds (scan capped at 65,536 cells), else a spawn point.
+  Bots use their assigned point, spiraling around its first human; humans
+  round-robin the active points. Bot countries are created lazily when a
+  point first needs one.
+- A separate pass requires the chosen cell to be own territory, bounded to a
   32 px search before spilling.
-- Bots anchor at `spawnCenters[(code - 1) % 8]` with their existing team-angle
-  ring, so the five bot countries cover regions 0–4 and the opening region has
-  opponents.
 - Humans and bots share the same 12 px same-country / 28 px cross-country
   spacing. A 16 px spatial hash makes each spacing test a 5 × 5 bucket scan
   instead of an O(players) loop; without it, 1024 same-country spawns took

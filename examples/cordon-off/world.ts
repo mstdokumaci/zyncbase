@@ -45,6 +45,9 @@ type Player = {
 	direction: Direction;
 	credit: number;
 	heardAt: number;
+	// Spawn point this player came from, so its bots know the local crowd
+	// size. Absent for humans who joined on their country's territory.
+	point?: number;
 	plan?: BotPlan;
 	thinkAt?: number;
 };
@@ -55,26 +58,52 @@ const steps = {
 	left: [-1, 0],
 	right: [1, 0],
 };
+// One playful country per spawn point, named after where its bots come from.
+// Humans may never create or join these (see reservedBotCountry).
 const botCountries = [
-	"Bot · Amber",
-	"Bot · Coral",
-	"Bot · Fern",
-	"Bot · Indigo",
-	"Bot · Pearl",
+	"Polandia",
+	"Switzerstan",
+	"Ruskovia",
+	"Mongolonia",
+	"Saudistan",
+	"Central Afrikia",
+	"Aussieland",
+	"Brasilandia",
+	"United Stakes",
 ];
-// Human spawn regions: the historical northern-Italy start (where bots
-// spawn) plus farthest-point samples over mostly-land chunks. Players round-
-// robin across them so a 1024 crowd spreads over the map instead of stacking
-// on one continent — which also splits subscriber fan-out by region.
-const SPAWN_CENTERS = 8;
-const SPAWN_EDGE_MARGIN = 128;
+// Spawn points unlock in waves of three: Warsaw/Zurich/Moscow confine early
+// players to Europe, Ulaanbaatar/Riyadh/Bangui expand over Eurasia and
+// Africa once those are in use, and the last three open once the first six
+// are full. Pixel coordinates use the land.json crop: longitude −135…180°,
+// latitude −60…85°.
+const SPAWN_POINTS = [
+	{ x: 990, y: 226 }, // Warsaw
+	{ x: 911, y: 259 }, // Zurich
+	{ x: 1095, y: 201 }, // Moscow
+	{ x: 1535, y: 256 }, // Ulaanbaatar
+	{ x: 1153, y: 416 }, // Riyadh
+	{ x: 974, y: 555 }, // Bangui
+	{ x: 1688, y: 760 }, // Yulara
+	{ x: 553, y: 694 }, // Brasília
+	{ x: 190, y: 312 }, // Denver
+];
+const SPAWN_WAVE = 3;
 const SPAWN_BUCKET_SHIFT = 4;
 const SPAWN_BUCKET_COLUMNS = Math.ceil(WIDTH / (1 << SPAWN_BUCKET_SHIFT));
 const SPAWN_BUCKET_ROWS = Math.ceil(HEIGHT / (1 << SPAWN_BUCKET_SHIFT));
 const SPAWN_OWNED_CELL_BUDGET = 1 << 16;
 const SPAWN_OWN_RADIUS = 32;
-const DEFAULT_SPAWN = { x: 933, y: 276 };
 const GOLDEN_ANGLE = 2.399963229728653;
+
+/** Bot country names stay reserved even before their country exists. */
+export function reservedBotCountry(value: unknown) {
+	try {
+		const name = countryName(value).toLowerCase();
+		return botCountries.some((country) => country.toLowerCase() === name);
+	} catch {
+		return false;
+	}
+}
 // readOwners decodes little-endian, so serialization must too.
 const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
@@ -92,14 +121,14 @@ export class World {
 	// ghosts never draw, block spawns, or pin countries.
 	private readonly graveyard = new Map<
 		string,
-		{ row: PlayerRow; expires: number }
+		{ row: PlayerRow; expires: number; point?: number }
 	>();
 	inputMessages = 0;
 	ticks = 0;
 	private nextCountryId = 1;
 	private botsEnabled = false;
-	// Human spawn cursor: drives round-robin center selection and the golden-
-	// angle spiral inside each region.
+	// Human spawn cursor: drives round-robin point selection and the golden-
+	// angle spiral inside each point.
 	private spawnCount = 0;
 	// Bot jitter (patch size, roam direction, pauses). Seeded so profile runs
 	// stay reproducible and their checksums remain comparable.
@@ -108,11 +137,10 @@ export class World {
 	private readonly bounds = new Map<number, Bounds>();
 	private readonly changedCountries = new Set<number>();
 	private readonly enclosureCountries = new Map<number, Set<number> | null>();
-	private readonly spawnCenters: { x: number; y: number }[];
+	// Spawn-point wave latch: 1 = first three points, 2 = six, 3 = all nine.
+	private wave = 1;
 
-	constructor(readonly land: Uint8Array) {
-		this.spawnCenters = this.computeSpawnCenters();
-	}
+	constructor(readonly land: Uint8Array) {}
 
 	get humanCount() {
 		return [...this.players.values()].filter((player) => !player.is_bot).length;
@@ -147,16 +175,28 @@ export class World {
 		this.populateBots(now);
 	}
 
+	// Bots are per spawn point: two join the point's first human, one stays
+	// while it holds two or three, and a fourth human retires them. A point
+	// with no humans has no bots and no bot country until one is needed.
 	private populateBots(now: number) {
-		const target = Math.max(0, 10 - Math.floor(this.humanCount / 2));
-		for (let i = 0; i < 10; i++) {
+		const active = this.activePointCount();
+		const humans = this.humansPerPoint();
+		for (let i = 0; i < SPAWN_POINTS.length * 2; i++) {
 			const id = `bot-${i}`;
-			if (i >= target) this.remove(id, now);
+			const point = i >> 1;
+			if (point >= active || (i & 1) >= this.botTarget(humans[point] ?? 0))
+				this.remove(id, now);
 			else if (!this.players.has(id)) {
-				const country = this.country(botCountries[Math.floor(i / 2)], true);
-				if (country) this.add(id, country, now, true);
+				const country = this.country(botCountries[point] as string, true);
+				if (country) this.add(id, country, now, true, i);
 			}
 		}
+	}
+
+	/** Two bots for a point's first human, one for two or three, none after. */
+	private botTarget(humans: number) {
+		if (humans === 0 || humans >= 4) return 0;
+		return humans === 1 ? 2 : 1;
 	}
 
 	private random() {
@@ -377,74 +417,31 @@ export class World {
 		this.dirtyRemovedCountries.add(countryId);
 	}
 
-	// First center is the historical northern-Italy start where bots spawn;
-	// the rest are farthest-point samples over inland chunks that are at
-	// least 60% land, so each region has room to spiral out.
-	private computeSpawnCenters() {
-		const centers = [{ ...DEFAULT_SPAWN }];
-		const candidates = this.spawnCandidates();
-		while (centers.length < SPAWN_CENTERS && candidates.length)
-			centers.push(this.takeFarthest(candidates, centers));
-		return centers;
+	/** Non-bot players counted by the spawn point they came from. */
+	private humansPerPoint() {
+		const counts = new Array<number>(SPAWN_POINTS.length).fill(0);
+		for (const player of this.players.values()) {
+			if (player.is_bot || player.point === undefined) continue;
+			counts[player.point] = (counts[player.point] ?? 0) + 1;
+		}
+		return counts;
 	}
 
-	/** Inland chunk centers that are at least 60% land. */
-	private spawnCandidates() {
-		const candidates: { x: number; y: number }[] = [];
-		for (
-			let row = Math.ceil(SPAWN_EDGE_MARGIN / CHUNK);
-			row < Math.ceil(HEIGHT / CHUNK);
-			row++
-		) {
-			for (
-				let col = Math.ceil(SPAWN_EDGE_MARGIN / CHUNK);
-				col < COLUMNS;
-				col++
-			) {
-				const x = Math.min(col * CHUNK + CHUNK / 2, WIDTH - 1);
-				const y = Math.min(row * CHUNK + CHUNK / 2, HEIGHT - 1);
-				if (x > WIDTH - SPAWN_EDGE_MARGIN || y > HEIGHT - SPAWN_EDGE_MARGIN)
-					continue;
-				if (this.chunkLandFraction(col, row) >= 0.6) candidates.push({ x, y });
-			}
-		}
-		return candidates;
-	}
-
-	private chunkLandFraction(col: number, row: number) {
-		let owned = 0,
-			area = 0;
-		for (let y = row * CHUNK; y < Math.min((row + 1) * CHUNK, HEIGHT); y++) {
-			for (let x = col * CHUNK; x < Math.min((col + 1) * CHUNK, WIDTH); x++) {
-				area++;
-				owned += this.land[y * WIDTH + x] as number;
-			}
-		}
-		return owned / area;
-	}
-
-	/** Pull the candidate farthest from every chosen center (greedy cover). */
-	private takeFarthest(
-		candidates: { x: number; y: number }[],
-		centers: { x: number; y: number }[],
-	) {
-		let best = candidates[0] as { x: number; y: number };
-		let bestDistance = -1;
-		for (const candidate of candidates) {
-			let nearest = Number.POSITIVE_INFINITY;
-			for (const center of centers) {
-				const dx = candidate.x - center.x,
-					dy = candidate.y - center.y;
-				nearest = Math.min(nearest, dx * dx + dy * dy);
-				if (nearest <= bestDistance) break;
-			}
-			if (nearest > bestDistance) {
-				bestDistance = nearest;
-				best = candidate;
-			}
-		}
-		candidates.splice(candidates.indexOf(best), 1);
-		return best;
+	// Waves latch and never revert: three points are enough while the world
+	// is small, and players leaving must not re-confine later spawns.
+	private activePointCount() {
+		const used = this.humansPerPoint();
+		if (
+			this.wave === 1 &&
+			used.slice(0, SPAWN_WAVE).every((count) => count > 0)
+		)
+			this.wave = 2;
+		if (
+			this.wave === 2 &&
+			used.slice(0, SPAWN_WAVE * 2).every((count) => count >= 4)
+		)
+			this.wave = 3;
+		return this.wave * SPAWN_WAVE;
 	}
 
 	/** Spiral outward from an anchor so joiners do not stack on the anchor. */
@@ -458,33 +455,41 @@ export class World {
 		};
 	}
 
-	// Round-robin the regions, then spiral outward inside each one so players
-	// in the same region still keep their distance.
+	// Round-robin the active points, then spiral outward inside each one so
+	// players in the same point still keep their distance.
 	private humanAnchor(index: number) {
-		const center = this.spawnCenters[index % this.spawnCenters.length] as {
-			x: number;
-			y: number;
-		};
-		const perCenter = Math.ceil(MAX_PLAYERS / this.spawnCenters.length);
-		const local = Math.floor(index / this.spawnCenters.length) % perCenter;
-		return this.spiralAnchor(center, local);
+		const active = this.activePointCount();
+		const point = index % active;
+		const center = SPAWN_POINTS[point] as { x: number; y: number };
+		const perCenter = Math.ceil(MAX_PLAYERS / active);
+		const local = Math.floor(index / active) % perCenter;
+		return { ...this.spiralAnchor(center, local), point };
 	}
 
-	// Humans reinforce their country: own land first, then a live teammate,
-	// then the regional round-robin. Bots spread over the first regions by
-	// country id so every region has an early opponent.
-	private spawnAnchor(countryId: number, bot: boolean, team: number) {
-		if (bot) {
-			const region = this.spawnCenters[
-				(countryId - 1) % this.spawnCenters.length
-			] as { x: number; y: number };
-			const angle = (team * Math.PI * 2) / botCountries.length - Math.PI / 2;
-			return {
-				x: region.x + Math.round(Math.cos(angle) * 48),
-				y: region.y + Math.round(Math.sin(angle) * 48),
-				own: false,
-			};
-		}
+	/** Anchor on a cell: spiral outward, reading ownership from the bitmap. */
+	private anchorAt(
+		countryId: number,
+		x: number,
+		y: number,
+		index: number,
+		point?: number,
+	) {
+		return {
+			...this.spiralAnchor({ x, y }, index),
+			own: this.owners[y * WIDTH + x] === countryId,
+			point,
+		};
+	}
+
+	// One anchor chain for humans and bots: a live teammate (on own land when
+	// possible), else the country's own land, else a spawn point. Bots take
+	// their assigned point and spiral around its first human; humans round-
+	// robin the active points.
+	private spawnAnchor(
+		countryId: number,
+		bot: boolean,
+		team: number,
+	): { x: number; y: number; own: boolean; point?: number } {
 		const teammates = [...this.players.values()].filter(
 			(player) => player.country_id === countryId,
 		);
@@ -493,19 +498,29 @@ export class World {
 				(player) => this.owners[player.y * WIDTH + player.x] === countryId,
 			) ?? teammates[0];
 		if (mate)
-			return {
-				...this.spiralAnchor(mate, teammates.length),
-				own: this.owners[mate.y * WIDTH + mate.x] === countryId,
-			};
+			return this.anchorAt(
+				countryId,
+				mate.x,
+				mate.y,
+				teammates.length,
+				mate.point,
+			);
 		const owned = this.findOwnedCell(countryId);
 		if (owned !== undefined)
-			return {
-				...this.spiralAnchor(
-					{ x: owned % WIDTH, y: Math.floor(owned / WIDTH) },
-					0,
-				),
-				own: true,
-			};
+			return this.anchorAt(
+				countryId,
+				owned % WIDTH,
+				Math.floor(owned / WIDTH),
+				0,
+			);
+		if (bot) {
+			const point = team >> 1;
+			const host = [...this.players.values()].find(
+				(player) => !player.is_bot && player.point === point,
+			);
+			const center = host ?? (SPAWN_POINTS[point] as { x: number; y: number });
+			return this.anchorAt(countryId, center.x, center.y, team & 1);
+		}
 		return { ...this.humanAnchor(this.spawnCount++), own: false };
 	}
 
@@ -528,10 +543,7 @@ export class World {
 	}
 
 	/** Bucket players by 16px cells so a spacing test is constant time. */
-	private spacingBuckets(
-		countryId: number,
-		extra?: { x: number; y: number; radiusSq: number },
-	) {
+	private spacingBuckets(countryId: number) {
 		const buckets = new Map<
 			number,
 			{ x: number; y: number; radiusSq: number }[]
@@ -545,11 +557,10 @@ export class World {
 			if (list) list.push(entry);
 			else buckets.set(key, [entry]);
 		};
-		// Humans and bots share one spacing rule; the round-robin spawn
-		// regions keep each region sparse enough for it to fit.
+		// Humans and bots share one spacing rule; the spawn points keep each
+		// region sparse enough for it to fit.
 		for (const other of this.players.values())
 			add(other.x, other.y, (countryId === other.country_id ? 12 : 28) ** 2);
-		if (extra) add(extra.x, extra.y, extra.radiusSq);
 		return buckets;
 	}
 
@@ -593,21 +604,13 @@ export class World {
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search first preserves spacing, then admits players on cramped land.
 	private spawn(countryId: number, bot: boolean, team: number) {
-		const center = [...this.players.values()].find(
-			(player) => !player.is_bot,
-		) ?? { ...DEFAULT_SPAWN };
 		const anchor = this.spawnAnchor(countryId, bot, team);
 		const occupied = new Set(
 			[...this.players.values()].map((p) => p.y * WIDTH + p.x),
 		);
-		const buckets = this.spacingBuckets(
-			countryId,
-			bot ? { x: center.x, y: center.y, radiusSq: 28 * 28 } : undefined,
-		);
-		// Humans reinforcing a country prefer its own cells; bots keep the
-		// plain ring search around the first human.
-		const ownsAnchor = !bot && anchor.own;
-		const passes = ownsAnchor
+		const buckets = this.spacingBuckets(countryId);
+		// An anchor on the country's own land prefers own cells first.
+		const passes = anchor.own
 			? [
 					{ spaced: true, own: true },
 					{ spaced: true, own: false },
@@ -647,7 +650,7 @@ export class World {
 							(!pass.spaced || this.fitsSpacing(buckets, x, y)) &&
 							(!pass.own || this.owners[y * WIDTH + x] === countryId),
 					);
-					if (position) return position;
+					if (position) return { ...position, point: anchor.point };
 				}
 			}
 		}
@@ -676,10 +679,18 @@ export class World {
 				this.land[y * WIDTH + x] &&
 				![...this.players.values()].some((p) => p.x === x && p.y === y)
 			)
-				return this.makePlayer(id, countryId, bot, x, y, now);
+				return this.makePlayer(id, countryId, bot, x, y, now, grave.point);
 		}
 		const position = this.spawn(countryId, bot, team);
-		return this.makePlayer(id, countryId, bot, position.x, position.y, now);
+		return this.makePlayer(
+			id,
+			countryId,
+			bot,
+			position.x,
+			position.y,
+			now,
+			position.point,
+		);
 	}
 
 	private makePlayer(
@@ -689,6 +700,7 @@ export class World {
 		x: number,
 		y: number,
 		now: number,
+		point?: number,
 	): Player {
 		const player: Player = {
 			id,
@@ -702,6 +714,7 @@ export class World {
 			direction: "idle",
 			credit: 0,
 			heardAt: now,
+			point,
 		};
 		this.players.set(id, player);
 		this.dirtyChunks.add(chunkIndex(x, y));
@@ -709,14 +722,14 @@ export class World {
 		return player;
 	}
 
-	private add(id: string, country: Country, now: number, bot = false) {
-		return this.spawnAt(
-			country.country_id,
-			bot,
-			botCountries.indexOf(country.name),
-			now,
-			id,
-		);
+	private add(
+		id: string,
+		country: Country,
+		now: number,
+		bot = false,
+		team = -1,
+	) {
+		return this.spawnAt(country.country_id, bot, team, now, id);
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep untrusted input validation adjacent to player admission.
@@ -767,7 +780,11 @@ export class World {
 			last_y: player.y,
 		};
 		if (player.name !== undefined) row.name = player.name;
-		this.graveyard.set(id, { row, expires: now + PLAYER_GRACE_MS });
+		this.graveyard.set(id, {
+			row,
+			expires: now + PLAYER_GRACE_MS,
+			point: player.point,
+		});
 		this.dirtyPlayerRows.add(id);
 		this.maybeDeleteCountry(player.country_id);
 	}

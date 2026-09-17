@@ -45,7 +45,7 @@ import {
 	terrain,
 	WIDTH,
 } from "./shared";
-import { World } from "./world";
+import { reservedBotCountry, World } from "./world";
 
 const directory = import.meta.dir;
 const root = resolve(directory, "../..");
@@ -297,6 +297,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 			roundActive = true;
 			let country: Country | undefined;
 			if (Object.hasOwn(input, "countryName")) {
+				// Bot countries are created lazily, so the name check must run
+				// before creation, not just against existing rows.
+				if (reservedBotCountry(input.countryName))
+					return reply(res, 409, {
+						error: "That country is reserved for bots.",
+					});
 				country = world.country(input.countryName);
 				if (!country)
 					return reply(res, 409, {
