@@ -8,6 +8,8 @@ import { World } from "./world";
 function workload(size: number, rotated: boolean, shape: string) {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const seed = new World(land);
+	const seedCountry = seed.country("Benchmark");
+	if (!seedCountry) throw new Error("Missing benchmark country");
 	const width = size * (shape === "square" ? 5 : 10);
 	const height = size * (shape === "square" ? 5 : 7);
 	const position = (x: number, y: number) =>
@@ -26,15 +28,7 @@ function workload(size: number, rotated: boolean, shape: string) {
 	}
 	const world = new World(land);
 	world.restore(
-		[
-			{
-				country_id: 1,
-				name: "Benchmark",
-				color: "red",
-				count: 0,
-				is_bot: false,
-			},
-		],
+		[seedCountry],
 		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
 	);
 	world.input(

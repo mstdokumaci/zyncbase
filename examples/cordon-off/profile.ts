@@ -62,6 +62,10 @@ await mkdir(output, { recursive: true });
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep deterministic geometry and population setup together, outside measured code.
 function fixture() {
 	const seed = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	// Create palette countries before painting: chunk serialization resolves
+	// each country id to its palette owner code.
+	for (let i = 0; i < countryCount; i++)
+		assert.equal(seed.country(`Country ${i + 1}`)?.country_id, i + 1);
 	const starts: { countryId: number; x: number; y: number }[] = [];
 	const paint = (x: number, y: number, countryId: number) => {
 		seed.owners[y * WIDTH + x] = countryId;
@@ -90,13 +94,7 @@ function fixture() {
 	}
 	const world = new World(seed.land);
 	world.restore(
-		Array.from({ length: countryCount }, (_, i) => ({
-			country_id: i + 1,
-			name: `Country ${i + 1}`,
-			color: "red",
-			count: 0,
-			is_bot: false,
-		})),
+		[...seed.countries.values()],
 		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
 	);
 	for (const [i, start] of starts.entries()) {

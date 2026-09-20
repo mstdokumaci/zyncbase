@@ -1,5 +1,5 @@
 {
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"store": {
 		"users": {
 			"namespaced": true,
@@ -20,7 +20,7 @@
 		"chunks": {
 			"required": ["owners", "dots"],
 			"fields": {
-				"owners": { "type": "bytes", "minLength": 2048, "maxLength": 2048 },
+				"owners": { "type": "bytes", "minLength": 1024, "maxLength": 1024 },
 				"dots": { "type": "bytes", "maxLength": 131072 }
 			}
 		},

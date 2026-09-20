@@ -6,7 +6,13 @@ import {
 	mayEnclose,
 } from "./enclosure";
 import { HoleFiller } from "./filler";
-import { chunkIndex, type Direction, HEIGHT, WIDTH } from "./shared";
+import {
+	COUNTRY_COLORS,
+	chunkIndex,
+	type Direction,
+	HEIGHT,
+	WIDTH,
+} from "./shared";
 import { World } from "./world";
 
 type Pixel = [number, number, number];
@@ -215,7 +221,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 		seed.countries.set(countryId, {
 			country_id: countryId,
 			name: String(countryId),
-			color: "old",
+			color: COUNTRY_COLORS[countryId - 1],
 			count: 0,
 			is_bot: false,
 		});
@@ -239,7 +245,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 			world.countries.set(countryId, {
 				country_id: countryId,
 				name: String(countryId),
-				color: "old",
+				color: COUNTRY_COLORS[countryId - 1],
 				count: 0,
 				is_bot: false,
 			});
@@ -581,7 +587,7 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 	world.countries.set(3, {
 		country_id: 3,
 		name: "3",
-		color: "red",
+		color: COUNTRY_COLORS[2],
 		count: 0,
 		is_bot: false,
 	});

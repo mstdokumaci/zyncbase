@@ -628,3 +628,93 @@ Validation: `bun test examples/cordon-off` (56 pass, including a new test
 asserting every slice is dispatched before the first settles; it fails against
 the serial implementation), `bun run test:game` (plaintext and IPv6/TLS),
 `bun run lint` and `bunx biome check --write --error-on-warnings` all pass.
+
+## Iteration: 2026-09-20, byte-per-cell palette owners
+
+Baseline: `434174a` with the pre-change `examples/cordon-off` copied to
+`test-artifacts/co-baseline`; candidate: uncommitted owner-format changes on
+top. Machine: AMD Ryzen 5 3600 (6 cores / 12 threads), WSL2, 31 GiB, Bun
+1.4.0, Zig 0.16.0 ReleaseFast, Playwright Chromium headless. `World.tick`,
+movement, enclosure, bots and the SDK are untouched; only how ownership is
+persisted and painted changes.
+
+`chunks.owners` was a little-endian `uint16` country id per cell: 2,048 bytes
+per row on every rewrite, even though the client only ever needed the owner's
+color. It is now one byte per cell — 0 = unowned, 1–64 =
+`COUNTRY_COLORS[code - 1]`. Country ids stay simulation-only; the server maps
+id to palette code when serializing and back when restoring, and schema 0.6.0
+caps `owners` at 1,024 bytes. The browser paints codes through a 256-entry
+palette LUT and motion prediction compares codes, so map colors no longer wait
+for the countries roster. This directly targets the payload lever left open by
+the 1024-player ramp and batch fan-in iterations above; it does not add
+field-level partial writes.
+
+### Paired timing
+
+One adjacent pair (baseline first, then candidate), the same
+[profile-browser.ts](./profile-browser.ts) ramp as the 2026-09-11 capture: one
+real Chromium observer, thin SDK peers to 128/256/512/1024, 30 s per stage.
+Values are single runs on a co-located machine; absolute numbers are not
+capacity claims. Chunk payload bytes count `owners + dots` before subscriber
+fan-out.
+
+| Stage | Tick rate, Hz | Commit p50, ms | Commit p95, ms | Chunk payload, MiB / 30 s | Writes | Payload per write |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 baseline | 17.9 | 3.61 | 9.89 | 53.7 | 25,967 | 2.12 KiB |
+| 128 candidate | 17.8 | 3.19 | 7.05 | 28.0 | 25,615 | 1.12 KiB |
+| 256 baseline | 17.9 | 7.82 | 15.56 | 100.5 | 47,846 | 2.15 KiB |
+| 256 candidate | 17.8 | 5.16 | 12.69 | 56.2 | 51,010 | 1.13 KiB |
+| 512 baseline | 16.8 | 16.19 | 33.52 | 171.1 | 81,484 | 2.15 KiB |
+| 512 candidate | 17.5 | 17.11 | 28.65 | 98.2 | 87,604 | 1.15 KiB |
+| 1024 baseline | 6.3 | 69.78 | 176.84 | 126.6 | 59,560 | 2.18 KiB |
+| 1024 candidate | 7.8 | 49.84 | 144.29 | 84.1 | 73,219 | 1.18 KiB |
+
+Across all stages the payload per chunk write falls 2.15 KiB to 1.15 KiB
+(−46.6%). At the 1024-player cap the commit p50 falls 69.8 to 49.8 ms (−29%)
+and the tick rate rises 6.3 to 7.8 Hz (+24%); commit p95 falls 176.8 to
+144.3 ms and the worst commit 222.2 to 181.2 ms. The observer browser's
+received bytes drop 213.6 to 151.9 KiB/s at 1024 and 262.1 to 127.6 KiB/s at
+128.
+
+### Why the gain holds
+
+`owners` dominated every row: 2,048 of ~2,200 bytes at 1024 players. Halving
+the field halves the SQLite WAL record, the msgpack frame and every subscriber
+delivery; the fixed per-commit transaction cost is unchanged, which is why the
+1024 stage gains less than 2x. Total payload per 30 s falls only 41% because
+the candidate reaches more ticks and therefore dirties more chunks (73,219
+writes versus 59,560); bytes per write is the trajectory-independent number.
+The 512-stage commit p50 is flat (16.19 versus 17.11 ms) while its p95 and max
+improve (33.5→28.7 and 158.3→52.2 ms); that stage was the noisiest in the
+previous capture too. At 128/256 the payload is nearly halved with unchanged
+tick rates, so the smaller rows are pure headroom.
+
+The client also stopped depending on the countries roster to paint: the map
+uses `COUNTRY_COLORS` directly, and `scoreboard()` no longer repaints chunks
+when rows arrive. Restoration validates that no two live countries share a
+palette color and rejects chunk codes with no matching country, the same
+failure mode as an unknown country id before. An in-progress world written by
+0.5.0 cannot be restored by 0.6.0 (2 KB rows fail the 1 KB size check); upgrade
+straight after a round boundary or run once with `--reset`.
+
+### Reproduction
+
+```sh
+bun run --filter @zyncbase/client build
+zig build -Doptimize=ReleaseFast
+cp -R examples/cordon-off test-artifacts/co-baseline   # before editing
+bun test-artifacts/co-baseline/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel chromium --output test-artifacts/cordon-off-profile/palette-owners/baseline
+# implement the owner-format change, then:
+bun examples/cordon-off/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel chromium --output test-artifacts/cordon-off-profile/palette-owners/candidate
+```
+
+`--channel chromium` uses a locally installed Playwright Chromium; the
+tracked workflow defaults to Edge on the macOS capture machine. Both variants
+spawn the same `zig-out/bin/zyncbase` and build browser assets from their own
+tree.
+
+Validation: `bun test examples/cordon-off` (79 pass, including the new
+byte-per-cell decode test), `bun run test:game` (plaintext and IPv6/TLS),
+`bunx biome check --write --error-on-warnings`, `zlint --deny-warnings` and
+`zig build check`. `zsort`/`zwanzig` are not installed on this WSL machine, so
+`bun run lint` could not run its full chain here.

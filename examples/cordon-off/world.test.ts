@@ -114,7 +114,7 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	for (const index of restored.dirtyChunks)
 		expect(readDots(restored.chunk(index).dots)).toEqual([]);
 	expect(readOwners(world.chunk(chunkIndex(32, 10)).owners)[10 * CHUNK]).toBe(
-		alice.country_id,
+		COUNTRY_COLORS.indexOf(north.color) + 1,
 	);
 	world.remove("alice", now);
 	expect(world.owners[10 * WIDTH + 35]).toBe(alice.country_id);
@@ -125,13 +125,13 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	).toBe(false);
 });
 
-test("owner bitmaps decode from misaligned little-endian bytes", () => {
-	// The one-byte offset defeats the native view, forcing the portable path.
-	const bytes = new Uint8Array(CHUNK * CHUNK * 2 + 1);
-	for (let i = 0; i < CHUNK * CHUNK; i++) bytes[2 * i + 1] = i % 251;
-	const owners = readOwners(bytes.subarray(1));
-	expect(owners.length).toBe(CHUNK * CHUNK);
-	for (let i = 0; i < CHUNK * CHUNK; i++) expect(owners[i]).toBe(i % 251);
+test("owner bitmaps pass byte-per-cell and reject any other size", () => {
+	const bytes = new Uint8Array(CHUNK * CHUNK);
+	for (let i = 0; i < bytes.length; i++) bytes[i] = i % (MAX_COUNTRIES + 1);
+	expect(readOwners(bytes)).toBe(bytes);
+	expect(() => readOwners(new Uint8Array(CHUNK * CHUNK * 2))).toThrow(
+		"Invalid chunk size",
+	);
 });
 
 test("bots join a point's first human, thin out as it crowds, and return when it empties", () => {

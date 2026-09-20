@@ -10,6 +10,7 @@ import {
 	CHUNK,
 	type ChunkRow,
 	COLUMNS,
+	COUNTRY_COLOR_INDEX,
 	COUNTRY_COLORS,
 	type Country,
 	chunkIndex,
@@ -104,11 +105,14 @@ export function reservedBotCountry(value: unknown) {
 		return false;
 	}
 }
-// readOwners decodes little-endian, so serialization must too.
-const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+// Chunk owner bytes are byte-per-cell palette codes; readOwners validates them.
 
 export class World {
 	readonly owners = new Uint16Array(WIDTH * HEIGHT);
+	// Country id -> wire owner code (0 = unowned). Filled eagerly for created
+	// and restored countries and lazily for directly injected rows, so only
+	// countries with a palette color can paint chunk bytes.
+	private readonly ownerCodes = new Uint8Array(65536);
 	readonly players = new Map<string, Player>();
 	readonly countries = new Map<number, Country>();
 	readonly dirtyChunks = new Set<number>();
@@ -306,6 +310,9 @@ export class World {
 		players: { id: string }[] = [],
 		persistedNextCountryId = 0,
 	) {
+		// Palette code -> country id when decoding chunk bytes; country ids
+		// start at 1, so 0 unambiguously marks "no country".
+		const byCode = new Uint16Array(MAX_COUNTRIES + 1);
 		for (const country of countries) {
 			const { country_id, name, color, is_bot } = country;
 			this.countries.set(country_id, {
@@ -315,6 +322,13 @@ export class World {
 				count: 0,
 				is_bot,
 			});
+			const code = COUNTRY_COLOR_INDEX.get(color);
+			if (code !== undefined) {
+				if (byCode[code])
+					throw new Error("Saved countries share a palette color");
+				byCode[code] = country_id;
+				this.ownerCodes[country_id] = code;
+			}
 			this.dirtyCountries.add(country_id);
 		}
 		// The allocator mark lives outside the country rows so retired ids
@@ -341,15 +355,19 @@ export class World {
 				const px = x + (i % CHUNK);
 				const py = y + Math.floor(i / CHUNK);
 				if (px >= WIDTH || py >= HEIGHT) continue;
-				this.owners[py * WIDTH + px] = owners[i];
-				if (owners[i]) {
-					const country = this.countries.get(owners[i]);
+				const code = owners[i];
+				const countryId = code ? byCode[code] : 0;
+				if (code && !countryId)
+					throw new Error("Saved territory has an unknown country");
+				this.owners[py * WIDTH + px] = countryId;
+				if (countryId) {
+					const country = this.countries.get(countryId);
 					if (!country)
 						throw new Error("Saved territory has an unknown country");
 					country.count++;
-					this.extendBounds(country.country_id, py * WIDTH + px);
-					this.changedCountries.add(country.country_id);
-					this.enclosureCountries.set(country.country_id, null);
+					this.extendBounds(countryId, py * WIDTH + px);
+					this.changedCountries.add(countryId);
+					this.enclosureCountries.set(countryId, null);
 				}
 			}
 			// Positions don't survive a restart (live map starts empty), so any
@@ -365,6 +383,7 @@ export class World {
 		for (const [countryId, country] of this.countries) {
 			if (country.count === 0) {
 				this.countries.delete(countryId);
+				this.ownerCodes[countryId] = 0;
 				this.dirtyCountries.delete(countryId);
 				this.dirtyRemovedCountries.add(countryId);
 			}
@@ -388,6 +407,8 @@ export class World {
 		const used = new Set([...this.countries.values()].map((c) => c.color));
 		const color = COUNTRY_COLORS.find((color) => !used.has(color));
 		if (!color) throw new Error("No country colors available");
+		const code = COUNTRY_COLOR_INDEX.get(color);
+		if (!code) throw new Error("No country colors available");
 		const country = {
 			country_id: countryId,
 			name,
@@ -395,6 +416,7 @@ export class World {
 			count: 0,
 			is_bot: isBot,
 		};
+		this.ownerCodes[countryId] = code;
 		this.countries.set(countryId, country);
 		this.dirtyCountries.add(countryId);
 		return country;
@@ -410,6 +432,7 @@ export class World {
 		for (const player of this.players.values())
 			if (player.country_id === countryId) return;
 		this.countries.delete(countryId);
+		this.ownerCodes[countryId] = 0;
 		this.bounds.delete(countryId);
 		this.enclosureCountries.delete(countryId);
 		this.changedCountries.delete(countryId);
@@ -1006,7 +1029,17 @@ export class World {
 		}
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: index validation plus the LE fast path and portable fallback.
+	/** Wire owner code for a country id; 0 when it has no palette color. */
+	private codeOf(countryId: number) {
+		let code = this.ownerCodes[countryId];
+		if (!code && countryId) {
+			const color = this.countries.get(countryId)?.color;
+			code = (color ? COUNTRY_COLOR_INDEX.get(color) : undefined) ?? 0;
+			this.ownerCodes[countryId] = code;
+		}
+		return code;
+	}
+
 	chunk(index: number): ChunkRow {
 		if (
 			!Number.isSafeInteger(index) ||
@@ -1016,29 +1049,20 @@ export class World {
 			throw new RangeError("Chunk index is out of range");
 		const x = (index % COLUMNS) * CHUNK,
 			y = Math.floor(index / COLUMNS) * CHUNK;
-		const owners = new Uint8Array(CHUNK * CHUNK * 2);
+		const owners = new Uint8Array(CHUNK * CHUNK);
 		const columns = Math.min(CHUNK, WIDTH - x),
 			rows = Math.min(CHUNK, HEIGHT - y);
-		if (LITTLE_ENDIAN) {
-			const view = new Uint16Array(owners.buffer);
-			for (let dy = 0; dy < rows; dy++)
-				view.set(
-					this.owners.subarray(
-						(y + dy) * WIDTH + x,
-						(y + dy) * WIDTH + x + columns,
-					),
-					dy * CHUNK,
-				);
-		} else {
-			// Native uint16 writes are not portable; keep the wire format LE.
-			const view = new DataView(owners.buffer);
-			for (let dy = 0; dy < rows; dy++)
-				for (let dx = 0; dx < columns; dx++)
-					view.setUint16(
-						(dy * CHUNK + dx) * 2,
-						this.owners[(y + dy) * WIDTH + x + dx],
-						true,
-					);
+		const codes = this.ownerCodes;
+		for (let dy = 0; dy < rows; dy++) {
+			let target = dy * CHUNK;
+			const start = (y + dy) * WIDTH + x;
+			for (let dx = 0; dx < columns; dx++, target++) {
+				const countryId = this.owners[start + dx];
+				let code = codes[countryId];
+				// Directly injected country rows skip country(); resolve once.
+				if (!code && countryId) code = this.codeOf(countryId);
+				owners[target] = code;
+			}
 		}
 		const dots: Dot[] = [...this.players.values()]
 			.filter((p) => chunkIndex(p.x, p.y) === index)

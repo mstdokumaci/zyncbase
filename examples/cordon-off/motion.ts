@@ -109,8 +109,9 @@ export class JoystickSteering {
 }
 
 // Render-side position: hot dot plus its cold country, joined from the
-// users roster at receive time. Dots alone carry no identity metadata.
-export type MotionDot = Dot & { country_id: number };
+// users roster at receive time. Dots alone carry no identity metadata, and
+// chunk owners are palette codes, so the joined value is the own color index.
+export type MotionDot = Dot & { colorIndex: number };
 
 export class LocalMotion {
 	private offset = { x: 0, y: 0 };
@@ -137,7 +138,7 @@ export class LocalMotion {
 		const distance = Math.abs(dx) + Math.abs(dot.y - this.dot.y);
 		const relocated =
 			dot.player_id !== this.dot.player_id ||
-			dot.country_id !== this.dot.country_id;
+			dot.colorIndex !== this.dot.colorIndex;
 		if (!distance && !relocated && direction === this.direction) {
 			this.dot = dot;
 			if (this.duration === this.stepDuration()) return;
@@ -181,7 +182,7 @@ export class LocalMotion {
 			to = y * WIDTH + x;
 		let cost = RULES.neutral;
 		if (this.land[to] && owner)
-			cost = owner === this.dot.country_id ? RULES.own : RULES.enemy;
+			cost = owner === this.dot.colorIndex ? RULES.own : RULES.enemy;
 		if (this.land[from] !== this.land[to]) cost += RULES.crossing;
 		return cost * RULES.tickMs;
 	}
