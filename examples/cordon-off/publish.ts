@@ -2,7 +2,7 @@ import type { BatchOperation } from "@zyncbase/client";
 import { rowId } from "./shared";
 import type { World } from "./world";
 
-// 500 is both the SDK and server batch cap. With 2 KB owner rows plus at most
+// 500 is both the SDK and server batch cap. With 1 KB owner rows plus at most
 // MAX_PLAYERS dots, a full slice stays well under the configured message cap.
 export const PUBLISH_BATCH_SIZE = 500;
 

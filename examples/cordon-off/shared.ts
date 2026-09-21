@@ -82,13 +82,17 @@ export const COUNTRY_COLORS = [
 	"#98b858",
 	"#d090b0",
 ];
+// Wire owner codes: 0 = unowned, 1..MAX_COUNTRIES = COUNTRY_COLORS[code - 1].
+// Chunk bitmaps store these codes; country ids stay simulation-only.
+export const COUNTRY_COLOR_INDEX = new Map(
+	COUNTRY_COLORS.map((color, index) => [color, index + 1]),
+);
 // Snapshot and canvas must agree on terrain colors.
 export const LAND_RGB = [80, 87, 94] as const;
 export const WATER_RGB = [19, 37, 52] as const;
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
-// Owner bitmaps are canonical little-endian on the wire; a native view skips
-// the per-element decode when the platform and alignment allow it.
+// Packed-color words are native-endian Uint32s; byte order depends on the host.
 export const LITTLE_ENDIAN =
 	new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
@@ -114,8 +118,9 @@ export type PlayerRow = {
 	last_x: number;
 	last_y: number;
 };
-// A country's numeric identity: referenced by PlayerRow.country_id and written
-// into the owners bitmap. Its row key in the countries table is the string form.
+// A country's numeric identity: referenced by PlayerRow.country_id. Its row key
+// in the countries table is the string form, and its palette color selects the
+// owner code written into chunk bitmaps.
 export type Country = {
 	country_id: number;
 	name: string;
@@ -125,6 +130,7 @@ export type Country = {
 };
 export type ChunkRow = {
 	id: string;
+	// CHUNK * CHUNK palette owner codes, one byte per cell.
 	owners: Uint8Array;
 	dots: Uint8Array;
 };
@@ -166,14 +172,8 @@ export function rowId(index: number) {
 }
 
 export function readOwners(bytes: Uint8Array) {
-	if (bytes.byteLength !== CHUNK * CHUNK * 2)
-		throw new Error("Invalid chunk size");
-	if (LITTLE_ENDIAN && bytes.byteOffset % 2 === 0)
-		return new Uint16Array(bytes.buffer, bytes.byteOffset, CHUNK * CHUNK);
-	return Uint16Array.from(
-		{ length: CHUNK * CHUNK },
-		(_, i) => bytes[i * 2] | (bytes[i * 2 + 1] << 8),
-	);
+	if (bytes.byteLength !== CHUNK * CHUNK) throw new Error("Invalid chunk size");
+	return bytes;
 }
 
 export function readDots(bytes: Uint8Array): Dot[] {

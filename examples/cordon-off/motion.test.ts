@@ -9,7 +9,7 @@ import {
 import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
-const dot: MotionDot = { player_id: "me", country_id: 1, x: 31, y: 10 };
+const dot: MotionDot = { player_id: "me", colorIndex: 1, x: 31, y: 10 };
 const land = new Uint8Array(WIDTH * HEIGHT);
 
 test("diagonal mixing alternates deterministically for any stick angle", () => {
@@ -82,7 +82,7 @@ test("visual step durations match the server for every terrain and ownership com
 				world.land[from] = source;
 				world.land[to] = destination;
 				world.owners[to] = owner;
-				const ms = world.stepCost(dot.country_id, from, to) * RULES.tickMs;
+				const ms = world.stepCost(1, from, to) * RULES.tickMs;
 				const motion = new LocalMotion(
 					dot,
 					"right",
@@ -121,6 +121,14 @@ test("destination ownership changes retime an active step without jumps or heart
 	slower.update(dot, "right", 125);
 	expect(slower.position(175).x).toBe(31.75);
 	expect(slower.position(225).x).toBe(32);
+});
+
+test("a palette color change does not reset the active step", () => {
+	const motion = new LocalMotion(dot, "right", 0, land, () => 0);
+	expect(motion.position(50).x).toBe(31.5);
+	motion.update({ ...dot, colorIndex: 2 }, "right", 50);
+	expect(motion.position(50).x).toBe(31.5);
+	expect(motion.position(75).x).toBe(31.75);
 });
 
 test("confirmations, stops, reversals and respawns reconcile the visible position", () => {

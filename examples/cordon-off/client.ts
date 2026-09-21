@@ -14,6 +14,8 @@ import {
 	CHUNK,
 	type ChunkRow,
 	COLUMNS,
+	COUNTRY_COLOR_INDEX,
+	COUNTRY_COLORS,
 	type Country,
 	chunkIndex,
 	countryName,
@@ -58,7 +60,7 @@ const roster = new Map<string, PlayerRow>();
 let rosterUnsub: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
-	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint16Array }
+	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint8Array }
 >();
 const subscriptions = new Map<number, () => void>();
 const held = new Map<string, Direction>();
@@ -294,35 +296,28 @@ addEventListener("resize", resize);
 resize();
 
 // One scratch ImageData reused by every chunk update: putImageData copies
-// synchronously, so a single buffer avoids per-tick allocations. Colors are
-// packed once per country id; the cache is dropped when the palette changes.
+// synchronously, so a single buffer avoids per-tick allocations. Owner codes
+// index a 256-entry palette LUT packed once, so painting needs no countries.
 const chunkImageData = new ImageData(CHUNK, CHUNK);
 const chunkPixels = new Uint32Array(chunkImageData.data.buffer);
-const chunkColors = new Map<number, number>();
-
-function packedColor(countryId: number) {
-	let color = chunkColors.get(countryId);
-	if (color === undefined) {
-		const hex = countries.get(countryId)?.color ?? "#b7c4bb";
-		const r = Number.parseInt(hex.slice(1, 3), 16);
-		const g = Number.parseInt(hex.slice(3, 5), 16);
-		const b = Number.parseInt(hex.slice(5, 7), 16);
-		color = LITTLE_ENDIAN
-			? ((0xff << 24) | (b << 16) | (g << 8) | r) >>> 0
-			: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
-		chunkColors.set(countryId, color);
-	}
-	return color;
+const ownerPixels = new Uint32Array(256);
+for (let code = 1; code <= MAX_COUNTRIES; code++) {
+	const hex = COUNTRY_COLORS[code - 1];
+	const r = Number.parseInt(hex.slice(1, 3), 16);
+	const g = Number.parseInt(hex.slice(3, 5), 16);
+	const b = Number.parseInt(hex.slice(5, 7), 16);
+	ownerPixels[code] = LITTLE_ENDIAN
+		? ((0xff << 24) | (b << 16) | (g << 8) | r) >>> 0
+		: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
 }
 
-function chunkImage(owners: Uint16Array, canvas?: HTMLCanvasElement) {
+function chunkImage(owners: Uint8Array, canvas?: HTMLCanvasElement) {
 	const image = canvas ?? document.createElement("canvas");
 	if (!canvas) image.width = image.height = CHUNK;
 	const draw = image.getContext("2d");
 	if (!draw) throw new Error("Canvas unavailable");
-	chunkPixels.fill(0);
 	for (let i = 0; i < owners.length; i++)
-		if (owners[i]) chunkPixels[i] = packedColor(owners[i]);
+		chunkPixels[i] = ownerPixels[owners[i]];
 	draw.putImageData(chunkImageData, 0, 0);
 	return image;
 }
@@ -331,8 +326,14 @@ function myCountryId(): number {
 	return roster.get(myPlayerId)?.country_id ?? selectedCountryId ?? 0;
 }
 
+function myColorIndex(): number {
+	return (
+		COUNTRY_COLOR_INDEX.get(countries.get(myCountryId())?.color ?? "") ?? 0
+	);
+}
+
 function toMotion(dot: Dot): MotionDot {
-	return { ...dot, country_id: myCountryId() };
+	return { ...dot, colorIndex: myColorIndex() };
 }
 
 function positionChanged(a: Dot, b: Dot) {
@@ -496,9 +497,9 @@ function scoreboard(rows: Country[]) {
 			player.country_id,
 			(headcount.get(player.country_id) ?? 0) + 1,
 		);
-	const paletteChanged = rows.some(
-		(row) => countries.get(row.country_id)?.color !== row.color,
-	);
+	const paletteChanged =
+		rows.length !== countries.size ||
+		rows.some((row) => countries.get(row.country_id)?.color !== row.color);
 	countries.clear();
 	for (const row of rows) countries.set(row.country_id, row);
 	element("country-count").textContent = String(rows.length);
@@ -528,12 +529,23 @@ function scoreboard(rows: Country[]) {
 				return li;
 			}),
 	);
-	if (paletteChanged) {
-		chunkColors.clear();
-		dirty = true;
-		for (const chunk of chunks.values())
-			chunk.image = chunkImage(chunk.owners, chunk.image);
-	}
+	// The motion's color joins the roster later than its first dot, so refresh
+	// it here without treating the change as a relocation.
+	refreshMotionColor();
+	// Chunk images come from the palette LUT, but dots join their color from
+	// this map: repaint once when the roster's colors arrive or change.
+	if (paletteChanged) dirty = true;
+}
+
+function refreshMotionColor() {
+	if (!motion) return;
+	const colorIndex = myColorIndex();
+	if (motion.dot.colorIndex === colorIndex) return;
+	motion.update(
+		{ ...motion.dot, colorIndex },
+		online ? direction : "idle",
+		performance.now(),
+	);
 }
 
 function publish(changed = false) {
