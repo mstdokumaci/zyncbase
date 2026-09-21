@@ -123,6 +123,14 @@ test("destination ownership changes retime an active step without jumps or heart
 	expect(slower.position(225).x).toBe(32);
 });
 
+test("a palette color change does not reset the active step", () => {
+	const motion = new LocalMotion(dot, "right", 0, land, () => 0);
+	expect(motion.position(50).x).toBe(31.5);
+	motion.update({ ...dot, colorIndex: 2 }, "right", 50);
+	expect(motion.position(50).x).toBe(31.5);
+	expect(motion.position(75).x).toBe(31.75);
+});
+
 test("confirmations, stops, reversals and respawns reconcile the visible position", () => {
 	const motion = new LocalMotion(dot, "right", 0, land, () => 0);
 	expect(motion.position(100).x).toBe(32);

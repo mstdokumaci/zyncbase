@@ -529,9 +529,23 @@ function scoreboard(rows: Country[]) {
 				return li;
 			}),
 	);
+	// The motion's color joins the roster later than its first dot, so refresh
+	// it here without treating the change as a relocation.
+	refreshMotionColor();
 	// Chunk images come from the palette LUT, but dots join their color from
 	// this map: repaint once when the roster's colors arrive or change.
 	if (paletteChanged) dirty = true;
+}
+
+function refreshMotionColor() {
+	if (!motion) return;
+	const colorIndex = myColorIndex();
+	if (motion.dot.colorIndex === colorIndex) return;
+	motion.update(
+		{ ...motion.dot, colorIndex },
+		online ? direction : "idle",
+		performance.now(),
+	);
 }
 
 function publish(changed = false) {
