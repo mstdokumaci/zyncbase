@@ -871,6 +871,87 @@ test("human spawns spread out instead of stacking on one chunk", () => {
 	expect(Math.max(...perChunk.values())).toBeLessThan(16);
 });
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the conquest fixture, the border step, and the fill check describe one spawn scenario.
+test("founders spawn on a border inside taken land so the first move paints", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const enemy = world.country("Enemy");
+	const neighbor = world.country("Neighbor");
+	const country = world.country("Newcomer");
+	if (!enemy || !neighbor || !country) throw new Error("Missing countries");
+	// Warsaw is the first point a founder gets. Enemy owns a solid disk
+	// around it, so a spawn in its interior would be filled straight back.
+	const center = { x: 990, y: 226 };
+	const radius = 300;
+	let owned = 0;
+	for (let y = center.y - radius; y <= center.y + radius; y++)
+		for (let x = center.x - radius; x <= center.x + radius; x++) {
+			if (Math.abs(x - center.x) + Math.abs(y - center.y) > radius) continue;
+			world.owners[y * WIDTH + x] = enemy.country_id;
+			owned++;
+		}
+	enemy.count = owned;
+	// A neighbour line gives the founder a border to paint on; it runs the
+	// full height so the enemy fill cannot treat it as an enclosed hole.
+	const line = center.x + 20;
+	for (let y = 0; y < HEIGHT; y++)
+		world.owners[y * WIDTH + line] = neighbor.country_id;
+	neighbor.count = HEIGHT;
+	const boxes = (
+		world as unknown as {
+			bounds: Map<
+				number,
+				{ left: number; right: number; top: number; bottom: number }
+			>;
+		}
+	).bounds;
+	boxes.set(enemy.country_id, {
+		left: center.x - radius,
+		right: center.x + radius,
+		top: center.y - radius,
+		bottom: center.y + radius,
+	});
+	boxes.set(neighbor.country_id, {
+		left: line,
+		right: line,
+		top: 0,
+		bottom: HEIGHT - 1,
+	});
+	world.input(
+		"founder",
+		{
+			name: "Founder",
+			country_id: country.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	const founder = world.players.get("founder");
+	if (!founder) throw new Error("Missing founder");
+	const at = founder.y * WIDTH + founder.x;
+	// Spawned on enemy land, but on a border near the anchor: the local ring
+	// found it, no teleport to the disk edge (300px) or beyond.
+	expect(world.owners[at]).toBe(enemy.country_id);
+	expect(
+		Math.abs(founder.x - center.x) + Math.abs(founder.y - center.y),
+	).toBeLessThan(128);
+	const moves = [
+		{ direction: "right", offset: 1 },
+		{ direction: "left", offset: -1 },
+		{ direction: "down", offset: WIDTH },
+		{ direction: "up", offset: -WIDTH },
+	] as const;
+	const step = moves.find(
+		({ offset }) =>
+			world.land[at + offset] === 1 &&
+			world.owners[at + offset] === neighbor.country_id,
+	);
+	if (!step) throw new Error("Missing neighbour border to step onto");
+	world.input("founder", { direction: step.direction, seq: 2 }, 1);
+	for (let tick = 0; tick < RULES.enemy + 2; tick++) world.tick(tick + 2);
+	expect(world.owners[founder.y * WIDTH + founder.x]).toBe(country.country_id);
+});
+
 test("human joiners reinforce their territory, teammates, or a region", () => {
 	const world = new World(terrain());
 	const country = world.country("Team");
