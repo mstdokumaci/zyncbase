@@ -11,14 +11,16 @@ import {
 import { HEIGHT, MAX_PLAYERS, WIDTH } from "./shared";
 import { World } from "./world";
 
-test("a chunk's dots cap can hold every player in one chunk", async () => {
+test("a user chunk's coordinates cap can hold every player", async () => {
 	const schema = (await Bun.file(
 		new URL("./schema.json", import.meta.url),
 	).json()) as {
-		store: { chunks: { fields: { dots: { maxLength: number } } } };
+		store: {
+			user_chunks: { fields: { coordinates: { maxLength: number } } };
+		};
 	};
-	const cap = schema.store.chunks.fields.dots.maxLength;
-	// Worst case: MAX_PLAYERS dots in one 32x32 chunk, with identity at its
+	const cap = schema.store.user_chunks.fields.coordinates.maxLength;
+	// Worst case: MAX_PLAYERS dots in one 200x100 chunk, with identity at its
 	// longest plausible shape plus coordinates.
 	const dot = JSON.stringify({
 		player_id: "player:".padEnd(64, "0"),
@@ -27,7 +29,7 @@ test("a chunk's dots cap can hold every player in one chunk", async () => {
 	});
 	assert.ok(
 		cap >= dot.length * MAX_PLAYERS,
-		`dots cap ${cap} < ${dot.length * MAX_PLAYERS} needed for ${MAX_PLAYERS} players in one chunk`,
+		`coordinates cap ${cap} < ${dot.length * MAX_PLAYERS} needed for ${MAX_PLAYERS} players in one chunk`,
 	);
 });
 
@@ -35,12 +37,15 @@ test("a chunks-only drain holds roster rows back for the slower flush", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const countryId = world.country("Hold")?.country_id;
 	assert(countryId);
-	world.dirtyChunks.add(7);
+	world.dirtyCountryChunks.add(7);
+	world.dirtyUserChunks.add(3);
 	const partial = drainPublishState(world, { rosters: false });
-	expect(partial.chunks).toEqual([7]);
+	expect(partial.countryChunks).toEqual([7]);
+	expect(partial.userChunks).toEqual([3]);
 	expect(partial.countries).toEqual([]);
 	expect(partial.playerRows).toEqual([]);
-	expect(world.dirtyChunks.size).toBe(0);
+	expect(world.dirtyCountryChunks.size).toBe(0);
+	expect(world.dirtyUserChunks.size).toBe(0);
 	// Held entries keep their latest values until the roster flush drains them.
 	expect(world.dirtyCountries.has(countryId)).toBe(true);
 	const full = drainPublishState(world);
@@ -88,9 +93,10 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(world.dirtyPlayerRows.has("ghost")).toBe(true);
 	expect(world.dirtyRemovedPlayerRows.size).toBe(0);
 	// More than one 500-operation batch of chunk writes.
-	for (let i = 0; i < 520; i++) world.dirtyChunks.add(i);
+	for (let i = 0; i < 520; i++) world.dirtyCountryChunks.add(i);
 	const snapshot = drainPublishState(world);
-	expect(world.dirtyChunks.size).toBe(0);
+	expect(world.dirtyCountryChunks.size).toBe(0);
+	expect(world.dirtyUserChunks.size).toBe(0);
 	expect(world.dirtyCountries.size).toBe(0);
 	expect(world.dirtyRemovedCountries.size).toBe(0);
 	expect(world.dirtyPlayerRows.size).toBe(0);
@@ -130,7 +136,8 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	}
 	// Nothing sent or unsent is lost: the failed attempt restores it all.
 	expect(sent).toHaveLength(2);
-	expect(world.dirtyChunks.size).toBe(snapshot.chunks.length);
+	expect(world.dirtyCountryChunks.size).toBe(snapshot.countryChunks.length);
+	expect(world.dirtyUserChunks.size).toBe(snapshot.userChunks.length);
 	expect(world.dirtyCountries.size).toBe(snapshot.countries.length);
 	expect(world.dirtyRemovedCountries).toEqual(new Set(snapshot.removed));
 	expect(world.dirtyPlayerRows).toEqual(new Set(snapshot.playerRows));
@@ -145,7 +152,8 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	const retrySnapshot = drainPublishState(world);
 	await runPublishBatches(retry, buildPublishOperations(world, retrySnapshot));
 	expect(retried.flat()).toEqual(operations);
-	expect(world.dirtyChunks.size).toBe(0);
+	expect(world.dirtyCountryChunks.size).toBe(0);
+	expect(world.dirtyUserChunks.size).toBe(0);
 	expect(world.dirtyCountries.size).toBe(0);
 	expect(world.dirtyRemovedCountries.size).toBe(0);
 	expect(world.dirtyPlayerRows.size).toBe(0);
@@ -157,8 +165,8 @@ test("every slice is dispatched before the first one settles", async () => {
 		{ length: PUBLISH_BATCH_SIZE + 1 },
 		(_, i) => ({
 			op: "set" as const,
-			path: ["chunks", String(i)],
-			value: { owners: new Uint8Array(2), dots: new Uint8Array(0) },
+			path: ["country_chunks", String(i)],
+			value: { color_indexes: new Uint8Array(2) },
 		}),
 	);
 	const started: number[] = [];
@@ -182,8 +190,8 @@ test("a synchronously throwing batch still settles every slice", async () => {
 		{ length: PUBLISH_BATCH_SIZE * 2 + 1 },
 		(_, i) => ({
 			op: "set" as const,
-			path: ["chunks", String(i)],
-			value: { owners: new Uint8Array(2), dots: new Uint8Array(0) },
+			path: ["country_chunks", String(i)],
+			value: { color_indexes: new Uint8Array(2) },
 		}),
 	);
 	const invoked: number[] = [];

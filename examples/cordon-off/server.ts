@@ -31,8 +31,8 @@ import {
 	runPublishBatches,
 } from "./publish";
 import {
-	type ChunkRow,
 	type Country,
+	type CountryChunkRow,
 	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_PLAYERS,
@@ -43,6 +43,7 @@ import {
 	RULES,
 	rowId,
 	terrain,
+	type UserChunkRow,
 	WIDTH,
 } from "./shared";
 import { reservedBotCountry, World } from "./world";
@@ -109,8 +110,10 @@ let ready = false;
 let stopping = false;
 let inFlight: Promise<void> | null = null;
 let flushes = 0,
-	chunkWrites = 0,
-	payloadBytes = 0,
+	countryChunkWrites = 0,
+	countryChunkBytes = 0,
+	userChunkWrites = 0,
+	userChunkBytes = 0,
 	commitMs = 0;
 let lastPublishedMark = 1;
 let tickCount = 0;
@@ -445,6 +448,22 @@ function recordRosterCommit(snapshot: PublishSnapshot) {
 	lastPublishedMark = world.allocatorMark;
 }
 
+/** Split-tables metrics: one counter pair per chunk grid. */
+function recordChunkWrites(operations: BatchOperation[]) {
+	for (const op of operations) {
+		if (op.op !== "set") continue;
+		if (op.path[0] === "country_chunks") {
+			const value = op.value as unknown as { color_indexes: Uint8Array };
+			countryChunkWrites++;
+			countryChunkBytes += value.color_indexes.byteLength;
+		} else if (op.path[0] === "user_chunks") {
+			const value = op.value as unknown as { coordinates: Uint8Array };
+			userChunkWrites++;
+			userChunkBytes += value.coordinates.byteLength;
+		}
+	}
+}
+
 async function publish(forceRosters = false) {
 	tickCount++;
 	const rosters = shouldPublishRosters(forceRosters);
@@ -472,15 +491,7 @@ async function publish(forceRosters = false) {
 	if (rosters) recordRosterCommit(snapshot);
 	commitMs = performance.now() - started;
 	flushes++;
-	for (const op of operations) {
-		if (op.op !== "set" || op.path[0] !== "chunks") continue;
-		const value = op.value as unknown as {
-			owners: Uint8Array;
-			dots: Uint8Array;
-		};
-		chunkWrites++;
-		payloadBytes += value.owners.byteLength + value.dots.byteLength;
-	}
+	recordChunkWrites(operations);
 }
 
 let tick: ReturnType<typeof setInterval> | undefined;
@@ -542,14 +553,14 @@ async function archiveWorld(
 
 async function wipeWorldRows(
 	countries: Country[],
-	chunks: ChunkRow[],
+	countryChunks: CountryChunkRow[],
 	playerRows: PlayerRow[],
 	meta: { id: string }[],
 ) {
 	const operations: BatchOperation[] = [
-		...chunks.map((row) => ({
+		...countryChunks.map((row) => ({
 			op: "remove" as const,
-			path: ["chunks", row.id],
+			path: ["country_chunks", row.id],
 		})),
 		...playerRows.map((row) => ({
 			op: "remove" as const,
@@ -687,25 +698,40 @@ try {
 	}
 	await client.connect();
 	const countries = (await allRows("countries")) as Country[];
-	const chunks = (await allRows("chunks")) as ChunkRow[];
+	const countryChunks = (await allRows("country_chunks")) as CountryChunkRow[];
+	const userChunks = (await allRows("user_chunks")) as UserChunkRow[];
 	const playerRows = (await allRows("users")) as PlayerRow[];
 	const meta = (await allRows("meta")) as {
 		id: string;
 		next_country_id: number;
 	}[];
+	// Coordinates are live state: rows from a previous process never survive.
+	if (userChunks.length)
+		await runPublishBatches(
+			(batch) => client.store.batch(batch, { confirm: "committed" }),
+			userChunks.map((row) => ({
+				op: "remove" as const,
+				path: ["user_chunks", row.id],
+			})),
+		);
 	const savedRound = await readRoundCursor(dataDir);
 	const maxHistory = await maxHistoryNumber(historyDir);
 	const startup = Date.now();
 	if (process.argv.includes("--reset")) {
-		await wipeWorldRows(countries, chunks, playerRows, meta);
+		await wipeWorldRows(countries, countryChunks, playerRows, meta);
 		await startRound(Math.max(maxHistory + 1, savedRound?.number ?? 0));
 		console.log("World reset.");
 	} else if (savedRound?.fresh) {
-		await wipeWorldRows(countries, chunks, playerRows, meta);
+		await wipeWorldRows(countries, countryChunks, playerRows, meta);
 		await startRound(Math.max(savedRound.number, maxHistory + 1));
 	} else if (!savedRound || startup >= savedRound.endsAt) {
 		// The round expired while the process was down: archive its final map.
-		world.restore(countries, chunks, playerRows, meta[0]?.next_country_id ?? 0);
+		world.restore(
+			countries,
+			countryChunks,
+			playerRows,
+			meta[0]?.next_country_id ?? 0,
+		);
 		let number = Math.max(savedRound?.number ?? 0, maxHistory + 1);
 		if (totalClaimed() > 0) {
 			await archiveWorld(
@@ -715,11 +741,16 @@ try {
 			);
 			number += 1;
 		}
-		await wipeWorldRows(countries, chunks, playerRows, meta);
+		await wipeWorldRows(countries, countryChunks, playerRows, meta);
 		world = new World(terrain());
 		await startRound(number);
 	} else {
-		world.restore(countries, chunks, playerRows, meta[0]?.next_country_id ?? 0);
+		world.restore(
+			countries,
+			countryChunks,
+			playerRows,
+			meta[0]?.next_country_id ?? 0,
+		);
 		round = savedRound;
 	}
 	roundActive = totalClaimed() > 0;
@@ -805,8 +836,10 @@ try {
 					ticks: world.ticks,
 					inputs: world.inputMessages,
 					flushes,
-					chunkWrites,
-					chunkPayloadBytes: payloadBytes,
+					countryChunkWrites,
+					countryChunkBytes,
+					userChunkWrites,
+					userChunkBytes,
 					lastCommitMs: Math.round(commitMs),
 				}),
 			),

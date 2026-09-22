@@ -718,3 +718,99 @@ byte-per-cell decode test), `bun run test:game` (plaintext and IPv6/TLS),
 `bunx biome check --write --error-on-warnings`, `zlint --deny-warnings` and
 `zig build check`. `zsort`/`zwanzig` are not installed on this WSL machine, so
 `bun run lint` could not run its full chain here.
+
+## Iteration: 2026-09-22, split chunk tables + RLE color indexes
+
+Baseline: 0.6.0 copied to `test-artifacts/co-baseline-split` before edits;
+candidate: the split-table + RLE work on top. Machine: Intel Core i9-9880H,
+macOS x64 (the development machine the README marks unsuitable for capacity
+claims), Bun 1.4.0, Zig 0.16.0 ReleaseFast, Microsoft Edge (`--channel
+msedge`; Playwright Chromium is not installed here, and both variants used the
+same channel). `World.tick`, movement, enclosure, and bots are untouched; only
+where ownership and coordinates are stored changes.
+
+The former `chunks` table becomes two grids with independent update paths:
+
+- `country_chunks` — 50 × 25-cell chunks (40 × 40). `color_indexes` is an RLE
+  bitmap of palette indexes (count 1..255, index). Rows are written **only on
+  claims**; a movement no longer rewrites a bitmap. Chunks containing no land
+  have no row and no subscription.
+- `user_chunks` — 200 × 100-cell chunks (10 × 10). `coordinates` is the JSON
+  slim-dot list (`player_id`, `x`, `y`) for live players inside the chunk,
+  written when one moves. Clients subscribe to both grids around the viewport.
+
+### Paired ramp
+
+Adjacent pair with the same `profile-browser.ts` ramp as the palette-owner
+iteration (128/256/512/1024, 30 s per stage, one Chromium observer plus thin
+SDK peers). Baseline ran first, candidate second. Tick rate and commit values
+are per-stage windows from the preload's `server.json`; browser columns are CDP
+task/script time and WebSocket bytes over the stage.
+
+| Stage | Variant | Tick Hz | Tick p50 | Commit p50 | Commit p95 | Ops/commit | Browser rx | rx frames | Browser task/script |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | baseline | 19.8 | 0.6 ms | 3.0 ms | 7.5 ms | 54 | 336.1 KiB/s | 958 | 1901 / 649 ms |
+| 128 | candidate | 19.8 | 0.6 ms | 3.2 ms | 6.7 ms | 56 | 69.3 KiB/s | 923 | 1368 / 441 ms |
+| 256 | baseline | 19.8 | 3.6 ms | 5.1 ms | 12.3 ms | 102 | 409.1 KiB/s | 880 | 1848 / 638 ms |
+| 256 | candidate | 19.8 | 3.4 ms | 5.5 ms | 12.5 ms | 78 | 87.3 KiB/s | 917 | 1650 / 546 ms |
+| 512 | baseline | 17.6 | 17.4 ms | 10.9 ms | 32.2 ms | 190 | 468.6 KiB/s | 780 | 2314 / 819 ms |
+| 512 | candidate | 18.0 | 15.2 ms | 11.4 ms | 37.5 ms | 117 | 70.0 KiB/s | 818 | 1826 / 611 ms |
+| 1024 | baseline | 7.1 | 42.6 ms | 39.3 ms | 116.9 ms | 320 | 356.8 KiB/s | 421 | 2524 / 1075 ms |
+| 1024 | candidate | 5.9 | 38.8 ms | 81.0 ms | 225.5 ms | 180 | 35.1 KiB/s | 390 | 1539 / 548 ms |
+
+Two 1024-only repeats were run to check the one adverse stage:
+
+| 1024 run | Tick Hz | Tick p50 | Commit p50 | Commit p95 | Ops/commit | Browser rx | Browser task/script |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline, repeat | 6.0 | 13.4 ms | 101.3 ms | 261.8 ms | 312 | 190.7 KiB/s | 1643 / 615 ms |
+| candidate, repeat | 7.4 | 23.8 ms | 67.1 ms | 161.9 ms | 265 | 99.2 KiB/s | 1864 / 757 ms |
+
+### Write volume
+
+Cumulative publish counters (before subscriber fan-out):
+
+- Baseline: 294,070 chunk writes × 1,181 B average = 347 MiB.
+- Candidate: 129,885 country writes × 272 B (RLE) + 62,111 user writes × 937 B
+  = ~89 MiB. Rows −35%, bytes −74%.
+- The candidate's second 1024 run measured country 213 B and user 1,601 B per
+  row: spawn clusters concentrate dots into fewer, larger coordinate rows.
+
+### What holds
+
+- Client egress and CPU: browser rx falls 72–90% at every stage across both
+  runs, browser script time falls 15–49%, and draw p95 is equal or better. This
+  is the split's consistent win: movement carries JSON coordinates only, and
+  claim-only country chunks stop resending bitmaps.
+- Server work per commit: ops/commit falls 16–44% (320 → 180 at 1024), matching
+  the claim-only country writes plus ≤ 100 coordinate rows per tick.
+- RLE does what it was chosen for: 1,250-cell bitmaps average 213–272 B, about
+  5x smaller than the byte-per-cell rows they replace, without a decompression
+  dependency on the client.
+
+### What this machine cannot resolve
+
+The 1024 server stage is dominated by co-located noise: two identical baseline
+runs measured commit p50 39.3 ms and 101.3 ms, and tick 7.1 Hz and 6.0 Hz.
+The candidate's 67.1–81.0 ms and 5.9–7.4 Hz sit inside that spread, so this
+pair cannot attribute the top stage either way. The 512 stage is flat (tick
+17.6 → 18.0 Hz, commit p50 10.9 → 11.4 ms) and the 128/256 stages are
+unchanged. Absolute 1024 throughput still needs the Ryzen/WSL2 machine or the
+VPS; the client-side wins are large enough to survive the noise.
+
+### Reproduction
+
+```sh
+bun run --filter @zyncbase/client build
+zig build -Doptimize=ReleaseFast
+cp -R examples/cordon-off test-artifacts/co-baseline-split   # before editing
+bun test-artifacts/co-baseline-split/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel msedge --output test-artifacts/cordon-off-profile/split-rle/baseline
+# implement the split + RLE, then:
+bun examples/cordon-off/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel msedge --output test-artifacts/cordon-off-profile/split-rle/candidate
+```
+
+Validation: `bun test examples/cordon-off` (82 pass), `bun run test:game`
+(plaintext: 9 scenarios; TLS: 6 scenarios — the round lifecycle is
+plaintext-only by design), `bunx biome check --write --error-on-warnings`,
+`bun run lint`, and `bun examples/cordon-off/build.ts`. An earlier TLS run
+timed out in the network-slot scenario and passed on rerun; that path is
+presence admission and unrelated to the chunk tables.

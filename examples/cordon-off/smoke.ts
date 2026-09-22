@@ -7,13 +7,15 @@ import { createClient, type ZyncBaseClient } from "@zyncbase/client";
 import { buildBrowser } from "./build";
 import { startLocalEdge } from "./dev";
 import {
-	type ChunkRow,
 	COUNTRY_COLORS,
 	type Country,
+	type CountryChunkRow,
 	MAX_COUNTRIES,
 	NAMESPACE,
 	type PlayerRow,
-	readDots,
+	readColorIndexes,
+	readCoordinates,
+	type UserChunkRow,
 } from "./shared";
 
 async function freePort() {
@@ -218,8 +220,10 @@ async function startWithRunway(
 }
 
 async function claimedAnyLand(client: ZyncBaseClient) {
-	const rows = await chunks(client);
-	return rows.some((row) => row.owners.some((byte) => byte !== 0));
+	const rows = await countryChunks(client);
+	return rows.some((row) =>
+		readColorIndexes(row.color_indexes).some((byte) => byte !== 0),
+	);
 }
 
 async function runLifecycle() {
@@ -283,8 +287,8 @@ async function runLifecycle() {
 	assert.equal(png.headers.get("content-type"), "image/png");
 	const wiped = await connect();
 	assert.ok(
-		(await chunks(wiped.client)).every((row) =>
-			row.owners.every((byte) => byte === 0),
+		(await countryChunks(wiped.client)).every((row) =>
+			readColorIndexes(row.color_indexes).every((byte) => byte === 0),
 		),
 		"boot after an archive starts a clean world",
 	);
@@ -410,8 +414,8 @@ async function runLifecycle() {
 	);
 	const cleaned = await connect();
 	assert.ok(
-		(await chunks(cleaned.client)).every((row) =>
-			row.owners.every((byte) => byte === 0),
+		(await countryChunks(cleaned.client)).every((row) =>
+			readColorIndexes(row.color_indexes).every((byte) => byte === 0),
 		),
 		"the expired round's world is wiped at boot",
 	);
@@ -522,10 +526,16 @@ async function connect(countryName?: string) {
 	return { client, id, countryId };
 }
 
-async function chunks(client: ZyncBaseClient) {
-	return (await client.store.query("chunks", {
+async function countryChunks(client: ZyncBaseClient) {
+	return (await client.store.query("country_chunks", {
+		limit: 2048,
+	})) as unknown as CountryChunkRow[];
+}
+
+async function userChunks(client: ZyncBaseClient) {
+	return (await client.store.query("user_chunks", {
 		limit: 100,
-	})) as unknown as ChunkRow[];
+	})) as unknown as UserChunkRow[];
 }
 
 try {
@@ -613,13 +623,13 @@ try {
 		direction: "idle",
 		seq: 1,
 	});
-	let visible: ChunkRow[] = [];
-	bob.client.store.subscribe("chunks", { limit: 100 }, (rows) => {
-		visible = rows as ChunkRow[];
+	let visible: UserChunkRow[] = [];
+	bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
+		visible = rows as UserChunkRow[];
 	});
 	const dot = () =>
 		visible
-			.flatMap((row) => readDots(row.dots))
+			.flatMap((row) => readCoordinates(row.coordinates))
 			.find((dot) => dot.player_id === alice.id);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
@@ -645,7 +655,7 @@ try {
 	await eventually(
 		async () =>
 			visible
-				.flatMap((row) => readDots(row.dots))
+				.flatMap((row) => readCoordinates(row.coordinates))
 				.some((dot) => dot.player_id === bob.id) &&
 			(await rosterOf(bob.client)).get(bob.id)?.name === "Bob",
 		"other humans have roster-backed map dots",
@@ -670,7 +680,7 @@ try {
 	await eventually(
 		async () =>
 			visible
-				.flatMap((row) => readDots(row.dots))
+				.flatMap((row) => readCoordinates(row.coordinates))
 				.some((dot) => dot.player_id === teammate.id) &&
 			(await rosterOf(bob.client)).get(teammate.id)?.country_id ===
 				north.country_id,
@@ -722,11 +732,14 @@ try {
 		"key release stops movement",
 	);
 	const row = visible.find((row) =>
-		readDots(row.dots).some((dot) => dot.player_id === alice.id),
+		readCoordinates(row.coordinates).some((dot) => dot.player_id === alice.id),
 	);
 	assert.ok(row);
 	await assert.rejects(
-		alice.client.store.set(["chunks", row.id, "dots"], new Uint8Array()),
+		alice.client.store.set(
+			["user_chunks", row.id, "coordinates"],
+			new Uint8Array(),
+		),
 		{ code: "PERMISSION_DENIED" },
 	);
 	await assert.rejects(
@@ -755,8 +768,8 @@ try {
 		return health.players === 0 && health.bots === 0;
 	}, "an empty world holds no bots");
 	await eventually(async () => {
-		const dots = (await chunks(observer.client)).flatMap((row) =>
-			readDots(row.dots),
+		const dots = (await userChunks(observer.client)).flatMap((row) =>
+			readCoordinates(row.coordinates),
 		);
 		return dots.length === 0;
 	}, "bot dots cleared without humans");
@@ -775,19 +788,24 @@ try {
 		return JSON.stringify(before) === JSON.stringify(after) ? after : undefined;
 	}, "roster settled")) as Country[];
 	assert.ok(savedCountries.some((country) => country.count > 0));
-	const savedChunks = await chunks(observer.client);
+	const savedChunks = await countryChunks(observer.client);
 	console.log("PASS: movement, stop, authorization, disconnected dot cleanup");
 	await stop();
 	await start();
 	const returning = await connect();
-	const restoredChunks = await chunks(returning.client);
-	for (const row of savedChunks)
+	const restoredChunks = await countryChunks(returning.client);
+	for (const row of savedChunks) {
+		const saved = restoredChunks.find((restored) => restored.id === row.id);
+		assert.ok(saved, "every saved chunk row survives the restart");
 		assert.deepEqual(
-			restoredChunks.find((saved) => saved.id === row.id)?.owners,
-			row.owners,
+			readColorIndexes(saved.color_indexes),
+			readColorIndexes(row.color_indexes),
 		);
+	}
 	assert.ok(
-		restoredChunks.every((row) => readDots(row.dots).length === 0),
+		(await userChunks(returning.client)).every(
+			(row) => readCoordinates(row.coordinates).length === 0,
+		),
 		"restart clears every dot: no humans, so no bots",
 	);
 	const restoredRoster = await rosterOf(returning.client);
@@ -836,8 +854,8 @@ try {
 	});
 	const clean = await connect();
 	assert.ok(
-		(await chunks(clean.client)).every((row) =>
-			row.owners.every((byte) => byte === 0),
+		(await countryChunks(clean.client)).every((row) =>
+			readColorIndexes(row.color_indexes).every((byte) => byte === 0),
 		),
 	);
 	const fresh = (await clean.client.store.query(

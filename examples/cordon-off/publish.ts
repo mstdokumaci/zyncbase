@@ -2,12 +2,14 @@ import type { BatchOperation } from "@zyncbase/client";
 import { rowId } from "./shared";
 import type { World } from "./world";
 
-// 500 is both the SDK and server batch cap. With 1 KB owner rows plus at most
-// MAX_PLAYERS dots, a full slice stays well under the configured message cap.
+// 500 is both the SDK and server batch cap. With RLE country-chunk rows plus
+// at most 100 user chunks and MAX_PLAYERS dots, a slice stays well under the
+// configured message cap.
 export const PUBLISH_BATCH_SIZE = 500;
 
 export type PublishSnapshot = {
-	chunks: number[];
+	countryChunks: number[];
+	userChunks: number[];
 	countries: number[];
 	removed: number[];
 	playerRows: string[];
@@ -24,13 +26,15 @@ export function drainPublishState(
 	// later with their latest values.
 	const rosters = opts?.rosters ?? true;
 	const snapshot = {
-		chunks: [...world.dirtyChunks],
+		countryChunks: [...world.dirtyCountryChunks],
+		userChunks: [...world.dirtyUserChunks],
 		countries: rosters ? [...world.dirtyCountries] : [],
 		removed: rosters ? [...world.dirtyRemovedCountries] : [],
 		playerRows: rosters ? [...world.dirtyPlayerRows] : [],
 		removedPlayerRows: rosters ? [...world.dirtyRemovedPlayerRows] : [],
 	};
-	world.dirtyChunks.clear();
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
 	if (rosters) {
 		world.dirtyCountries.clear();
 		world.dirtyRemovedCountries.clear();
@@ -45,7 +49,9 @@ export function restorePublishState(
 	world: World,
 	snapshot: PublishSnapshot,
 ): void {
-	for (const index of snapshot.chunks) world.dirtyChunks.add(index);
+	for (const index of snapshot.countryChunks)
+		world.dirtyCountryChunks.add(index);
+	for (const index of snapshot.userChunks) world.dirtyUserChunks.add(index);
 	for (const countryId of snapshot.countries)
 		world.dirtyCountries.add(countryId);
 	for (const countryId of snapshot.removed)
@@ -92,9 +98,13 @@ export function buildPublishOperations(
 			path: ["users", id],
 			value: row,
 		})),
-		...snapshot.chunks.map((index) => {
-			const { id, ...value } = world.chunk(index);
-			return { op: "set" as const, path: ["chunks", id], value };
+		...snapshot.countryChunks.map((index) => {
+			const { id, ...value } = world.countryChunk(index);
+			return { op: "set" as const, path: ["country_chunks", id], value };
+		}),
+		...snapshot.userChunks.map((index) => {
+			const { id, ...value } = world.userChunk(index);
+			return { op: "set" as const, path: ["user_chunks", id], value };
 		}),
 	];
 }

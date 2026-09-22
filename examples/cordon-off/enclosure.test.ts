@@ -8,7 +8,7 @@ import {
 import { HoleFiller } from "./filler";
 import {
 	COUNTRY_COLORS,
-	chunkIndex,
+	countryChunkIndex,
 	type Direction,
 	HEIGHT,
 	WIDTH,
@@ -228,7 +228,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 	const chunks = new Set<number>();
 	for (const [x, y, countryId] of pixels) {
 		seed.owners[y * WIDTH + x] = countryId;
-		chunks.add(chunkIndex(x, y));
+		chunks.add(countryChunkIndex(x, y));
 	}
 	const world = new World(land);
 	const owned = new Set<number>(pixels.map((pixel) => pixel[2]));
@@ -236,7 +236,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 		[...seed.countries.values()].filter((country) =>
 			owned.has(country.country_id),
 		),
-		[...chunks].map((index) => seed.chunk(index)),
+		[...chunks].map((index) => seed.countryChunk(index)),
 	);
 	// Production restore prunes landless countries as abandoned, so
 	// re-register test identities that own no pixels yet as setup-only state.
@@ -249,7 +249,8 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 				count: 0,
 				is_bot: false,
 			});
-	world.dirtyChunks.clear();
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
 	let now = 0,
 		seq = 0;
 	const input = (id: string, country: number, direction: Direction) =>
@@ -328,11 +329,11 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 		[31, 32],
 		[32, 32],
 	])
-		expect(world.dirtyChunks.has(chunkIndex(x, y))).toBe(true);
+		expect(world.dirtyCountryChunks.has(countryChunkIndex(x, y))).toBe(true);
 	const restored = new World(world.land);
 	restored.restore(
 		[...world.countries.values()],
-		[...chunks].map((index) => world.chunk(index)),
+		[...chunks].map((index) => world.countryChunk(index)),
 	);
 	expect(restored.owners).toEqual(world.owners);
 	expect([...restored.countries.values()]).toEqual([

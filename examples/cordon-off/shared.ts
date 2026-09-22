@@ -2,8 +2,22 @@ import map from "./land.json";
 
 export const WIDTH = map.width;
 export const HEIGHT = map.height;
-export const CHUNK = 32;
-export const COLUMNS = Math.ceil(WIDTH / CHUNK);
+// Country chunks: ownership bitmaps on a 40x40 grid of 50x25-cell chunks.
+// Both dimensions divide the map exactly, so every chunk is full-sized.
+export const COUNTRY_CHUNK_WIDTH = 50;
+export const COUNTRY_CHUNK_HEIGHT = 25;
+export const COUNTRY_COLUMNS = WIDTH / COUNTRY_CHUNK_WIDTH;
+export const COUNTRY_ROWS = HEIGHT / COUNTRY_CHUNK_HEIGHT;
+export const COUNTRY_CHUNK_CELLS = COUNTRY_CHUNK_WIDTH * COUNTRY_CHUNK_HEIGHT;
+// Run-length pairs (count 1..255, color index): worst case every cell flips.
+export const COUNTRY_COLOR_INDEXES_MAX = COUNTRY_CHUNK_CELLS * 2;
+// User chunks: player coordinates on a 10x10 grid of 200x100-cell chunks. A
+// movement only rewrites its chunk's row, so the grid is coarse on purpose.
+export const USER_CHUNK_WIDTH = 200;
+export const USER_CHUNK_HEIGHT = 100;
+export const USER_COLUMNS = WIDTH / USER_CHUNK_WIDTH;
+export const USER_ROWS = HEIGHT / USER_CHUNK_HEIGHT;
+export const USER_CHUNK_COUNT = USER_COLUMNS * USER_ROWS;
 export const NAMESPACE = "world-1";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
 export const MAX_PLAYERS = 1024;
@@ -128,11 +142,15 @@ export type Country = {
 	count: number;
 	is_bot: boolean;
 };
-export type ChunkRow = {
+export type CountryChunkRow = {
 	id: string;
-	// CHUNK * CHUNK palette owner codes, one byte per cell.
-	owners: Uint8Array;
-	dots: Uint8Array;
+	// RLE (count, color index) pairs of COUNTRY_CHUNK_CELLS palette codes.
+	color_indexes: Uint8Array;
+};
+export type UserChunkRow = {
+	id: string;
+	// JSON Dot[] of the live players inside this user chunk.
+	coordinates: Uint8Array;
 };
 export type RoundInfo = {
 	number: number;
@@ -163,20 +181,78 @@ export function wrapX(x: number) {
 	return ((x % WIDTH) + WIDTH) % WIDTH;
 }
 
-export function chunkIndex(x: number, y: number) {
-	return Math.floor(y / CHUNK) * COLUMNS + Math.floor(x / CHUNK);
+export function countryChunkIndex(x: number, y: number) {
+	return (
+		Math.floor(y / COUNTRY_CHUNK_HEIGHT) * COUNTRY_COLUMNS +
+		Math.floor(x / COUNTRY_CHUNK_WIDTH)
+	);
+}
+
+export function userChunkIndex(x: number, y: number) {
+	return (
+		Math.floor(y / USER_CHUNK_HEIGHT) * USER_COLUMNS +
+		Math.floor(x / USER_CHUNK_WIDTH)
+	);
 }
 
 export function rowId(index: number) {
 	return String(index);
 }
 
-export function readOwners(bytes: Uint8Array) {
-	if (bytes.byteLength !== CHUNK * CHUNK) throw new Error("Invalid chunk size");
-	return bytes;
+// Country chunks that hold no land can never change owner: no row exists for
+// them and clients never subscribe. Derived from the same land runs as terrain.
+export const WATER_COUNTRY_CHUNKS = (() => {
+	const water = new Uint8Array(COUNTRY_COLUMNS * COUNTRY_ROWS).fill(1);
+	for (let i = 0; i < map.runs.length; i += 2) {
+		let start = map.runs[i];
+		const end = start + map.runs[i + 1];
+		while (start < end) {
+			const y = Math.floor(start / WIDTH);
+			const rowEnd = Math.min(end, (y + 1) * WIDTH);
+			const first = Math.floor((start % WIDTH) / COUNTRY_CHUNK_WIDTH);
+			const last = Math.floor(((rowEnd - 1) % WIDTH) / COUNTRY_CHUNK_WIDTH);
+			const row = Math.floor(y / COUNTRY_CHUNK_HEIGHT);
+			for (let column = first; column <= last; column++)
+				water[row * COUNTRY_COLUMNS + column] = 0;
+			start = rowEnd;
+		}
+	}
+	return water;
+})();
+
+/** RLE-encode a chunk's palette codes as (count 1..255, index) pairs. */
+export function encodeColorIndexes(codes: Uint8Array) {
+	const encoded = new Uint8Array(codes.length * 2);
+	let out = 0;
+	let i = 0;
+	while (i < codes.length) {
+		const index = codes[i];
+		let run = 1;
+		while (run < 255 && i + run < codes.length && codes[i + run] === index)
+			run++;
+		encoded[out++] = run;
+		encoded[out++] = index;
+		i += run;
+	}
+	return encoded.slice(0, out);
 }
 
-export function readDots(bytes: Uint8Array): Dot[] {
+/** Decode an RLE color-index chunk; rejects any stream that is not exact. */
+export function readColorIndexes(bytes: Uint8Array) {
+	const codes = new Uint8Array(COUNTRY_CHUNK_CELLS);
+	let out = 0;
+	for (let i = 0; i < bytes.length; i += 2) {
+		if (i + 1 >= bytes.length) throw new Error("Invalid chunk size");
+		const run = bytes[i];
+		if (!run || out + run > codes.length) throw new Error("Invalid chunk size");
+		codes.fill(bytes[i + 1], out, out + run);
+		out += run;
+	}
+	if (out !== codes.length) throw new Error("Invalid chunk size");
+	return codes;
+}
+
+export function readCoordinates(bytes: Uint8Array): Dot[] {
 	return JSON.parse(decoder.decode(bytes));
 }
 

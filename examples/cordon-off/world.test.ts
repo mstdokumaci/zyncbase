@@ -2,18 +2,20 @@ import { expect, test } from "bun:test";
 import { planBot } from "./bots";
 import { buildPublishOperations, drainPublishState } from "./publish";
 import {
-	CHUNK,
+	COUNTRY_CHUNK_WIDTH,
 	COUNTRY_COLORS,
-	chunkIndex,
+	countryChunkIndex,
+	encodeColorIndexes,
 	HEIGHT,
 	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
 	PLAYER_GRACE_MS,
 	playerName,
 	RULES,
-	readDots,
-	readOwners,
+	readColorIndexes,
+	readCoordinates,
 	terrain,
+	userChunkIndex,
 	WIDTH,
 } from "./shared";
 import { World } from "./world";
@@ -62,74 +64,99 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	if (!alice || !bob) throw new Error("Missing players");
 	expect(world.players.get("friend")?.country_id).toBe(alice.country_id);
 	expect([alice.x, alice.y]).not.toEqual([bob.x, bob.y]);
-	alice.x = CHUNK - 1;
+	alice.x = COUNTRY_CHUNK_WIDTH - 1;
 	alice.y = 10;
-	world.dirtyChunks.clear();
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
 	input("alice", "right");
 	ticks(1);
-	expect(alice.x).toBe(31);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH - 1);
 	input("alice", "idle");
 	ticks(10);
-	expect(alice.x).toBe(31);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH - 1);
 	input("alice", "right");
 	ticks(1);
-	expect(alice.x).toBe(32);
-	expect(world.dirtyChunks.has(chunkIndex(31, 10))).toBe(true);
-	expect(world.dirtyChunks.has(chunkIndex(32, 10))).toBe(true);
-	expect(world.owners[10 * WIDTH + 32]).toBe(alice.country_id);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH);
+	expect(
+		world.dirtyUserChunks.has(userChunkIndex(COUNTRY_CHUNK_WIDTH, 10)),
+	).toBe(true);
+	expect(
+		world.dirtyCountryChunks.has(countryChunkIndex(COUNTRY_CHUNK_WIDTH, 10)),
+	).toBe(true);
+	expect(world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH]).toBe(alice.country_id);
 
-	world.owners[10 * WIDTH + 31] = alice.country_id;
+	world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH - 1] = alice.country_id;
+	// Tests mutate the grid directly, so queue the touched country chunk too.
+	world.dirtyCountryChunks.add(countryChunkIndex(COUNTRY_CHUNK_WIDTH - 1, 10));
 	const north = world.countries.get(alice.country_id),
 		south = world.countries.get(bob.country_id);
 	if (!north || !south) throw new Error("Missing countries");
 	north.count++;
 	input("alice", "left");
 	ticks(RULES.own);
-	expect(alice.x).toBe(31);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH - 1);
 	input("alice", "right");
 	ticks(RULES.own);
-	expect(alice.x).toBe(32);
-	world.owners[10 * WIDTH + 33] = bob.country_id;
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH);
+	world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 1] = bob.country_id;
 	south.count++;
 	ticks(RULES.enemy - 1);
-	expect(alice.x).toBe(32);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH);
 	ticks(1);
-	expect(alice.x).toBe(33);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH + 1);
 	expect(south.count).toBe(0);
 
-	land[10 * WIDTH + 34] = 0;
+	land[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 2] = 0;
 	ticks(RULES.neutral + RULES.crossing - 1);
-	expect(alice.x).toBe(33);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH + 1);
 	ticks(1);
-	expect(alice.x).toBe(34);
-	expect(world.owners[10 * WIDTH + 34]).toBe(0);
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH + 2);
+	expect(world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 2]).toBe(0);
 	ticks(RULES.neutral + RULES.crossing);
-	expect(alice.x).toBe(35);
-	const saved = [...world.dirtyChunks].map((index) => world.chunk(index));
+	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH + 3);
+	const saved = [...world.dirtyCountryChunks].map((index) =>
+		world.countryChunk(index),
+	);
 	const restored = new World(land);
 	restored.restore([...world.countries.values()], saved);
 	expect(restored.players.size).toBe(0);
-	expect(restored.owners[10 * WIDTH + 35]).toBe(alice.country_id);
-	expect(restored.countries.get(alice.country_id)?.count).toBe(north.count);
-	for (const index of restored.dirtyChunks)
-		expect(readDots(restored.chunk(index).dots)).toEqual([]);
-	expect(readOwners(world.chunk(chunkIndex(32, 10)).owners)[10 * CHUNK]).toBe(
-		COUNTRY_COLORS.indexOf(north.color) + 1,
+	expect(restored.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 3]).toBe(
+		alice.country_id,
 	);
-	world.remove("alice", now);
-	expect(world.owners[10 * WIDTH + 35]).toBe(alice.country_id);
+	expect(restored.countries.get(alice.country_id)?.count).toBe(north.count);
+	expect(restored.dirtyUserChunks.size).toBe(0);
 	expect(
-		readDots(world.chunk(chunkIndex(35, 10)).dots).some(
-			(dot) => dot.player_id === "alice",
-		),
+		readColorIndexes(
+			world.countryChunk(countryChunkIndex(COUNTRY_CHUNK_WIDTH, 10))
+				.color_indexes,
+		)[10 * COUNTRY_CHUNK_WIDTH],
+	).toBe(COUNTRY_COLORS.indexOf(north.color) + 1);
+	world.remove("alice", now);
+	expect(world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 3]).toBe(
+		alice.country_id,
+	);
+	expect(
+		readCoordinates(
+			world.userChunk(userChunkIndex(COUNTRY_CHUNK_WIDTH + 3, 10)).coordinates,
+		).some((dot) => dot.player_id === "alice"),
 	).toBe(false);
 });
 
-test("owner bitmaps pass byte-per-cell and reject any other size", () => {
-	const bytes = new Uint8Array(CHUNK * CHUNK);
-	for (let i = 0; i < bytes.length; i++) bytes[i] = i % (MAX_COUNTRIES + 1);
-	expect(readOwners(bytes)).toBe(bytes);
-	expect(() => readOwners(new Uint8Array(CHUNK * CHUNK * 2))).toThrow(
+test("color-index chunks round-trip and reject malformed streams", () => {
+	const codes = new Uint8Array(COUNTRY_CHUNK_WIDTH * 25);
+	for (let i = 0; i < codes.length; i++)
+		codes[i] = Math.floor(i / 64) % (MAX_COUNTRIES + 1);
+	const encoded = encodeColorIndexes(codes);
+	expect(encoded.byteLength).toBeLessThan(codes.length);
+	expect(readColorIndexes(encoded)).toEqual(codes);
+	// Truncated pair, oversized run, and short decoded output all fail closed.
+	expect(() => readColorIndexes(encoded.subarray(1))).toThrow(
+		"Invalid chunk size",
+	);
+	expect(() => readColorIndexes(new Uint8Array([255, 1]))).toThrow(
+		"Invalid chunk size",
+	);
+	expect(() => readColorIndexes(new Uint8Array([1, 1]))).toThrow(
 		"Invalid chunk size",
 	);
 });
@@ -471,7 +498,7 @@ test("64 live countries keep distinct colors through slot reuse and restart", ()
 	const restored = new World(land);
 	restored.restore(
 		rows,
-		[world.chunk(0), world.chunk(1)],
+		[world.countryChunk(0), world.countryChunk(1)],
 		[],
 		world.allocatorMark,
 	);
@@ -564,7 +591,9 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	const keep = src.players.get("f");
 	if (!keep) throw new Error("Founder missing");
 	expect(src.countries.get(keep.country_id)?.count).toBe(1);
-	const chunks = [...src.dirtyChunks].map((index) => src.chunk(index));
+	const chunks = [...src.dirtyCountryChunks].map((index) =>
+		src.countryChunk(index),
+	);
 	const rows = [...src.countries.values()];
 	rows.push({
 		country_id: 999,
@@ -653,9 +682,9 @@ test("human names are required, limited to 16 characters, and published separate
 	expect(world.countries.get(alice.country_id)?.name).toBe("North");
 	// Dots carry positions only; names live in the published roster rows.
 	for (const player of [alice, bob]) {
-		const dot = readDots(world.chunk(chunkIndex(player.x, player.y)).dots).find(
-			(dot) => dot.player_id === player.id,
-		);
+		const dot = readCoordinates(
+			world.userChunk(userChunkIndex(player.x, player.y)).coordinates,
+		).find((dot) => dot.player_id === player.id);
 		expect(dot).toMatchObject({
 			player_id: player.id,
 			x: player.x,
@@ -722,7 +751,7 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 	// Dots vanish immediately but the row lingers with its final position.
 	expect(world.players.has("alice")).toBe(false);
 	expect(
-		readDots(world.chunk(chunkIndex(x, y)).dots).some(
+		readCoordinates(world.userChunk(userChunkIndex(x, y)).coordinates).some(
 			(dot) => dot.player_id === "alice",
 		),
 	).toBe(false);
@@ -785,7 +814,7 @@ test("silent-timeout removal still grants the full grace window on reconnect", (
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 });
 
-test("crossing a chunk boundary refreshes the roster position, plain moves do not", () => {
+test("crossing a country chunk boundary refreshes the roster position, plain moves do not", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Walker",
@@ -796,30 +825,32 @@ test("crossing a chunk boundary refreshes the roster position, plain moves do no
 	world.input("walker", data, 0);
 	const player = world.players.get("walker");
 	if (!player) throw new Error("Player missing");
-	player.x = CHUNK - 1;
+	player.x = COUNTRY_CHUNK_WIDTH - 1;
 	player.y = 10;
-	player.last_x = CHUNK - 1;
+	player.last_x = COUNTRY_CHUNK_WIDTH - 1;
 	player.last_y = 10;
 	world.dirtyPlayerRows.clear();
 	world.tick(1);
 	// Still inside the chunk: no roster write.
-	expect(chunkIndex(player.x, player.y)).toBe(chunkIndex(CHUNK - 1, 10));
+	expect(countryChunkIndex(player.x, player.y)).toBe(
+		countryChunkIndex(COUNTRY_CHUNK_WIDTH - 1, 10),
+	);
 	expect(world.dirtyPlayerRows.has("walker")).toBe(false);
-	player.x = CHUNK - 1;
+	player.x = COUNTRY_CHUNK_WIDTH - 1;
 	world.input("walker", { ...data, seq: 2 }, 2);
 	for (let now = 3; now < 3 + RULES.neutral * 2 + 10; now++) {
 		world.tick(now);
-		if (player.x === CHUNK) break;
+		if (player.x === COUNTRY_CHUNK_WIDTH) break;
 	}
-	expect(player.x).toBe(CHUNK);
+	expect(player.x).toBe(COUNTRY_CHUNK_WIDTH);
 	expect(world.playerRow("walker")).toMatchObject({
-		last_x: CHUNK,
+		last_x: COUNTRY_CHUNK_WIDTH,
 		last_y: 10,
 	});
 	expect(world.dirtyPlayerRows.has("walker")).toBe(true);
 });
 
-test("restore clears persisted dots and queues stale roster rows for removal", () => {
+test("restore clears positions and queues stale roster rows for removal", () => {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const src = new World(land);
 	src.input(
@@ -832,15 +863,18 @@ test("restore clears persisted dots and queues stale roster rows for removal", (
 		},
 		0,
 	);
-	const chunks = [...src.dirtyChunks].map((index) => src.chunk(index));
+	const chunks = [...src.dirtyCountryChunks].map((index) =>
+		src.countryChunk(index),
+	);
 	const dst = new World(land.slice());
 	dst.restore([...src.countries.values()], chunks, [
 		{ id: "alice" },
 		{ id: "bot-0" },
 	]);
-	// Positions never survive a restart; stale dots republish empty.
-	for (const index of dst.dirtyChunks)
-		expect(readDots(dst.chunk(index).dots)).toEqual([]);
+	// Positions never survive a restart: the live map starts empty and no
+	// coordinates row is marked for republish.
+	expect(dst.dirtyUserChunks.size).toBe(0);
+	expect(dst.players.size).toBe(0);
 	expect(dst.dirtyRemovedPlayerRows).toEqual(new Set(["alice", "bot-0"]));
 });
 
@@ -862,11 +896,11 @@ test("human spawns spread out instead of stacking on one chunk", () => {
 	const perChunk = new Map<number, number>();
 	for (const player of world.players.values())
 		perChunk.set(
-			chunkIndex(player.x, player.y),
-			(perChunk.get(chunkIndex(player.x, player.y)) ?? 0) + 1,
+			countryChunkIndex(player.x, player.y),
+			(perChunk.get(countryChunkIndex(player.x, player.y)) ?? 0) + 1,
 		);
 	// Stacking the crowd on the first player used to put every dot in one or
-	// two chunks, which overflowed the dots field once the chunk was full.
+	// two chunks, which overflowed the coordinates field once full.
 	expect(perChunk.size).toBeGreaterThan(64);
 	expect(Math.max(...perChunk.values())).toBeLessThan(16);
 });

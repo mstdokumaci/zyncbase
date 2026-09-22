@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { HoleFiller } from "./filler";
-import { chunkIndex, HEIGHT, WIDTH } from "./shared";
+import { countryChunkIndex, HEIGHT, WIDTH } from "./shared";
 import { World } from "./world";
 
 // Synthetic geometry keeps this repeatable without a saved game or a database.
@@ -23,13 +23,13 @@ function workload(size: number, rotated: boolean, shape: string) {
 			if (shape !== "square" && !wall && !closingWall) continue;
 			const p = position(x, y);
 			seed.owners[p.y * WIDTH + p.x] = 1;
-			seed.dirtyChunks.add(chunkIndex(p.x, p.y));
+			seed.dirtyCountryChunks.add(countryChunkIndex(p.x, p.y));
 		}
 	}
 	const world = new World(land);
 	world.restore(
 		[seedCountry],
-		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
+		[...seed.dirtyCountryChunks].map((index) => seed.countryChunk(index)),
 	);
 	world.input(
 		"walker",
@@ -59,7 +59,8 @@ function workload(size: number, rotated: boolean, shape: string) {
 	const reset = () => {
 		world.owners.set(initial);
 		country.count = count;
-		world.dirtyChunks.clear();
+		world.dirtyCountryChunks.clear();
+		world.dirtyUserChunks.clear();
 		world.dirtyCountries.clear();
 		Object.assign(player, start);
 		player.credit =
