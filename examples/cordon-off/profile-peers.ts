@@ -66,24 +66,25 @@ function visibleFor(
 	chunkHeight: number,
 	columns: number,
 	rows: number,
+	margin: number,
 	water?: Uint8Array,
 ) {
 	const visible = new Set<number>();
 	const left = Math.max(
 		0,
-		Math.floor((peer.x - peer.width / peer.zoom / 2) / chunkWidth) - 1,
+		Math.floor((peer.x - peer.width / peer.zoom / 2) / chunkWidth) - margin,
 	);
 	const right = Math.min(
 		columns - 1,
-		Math.floor((peer.x + peer.width / peer.zoom / 2) / chunkWidth) + 1,
+		Math.floor((peer.x + peer.width / peer.zoom / 2) / chunkWidth) + margin,
 	);
 	const top = Math.max(
 		0,
-		Math.floor((peer.y - peer.height / peer.zoom / 2) / chunkHeight) - 1,
+		Math.floor((peer.y - peer.height / peer.zoom / 2) / chunkHeight) - margin,
 	);
 	const bottom = Math.min(
 		rows - 1,
-		Math.floor((peer.y + peer.height / peer.zoom / 2) / chunkHeight) + 1,
+		Math.floor((peer.y + peer.height / peer.zoom / 2) / chunkHeight) + margin,
 	);
 	for (let y = top; y <= bottom; y++)
 		for (let x = left; x <= right; x++) {
@@ -119,6 +120,8 @@ function subscribe(peer: Peer) {
 			COUNTRY_CHUNK_HEIGHT,
 			COUNTRY_COLUMNS,
 			COUNTRY_ROWS,
+			// client.ts COUNTRY_PREFETCH_CHUNKS
+			1,
 			WATER_COUNTRY_CHUNKS,
 		),
 		(index) =>
@@ -134,6 +137,8 @@ function subscribe(peer: Peer) {
 			USER_CHUNK_HEIGHT,
 			USER_COLUMNS,
 			USER_ROWS,
+			// client.ts USER_PREFETCH_CHUNKS
+			0,
 		),
 		(index) =>
 			peer.client.store.listen(["user_chunks", String(index)], (row) => {
