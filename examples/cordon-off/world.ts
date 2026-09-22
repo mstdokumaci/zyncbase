@@ -625,26 +625,95 @@ export class World {
 		return true;
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search first preserves spacing, then admits players on cramped land.
+	/**
+	 * A first move from here paints: a neutral land neighbour to claim, or a
+	 * neighbouring ownership border that stops the losing country's fill from
+	 * reclaiming the claimed cell. A uniform other-country interior has neither.
+	 */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one bounded 3x3 neighbour scan is clearer inline than split into row helpers.
+	private paintable(cell: number) {
+		const x = cell % WIDTH;
+		const y = (cell - x) / WIDTH;
+		let seen = -1;
+		for (let dy = -1; dy <= 1; dy++) {
+			const ny = y + dy;
+			if (ny < 0 || ny >= HEIGHT) continue;
+			for (let dx = -1; dx <= 1; dx++) {
+				if (!dx && !dy) continue;
+				const nx = x + dx;
+				if (nx < 0 || nx >= WIDTH) continue;
+				const neighbour = ny * WIDTH + nx;
+				if (!this.land[neighbour]) continue;
+				const owner = this.owners[neighbour];
+				if (owner === 0) return true;
+				if (seen === -1) seen = owner;
+				else if (owner !== seen) return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Nearest paintable cell, for anchors buried in one country's interior.
+	 * One linear sweep beats an unbounded ring hunt, which allocated millions
+	 * of candidates on a conquered map. Spacing is skipped here: the nearest
+	 * border matters more than breathing room the player can walk off.
+	 */
+	private nearestPaintable(
+		anchor: { x: number; y: number },
+		occupied: Set<number>,
+	) {
+		let best = -1;
+		let bestDistance = Infinity;
+		for (let cell = 0; cell < this.owners.length; cell++) {
+			if (!this.land[cell] || occupied.has(cell) || !this.paintable(cell))
+				continue;
+			const x = cell % WIDTH;
+			const distance =
+				Math.abs(x - anchor.x) + Math.abs(Math.floor(cell / WIDTH) - anchor.y);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				best = cell;
+			}
+		}
+		return best < 0
+			? undefined
+			: { x: best % WIDTH, y: Math.floor(best / WIDTH) };
+	}
+
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ring search preserves spacing first, then prefers paintable land, then admits players on cramped land.
 	private spawn(countryId: number, bot: boolean, team: number) {
 		const anchor = this.spawnAnchor(countryId, bot, team);
 		const occupied = new Set(
 			[...this.players.values()].map((p) => p.y * WIDTH + p.x),
 		);
 		const buckets = this.spacingBuckets(countryId);
-		// An anchor on the country's own land prefers own cells first.
-		const passes = anchor.own
-			? [
-					{ spaced: true, own: true },
-					{ spaced: true, own: false },
-					{ spaced: false, own: false },
-				]
-			: [
-					{ spaced: true, own: false },
-					{ spaced: false, own: false },
-				];
+		// An anchor on the country's own land prefers own cells first; a cell
+		// whose first move paints follows, then the legacy free-land search.
+		const passes: { spaced: boolean; own?: boolean; paint?: boolean }[] =
+			anchor.own
+				? [
+						{ spaced: true, own: true },
+						{ spaced: true, paint: true },
+						{ spaced: false, paint: true },
+						{ spaced: true, own: false },
+						{ spaced: false, own: false },
+					]
+				: [
+						{ spaced: true, paint: true },
+						{ spaced: false, paint: true },
+						{ spaced: true, own: false },
+						{ spaced: false, own: false },
+					];
 		// Prefer breathing room, but tiny islands must still admit players on free land.
 		for (const pass of passes) {
+			// A bounded ring cannot reach a border on a conquered map; one
+			// linear sweep finds the nearest paintable cell instead.
+			if (pass.paint && !pass.spaced) {
+				const nearest = this.nearestPaintable(anchor, occupied);
+				if (nearest) return { ...nearest, point: anchor.point };
+				continue;
+			}
 			// Spiral anchors can sit off-map; reach to the farthest corner
 			// from the anchor, not just the map's larger dimension, or the
 			// fallback can miss a strip on the far side.
@@ -671,7 +740,8 @@ export class World {
 							this.land[y * WIDTH + x] &&
 							!occupied.has(y * WIDTH + x) &&
 							(!pass.spaced || this.fitsSpacing(buckets, x, y)) &&
-							(!pass.own || this.owners[y * WIDTH + x] === countryId),
+							(!pass.own || this.owners[y * WIDTH + x] === countryId) &&
+							(!pass.paint || this.paintable(y * WIDTH + x)),
 					);
 					if (position) return { ...position, point: anchor.point };
 				}
