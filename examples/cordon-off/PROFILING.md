@@ -814,3 +814,146 @@ plaintext-only by design), `bunx biome check --write --error-on-warnings`,
 `bun run lint`, and `bun examples/cordon-off/build.ts`. An earlier TLS run
 timed out in the network-slot scenario and passed on rerun; that path is
 presence admission and unrelated to the chunk tables.
+
+## Iteration: 2026-09-22, split chunk tables on WSL2 (AB re-run)
+
+The same candidate as the macOS iteration above, re-probed on the WSL2
+machine the earlier entry identifies as suitable for the 1024-player stage:
+baseline `main` at `6302ae9` (schema 0.6.0, one `chunks` table with
+byte-per-cell owners), candidate `chunk-refactor` at `041b7c1` (schema 0.7.0,
+`country_chunks` RLE plus `user_chunks` JSON; includes the later `visibleFor`
+margin commit). The macOS capture could not attribute its 1024 stage; this
+three-pair AB separates it cleanly.
+
+Machine: AMD Ryzen 5 3600 (6 cores / 12 threads), WSL2, 31 GiB, Bun 1.4.0,
+Zig 0.16.0 ReleaseFast, Playwright 1.63.0 Chromium headless
+(`--channel chromium`), page cache warm, builds outside the measured
+intervals, no sampling profiler. Baseline was archived to
+`test-artifacts/co-baseline-main` with
+`git archive main:examples/cordon-off`; the candidate ran from the working
+tree. Three paired repeats per workload with baseline/candidate order
+alternated (baseline first on repeats 1 and 3). All runs passed the harness
+assertions; every browser stage additionally asserts all peers positioned and
+zero connection or browser errors.
+
+### Local simulation
+
+20 countries, 40 movers, 200 disposable warmup ticks, 1,200 measured ticks
+except the long run at 12,000. Medians of three repeats; ranges in
+parentheses. Serialization is reported as its own column because the split
+writes two row shapes where the baseline wrote one.
+
+| Workload | Baseline sim | Candidate sim | Change | Baseline / candidate serialization | Baseline / candidate sim p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fragmented bots | 678.8 ms (664.4–695.0) | 679.1 ms (673.6–720.5) | +0.0% | 112.6 / 140.5 ms | 4.30 / 4.47 ms |
+| Compact bots | 239.0 ms (234.4–253.7) | 229.0 ms (216.1–243.9) | −4.2% | 104.7 / 117.8 ms | 1.23 / 1.21 ms |
+| Fragmented scripted | 1,812.4 ms (1,674.8–2,042.8) | 1,845.3 ms (1,812.4–1,846.5) | +1.8% | 95.0 / 118.1 ms | 14.39 / 14.96 ms |
+| Fragmented bots, 12,000 ticks | 8,397.9 ms (8,145.6–8,522.3) | 8,072.3 ms (7,961.5–8,689.4) | −3.9% | 1,142.9 / 1,240.5 ms | 4.45 / 4.29 ms |
+
+No run had a tick over budget. Simulation is unchanged within noise
+(±4%, overlapping ranges); serialization rises 8.5–24.8% because a tick can
+now emit a country chunk and a user chunk instead of one combined row. The
+absolute cost is small (0.01–0.02 ms per tick) and the publish table below
+shows the row bytes fall far more than the row count grows.
+
+Trajectory check: at sampled ticks 1/300/600, ownership bytes, player
+positions, sequence counters, directions and movement credit hash identically
+in both variants for scripted and bot modes. The harness's combined final
+checksum differs only in roster `last_x`/`last_y`, which now update on 40 px
+country-chunk crossings instead of the former 32 px chunk grid. Territory and
+movement are unaffected; reconnect anchors are coarser by design.
+
+### Real database control
+
+One paced fragmented-bot run per repeat against an isolated local server with
+committed SDK batches (20 countries, 40 movers, 1,200 ticks at 20 Hz).
+Medians of three repeats.
+
+| Metric | Baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| Elapsed | 59.62 s | 59.60 s | 0% |
+| Flushes (one commit per tick) | 1,200 | 1,200 | 0% |
+| Commit p50 / p95 / p99 | 1.68 / 2.41 / 9.24 ms | 1.85 / 2.55 / 8.34 ms | p50 +10%, p99 −10% |
+| Chunk rows written | 26,084 | 39,824 (17,755 country + 22,069 user) | +52.7% |
+| Chunk payload | 27.88 MB | 3.68 MB (2.29 + 1.38) | −86.8% |
+| Bytes per row | 1,068.7 | 92.4 (129.2 country, 62.7 user) | −91.4% |
+
+The paced commit latency is unchanged (the run is not storage-bound); the
+write *volume* is what moves. RLE country rows average 129 B against the
+1,069 B combined rows they replace, and coordinate-only user rows average
+63 B. The split pays 53% more rows for 87% fewer payload bytes.
+
+### Browser ramp
+
+Real Chromium observer plus thin SDK peers, 128/256/512/1024 players, 30 s
+per stage, median of three repeats; per-run ranges are in prose. Tick rate
+and commit values are per-stage windows from the `server.json` preload;
+browser columns are CDP task/script time and WebSocket bytes over the stage.
+
+| Stage | Variant | Tick Hz | Commit p50 | Commit p95 | Ops/commit | Browser rx | rx frames | Script ms | Draw p95 | Driver cores |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | baseline | 17.93 | 2.75 ms | 6.48 ms | 52 | 143.3 KiB/s | 1,255 | 536 | 0.40 ms | 0.40 |
+| 128 | candidate | 18.03 | 2.06 ms | 5.20 ms | 50 | 62.4 KiB/s | 1,278 | 520 | 0.40 ms | 0.35 |
+| 256 | baseline | 18.25 | 4.51 ms | 13.01 ms | 98 | 192.4 KiB/s | 1,347 | 613 | 0.50 ms | 1.10 |
+| 256 | candidate | 18.33 | 4.10 ms | 10.50 ms | 71 | 97.8 KiB/s | 1,291 | 638 | 0.50 ms | 0.88 |
+| 512 | baseline | 17.72 | 14.88 ms | 28.40 ms | 186 | 210.4 KiB/s | 1,297 | 703 | 0.50 ms | 3.17 |
+| 512 | candidate | 18.01 | 12.94 ms | 22.96 ms | 96 | 125.1 KiB/s | 1,233 | 760 | 0.70 ms | 2.50 |
+| 1024 | baseline | 8.05 | 40.24 ms | 114.80 ms | 333 | 195.6 KiB/s | 687 | 855 | 0.80 ms | 4.49 |
+| 1024 | candidate | 11.35 | 24.82 ms | 86.61 ms | 143 | 141.2 KiB/s | 799 | 1,089 | 1.10 ms | 4.43 |
+
+The 1024 stage is the decisive one and no longer overlaps: baseline tick rate
+was 7.93–8.32 Hz against the candidate's 11.12–11.70 Hz (+41%), and commit
+p50 was 39.14–42.83 ms against 24.50–27.90 ms (−38%). Ops per commit fall
+57% and payload per row falls enough that the observer receives 28% fewer
+bytes despite the higher tick rate. At 512 the candidate is also ahead on
+commit p50 (7.81–13.27 versus 9.78–16.87 ms) and driver CPU falls 21%
+(2.50 versus 3.17 cores) even though its tick rate is unchanged; 128 and 256
+change little apart from 49–57% less browser rx and lower driver CPU.
+
+Two candidate costs are visible and small in absolute terms:
+serialization, above, and browser script time at 512/1024 (760/1,089 ms per
+30 s stage versus 703/855 ms). The client now parses a JSON coordinate row
+per moving user chunk in addition to drawing the color grid, and receives
+more, smaller frames (799 versus 687 at 1024). Paint stays cheap (draw p95
+0.8 → 1.1 ms) and FPS is identical (~27.6 at every stage, capped by the
+animation loop); the driver CPU difference at 1024 is not resolvable
+(4.43 versus 4.49 cores). As on macOS, the absolute 1024 numbers remain a
+co-located WSL2 measurement, not VPS capacity; the pair separation this time
+is wider than the per-repeat spread on both sides.
+
+### Reproduction
+
+```sh
+bun run --filter @zyncbase/client build
+zig build -Doptimize=ReleaseFast
+mkdir -p test-artifacts/co-baseline-main
+git archive --format=tar main:examples/cordon-off | tar -x -C test-artifacts/co-baseline-main
+
+# pair 1 (baseline first); repeat with pair 2 (candidate first) and pair 3.
+# Short workloads: --mode bots --shape fragmented / --mode bots --shape compact /
+# --mode scripted --shape fragmented (1,200 ticks each, same command shape):
+bun test-artifacts/co-baseline-main/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/baseline
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/candidate
+bun test-artifacts/co-baseline-main/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/long-baseline
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --ticks 12000 --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/long-candidate
+bun test-artifacts/co-baseline-main/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/baseline
+bun examples/cordon-off/profile.ts --mode bots --shape fragmented --publish --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/candidate
+bun test-artifacts/co-baseline-main/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel chromium --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/browser-baseline
+bun examples/cordon-off/profile-browser.ts --players 128,256,512,1024 --seconds 30 --channel chromium --output test-artifacts/cordon-off-profile/wsl-ab/repeat-1/browser-candidate
+```
+
+The long runs need their own `--output` directory: the harness labels files
+by country/shape/mode only, so a 12,000-tick run overwrites the 1,200-tick
+`20-fragmented-bots-local.json` in the same directory. Artifacts are
+generated and gitignored under `test-artifacts/cordon-off-profile/wsl-ab/`.
+Playwright resolves through the repo's `node_modules` symlink, which points
+at a package installed under `/tmp/opencode/pw`.
+
+Validation: `bun run lint` could not run its full chain on this machine
+(`zsort` and `zwanzig` are not installed); `zig fmt --check src`,
+`zig build check`, `bunx biome check --write --error-on-warnings` and
+`zlint` (0 errors, 2 pre-existing `must-return-ref` warnings in
+`src/storage_engine/write_worker.zig`, untouched by this iteration) pass.
+All 30 simulation and publish runs retained their variant's checksums;
+ownership and position trajectories match across variants at sampled ticks,
+as described above.
