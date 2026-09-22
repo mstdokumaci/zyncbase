@@ -106,8 +106,8 @@ jobs:
 
           mkdir -p /tmp/zsort
           curl -fsSL -o /tmp/zsort.tar.gz \
-            "https://github.com/mstdokumaci/zsort/releases/download/v0.7.0/zsort-x86_64-linux.tar.gz"
-          echo "446081c805aebd4ba8bc6f4126981bfd8875e65503d7b0d7275ab5c9566ec56a  /tmp/zsort.tar.gz" | sha256sum -c -
+            "https://github.com/mstdokumaci/zsort/releases/download/v0.8.0/zsort-x86_64-linux.tar.gz"
+          echo "891832d3e96862195f842ca02c246751efbaaffb277e949c0226db6aade67181  /tmp/zsort.tar.gz" | sha256sum -c -
           tar -xzf /tmp/zsort.tar.gz -C /tmp/zsort
           sudo mv /tmp/zsort/zsort /usr/local/bin/zsort
 
