@@ -931,6 +931,54 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	);
 });
 
+test("joining an abandoned country's territory still brings its bots", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.startBots(0);
+	const country = world.country("Homeland");
+	if (!country) throw new Error("Missing country");
+	let now = INPUT_LEASE_MS * 10;
+	world.input(
+		"founder",
+		{
+			name: "Founder",
+			country_id: country.country_id,
+			direction: "right",
+			seq: 1,
+		},
+		now,
+	);
+	for (let i = 0; i < RULES.neutral * 2 + 5 && country.count === 0; i++)
+		world.tick(++now);
+	const founder = world.players.get("founder");
+	if (!founder) throw new Error("Missing founder");
+	expect(founder.point).toBeDefined();
+	expect(country.count).toBeGreaterThan(0);
+	const bots = () =>
+		[...world.players.values()].filter((player) => player.is_bot);
+	world.remove("founder", now);
+	world.tick(++now);
+	// No humans left: the point's bots retire, but its land stays.
+	expect(bots()).toHaveLength(0);
+	// A new human joins the landed country with no live teammate: it lands on
+	// the country's territory and still counts toward a point's bots.
+	world.input(
+		"joiner",
+		{
+			name: "Joiner",
+			country_id: country.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		now,
+	);
+	world.tick(++now);
+	const joiner = world.players.get("joiner");
+	if (!joiner) throw new Error("Missing joiner");
+	expect(world.owners[joiner.y * WIDTH + joiner.x]).toBe(country.country_id);
+	expect(joiner.point).toBeDefined();
+	expect(bots()).toHaveLength(2);
+});
+
 test("humans cannot join bot countries, even with a forged country id", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const bot = world.country("Polandia", true);
