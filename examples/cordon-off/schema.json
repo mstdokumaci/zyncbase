@@ -1,5 +1,5 @@
 {
-	"version": "0.6.0",
+	"version": "0.7.0",
 	"store": {
 		"users": {
 			"namespaced": true,
@@ -17,11 +17,16 @@
 				"next_country_id": { "type": "integer", "minimum": 1 }
 			}
 		},
-		"chunks": {
-			"required": ["owners", "dots"],
+		"country_chunks": {
+			"required": ["color_indexes"],
 			"fields": {
-				"owners": { "type": "bytes", "minLength": 1024, "maxLength": 1024 },
-				"dots": { "type": "bytes", "maxLength": 131072 }
+				"color_indexes": { "type": "bytes", "minLength": 1, "maxLength": 2560 }
+			}
+		},
+		"user_chunks": {
+			"required": ["coordinates"],
+			"fields": {
+				"coordinates": { "type": "bytes", "maxLength": 131072 }
 			}
 		},
 		"countries": {

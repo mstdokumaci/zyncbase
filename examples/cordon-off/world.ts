@@ -7,17 +7,20 @@ import {
 } from "./enclosure";
 import { type Bounds, HoleFiller } from "./filler";
 import {
-	CHUNK,
-	type ChunkRow,
-	COLUMNS,
+	COUNTRY_CHUNK_CELLS,
+	COUNTRY_CHUNK_HEIGHT,
+	COUNTRY_CHUNK_WIDTH,
 	COUNTRY_COLOR_INDEX,
 	COUNTRY_COLORS,
+	COUNTRY_COLUMNS,
+	COUNTRY_ROWS,
 	type Country,
-	chunkIndex,
+	type CountryChunkRow,
+	countryChunkIndex,
 	countryName,
 	type Direction,
 	type Dot,
-	decoder,
+	encodeColorIndexes,
 	encoder,
 	HEIGHT,
 	INPUT_LEASE_MS,
@@ -27,8 +30,11 @@ import {
 	type PlayerRow,
 	playerName,
 	RULES,
-	readOwners,
+	readColorIndexes,
 	rowId,
+	USER_CHUNK_COUNT,
+	type UserChunkRow,
+	userChunkIndex,
 	WIDTH,
 	wrapX,
 } from "./shared";
@@ -105,7 +111,7 @@ export function reservedBotCountry(value: unknown) {
 		return false;
 	}
 }
-// Chunk owner bytes are byte-per-cell palette codes; readOwners validates them.
+// Country chunk bytes are RLE palette indexes; user chunk bytes are JSON dots.
 
 export class World {
 	readonly owners = new Uint16Array(WIDTH * HEIGHT);
@@ -115,7 +121,10 @@ export class World {
 	private readonly ownerCodes = new Uint8Array(65536);
 	readonly players = new Map<string, Player>();
 	readonly countries = new Map<number, Country>();
-	readonly dirtyChunks = new Set<number>();
+	// Claims rewrite their country chunk's color indexes; movement rewrites its
+	// user chunk's coordinates. The two grids never share a dirty entry.
+	readonly dirtyCountryChunks = new Set<number>();
+	readonly dirtyUserChunks = new Set<number>();
 	readonly dirtyCountries = new Set<number>();
 	readonly dirtyRemovedCountries = new Set<number>();
 	readonly dirtyPlayerRows = new Set<string>();
@@ -306,7 +315,7 @@ export class World {
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass restores the bitmap and recomputes its counts together.
 	restore(
 		countries: Country[],
-		chunks: ChunkRow[],
+		chunks: CountryChunkRow[],
 		players: { id: string }[] = [],
 		persistedNextCountryId = 0,
 	) {
@@ -340,22 +349,21 @@ export class World {
 		);
 		for (const chunk of chunks) {
 			const index = Number(chunk.id);
-			// Reject negatives (whose cells dodge the per-cell bounds check
-			// below and would corrupt counts/bounds) and out-of-range ids.
+			// Reject negative and out-of-range ids: they would poison the
+			// per-cell coordinates (or counts/bounds) that follow.
 			if (
 				!Number.isSafeInteger(index) ||
 				index < 0 ||
-				index >= COLUMNS * Math.ceil(HEIGHT / CHUNK)
+				index >= COUNTRY_COLUMNS * COUNTRY_ROWS
 			)
 				continue;
-			const owners = readOwners(chunk.owners);
-			const x = (index % COLUMNS) * CHUNK;
-			const y = Math.floor(index / COLUMNS) * CHUNK;
-			for (let i = 0; i < owners.length; i++) {
-				const px = x + (i % CHUNK);
-				const py = y + Math.floor(i / CHUNK);
-				if (px >= WIDTH || py >= HEIGHT) continue;
-				const code = owners[i];
+			const colorIndexes = readColorIndexes(chunk.color_indexes);
+			const x = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH;
+			const y = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
+			for (let i = 0; i < colorIndexes.length; i++) {
+				const px = x + (i % COUNTRY_CHUNK_WIDTH);
+				const py = y + Math.floor(i / COUNTRY_CHUNK_WIDTH);
+				const code = colorIndexes[i];
 				const countryId = code ? byCode[code] : 0;
 				if (code && !countryId)
 					throw new Error("Saved territory has an unknown country");
@@ -370,10 +378,6 @@ export class World {
 					this.enclosureCountries.set(countryId, null);
 				}
 			}
-			// Positions don't survive a restart (live map starts empty), so any
-			// chunk persisting dots must be republished empty. Dots bytes are
-			// small; decoding beats keeping a queryable flag for this one path.
-			if (this.chunkHasDots(chunk)) this.dirtyChunks.add(index);
 		}
 		// Stale roster rows (including grace tombstones) never survive a
 		// restart: the live map is empty, so queue them all for removal.
@@ -815,7 +819,7 @@ export class World {
 			point,
 		};
 		this.players.set(id, player);
-		this.dirtyChunks.add(chunkIndex(x, y));
+		this.dirtyUserChunks.add(userChunkIndex(x, y));
 		this.dirtyPlayerRows.add(id);
 		return player;
 	}
@@ -855,7 +859,7 @@ export class World {
 		player.heardAt = now;
 		if (Number(data.seq) < player.seq) return;
 		if (player.seq !== data.seq)
-			this.dirtyChunks.add(chunkIndex(player.x, player.y));
+			this.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
 		player.seq = Number(data.seq);
 		player.direction = direction as Direction;
 	}
@@ -863,7 +867,7 @@ export class World {
 	remove(id: string, now: number) {
 		const player = this.players.get(id);
 		if (!player) return;
-		this.dirtyChunks.add(chunkIndex(player.x, player.y));
+		this.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
 		this.players.delete(id);
 		// Tombstone: the dots vanish now, but the roster row lingers with its
 		// final position so a same-id reconnect resumes in place. Expiry runs
@@ -964,15 +968,15 @@ export class World {
 		const cost = this.stepCost(player.country_id, from, to);
 		if (++player.credit < cost) return;
 		player.credit = 0;
-		const before = chunkIndex(player.x, player.y);
-		this.dirtyChunks.add(before);
+		const before = countryChunkIndex(player.x, player.y);
+		this.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
 		player.x = x;
 		player.y = y;
-		const after = chunkIndex(x, y);
-		this.dirtyChunks.add(after);
-		// Roster position tracks chunk crossings only (not every cell): exact
-		// enough for O(1) locate, quiet enough to keep the cold subscription
-		// cold. ponytail: per-tick sync if locate ever misses on fast movers.
+		const after = countryChunkIndex(x, y);
+		this.dirtyUserChunks.add(userChunkIndex(x, y));
+		// Roster position tracks country-chunk crossings only (not every cell):
+		// exact enough for O(1) locate, quiet enough to keep the cold
+		// subscription cold. ponytail: per-tick sync if locate misses on fast movers.
 		if (after !== before) {
 			player.last_x = x;
 			player.last_y = y;
@@ -1069,7 +1073,9 @@ export class World {
 				this.queueEnclosure(countryId, cell + WIDTH);
 			if (x > 0) this.queueEnclosure(countryId, cell - 1);
 		}
-		this.dirtyChunks.add(chunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)));
+		this.dirtyCountryChunks.add(
+			countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
+		);
 		const country = this.countries.get(countryId);
 		if (country) country.count++;
 		this.dirtyCountries.add(countryId);
@@ -1094,16 +1100,6 @@ export class World {
 			this.queueEnclosure(owner, cell);
 	}
 
-	/** Persisted dots are untrusted input: corrupt rows republish empty. */
-	private chunkHasDots(chunk: ChunkRow): boolean {
-		try {
-			const dots = JSON.parse(decoder.decode(chunk.dots));
-			return !Array.isArray(dots) || dots.length > 0;
-		} catch {
-			return true;
-		}
-	}
-
 	/** Wire owner code for a country id; 0 when it has no palette color. */
 	private codeOf(countryId: number) {
 		let code = this.ownerCodes[countryId];
@@ -1115,37 +1111,40 @@ export class World {
 		return code;
 	}
 
-	chunk(index: number): ChunkRow {
+	countryChunk(index: number): CountryChunkRow {
 		if (
 			!Number.isSafeInteger(index) ||
 			index < 0 ||
-			index >= COLUMNS * Math.ceil(HEIGHT / CHUNK)
+			index >= COUNTRY_COLUMNS * COUNTRY_ROWS
 		)
 			throw new RangeError("Chunk index is out of range");
-		const x = (index % COLUMNS) * CHUNK,
-			y = Math.floor(index / COLUMNS) * CHUNK;
-		const owners = new Uint8Array(CHUNK * CHUNK);
-		const columns = Math.min(CHUNK, WIDTH - x),
-			rows = Math.min(CHUNK, HEIGHT - y);
-		const codes = this.ownerCodes;
-		for (let dy = 0; dy < rows; dy++) {
-			let target = dy * CHUNK;
+		const x = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH;
+		const y = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
+		const codes = new Uint8Array(COUNTRY_CHUNK_CELLS);
+		const ownerCodes = this.ownerCodes;
+		for (let dy = 0; dy < COUNTRY_CHUNK_HEIGHT; dy++) {
+			let target = dy * COUNTRY_CHUNK_WIDTH;
 			const start = (y + dy) * WIDTH + x;
-			for (let dx = 0; dx < columns; dx++, target++) {
+			for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++, target++) {
 				const countryId = this.owners[start + dx];
-				let code = codes[countryId];
+				let code = ownerCodes[countryId];
 				// Directly injected country rows skip country(); resolve once.
 				if (!code && countryId) code = this.codeOf(countryId);
-				owners[target] = code;
+				codes[target] = code;
 			}
 		}
-		const dots: Dot[] = [...this.players.values()]
-			.filter((p) => chunkIndex(p.x, p.y) === index)
+		return { id: rowId(index), color_indexes: encodeColorIndexes(codes) };
+	}
+
+	userChunk(index: number): UserChunkRow {
+		if (!Number.isSafeInteger(index) || index < 0 || index >= USER_CHUNK_COUNT)
+			throw new RangeError("Chunk index is out of range");
+		const coordinates: Dot[] = [...this.players.values()]
+			.filter((player) => userChunkIndex(player.x, player.y) === index)
 			.map(({ id, x, y }) => ({ player_id: id, x, y }));
 		return {
 			id: rowId(index),
-			owners,
-			dots: encoder.encode(JSON.stringify(dots)),
+			coordinates: encoder.encode(JSON.stringify(coordinates)),
 		};
 	}
 }

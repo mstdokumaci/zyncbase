@@ -11,13 +11,15 @@ import {
 	type MotionDot,
 } from "./motion";
 import {
-	CHUNK,
-	type ChunkRow,
-	COLUMNS,
+	COUNTRY_CHUNK_HEIGHT,
+	COUNTRY_CHUNK_WIDTH,
 	COUNTRY_COLOR_INDEX,
 	COUNTRY_COLORS,
+	COUNTRY_COLUMNS,
+	COUNTRY_ROWS,
 	type Country,
-	chunkIndex,
+	type CountryChunkRow,
+	countryChunkIndex,
 	countryName,
 	type Direction,
 	type Dot,
@@ -28,9 +30,15 @@ import {
 	NAMESPACE,
 	type PlayerRow,
 	playerName,
-	readDots,
-	readOwners,
+	readColorIndexes,
+	readCoordinates,
 	terrain,
+	USER_CHUNK_HEIGHT,
+	USER_CHUNK_WIDTH,
+	USER_COLUMNS,
+	USER_ROWS,
+	type UserChunkRow,
+	WATER_COUNTRY_CHUNKS,
 	WATER_RGB,
 	WIDTH,
 	wrapX,
@@ -60,9 +68,11 @@ const roster = new Map<string, PlayerRow>();
 let rosterUnsub: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
-	{ image: HTMLCanvasElement; dots: Dot[]; owners: Uint8Array }
+	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
+const userChunks = new Map<number, Dot[]>();
 const subscriptions = new Map<number, () => void>();
+const userSubscriptions = new Map<number, () => void>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -109,16 +119,19 @@ let sessionGeneration = 0;
 let dirty = true;
 let drawnX = Number.NaN;
 let drawnY = Number.NaN;
-let lastSubBounds = "";
+let lastCountrySubKey = "";
+let lastUserSubKey = "";
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
 // Camera catch-up time constant. Bigger = lazier trailing behind the dot.
 const CAMERA_TAU = 120;
-// A chunk subscription costs a listen round trip, so keep one extra chunk on
-// the leading edge of travel; idle needs no margin.
-const PREFETCH_CHUNKS = 1;
+// A chunk subscription costs a listen round trip, so keep one extra country
+// chunk on the leading edge of travel; user chunks are 200 cells wide and need
+// no margin, and idle needs none either.
+const COUNTRY_PREFETCH_CHUNKS = 1;
+const USER_PREFETCH_CHUNKS = 0;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
 
@@ -296,9 +309,9 @@ addEventListener("resize", resize);
 resize();
 
 // One scratch ImageData reused by every chunk update: putImageData copies
-// synchronously, so a single buffer avoids per-tick allocations. Owner codes
+// synchronously, so a single buffer avoids per-tick allocations. Color indexes
 // index a 256-entry palette LUT packed once, so painting needs no countries.
-const chunkImageData = new ImageData(CHUNK, CHUNK);
+const chunkImageData = new ImageData(COUNTRY_CHUNK_WIDTH, COUNTRY_CHUNK_HEIGHT);
 const chunkPixels = new Uint32Array(chunkImageData.data.buffer);
 const ownerPixels = new Uint32Array(256);
 for (let code = 1; code <= MAX_COUNTRIES; code++) {
@@ -311,13 +324,16 @@ for (let code = 1; code <= MAX_COUNTRIES; code++) {
 		: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
 }
 
-function chunkImage(owners: Uint8Array, canvas?: HTMLCanvasElement) {
+function chunkImage(colorIndexes: Uint8Array, canvas?: HTMLCanvasElement) {
 	const image = canvas ?? document.createElement("canvas");
-	if (!canvas) image.width = image.height = CHUNK;
+	if (!canvas) {
+		image.width = COUNTRY_CHUNK_WIDTH;
+		image.height = COUNTRY_CHUNK_HEIGHT;
+	}
 	const draw = image.getContext("2d");
 	if (!draw) throw new Error("Canvas unavailable");
-	for (let i = 0; i < owners.length; i++)
-		chunkPixels[i] = ownerPixels[owners[i]];
+	for (let i = 0; i < colorIndexes.length; i++)
+		chunkPixels[i] = ownerPixels[colorIndexes[i]];
 	draw.putImageData(chunkImageData, 0, 0);
 	return image;
 }
@@ -372,17 +388,23 @@ function updateSelfMotion(self: MotionDot, now: number) {
 	motion = new LocalMotion(self, moving, now, land, ownerAt);
 }
 
-function receive(row: ChunkRow) {
+function receiveCountryChunk(row: CountryChunkRow) {
 	const index = Number(row.id);
 	if (!Number.isSafeInteger(index)) return;
-	const dots = readDots(row.dots);
-	const owners = readOwners(row.owners);
+	const colorIndexes = readColorIndexes(row.color_indexes);
 	const previous = chunks.get(index);
 	chunks.set(index, {
-		dots,
-		owners,
-		image: chunkImage(owners, previous?.image),
+		colorIndexes,
+		image: chunkImage(colorIndexes, previous?.image),
 	});
+	dirty = true;
+}
+
+function receiveUserChunk(row: UserChunkRow) {
+	const index = Number(row.id);
+	if (!Number.isSafeInteger(index)) return;
+	const dots = readCoordinates(row.coordinates);
+	userChunks.set(index, dots);
 	dirty = true;
 	const self = dots.find((dot) => dot.player_id === myPlayerId);
 	const now = performance.now();
@@ -400,91 +422,161 @@ function receive(row: ChunkRow) {
 
 function ownerAt(x: number, y: number) {
 	const wrapped = wrapX(x);
-	return chunks.get(chunkIndex(wrapped, y))?.owners[
-		(y % CHUNK) * CHUNK + (wrapped % CHUNK)
+	// Water is always unowned and water-only chunks have no rows; answer
+	// without a subscribed chunk so prediction keeps working over the ocean.
+	if (!land[y * WIDTH + wrapped]) return 0;
+	return chunks.get(countryChunkIndex(wrapped, y))?.colorIndexes[
+		(y % COUNTRY_CHUNK_HEIGHT) * COUNTRY_CHUNK_WIDTH +
+			(wrapped % COUNTRY_CHUNK_WIDTH)
 	];
 }
 
-// A world copy is WIDTH wide but chunk columns are CHUNK wide; the last column
-// is partial, so the wrapped columns come from world copies rather than a
-// modulo of the chunk column. Straddling the seam can need columns from both
-// ends at once.
-function visibleChunks() {
+// A world copy is WIDTH wide but chunk columns are chunk-width; both grids
+// divide WIDTH exactly, so wrapped columns come from world copies rather than
+// a modulo of the chunk column. Straddling the seam can need both ends.
+type ChunkGrid = {
+	width: number;
+	height: number;
+	columns: number;
+	rows: number;
+	prefetch: number;
+	water?: Uint8Array;
+};
+
+const COUNTRY_GRID: ChunkGrid = {
+	width: COUNTRY_CHUNK_WIDTH,
+	height: COUNTRY_CHUNK_HEIGHT,
+	columns: COUNTRY_COLUMNS,
+	rows: COUNTRY_ROWS,
+	prefetch: COUNTRY_PREFETCH_CHUNKS,
+	water: WATER_COUNTRY_CHUNKS,
+};
+const USER_GRID: ChunkGrid = {
+	width: USER_CHUNK_WIDTH,
+	height: USER_CHUNK_HEIGHT,
+	columns: USER_COLUMNS,
+	rows: USER_ROWS,
+	prefetch: USER_PREFETCH_CHUNKS,
+};
+
+// Extend the view by the grid's prefetch margin in the direction of travel so
+// a tile is subscribed before its pixels reach the viewport edge. The heading
+// persists while idle so a stop keeps the margin it already paid for.
+function subscriptionBounds(grid: ChunkGrid) {
+	const halfWidth = width / scale / 2;
+	const halfHeight = height / scale / 2;
+	const heading = direction === "idle" ? prefetchDirection : direction;
+	return {
+		xMin:
+			camera.x -
+			halfWidth -
+			(heading === "left" ? grid.prefetch * grid.width : 0),
+		xMax:
+			camera.x +
+			halfWidth +
+			(heading === "right" ? grid.prefetch * grid.width : 0),
+		yMin:
+			camera.y -
+			halfHeight -
+			(heading === "up" ? grid.prefetch * grid.height : 0),
+		yMax:
+			camera.y +
+			halfHeight +
+			(heading === "down" ? grid.prefetch * grid.height : 0),
+	};
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one walk covers seam copies, rows, and the water filter for either grid.
+function visibleChunks(grid: ChunkGrid) {
 	const visible = new Set<number>();
-	const { xMin, xMax, yMin, yMax } = subscriptionBounds();
-	const top = Math.max(0, Math.floor(yMin / CHUNK));
-	const bottom = Math.min(
-		Math.ceil(HEIGHT / CHUNK) - 1,
-		Math.floor(yMax / CHUNK),
-	);
+	const { xMin, xMax, yMin, yMax } = subscriptionBounds(grid);
+	const top = Math.max(0, Math.floor(yMin / grid.height));
+	const bottom = Math.min(grid.rows - 1, Math.floor(yMax / grid.height));
 	for (let k = Math.floor(xMin / WIDTH); k <= Math.floor(xMax / WIDTH); k++) {
 		const start = Math.max(0, xMin - k * WIDTH),
 			end = Math.min(WIDTH, xMax - k * WIDTH);
 		if (start >= end) continue;
-		const first = Math.floor(start / CHUNK);
-		const last = Math.min(COLUMNS - 1, Math.ceil(end / CHUNK) - 1);
+		const first = Math.floor(start / grid.width);
+		const last = Math.min(grid.columns - 1, Math.ceil(end / grid.width) - 1);
 		for (let col = first; col <= last; col++)
-			for (let y = top; y <= bottom; y++) visible.add(y * COLUMNS + col);
+			for (let y = top; y <= bottom; y++) {
+				const index = y * grid.columns + col;
+				// Water-only country chunks can never change: never subscribe.
+				if (!grid.water?.[index]) visible.add(index);
+			}
 	}
 	return visible;
 }
 
-// Extend the view one chunk in the direction of travel so a tile is subscribed
-// (and its first row delivered) before its pixels reach the viewport edge. The
-// heading persists while idle so a stop keeps the margin it already paid for.
-function subscriptionBounds() {
-	const halfWidth = width / scale / 2;
-	const halfHeight = height / scale / 2;
-	const margin = PREFETCH_CHUNKS * CHUNK;
-	const heading = direction === "idle" ? prefetchDirection : direction;
-	return {
-		xMin: camera.x - halfWidth - (heading === "left" ? margin : 0),
-		xMax: camera.x + halfWidth + (heading === "right" ? margin : 0),
-		yMin: camera.y - halfHeight - (heading === "up" ? margin : 0),
-		yMax: camera.y + halfHeight + (heading === "down" ? margin : 0),
-	};
+function subscriptionKey(grid: ChunkGrid) {
+	const { xMin, xMax, yMin, yMax } = subscriptionBounds(grid);
+	return `${Math.floor(xMin / grid.width)},${Math.floor(xMax / grid.width)},${Math.floor(yMin / grid.height)},${Math.floor(yMax / grid.height)}`;
 }
 
-function subscriptionKey() {
-	const { xMin, xMax, yMin, yMax } = subscriptionBounds();
-	return `${Math.floor(xMin / CHUNK)},${Math.floor(xMax / CHUNK)},${Math.floor(yMin / CHUNK)},${Math.floor(yMax / CHUNK)}`;
-}
-
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: both grids need the same serve/unserve bookkeeping in one pass.
 function updateSubscriptions() {
 	// The SDK does not retry a listen issued while the transport is down, and a
 	// failed handle would pin its chunk index forever. Record the served bounds
 	// only when a set is served, or an offline key would suppress the first
 	// refresh after reconnect.
 	if (!client || !playing || !online) return;
-	lastSubBounds = subscriptionKey();
-	const visible = visibleChunks();
+	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
+	lastUserSubKey = subscriptionKey(USER_GRID);
+	const visibleCountry = visibleChunks(COUNTRY_GRID);
 	for (const [index, unsub] of subscriptions) {
-		if (visible.has(index)) continue;
+		if (visibleCountry.has(index)) continue;
 		unsub();
 		subscriptions.delete(index);
 		chunks.delete(index);
 	}
-	for (const index of visible) {
+	for (const index of visibleCountry) {
 		if (subscriptions.has(index)) continue;
 		// Direct document listens: chunk ids are the store primary keys, so
 		// no secondary index or query-subscription group is needed per tile.
 		const key = index;
-		const unsub = client.store.listen(["chunks", String(index)], (row) => {
-			if (!subscriptions.has(key)) return;
-			if (row) receive(row as ChunkRow);
+		const unsub = client.store.listen(
+			["country_chunks", String(index)],
+			(row) => {
+				if (!subscriptions.has(key)) return;
+				if (row) receiveCountryChunk(row as CountryChunkRow);
+				else {
+					chunks.delete(key);
+					dirty = true;
+				}
+			},
+		);
+		subscriptions.set(index, unsub);
+	}
+	const visibleUser = visibleChunks(USER_GRID);
+	for (const [index, unsub] of userSubscriptions) {
+		if (visibleUser.has(index)) continue;
+		unsub();
+		userSubscriptions.delete(index);
+		userChunks.delete(index);
+	}
+	for (const index of visibleUser) {
+		if (userSubscriptions.has(index)) continue;
+		const key = index;
+		const unsub = client.store.listen(["user_chunks", String(index)], (row) => {
+			if (!userSubscriptions.has(key)) return;
+			if (row) receiveUserChunk(row as UserChunkRow);
 			else {
-				chunks.delete(key);
+				userChunks.delete(key);
 				dirty = true;
 			}
 		});
-		subscriptions.set(index, unsub);
+		userSubscriptions.set(index, unsub);
 	}
 }
 
 // Recompute tiles only when the prefetched bounds cross a chunk edge: chunk
 // updates arrive at tick rate and must not rescan subscriptions each time.
 function maybeUpdateSubscriptions() {
-	if (subscriptionKey() === lastSubBounds) return;
+	if (
+		subscriptionKey(COUNTRY_GRID) === lastCountrySubKey &&
+		subscriptionKey(USER_GRID) === lastUserSubKey
+	)
+		return;
 	updateSubscriptions();
 }
 
@@ -833,6 +925,9 @@ function returnToLobby(message: string) {
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
+	for (const unsub of userSubscriptions.values()) unsub();
+	userSubscriptions.clear();
+	userChunks.clear();
 	rosterUnsub?.unsubscribe();
 	rosterUnsub = undefined;
 	roster.clear();
@@ -882,8 +977,8 @@ async function locate() {
 		) {
 			// The camera is the subscription focus, so this move re-targets the
 			// listening ring. Only do it before a local dot exists: the located
-			// cell is the chunk entry, up to CHUNK-1 cells off, so it must not
-			// fight draw()'s eased follow once motion owns the view.
+			// cell is the chunk entry, up to COUNTRY_CHUNK_WIDTH-1 cells off, so
+			// it must not fight draw()'s eased follow once motion owns the view.
 			if (!motion) {
 				camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
 				dirty = true;
@@ -1084,8 +1179,8 @@ function draw(now: number) {
 		);
 	visibleDots.clear();
 	for (const [index, chunk] of chunks) {
-		const chunkX = (index % COLUMNS) * CHUNK,
-			chunkY = Math.floor(index / COLUMNS) * CHUNK;
+		const chunkX = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH,
+			chunkY = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
 		for (
 			let k = Math.floor((xMin - chunkX) / WIDTH);
 			k <= Math.floor((xMax - chunkX) / WIDTH);
@@ -1095,11 +1190,14 @@ function draw(now: number) {
 				chunk.image,
 				left + (chunkX + k * WIDTH) * zoom,
 				top + chunkY * zoom,
-				CHUNK * zoom,
-				CHUNK * zoom,
+				COUNTRY_CHUNK_WIDTH * zoom,
+				COUNTRY_CHUNK_HEIGHT * zoom,
 			);
-		for (const dot of chunk.dots) visibleDots.set(dot.player_id, dot);
 	}
+	// Coordinates arrive per user chunk, already bounded to the subscribed
+	// viewport; join them here so the draw loop has a single dot map.
+	for (const dots of userChunks.values())
+		for (const dot of dots) visibleDots.set(dot.player_id, dot);
 	// Draw yourself last so nearby dots and names do not cover your marker.
 	const self = visibleDots.get(myPlayerId) ?? motion?.dot;
 	if (self) {

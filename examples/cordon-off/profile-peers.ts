@@ -1,19 +1,26 @@
 // One native Worker per 64 SDK peers keeps load generation off a single JS loop.
 import { createClient, type ZyncBaseClient } from "@zyncbase/client";
 import {
-	CHUNK,
-	type ChunkRow,
-	COLUMNS,
-	HEIGHT,
+	COUNTRY_CHUNK_HEIGHT,
+	COUNTRY_CHUNK_WIDTH,
+	COUNTRY_COLUMNS,
+	COUNTRY_ROWS,
 	NAMESPACE,
 	type PlayerRow,
-	readDots,
+	readCoordinates,
+	USER_CHUNK_HEIGHT,
+	USER_CHUNK_WIDTH,
+	USER_COLUMNS,
+	USER_ROWS,
+	type UserChunkRow,
+	WATER_COUNTRY_CHUNKS,
 } from "./shared";
 
 type Peer = {
 	client: ZyncBaseClient;
 	input: { name: string; country_id: number; direction: string; seq: number };
 	subscriptions: Map<number, () => void>;
+	userSubscriptions: Map<number, () => void>;
 	x: number;
 	y: number;
 	positioned: boolean;
@@ -52,49 +59,101 @@ let moving = false,
 	lastBeat = performance.now();
 let heartbeatLag: number[] = [];
 
-function subscribe(peer: Peer) {
+// Peers mirror the browser: one subscription set per grid, viewport-sized.
+function visibleFor(
+	peer: Peer,
+	chunkWidth: number,
+	chunkHeight: number,
+	columns: number,
+	rows: number,
+	margin: number,
+	water?: Uint8Array,
+) {
 	const visible = new Set<number>();
 	const left = Math.max(
 		0,
-		Math.floor((peer.x - peer.width / peer.zoom / 2) / CHUNK) - 1,
+		Math.floor((peer.x - peer.width / peer.zoom / 2) / chunkWidth) - margin,
 	);
 	const right = Math.min(
-		COLUMNS - 1,
-		Math.floor((peer.x + peer.width / peer.zoom / 2) / CHUNK) + 1,
+		columns - 1,
+		Math.floor((peer.x + peer.width / peer.zoom / 2) / chunkWidth) + margin,
 	);
 	const top = Math.max(
 		0,
-		Math.floor((peer.y - peer.height / peer.zoom / 2) / CHUNK) - 1,
+		Math.floor((peer.y - peer.height / peer.zoom / 2) / chunkHeight) - margin,
 	);
 	const bottom = Math.min(
-		Math.ceil(HEIGHT / CHUNK) - 1,
-		Math.floor((peer.y + peer.height / peer.zoom / 2) / CHUNK) + 1,
+		rows - 1,
+		Math.floor((peer.y + peer.height / peer.zoom / 2) / chunkHeight) + margin,
 	);
 	for (let y = top; y <= bottom; y++)
-		for (let x = left; x <= right; x++) visible.add(y * COLUMNS + x);
-	for (const [index, unsub] of peer.subscriptions) {
+		for (let x = left; x <= right; x++) {
+			const index = y * columns + x;
+			if (!water?.[index]) visible.add(index);
+		}
+	return visible;
+}
+
+// Bring one grid's subscription set in line with its viewport.
+function syncSubscriptions(
+	subscriptions: Map<number, () => void>,
+	visible: Set<number>,
+	listenFor: (index: number) => () => void,
+) {
+	for (const [index, unsub] of subscriptions) {
 		if (visible.has(index)) continue;
 		unsub();
-		peer.subscriptions.delete(index);
+		subscriptions.delete(index);
 	}
 	for (const index of visible) {
-		if (peer.subscriptions.has(index)) continue;
-		peer.subscriptions.set(
-			index,
-			peer.client.store.listen(["chunks", String(index)], (row) => {
+		if (subscriptions.has(index)) continue;
+		subscriptions.set(index, listenFor(index));
+	}
+}
+
+function subscribe(peer: Peer) {
+	syncSubscriptions(
+		peer.subscriptions,
+		visibleFor(
+			peer,
+			COUNTRY_CHUNK_WIDTH,
+			COUNTRY_CHUNK_HEIGHT,
+			COUNTRY_COLUMNS,
+			COUNTRY_ROWS,
+			// client.ts COUNTRY_PREFETCH_CHUNKS
+			1,
+			WATER_COUNTRY_CHUNKS,
+		),
+		(index) =>
+			peer.client.store.listen(["country_chunks", String(index)], () => {
+				callbacks++;
+			}),
+	);
+	syncSubscriptions(
+		peer.userSubscriptions,
+		visibleFor(
+			peer,
+			USER_CHUNK_WIDTH,
+			USER_CHUNK_HEIGHT,
+			USER_COLUMNS,
+			USER_ROWS,
+			// client.ts USER_PREFETCH_CHUNKS
+			0,
+		),
+		(index) =>
+			peer.client.store.listen(["user_chunks", String(index)], (row) => {
 				callbacks++;
 				if (!row) return;
-				const dot = readDots((row as unknown as ChunkRow).dots).find(
-					(dot) => dot.player_id === peer.client.presence.localUserId,
-				);
+				const dot = readCoordinates(
+					(row as unknown as UserChunkRow).coordinates,
+				).find((dot) => dot.player_id === peer.client.presence.localUserId);
 				if (!dot || (peer.x === dot.x && peer.y === dot.y)) return;
 				peer.moves++;
 				peer.x = dot.x;
 				peer.y = dot.y;
 				subscribe(peer);
 			}),
-		);
-	}
+	);
 }
 
 // The committed roster row carries the admitted spawn cell. Roster fanout is
@@ -181,6 +240,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				positioned: false,
 				moves: 0,
 				subscriptions: new Map(),
+				userSubscriptions: new Map(),
 				input: {
 					name: `Player ${data.index + 1}`,
 					country_id: data.country_id,
@@ -215,7 +275,10 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			callbacks,
 			heartbeatLag,
 			errors,
-			subscriptions: peers.reduce((n, p) => n + p.subscriptions.size + 2, 0),
+			subscriptions: peers.reduce(
+				(n, p) => n + p.subscriptions.size + p.userSubscriptions.size + 2,
+				0,
+			),
 			movingPeers: peers.filter((p) => p.moves > 0).length,
 			positioned: peers.filter((p) => p.positioned).length,
 		});

@@ -16,12 +16,13 @@ import {
 	withServer,
 } from "../../tests/e2e/src/harness";
 import {
-	chunkIndex,
+	countryChunkIndex,
 	type Direction,
 	HEIGHT,
 	NAMESPACE,
 	RULES,
 	rowId,
+	userChunkIndex,
 	WIDTH,
 } from "./shared";
 import { World } from "./world";
@@ -69,7 +70,7 @@ function fixture() {
 	const starts: { countryId: number; x: number; y: number }[] = [];
 	const paint = (x: number, y: number, countryId: number) => {
 		seed.owners[y * WIDTH + x] = countryId;
-		seed.dirtyChunks.add(chunkIndex(x, y));
+		seed.dirtyCountryChunks.add(countryChunkIndex(x, y));
 	};
 	for (let i = 0; i < countryCount; i++) {
 		const left = 20 + (i % 5) * 390;
@@ -95,7 +96,7 @@ function fixture() {
 	const world = new World(seed.land);
 	world.restore(
 		[...seed.countries.values()],
-		[...seed.dirtyChunks].map((index) => seed.chunk(index)),
+		[...seed.dirtyCountryChunks].map((index) => seed.countryChunk(index)),
 	);
 	for (const [i, start] of starts.entries()) {
 		const id = `mover-${i}`;
@@ -113,6 +114,7 @@ function fixture() {
 			credit: 0,
 			heardAt: 0,
 		});
+		world.dirtyUserChunks.add(userChunkIndex(start.x, start.y));
 		world.dirtyPlayerRows.add(id);
 	}
 	if (values.mode === "bots") {
@@ -124,7 +126,8 @@ function fixture() {
 		});
 		world.startBots(0);
 	}
-	world.dirtyChunks.clear();
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
 	world.dirtyCountries.clear();
 	verify(world);
 	return world;
@@ -157,9 +160,14 @@ function steer(world: World, tick: number) {
 	}
 }
 
-// Match server.ts: full dirty chunk rows, country rows, player rows, then committed batches.
+// Match server.ts: dirty chunk rows for both grids, country rows, player rows, then committed batches.
 function changes(world: World) {
-	const chunks = [...world.dirtyChunks].map((index) => world.chunk(index));
+	const countryChunks = [...world.dirtyCountryChunks].map((index) =>
+		world.countryChunk(index),
+	);
+	const userChunks = [...world.dirtyUserChunks].map((index) =>
+		world.userChunk(index),
+	);
 	const operations: BatchOperation[] = [...world.dirtyCountries].map(
 		(countryId) => {
 			const country = world.countries.get(countryId);
@@ -176,16 +184,24 @@ function changes(world: World) {
 		assert(row);
 		operations.push({ op: "set", path: ["users", id], value: row });
 	}
-	for (const { id, ...value } of chunks)
-		operations.push({ op: "set", path: ["chunks", id], value });
-	world.dirtyChunks.clear();
+	for (const { id, ...value } of countryChunks)
+		operations.push({ op: "set", path: ["country_chunks", id], value });
+	for (const { id, ...value } of userChunks)
+		operations.push({ op: "set", path: ["user_chunks", id], value });
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
 	world.dirtyCountries.clear();
 	world.dirtyPlayerRows.clear();
 	return {
 		operations,
-		chunks: chunks.length,
-		bytes: chunks.reduce(
-			(sum, chunk) => sum + chunk.owners.byteLength + chunk.dots.byteLength,
+		countryChunks: countryChunks.length,
+		userChunks: userChunks.length,
+		countryBytes: countryChunks.reduce(
+			(sum, chunk) => sum + chunk.color_indexes.byteLength,
+			0,
+		),
+		userBytes: userChunks.reduce(
+			(sum, chunk) => sum + chunk.coordinates.byteLength,
 			0,
 		),
 	};
@@ -251,9 +267,11 @@ async function run(client?: ZyncBaseClient) {
 	if (client) {
 		for (let cell = 0; cell < world.owners.length; cell++)
 			if (world.owners[cell])
-				world.dirtyChunks.add(
-					chunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
+				world.dirtyCountryChunks.add(
+					countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
 				);
+		for (const player of world.players.values())
+			world.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
 		for (const countryId of world.countries.keys())
 			world.dirtyCountries.add(countryId);
 		const initial = changes(world).operations;
@@ -268,8 +286,10 @@ async function run(client?: ZyncBaseClient) {
 		serialization: number[] = [],
 		commit: number[] = [],
 		total: number[] = [];
-	let chunkWrites = 0,
-		payloadBytes = 0,
+	let countryChunkWrites = 0,
+		countryChunkBytes = 0,
+		userChunkWrites = 0,
+		userChunkBytes = 0,
 		flushes = 0;
 	const cpu = process.cpuUsage();
 	const heapBefore = heapStats();
@@ -296,8 +316,10 @@ async function run(client?: ZyncBaseClient) {
 			serialization.push(t2 - t1);
 			commit.push(t3 - t2);
 			total.push(t3 - t0);
-			chunkWrites += batch.chunks;
-			payloadBytes += batch.bytes;
+			countryChunkWrites += batch.countryChunks;
+			countryChunkBytes += batch.countryBytes;
+			userChunkWrites += batch.userChunks;
+			userChunkBytes += batch.userBytes;
 			if (client && (tick + 1) % 200 === 0)
 				console.log(`Committed ${tick + 1}/${ticks} ticks`);
 			// Publishing defaults to the game's 20 Hz rate. --unpaced stresses commits.
@@ -339,8 +361,10 @@ async function run(client?: ZyncBaseClient) {
 		commit: summary(commit),
 		total: summary(total),
 		ticksOverBudget: total.filter((ms) => ms > RULES.tickMs).length,
-		chunkWrites,
-		payloadBytes,
+		countryChunkWrites,
+		countryChunkBytes,
+		userChunkWrites,
+		userChunkBytes,
 		flushes,
 	};
 	verify(world);

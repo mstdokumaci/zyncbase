@@ -15,7 +15,12 @@
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
 		{
-			"collection": "chunks",
+			"collection": "country_chunks",
+			"read": true,
+			"write": { "$session.role": { "eq": "simulation" } }
+		},
+		{
+			"collection": "user_chunks",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }
 		},
