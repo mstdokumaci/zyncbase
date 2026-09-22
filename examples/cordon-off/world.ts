@@ -46,8 +46,8 @@ type Player = {
 	direction: Direction;
 	credit: number;
 	heardAt: number;
-	// Spawn point this player came from, so its bots know the local crowd
-	// size. Absent for humans who joined on their country's territory.
+	// Spawn point whose bots this player's crowd calls in. Every human has
+	// one; bots carry none.
 	point?: number;
 	plan?: BotPlan;
 	thinkAt?: number;
@@ -725,6 +725,11 @@ export class World {
 		now: number,
 		point?: number,
 	): Player {
+		// Every human carries a point; joiners of existing territory round-robin
+		// like fresh founders so the point's bots still spawn for them. Bots
+		// carry none.
+		if (!bot && point === undefined)
+			point = this.humanAnchor(this.spawnCount++).point;
 		const player: Player = {
 			id,
 			country_id: countryId,
