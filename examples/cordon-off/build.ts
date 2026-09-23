@@ -1,5 +1,7 @@
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { renderMapPng } from "./history";
+import { HEIGHT, terrain, WIDTH } from "./shared";
 
 export async function buildBrowser(outdir = join(import.meta.dir, "dist")) {
 	await mkdir(outdir, { recursive: true });
@@ -12,8 +14,18 @@ export async function buildBrowser(outdir = join(import.meta.dir, "dist")) {
 	if (!bundle.success)
 		throw new AggregateError(bundle.logs, "Browser build failed");
 	await Promise.all(
-		["index.html", "style.css", "history.html"].map((name) =>
+		["index.html", "style.css", "history.html", "favicon.svg"].map((name) =>
 			copyFile(join(import.meta.dir, name), join(outdir, name)),
+		),
+	);
+	await writeFile(
+		join(outdir, "og.png"),
+		renderMapPng(
+			new Uint16Array(WIDTH * HEIGHT),
+			terrain(),
+			new Map<number, string>(),
+			WIDTH,
+			HEIGHT,
 		),
 	);
 	await writeFile(

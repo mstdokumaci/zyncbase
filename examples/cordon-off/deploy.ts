@@ -18,6 +18,7 @@ const MIME_TYPES: Record<string, string> = {
 	css: "text/css",
 	json: "application/json",
 	png: "image/png",
+	svg: "image/svg+xml",
 };
 
 /** sha256 over sorted relative paths and contents of every asset file. */

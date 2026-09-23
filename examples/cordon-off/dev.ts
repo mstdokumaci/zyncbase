@@ -29,6 +29,8 @@ export async function startLocalEdge(options: {
 		["/client.js", ["client.js", "text/javascript"]],
 		["/style.css", ["style.css", "text/css"]],
 		["/history.html", ["history.html", "text/html"]],
+		["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
+		["/og.png", ["og.png", "image/png"]],
 	]);
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this development-only handler mirrors static and HTTP origin routing.
 	const server = createServer(async (req, res) => {
