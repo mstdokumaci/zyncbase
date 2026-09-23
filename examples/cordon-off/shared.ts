@@ -161,7 +161,7 @@ export type RoundInfo = {
 export type RoundCursor = RoundInfo & { fresh?: boolean };
 
 // Round boundaries are absolute multiples of the period since the Unix epoch,
-// so the default 2 h period lands on even UTC hours and restarts cannot drift.
+// so the default 1 h period lands on the hour and restarts cannot drift.
 export function nextRoundBoundary(now: number, periodMs: number) {
 	return (Math.floor(now / periodMs) + 1) * periodMs;
 }

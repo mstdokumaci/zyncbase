@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { LAND_RGB, type RoundCursor, WATER_RGB } from "./shared";
 
-export const HISTORY_LIMIT = 20;
+export const HISTORY_LIMIT = 36;
 const CURSOR_FILE = "round.json";
 const INDEX_FILE = "index.json";
 
