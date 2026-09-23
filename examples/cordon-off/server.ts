@@ -76,8 +76,8 @@ const databaseUrl = new URL("/ws", origin);
 databaseUrl.protocol = tls ? "wss:" : "ws:";
 if (!tls) databaseUrl.hostname = "127.0.0.1";
 databaseUrl.port = String(databasePort);
-// Rounds end on absolute multiples of this period; 2 h lands on even UTC hours.
-const roundMs = Number(process.env.GAME_ROUND_MS ?? 7_200_000);
+// Rounds end on absolute multiples of this period; 1 h lands on the hour.
+const roundMs = Number(process.env.GAME_ROUND_MS ?? 3_600_000);
 if (!Number.isSafeInteger(roundMs) || roundMs <= 0)
 	throw new Error("GAME_ROUND_MS must be a positive integer");
 // A quiet world resets early so the next visitor starts fresh; 0 disables.

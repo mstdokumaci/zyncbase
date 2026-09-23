@@ -556,9 +556,9 @@ try {
 	assert.equal(typeof healthNow, "number");
 	assert.equal(typeof lobbyRound.number, "number");
 	assert.equal(
-		lobbyRound.endsAt % 7_200_000,
+		lobbyRound.endsAt % 3_600_000,
 		0,
-		"round boundaries land on even UTC hours",
+		"round boundaries land on the hour",
 	);
 	assert.ok(lobbyRound.endsAt > healthNow);
 	assert.equal(

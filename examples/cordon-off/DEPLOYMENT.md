@@ -180,7 +180,7 @@ After the foreground check, stop it with Ctrl+C. You can use FreeBSD's superviso
 daemon -R 1 -P /home/freebsd/.config/cordon-off/supervisor.pid -o /home/freebsd/.config/cordon-off/game.log /home/freebsd/.config/cordon-off/run.sh
 ```
 
-The game exits and restarts by design at every round boundary (2 h) and after ten quiet minutes, recycling the simulation and ZyncBase processes; `daemon` must be allowed to restart it, and `-R 1` keeps that handoff quick. To stop the supervisor and game, run in `sh`:
+The game exits and restarts by design at every round boundary (1 h) and after ten quiet minutes, recycling the simulation and ZyncBase processes; `daemon` must be allowed to restart it, and `-R 1` keeps that handoff quick. To stop the supervisor and game, run in `sh`:
 
 ```sh
 kill -TERM "$(cat /home/freebsd/.config/cordon-off/supervisor.pid)"

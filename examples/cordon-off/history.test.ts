@@ -53,7 +53,7 @@ function pixel(raw: Buffer, width: number, x: number, y: number) {
 }
 
 test("round boundaries land on absolute period multiples", () => {
-	const period = 7_200_000;
+	const period = 3_600_000;
 	const thirteenThirtySeven = Date.UTC(2026, 0, 1, 13, 37, 12);
 	expect(nextRoundBoundary(thirteenThirtySeven, period)).toBe(
 		Date.UTC(2026, 0, 1, 14, 0, 0),
@@ -61,7 +61,7 @@ test("round boundaries land on absolute period multiples", () => {
 	// Exactly on a boundary always advances to the next one.
 	const boundary = Date.UTC(2026, 0, 1, 14, 0, 0);
 	expect(nextRoundBoundary(boundary, period)).toBe(
-		Date.UTC(2026, 0, 1, 16, 0, 0),
+		Date.UTC(2026, 0, 1, 15, 0, 0),
 	);
 	// A custom period still aligns to epoch multiples.
 	expect(nextRoundBoundary(1000, 1000)).toBe(2000);
