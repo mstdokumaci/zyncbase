@@ -82,8 +82,10 @@ const assets = await buildBrowser(join(dataDir, "assets"));
 assert.deepEqual((await readdir(assets)).sort(), [
 	"_headers",
 	"client.js",
+	"favicon.svg",
 	"history.html",
 	"index.html",
+	"og.png",
 	"style.css",
 ]);
 const edgeOptions = { port: 0, authPort, databasePort, assets, ca: cert };
