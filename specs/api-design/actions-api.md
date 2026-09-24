@@ -225,8 +225,11 @@ interface ActionContext {
   readonly userId: string;
   /** Active namespace of the action's bound scope. */
   readonly namespace: string;
-  /** Server-assigned execution id for this invocation. Opaque; useful for tracing. */
-  readonly reqId: number;
+  /**
+   * Server-assigned execution id for this invocation. Matches the `execId`
+   * carried by `ActionForward` and echoed by `ActionReply`.
+   */
+  readonly execId: number;
 }
 ```
 
