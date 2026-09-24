@@ -130,11 +130,12 @@ fixint. **Never reuse or renumber an assigned ID.**
 | `0x33` | `ActionRegister` | W→S | Advertise handled actions. |
 
 **Direction rules:** server-only IDs (`0x00`–`0x01`, `0x03`, `0x05`,
-`0x18`–`0x1a`, `0x28`–`0x29`, `0x31`–`0x32`) received as client requests are
-rejected with `INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`)
-and `0x30` (`ActionCall`) are client requests. `0x33` (`ActionRegister`) is
-accepted only from a worker connection and is checked by the action `register`
-authorization rule. Unknown or unassigned IDs are rejected the same way.
+`0x18`–`0x1a`, `0x28`–`0x29`, `0x31`) received as client requests are rejected
+with `INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`) and
+`0x30` (`ActionCall`) are client requests. `0x32` (`ActionReply`) is accepted
+only from the worker the call was forwarded to; `0x33` (`ActionRegister`) is
+accepted from any client whose `$session` passes the action `register` rule.
+Unknown or unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
 only its value is numeric. `StoreDelta`, `PresenceBroadcast`, and
@@ -217,10 +218,11 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 - `ActionCall` uses the fixed five-element tuple `[0x30, reqId, actionId, timeoutMs, paramsPairArray]`. `reqId` is the client envelope `id`; `timeoutMs` is a non-negative integer or `nil` and may only shorten the server deadline; `paramsPairArray` is an array of `[field_index, value]` pairs.
 - `ActionForward` uses the fixed five-element tuple `[0x31, execId, userId, actionId, paramsPairArray]`. `execId` is minted by the server for this execution and is the only cross-connection correlation key; `userId` is `bin16` from the action's bound scope.
-- `ActionReply` uses the fixed four-element tuple `[0x32, execId, ok, payload]`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. Workers must only send `ActionReply` for synchronous actions; workers must omit `ActionReply` for asynchronous actions, and the server silently discards any reply received for an asynchronous execution id.
+- `ActionReply` uses the fixed four-element tuple `[0x32, execId, ok, payload]`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. The server accepts a reply only from the worker the call was forwarded to; unknown or foreign replies are discarded. Workers send `ActionReply` only for synchronous actions; a reply received for an asynchronous execution id is discarded.
 - `ActionRegister` uses the fixed two-element tuple `[0x33, actionIds]`. The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
-- `0x31` and `0x32` are worker/server-only message types. A non-worker client sending them is rejected with `INVALID_MESSAGE_TYPE`.
-- `0x33` (`ActionRegister`) is accepted from a worker connection and is subject to the action `register` authorization rule.
+- `0x31` is a server-only message type. Application clients sending it are rejected with `INVALID_MESSAGE_TYPE`.
+- `0x32` (`ActionReply`) is accepted only from the worker the call was forwarded to.
+- `0x33` (`ActionRegister`) is accepted from any client whose `$session` passes the action `register` rule.
 - Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
 
 ## Scoped Session Rules

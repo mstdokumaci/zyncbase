@@ -159,7 +159,10 @@ Client-side cancellation is not supported in this version. A pending sync call s
 
 ## Backend Worker API (`server.actions.handle`)
 
-Backend services connect to ZyncBase as ordinary authenticated clients whose `$session` satisfies the action's `register` authorization rule. Workers handle actions using `server.actions.handle(name, handler)`.
+A worker is a client that handles actions. A backend service becomes a worker by connecting like any other client and satisfying the action's `register` authorization rule; the server then forwards that action's calls to it. Any client whose session passes the rule can be a worker. Workers handle actions using `server.actions.handle(name, handler)`.
+
+> [!IMPORTANT]
+> **Granting `register` is a trust decision.** A worker receives raw action params and replies on the action's behalf. Run workers as trusted backend service processes with service identities, deployed alongside your infrastructure, and keep `register` rules narrow (for example, a dedicated service claim).
 
 Calling `server.actions.handle()` registers the handler locally and sends `ActionRegister` to the server. Registration requires the connection to be established with the action's bound scope ready; calling `handle()` before that throws `SESSION_NOT_READY`.
 
@@ -202,6 +205,7 @@ server.actions.handle('checkout', async (ctx, params) => {
 ### Registration Lifecycle
 
 - Registrations are per-connection and removed on disconnect.
+- When a worker's token is refreshed, `register` is re-evaluated against the new `$session`; registrations that no longer pass are removed and the worker's in-flight sync calls fail with `PERMISSION_DENIED` (the handler may already have executed).
 - The SDK re-registers handlers automatically after reconnect.
 - A namespace switch on the action's bound scope invalidates that scope's registrations; the SDK re-registers when the new scope is ready.
 - Round-robin provides no sticky routing: handlers must be stateless across invocations or share state explicitly.

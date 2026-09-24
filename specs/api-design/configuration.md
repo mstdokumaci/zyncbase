@@ -1285,7 +1285,7 @@ Define authorization rules using the declarative JSON condition grammar document
 }
 ```
 
-The top-level `actions` array controls action invocation (`invoke`) and worker registration (`register`) per action, with `*` as a catch-all fallback. Rules are fail-closed.
+The top-level `actions` array controls action invocation (`invoke`) and worker registration (`register`) per action, with `*` as a catch-all fallback. Rules are fail-closed. Grant `register` only to trusted backend service identities: a worker receives action params and replies on the action's behalf.
 
 ### Condition Grammar
 

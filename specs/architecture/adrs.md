@@ -943,7 +943,8 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 - `authorization.json` gains a top-level `"actions"` array parallel to `"store"`: each rule is `{ "action": name | "*", "invoke": Condition, "register": Condition }`.
 - `invoke` is evaluated pre-enqueue (accept phase) against `$session`, `$namespace`, and `$value` (the params payload). `register` gates `ActionRegister`. Denials return `PERMISSION_DENIED`.
 - Rules are fail-closed. The implicit playground default allows `invoke` for `"*"` and denies `register` when no authorization file is configured; running a worker requires explicit authorization rules.
-- A "worker role" is a mapped `$session` claim checked by `register` rules — not a new engine concept. Workers are ordinary authenticated clients that additionally register handlers.
+- A worker is any authenticated client whose `$session` satisfies the action's `register` rule; it is an ordinary client that additionally handles actions. Worker identity is a mapped claim, not a protocol handshake.
+- When a worker's token is refreshed, `register` is re-evaluated against the new `$session`; registrations that no longer pass are removed and the worker's in-flight sync calls fail with `PERMISSION_DENIED`.
 - This keeps authorization RAM-only inside the Zig core. ADR-016's rejection of external authorization processes stands: workers execute business logic, never permission truth.
 
 ### Worker Topology and Routing
@@ -977,7 +978,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
   - `0x31 ActionForward` (Server → Worker)
   - `0x32 ActionReply` (Worker → Server; synchronous only)
   - `0x33 ActionRegister` (Worker → Server)
-- `0x31` and `0x32` are worker/server-only; application clients sending them are rejected with `INVALID_MESSAGE_TYPE`. `0x33` (`ActionRegister`) is accepted from authenticated worker connections and gated by the action `register` rule. This extends the ADR-008 registry range beyond `0x29` to `0x33`.
+- `0x31` is server-only; application clients sending it are rejected with `INVALID_MESSAGE_TYPE`. `0x32` is accepted only from the worker the call was forwarded to; other senders are rejected. `0x33` (`ActionRegister`) is accepted from any client whose `$session` passes the action `register` rule. This extends the ADR-008 registry range beyond `0x29` to `0x33`.
 
 ### Consequences
 

@@ -36,9 +36,13 @@
 2. Decode `wire.Envelope` from the raw MessagePack frame.
 3. Acquire a request arena from `MemoryStrategy`.
 4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.
-5. Route to the store, auth, or presence handler with an exhaustive `switch` over `MessageType` (adding a registry member is a compile-time routing decision).
+5. Route to the store, auth, presence, or action handler with an exhaustive `switch` over `MessageType` (adding a registry member is a compile-time routing decision).
 6. Send an immediate response when the route completes synchronously.
-7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current.
+7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current. Action paths settle as follows:
+   - Async `ActionCall` answers immediately with `0x00 OK` once admitted to the forward path; it has no deferred response.
+   - Sync `ActionCall` records a pending entry and answers only when the worker's `ActionReply` resolves it, or fails it with `ACTION_TIMEOUT` / `REQUEST_SUPERSEDED`.
+   - `ActionRegister` completes on the event loop and answers immediately.
+   - `ActionReply` resolves a pending caller by `execId`; a reply that does not match a pending `execId` owned by the sending worker is discarded.
 8. Convert route failures through `wire.getWireError` and send a canonical error response.
 
 ## Supported Routes
@@ -53,7 +57,8 @@
 | Presence write | `PresenceSet`, `PresenceSetShared`, `PresenceRemove` | Requires ready presence scope and presence authorization. |
 | Presence subscription control | `PresenceSubscribe`, `PresenceUnsubscribe`, `PresenceSubscribeShared`, `PresenceUnsubscribeShared` | Requires ready presence scope except local cleanup paths. |
 | Action call | `ActionCall` | Requires the action's bound scope (store or presence) to be ready and `invoke` authorization. |
-| Action registration | `ActionRegister` | Worker-only; requires the action's bound scope to be ready and `register` authorization. |
+| Action registration | `ActionRegister` | Any client passing the action `register` rule; requires the action's bound scope to be ready. |
+| Action reply | `ActionReply` | Accepted only from the worker the call was forwarded to; return payload validated; unknown or foreign replies are discarded. |
 
 ## Scoped Session Rules
 
@@ -113,6 +118,7 @@ Errors flow through four distinct paths depending on when they occur:
 - Per-connection mutable state is guarded by `Connection` methods; cross-connection fanout is handled by dedicated managers.
 - Store writes are serialized by the storage write queue; read/subscription paths must not mutate connection scope.
 - Disconnect teardown clears violation state, detaches subscriptions, resets scope, and removes presence owned by the connection.
+- Pending sync-action entries are per-connection and removed on reply, deadline, caller disconnect, and bound-scope change; worker registrations are removed on disconnect, bound-scope namespace change, and `AuthRefresh` re-evaluation.
 
 ## Related Specifications
 
