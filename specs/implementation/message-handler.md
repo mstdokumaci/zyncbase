@@ -40,7 +40,7 @@
 6. Send an immediate response when the route completes synchronously.
 7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current. Action paths settle as follows:
    - Async `ActionCall` answers immediately with `0x00 OK` once admitted to the forward path; it has no deferred response.
-   - Sync `ActionCall` records a pending entry and answers only when the worker's `ActionReply` resolves it, or fails it with `ACTION_TIMEOUT` / `REQUEST_SUPERSEDED`.
+   - Sync `ActionCall` records a pending entry and answers only when the worker's `ActionReply` resolves it, or fails it with `ACTION_TIMEOUT` / `WORKER_DISCONNECTED` / `REQUEST_SUPERSEDED`.
    - `ActionRegister` completes on the event loop and answers immediately.
    - `ActionReply` resolves a pending caller by `execId`; a reply that does not match a pending `execId` owned by the sending worker is discarded.
 8. Convert route failures through `wire.getWireError` and send a canonical error response.
@@ -118,7 +118,7 @@ Errors flow through four distinct paths depending on when they occur:
 - Per-connection mutable state is guarded by `Connection` methods; cross-connection fanout is handled by dedicated managers.
 - Store writes are serialized by the storage write queue; read/subscription paths must not mutate connection scope.
 - Disconnect teardown clears violation state, detaches subscriptions, resets scope, and removes presence owned by the connection.
-- Pending sync-action entries are per-connection and removed on reply, deadline, caller disconnect, and bound-scope change; worker registrations are removed on disconnect, bound-scope namespace change, and `AuthRefresh` re-evaluation.
+- Pending sync-action entries are per-connection and removed on reply, deadline, worker disconnect, caller disconnect, and bound-scope change; worker registrations are removed on disconnect, bound-scope namespace change, and `AuthRefresh` re-evaluation.
 
 ## Related Specifications
 

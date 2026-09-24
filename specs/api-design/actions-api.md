@@ -153,7 +153,7 @@ try {
 }
 ```
 
-Client-side cancellation is not supported in this version. A pending sync call settles when the worker replies, the server deadline expires (`ACTION_TIMEOUT`), the bound scope changes (`REQUEST_SUPERSEDED`), or the connection drops (`CONNECTION_FAILED`).
+Client-side cancellation is not supported in this version. A pending sync call settles when the worker replies, the server deadline expires (`ACTION_TIMEOUT`), the worker disconnects (`WORKER_DISCONNECTED`), the bound scope changes (`REQUEST_SUPERSEDED`), or the connection drops (`CONNECTION_FAILED`).
 
 ---
 

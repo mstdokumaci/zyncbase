@@ -960,7 +960,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 ### Correlation and Timeouts
 
 - `ActionCall` carries the client's per-connection envelope `id` (for the immediate response) and an optional `timeoutMs`. The server mints a unique execution id when forwarding; `ActionForward` carries that id with the bound-scope user id, and `ActionReply` echoes only the execution id. Client request ids are never used as cross-connection correlation keys.
-- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, caller disconnect, and scope change. A scope change rejects the pending call with `REQUEST_SUPERSEDED`; a caller disconnect delivers nothing because the connection is gone.
+- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, worker disconnect, caller disconnect, and scope change. A scope change rejects the pending call with `REQUEST_SUPERSEDED`; a caller disconnect delivers nothing because the connection is gone.
 - The server owns the deadline (default 10s). A client-supplied `timeoutMs` may only shorten it. Expiry answers the caller with `ACTION_TIMEOUT` and removes the pending entry; the worker may still be executing. Timeout means "no response received", not "not executed".
 - Worker-side cancellation (`AbortSignal`) is not part of this version; there is no cancel message.
 
