@@ -44,9 +44,9 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `AUTH_FAILED` | `authentication` | Server | Identity verification failed or the connection lacks required external identity. |
 | `TOKEN_EXPIRED` | `authentication` | Server | Session token expired and the client must refresh/reconnect. |
 | `NAMESPACE_UNAUTHORIZED` | `authorization` | Server | Namespace-level authorization denied access. |
-| `PERMISSION_DENIED` | `authorization` | Server | Store or presence rule denied the operation. |
+| `PERMISSION_DENIED` | `authorization` | Server | Store, presence, or action rule denied the operation. |
 | `SESSION_NOT_READY` | `state` | Server | Store/presence operation arrived before the required scoped session was ready. |
-| `REQUEST_SUPERSEDED` | `state` | Server | A newer scope-resolution request replaced the in-flight request. |
+| `REQUEST_SUPERSEDED` | `state` | Server | A newer scope request superseded in-flight work (scope resolution or a pending action call). |
 | `NAMESPACE_SWITCH_REJECTED` | `state` | Server | Namespace switching is forbidden for the active `users.namespaced` model. |
 | `SUBSCRIPTION_NOT_FOUND` | `state` | Server | Requested subscription id is not known for the connection. |
 | `NO_ACTION_WORKER` | `state` | Server | No connected worker is registered for the action in the bound scope and namespace. |

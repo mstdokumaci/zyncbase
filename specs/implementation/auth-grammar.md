@@ -141,7 +141,7 @@ When `authorization.json` is omitted, the server synthesizes the following "publ
     {
       "action": "*",
       "invoke": true,
-      "register": true
+      "register": false
     }
   ]
 }

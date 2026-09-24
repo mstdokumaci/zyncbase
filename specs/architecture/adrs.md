@@ -942,7 +942,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 
 - `authorization.json` gains a top-level `"actions"` array parallel to `"store"`: each rule is `{ "action": name | "*", "invoke": Condition, "register": Condition }`.
 - `invoke` is evaluated pre-enqueue (accept phase) against `$session`, `$namespace`, and `$value` (the params payload). `register` gates `ActionRegister`. Denials return `PERMISSION_DENIED`.
-- Rules are fail-closed. The implicit playground default allows `invoke` and `register` for `"*"` when no authorization file is configured.
+- Rules are fail-closed. The implicit playground default allows `invoke` for `"*"` and denies `register` when no authorization file is configured; running a worker requires explicit authorization rules.
 - A "worker role" is a mapped `$session` claim checked by `register` rules — not a new engine concept. Workers are ordinary authenticated clients that additionally register handlers.
 - This keeps authorization RAM-only inside the Zig core. ADR-016's rejection of external authorization processes stands: workers execute business logic, never permission truth.
 
@@ -959,7 +959,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 ### Correlation and Timeouts
 
 - `ActionCall` carries the client's per-connection envelope `id` (for the immediate response) and an optional `timeoutMs`. The server mints a unique execution id when forwarding; `ActionForward` carries that id with the bound-scope user id, and `ActionReply` echoes only the execution id. Client request ids are never used as cross-connection correlation keys.
-- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, caller disconnect, and scope change.
+- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, caller disconnect, and scope change. A scope change rejects the pending call with `REQUEST_SUPERSEDED`; a caller disconnect delivers nothing because the connection is gone.
 - The server owns the deadline (default 10s). A client-supplied `timeoutMs` may only shorten it. Expiry answers the caller with `ACTION_TIMEOUT` and removes the pending entry; the worker may still be executing. Timeout means "no response received", not "not executed".
 - Worker-side cancellation (`AbortSignal`) is not part of this version; there is no cancel message.
 
@@ -977,7 +977,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
   - `0x31 ActionForward` (Server → Worker)
   - `0x32 ActionReply` (Worker → Server; synchronous only)
   - `0x33 ActionRegister` (Worker → Server)
-- `0x31`–`0x33` are worker/server-only; clients sending them are rejected with `INVALID_MESSAGE_TYPE`. This extends the ADR-008 registry range beyond `0x29` to `0x33`.
+- `0x31` and `0x32` are worker/server-only; application clients sending them are rejected with `INVALID_MESSAGE_TYPE`. `0x33` (`ActionRegister`) is accepted from authenticated worker connections and gated by the action `register` rule. This extends the ADR-008 registry range beyond `0x29` to `0x33`.
 
 ### Consequences
 

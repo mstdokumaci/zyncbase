@@ -153,7 +153,7 @@ try {
 }
 ```
 
-Client-side cancellation is not supported in this version. A pending sync call settles when the worker replies, the server deadline expires (`ACTION_TIMEOUT`), or the connection drops (`CONNECTION_FAILED`).
+Client-side cancellation is not supported in this version. A pending sync call settles when the worker replies, the server deadline expires (`ACTION_TIMEOUT`), the bound scope changes (`REQUEST_SUPERSEDED`), or the connection drops (`CONNECTION_FAILED`).
 
 ---
 
@@ -260,7 +260,7 @@ Action rules live in `authorization.json` in a top-level `"actions"` array paral
 | `invoke` | Who may call the action. Evaluated against `$session`, `$namespace`, and `$value` (the params payload) before the call is accepted. |
 | `register` | Who may register a handler for the action via `ActionRegister`. |
 
-- Rules are fail-closed. When `authorization.json` is omitted, the playground defaults allow `invoke` and `register` on `"*"`.
+- Rules are fail-closed. When `authorization.json` is omitted, the playground defaults allow `invoke` on `"*"` and deny `register`; running a worker requires explicit authorization rules.
 - Denials return `PERMISSION_DENIED`.
 - A "worker role" is a mapped `$session` claim (see `authentication.session.claims`); there is no separate role system.
 
@@ -370,4 +370,4 @@ Actions follow ZyncBase's integer-routed binary MessagePack architecture:
 4. **`0x32 ActionReply` (Worker → Server)**: `[0x32, execId, ok, returnsPairArray | [code, message]]`. Sent only for synchronous actions; omitted for asynchronous actions.
 5. **`0x33 ActionRegister` (Worker → Server)**: `[0x33, actionIds]`. The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
 
-`0x31`–`0x33` are worker/server-only message types. Clients sending them are rejected with `INVALID_MESSAGE_TYPE`.
+`0x31` and `0x32` are worker/server-only message types; application clients sending them are rejected with `INVALID_MESSAGE_TYPE`. `0x33` (`ActionRegister`) is accepted from a worker connection and is subject to the action `register` authorization rule.
