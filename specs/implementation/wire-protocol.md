@@ -124,11 +124,16 @@ fixint. **Never reuse or renumber an assigned ID.**
 | `0x27` | `PresenceRemove` | C→S | Remove user presence. |
 | `0x28` | `PresenceBroadcast` | S→C | Push user presence changes. |
 | `0x29` | `SharedStateBroadcast` | S→C | Push shared state changes. |
+| `0x30` | `ActionCall` | C→S | Invoke an action. |
+| `0x31` | `ActionForward` | S→W | Forward an action call to a registered worker. |
+| `0x32` | `ActionReply` | W→S | Worker reply to a synchronous action call. |
+| `0x33` | `ActionRegister` | W→S | Advertise handled actions. |
 
 **Direction rules:** server-only IDs (`0x00`–`0x01`, `0x03`, `0x05`,
-`0x18`–`0x1a`, `0x28`–`0x29`) received as client requests are rejected with
-`INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`) is a client
-request; unknown or unassigned IDs are rejected the same way.
+`0x18`–`0x1a`, `0x28`–`0x29`, `0x31`–`0x33`) received as client requests are
+rejected with `INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`)
+and `0x30` (`ActionCall`) are client requests; unknown or unassigned IDs are
+rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
 only its value is numeric. `StoreDelta`, `PresenceBroadcast`, and
@@ -148,6 +153,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
 | `StoreLoadMore` | `subId`, `nextCursor`, optional `table_index` | Ready store scope and known subscription. | Page historical results for an active subscription. The server resolves the retained query by `subId`; SDKs may include `table_index` as response-context metadata. |
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
+| `ActionCall` | `action_id`, optional `timeoutMs`, `params` | Ready bound scope (store or presence per the action's schema `scope`) and `invoke` authorization. | Invoke an action. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |
 | `PresenceSet` | `data` | Ready presence scope. | Merge user presence fields. |
@@ -190,7 +196,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 | Push | Fields | Meaning |
 |------|--------|---------|
-| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields` | Integer dictionaries used by store, query, and presence messages. |
+| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, action dictionaries (`actions`, per-action `params`/`returns` field dictionaries, sync bitset, scope flags) | Integer dictionaries used by store, query, presence, and action messages. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
@@ -206,11 +212,21 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - Presence push `subId` values are non-negative JavaScript-safe integers. Empty `entries` and `patches` arrays are structurally valid.
 - `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.
 
+## Action Messages
+
+- `ActionCall` uses the fixed five-element tuple `[0x30, reqId, actionId, timeoutMs, paramsPairArray]`. `reqId` is the client envelope `id`; `timeoutMs` is a non-negative integer or `nil` and may only shorten the server deadline; `paramsPairArray` is an array of `[field_index, value]` pairs.
+- `ActionForward` uses the fixed five-element tuple `[0x31, execId, userId, actionId, paramsPairArray]`. `execId` is minted by the server for this execution and is the only cross-connection correlation key; `userId` is `bin16` from the action's bound scope.
+- `ActionReply` uses the fixed four-element tuple `[0x32, execId, ok, payload]`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. Workers must only send `ActionReply` for synchronous actions; workers must omit `ActionReply` for asynchronous actions, and the server silently discards any reply received for an asynchronous execution id.
+- `ActionRegister` uses the fixed two-element tuple `[0x33, actionIds]`. The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
+- `0x31`–`0x33` are worker/server-only message types. A non-worker client sending them is rejected with `INVALID_MESSAGE_TYPE`.
+- Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
+
 ## Scoped Session Rules
 
 - `StoreSetNamespace` and `PresenceSetNamespace` establish independent scoped sessions.
 - Store operations before store scope readiness return `SESSION_NOT_READY`.
 - Presence operations before presence scope readiness return `SESSION_NOT_READY`.
+- Action calls and registrations require the action's bound scope (store or presence per the schema `scope`) to be ready; otherwise they return `SESSION_NOT_READY`.
 - Every successful `PresenceSetNamespace` returns the active internal `users.id` as bin16; the SDK uses that canonical UUID for self-filtering.
 - External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.

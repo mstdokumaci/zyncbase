@@ -4,7 +4,7 @@ This directory contains the core API design specifications for the ZyncBase SDK 
 
 ## API Categories
 
-ZyncBase's API is strictly divided into two namespaces to separate persistent state from ephemeral state.
+ZyncBase's API is divided into three primary namespaces to separate persistent state, ephemeral peer awareness, and backend-enforced business logic.
 
 ### 1. Store API ([store-api.md](./store-api.md))
 For durable, synchronized data. Everything in the Store API is validated against your schema, persisted to SQLite, and syncs across clients.
@@ -16,6 +16,13 @@ For durable, synchronized data. Everything in the Store API is validated against
 ### 2. Presence API ([presence-api.md](./presence-api.md))
 For ephemeral, transient user awareness (cursors, typing indicators). Data is kept only in memory and is automatically wiped when a user disconnects.
 - **Methods**: Set, Get, and Subscribe to user presence.
+
+### 3. Actions API ([actions-api.md](./actions-api.md))
+For backend-enforced business logic and ephemeral upstream streaming. Routes schema-validated messages from clients to backend workers without touching SQLite or leaking data to peers.
+- **Methods**: `client.actions.call` (Client) and `server.actions.handle` (Worker).
+- **Execution Tiers**: Inherent sync RPC vs. async streaming derived from `schema.json`.
+- **Namespace Scope**: Per-action `scope` binds to the store (default) or presence scope.
+- **Authorization**: `actions` rules in `authorization.json` control invocation and worker registration.
 
 ## Lifecycle & Setup
 
@@ -38,12 +45,6 @@ Complete guide to server configuration, including:
 - Error propagation model (try/catch vs events)
 - Write failure reporting
 - Auto-retry summary
-
-## Framework Integrations ([framework-integrations.md](./framework-integrations.md))
-Planned React and Vue bindings:
-- React hooks (`useStore`, `useQuery`, `usePresence`, `useConnectionStatus`)
-- Vue composables
-- Common loading/error/data patterns
 
 ---
 

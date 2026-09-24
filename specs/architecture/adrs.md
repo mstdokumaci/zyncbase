@@ -242,7 +242,7 @@ WebSocket per-message deflate compression is disabled. MessagePack is already co
 - Smaller wire payloads than JSON without pre-compiled stubs.
 - Stack-overflow attacks via deeply nested payloads are impossible by construction.
 - No compression overhead on the critical path.
-- Message type discriminators are one-byte positive fixint IDs (`0x00`–`0x29`) from the canonical registry in `src/wire/message_type.zig` / `sdk/typescript/src/connection_wire.ts`, replacing the legacy top-level `type` strings. Direction is enforced by routing, not by the numeric value; see ADR-009.
+- Message type discriminators are one-byte positive fixint IDs (`0x00`–`0x33`) from the canonical registry in `src/wire/message_type.zig` / `sdk/typescript/src/connection_wire.ts`, replacing the legacy top-level `type` strings. Direction is enforced by routing, not by the numeric value; see ADR-009 and ADR-022.
 
 **Principles**: P-PPF, P-SBD
 
@@ -613,6 +613,8 @@ Durable state and ephemeral awareness state have fundamentally different consist
 
 This is a structural boundary, not a convention. A developer cannot accidentally use presence for durable data because the SDK has no API path that does so. The choice is forced at the call site.
 
+ADR-022 adds `client.actions.*` / `server.actions.*` as a third, independent surface for backend-enforced logic and ephemeral upstream streams. The store/presence durability boundary described here is unchanged by that addition.
+
 **Consequences**:
 - The store/presence distinction is visible in every code example and every type signature.
 - Presence state is explicitly scoped to the Typed Two-Tier Presence System, which builds on this namespace boundary.
@@ -870,3 +872,121 @@ Adding, removing, reordering, or changing a constraint is an index migration —
 - Duplicate rejection is observable only on committed confirmations; accepted writes give no delivery guarantee by design (ADR-018).
 
 **Principles**: P-SBD, P-TSF
+
+---
+
+## ADR-022: Schema-Defined Actions and Ephemeral Remote Execution
+
+Client-driven collaborative applications frequently require backend-enforced business logic: validating operations (checkout, inventory, matchmaking) or ingesting high-frequency ephemeral inputs (game controller movements, telemetry) without polluting SQLite storage or leaking commands to peer clients via presence.
+
+**Decision**: Introduce **Actions** as a first-class top-level section in `schema.json`. Actions provide a schema-validated, integer-routed upstream messaging pipeline from clients to backend workers. An action's execution mode (synchronous RPC vs. asynchronous streaming) is determined declaratively by whether it defines a `returns` schema. An action's namespace and user identity come from an optional `scope` field that binds it to the existing store or presence scope.
+
+### Grammar and Schema Definition
+
+Actions are defined under the top-level `"actions"` key in `schema.json`:
+- `params`: Object schema of input arguments with validation constraints (types, min/max, enums, patterns, nested objects, typed arrays).
+- `required`: Action-level array of required param paths.
+- `returns`: Object schema defining output fields for synchronous RPC, or `null`/omitted for asynchronous fire-and-forget actions.
+- `scope`: `"store"` (default) or `"presence"` — selects the namespace scope that resolves the action's namespace and user identity.
+
+```json
+{
+  "actions": {
+    "player_move": {
+      "params": {
+        "direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
+        "seq": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["direction"],
+      "returns": null,
+      "scope": "presence"
+    },
+    "checkout": {
+      "params": {
+        "cart_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["cart_id"],
+      "returns": {
+        "order_id": { "type": "string" },
+        "remaining_coins": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
+```
+
+Input validation runs inside the Zig engine before forwarding to workers; invalid payloads are rejected with `SCHEMA_VALIDATION_FAILED`. Return payloads are validated before delivery to the caller.
+
+### Execution Semantics: Inherent Sync vs. Async
+
+1. **Asynchronous (Fire-and-Forget / Stream)**:
+   - When `returns` is `null` or omitted.
+   - The server validates input constraints and immediately acknowledges the client (`0x00 OK`) on admission to the forward path.
+   - The SDK returns `Promise<void>`.
+   - Never touches SQLite disk or WAL. Zero peer broadcasting. Delivery is **at-most-once**: no persistence, no redelivery, and no worker-failure feedback.
+2. **Synchronous (RPC)**:
+   - When `returns` defines a valid schema.
+   - The server tracks the call by a server-minted execution id, routes it to a registered worker, awaits the worker's `ActionReply`, validates return fields, and forwards the response back to the client.
+   - The SDK returns `Promise<TOutput>`.
+
+Sync actions are orchestration, not transactions. The engine provides no atomic increment or compare-and-set, and a sync reply is a worker claim — not committed state. Workers that mutate store must use `confirm: "committed"` where the outcome matters and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
+
+### Namespace Scope Binding
+
+- Each action resolves namespace and user identity through its bound scope using the existing scope machinery (`StoreSetNamespace` / `PresenceSetNamespace`). There is no separate action scope, namespace message, or thread domain.
+- Namespace admission uses the bound scope's rules: `storeFilter` for store-scoped actions, `presenceRead` for presence-scoped actions. Calls and registrations before bound-scope readiness fail with `SESSION_NOT_READY`.
+- Registration and routing keys are `(scope, namespace_id, action_id)`.
+- Switching the bound scope's namespace clears that scope's registrations for the connection, mirroring subscription invalidation (ADR-014). Workers re-register after a switch; the SDK routes each call through the action's bound scope.
+
+### Authorization
+
+- `authorization.json` gains a top-level `"actions"` array parallel to `"store"`: each rule is `{ "action": name | "*", "invoke": Condition, "register": Condition }`.
+- `invoke` is evaluated pre-enqueue (accept phase) against `$session`, `$namespace`, and `$value` (the params payload). `register` gates `ActionRegister`. Denials return `PERMISSION_DENIED`.
+- Rules are fail-closed. The implicit playground default allows `invoke` and `register` for `"*"` when no authorization file is configured.
+- A "worker role" is a mapped `$session` claim checked by `register` rules — not a new engine concept. Workers are ordinary authenticated clients that additionally register handlers.
+- This keeps authorization RAM-only inside the Zig core. ADR-016's rejection of external authorization processes stands: workers execute business logic, never permission truth.
+
+### Worker Topology and Routing
+
+- **Scope + namespace scoped**: Workers register in the resolved namespace of each action's bound scope.
+- **Dynamic Registration**: Authenticated connections issue `ActionRegister` to advertise handled actions; the server validates the `register` rule and bound-scope readiness.
+- **Round-Robin Balancing**: ZyncBase distributes incoming calls across all healthy workers registered for `(scope, namespace_id, action_id)`. Round-robin implies no sticky routing — workers must be stateless across invocations or share state explicitly.
+- **Fail-Fast Semantics**:
+  - No registered worker → `NO_ACTION_WORKER`.
+  - Worker disconnects before replying → `WORKER_DISCONNECTED`; the worker's registrations are removed.
+  - Worker exceeds the deadline → `ACTION_TIMEOUT`.
+
+### Correlation and Timeouts
+
+- `ActionCall` carries the client's per-connection envelope `id` (for the immediate response) and an optional `timeoutMs`. The server mints a unique execution id when forwarding; `ActionForward` carries that id with the bound-scope user id, and `ActionReply` echoes only the execution id. Client request ids are never used as cross-connection correlation keys.
+- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, caller disconnect, and scope change.
+- The server owns the deadline (default 10s). A client-supplied `timeoutMs` may only shorten it. Expiry answers the caller with `ACTION_TIMEOUT` and removes the pending entry; the worker may still be executing. Timeout means "no response received", not "not executed".
+- Worker-side cancellation (`AbortSignal`) is not part of this version; there is no cancel message.
+
+### Threading and Delivery
+
+- Routing, registration bookkeeping, correlation, and forward/reply encoding run on the uWS event loop. No new thread domain is introduced (ADR-006).
+- There is no engine-side worker queue: forwarding uses normal connection sends, and a worker that cannot keep up with its uWS buffer is disconnected and must reconnect and re-register.
+- All existing send invariants apply: sends happen on the event loop, and handlers must not block it.
+
+### Wire Protocol Integration
+
+- **Integer Routing**: `SchemaSync` assigns dense integer action ids plus per-action flattened `params`/`returns` field dictionaries, a sync bitset, and per-action scope flags. `params` and `returns` travel over the wire as compact pair-arrays `[[field_index, value], ...]`.
+- **Message Types**:
+  - `0x30 ActionCall` (Client → Server)
+  - `0x31 ActionForward` (Server → Worker)
+  - `0x32 ActionReply` (Worker → Server; synchronous only)
+  - `0x33 ActionRegister` (Worker → Server)
+- `0x31`–`0x33` are worker/server-only; clients sending them are rejected with `INVALID_MESSAGE_TYPE`. This extends the ADR-008 registry range beyond `0x29` to `0x33`.
+
+### Consequences
+
+- Completely eliminates the need to abuse the Presence system or SQLite store for upstream client-to-server messaging.
+- Schema serves as the single source of truth for validation, execution mode, and scope binding.
+- Sync actions add worker availability and round-trip latency to the caller's path; they are not transactional and cannot express atomic counters or compare-and-set.
+- Async actions are at-most-once, inherit the per-connection message rate limit, and provide no delivery or failure feedback.
+- Clients write clean, boilerplate-free code (`client.actions.call(name, params)`) with end-to-end TypeScript type inference.
+- Keeps the Zig core fast and lean: business logic stays in external worker processes (Node/Bun/Go) while ZyncBase acts as the high-speed binary multiplexer.
+
+**Principles**: P-RTF, P-TSF, P-PPF, P-SBD, P-POM
+

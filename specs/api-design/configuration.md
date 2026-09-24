@@ -437,6 +437,43 @@ See [Presence API Reference](./presence-api.md) for full usage details.
 
 ---
 
+## Actions Schema (`actions`)
+
+Actions define schema-validated client-to-worker messages. The execution tier is derived from the declaration: a `returns` object declares a synchronous RPC; `null` or omitted declares an asynchronous stream. See [Actions API Reference](./actions-api.md) for the full contract.
+
+```json
+{
+  "actions": {
+    "player_move": {
+      "params": {
+        "direction": { "type": "string", "enum": ["up", "down", "left", "right"] },
+        "seq": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["direction"],
+      "returns": null,
+      "scope": "presence"
+    },
+    "checkout": {
+      "params": { "cart_id": { "type": "string", "minLength": 1 } },
+      "required": ["cart_id"],
+      "returns": {
+        "order_id": { "type": "string" },
+        "remaining_coins": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
+```
+
+| Key | Description |
+|---|---|
+| `params` | Input field definitions using the standard field grammar; nested objects flatten with `__`. |
+| `required` | Required param paths (dot notation). |
+| `returns` | Output field definitions for sync actions; `null`/omitted declares an async action. |
+| `scope` | `"store"` (default) or `"presence"` — the scope that resolves the action's namespace and user identity. |
+
+---
+
 ## store
 
 > [!IMPORTANT]
@@ -1236,9 +1273,19 @@ Define authorization rules using the declarative JSON condition grammar document
       "read": { "$session.role": { "eq": "admin" } },
       "write": false
     }
+  ],
+  "actions": [
+    {
+      "action": "checkout",
+      "invoke": { "$session.role": { "eq": "member" } },
+      "register": { "$session.role": { "eq": "worker" } }
+    },
+    { "action": "*", "invoke": false, "register": false }
   ]
 }
 ```
+
+The top-level `actions` array controls action invocation (`invoke`) and worker registration (`register`) per action, with `*` as a catch-all fallback. Rules are fail-closed.
 
 ### Condition Grammar
 
@@ -1246,7 +1293,7 @@ Define authorization rules using the declarative JSON condition grammar document
 - `$session.*` - Resolved session context projected from a validated JWT or anonymous identity (e.g., `$session.userId`, `$session.tenant_id`, `$session.role`)
 - `$namespace.*` - Parsed namespace parts (e.g., `$namespace.tenant_id`, `$namespace.room_id`)
 - `$path` - Target table/collection name
-- `$value.*` - Incoming mutation payload, available for writes
+- `$value.*` - Incoming mutation payload for writes, or the params payload for action `invoke` rules
 - `$doc.*` - Same-row SQLite columns, injected into SQL for reads and existing-row updates/removes
 
 **Operators:**

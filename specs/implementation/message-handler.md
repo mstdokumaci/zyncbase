@@ -52,6 +52,8 @@
 | Auth | `AuthRefresh` | Requires valid refresh token/JWT validation path. |
 | Presence write | `PresenceSet`, `PresenceSetShared`, `PresenceRemove` | Requires ready presence scope and presence authorization. |
 | Presence subscription control | `PresenceSubscribe`, `PresenceUnsubscribe`, `PresenceSubscribeShared`, `PresenceUnsubscribeShared` | Requires ready presence scope except local cleanup paths. |
+| Action call | `ActionCall` | Requires the action's bound scope (store or presence) to be ready and `invoke` authorization. |
+| Action registration | `ActionRegister` | Worker-only; requires the action's bound scope to be ready and `register` authorization. |
 
 ## Scoped Session Rules
 

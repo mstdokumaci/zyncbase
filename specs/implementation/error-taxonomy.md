@@ -49,6 +49,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `REQUEST_SUPERSEDED` | `state` | Server | A newer scope-resolution request replaced the in-flight request. |
 | `NAMESPACE_SWITCH_REJECTED` | `state` | Server | Namespace switching is forbidden for the active `users.namespaced` model. |
 | `SUBSCRIPTION_NOT_FOUND` | `state` | Server | Requested subscription id is not known for the connection. |
+| `NO_ACTION_WORKER` | `state` | Server | No connected worker is registered for the action in the bound scope and namespace. |
 | `COLLECTION_NOT_FOUND` | `validation` | Server | Store table/collection is not present in the loaded schema. |
 | `FIELD_NOT_FOUND` | `validation` | Server | Referenced field is not present in the table schema. |
 | `IMMUTABLE_FIELD` | `validation` | Server | Request attempted to write a protected system field. |
@@ -63,6 +64,8 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `BATCH_TOO_LARGE` | `client` | Server + SDK | Batch exceeds the configured maximum operation count. |
 | `MESSAGE_TOO_LARGE` | `client` | Server + SDK | Payload exceeded configured parser or message-size limits. |
 | `RATE_LIMITED` | `rate_limit` | Server | Per-connection request token bucket rejected the message. |
+| `ACTION_TIMEOUT` | `server` | Server | Sync action worker failed to reply before the server deadline. The action may still execute; action calls are never auto-retried. |
+| `WORKER_DISCONNECTED` | `server` | Server | Worker disconnected while processing a sync action. The action may have partially executed; action calls are never auto-retried. |
 | `INTERNAL_ERROR` | `server` | Server | Unclassified internal failure. This is a bug or operational problem. |
 | `ENGINE_UNHEALTHY` | `server` | Server | Storage/write engine is degraded and cannot complete the request now. |
 | `CONNECTION_FAILED` | `network` | SDK | WebSocket connection failed or closed unexpectedly. |
@@ -73,7 +76,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 - Internal Zig errors are not public API. They map to the closest public code in `src/wire/errors.zig`.
 - Parser limit failures currently map to `MESSAGE_TOO_LARGE` or `INVALID_MESSAGE_FORMAT`; do not document separate public MessagePack limit codes unless they are added to `src/wire/errors.zig` and the SDK.
 - SQLite, cache, checkpoint, and allocator failures are operational/internal details. They should map to `ENGINE_UNHEALTHY` or `INTERNAL_ERROR` unless a user-facing public error code is intentionally added.
-- Authorization failures map to `NAMESPACE_UNAUTHORIZED` only for namespace admission. Store/presence operation denials map to `PERMISSION_DENIED`.
+- Authorization failures map to `NAMESPACE_UNAUTHORIZED` only for namespace admission. Store, presence, and action operation denials map to `PERMISSION_DENIED`.
 - Write acknowledgement failures use the same code catalog inside `WriteError` pushes; top-level `phase` and optional `batchIndex` fields explain where the failure happened.
 
 ## Propagation
@@ -95,6 +98,8 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `state` | No | Wait for scope readiness, resubscribe, or reconnect depending on the code. |
 | `validation` | No | Fix request shape/schema/query. |
 | `client` | No | Fix SDK call site or reduce payload/batch size. |
+
+Action call results are never auto-retried by the SDK, regardless of category: a retried call may already have executed. Retry policy for actions is an application decision.
 
 ## Related Specifications
 

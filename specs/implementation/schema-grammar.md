@@ -41,6 +41,7 @@ Schema configuration is rooted, not a bare table map:
 | `version` | `string` | yes | Schema version string. |
 | `store` | `object` | yes | Map of table names to table definitions. |
 | `presence` | `object` | no | User/shared presence field definitions. If omitted, a minimal implicit presence schema is synthesized. |
+| `actions` | `object` | no | Map of action names to action definitions. If omitted, no actions exist. |
 | `metadata` | `object` | no | Preserved schema metadata for operators/tools. |
 
 `Config.schema` may be either an inline object with this shape or a string path to a JSON file with this shape.
@@ -182,6 +183,24 @@ At boot, the server flattens presence definitions to index arrays sent to client
 |:---|:---|:---|:---|
 | **Phase 1** | `presence.user` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceUserFields[]`. (Position = Wire Index). |
 | **Phase 2** | `presence.shared` | Recursively iterates keys in definition order. Object sub-fields are joined with `__`. | Array `presenceSharedFields[]`. (Position = Wire Index). |
+
+---
+
+## Actions Schema
+
+Actions are declared under the top-level `actions` key as a map of action names to definitions. Action names follow the same identifier grammar as tables (`[A-Za-z][A-Za-z0-9_]*`). Each action definition is closed: the accepted keys are `params`, `required`, `returns`, and `scope`.
+
+| Key | Type | Required | Description |
+|:---|:---:|:---:|:---|
+| `params` | `object` | no | Map of parameter field definitions. Omitted or `{}` means no parameters. |
+| `required` | `array<string>` | no | Required parameter paths (dot notation, same path rules as table `required`). Every path must resolve to a declared param; otherwise startup fails. |
+| `returns` | `object \| null` | no | Output field definitions for synchronous actions. `null` or omitted declares an asynchronous action. All declared return fields must be present in a successful reply. |
+| `scope` | `string` | no | `"store"` (default) or `"presence"`. Selects the namespace scope that resolves the action's namespace and user identity. |
+
+- `params` and `returns` use the field grammar: primitives accept `type` plus validation constraints; `object` fields accept `type` and `fields` (arbitrary nesting, flattened with `__`); `array` fields require `items`. Store-only properties (`indexed`, `references`, `onDelete`, `unique`, `metadata`) are rejected because actions are never persisted.
+- Each of `params` and `returns` supports at most 500 flat fields.
+- The server flattens both dictionaries into per-action index arrays delivered through `SchemaSync` (wire layout owned by [Wire Protocol](./wire-protocol.md)).
+- Input params are validated before forwarding and return payloads before delivery, both using `SCHEMA_VALIDATION_FAILED` on failure.
 
 ---
 

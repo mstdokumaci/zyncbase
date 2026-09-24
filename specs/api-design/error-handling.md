@@ -163,6 +163,16 @@ Error codes relevant to SDK consumers, grouped by category:
 | `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
 | `ENGINE_UNHEALTHY` | Write engine is in degraded state | Yes — retry up to 3 times |
 
+### Actions
+
+| Code | Description | Auto-retry? |
+|------|-------------|-------------|
+| `NO_ACTION_WORKER` | No worker is registered for this action in the bound scope and namespace | No — start a worker or retry later |
+| `ACTION_TIMEOUT` | Worker did not reply before the server deadline; the action may still execute | No — never auto-retried |
+| `WORKER_DISCONNECTED` | Worker disconnected while processing a sync action; it may have partially executed | No — never auto-retried |
+
+Action calls are never auto-retried by the SDK: a retried call may execute twice. Retry policy for actions is an application decision. `PERMISSION_DENIED` covers action `invoke` rule denials, and `SCHEMA_VALIDATION_FAILED` covers invalid params or worker return payloads.
+
 ## Write Failure Reporting
 
 ZyncBase separates state delivery from write outcome reporting:
@@ -189,6 +199,8 @@ Confirmed write timeouts mean confirmation was not received. They do not imply t
 | State | ❌ No | 0 | Surface immediately |
 | Validation | ❌ No | 0 | Surface immediately |
 | Client | ❌ No | 0 | Surface immediately |
+
+Action calls are never auto-retried, regardless of category: a retried call may already have executed. See [Actions](#actions).
 
 ---
 
