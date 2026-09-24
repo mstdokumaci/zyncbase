@@ -28,12 +28,13 @@ This document specifies the formal JSON grammar structures, context variables, a
 
 ## Root Structure
 
-The root of `authorization.json` consists of two decoupled arrays:
+The root of `authorization.json` consists of three decoupled arrays:
 
 | Key | Type | Description |
 |:---|:---|:---|
 | `namespaces` | `array` | Rules for horizontal partitioning (namespace access) and presence operations. |
 | `store` | `array` | Rules for vertical partitioning (table access) and document ownership. |
+| `actions` | `array` | Rules for action invocation and worker registration. |
 
 ### Namespace Rule Fields
 
@@ -52,6 +53,14 @@ The root of `authorization.json` consists of two decoupled arrays:
 | `collection` | `string` | Table name, or `*` for a catch-all fallback. |
 | `read` | `Condition` | Checked on `StoreQuery` and `StoreSubscribe`. |
 | `write` | `Condition` | Checked on `StoreSet`, `StoreRemove`, and `StoreBatch`. |
+
+### Action Rule Fields
+
+| Key | Type | Description / Validation |
+|:---|:---:|:---|
+| `action` | `string` | Action name, or `*` for a catch-all fallback. |
+| `invoke` | `Condition` | Checked when an `ActionCall` is accepted. `$value` contains the params payload. |
+| `register` | `Condition` | Checked on `ActionRegister`. Worker identity is an ordinary mapped `$session` claim. |
 
 ---
 
@@ -89,6 +98,8 @@ ZyncBase evaluates variables using two execution paths:
 | `PresenceSetShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
 | `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `PresenceSubscribeShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
+| `ActionCall` | ✅ RAM | ✅ RAM | ❌ | ✅ RAM | ❌ | ❌ |
+| `ActionRegister` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -124,6 +135,13 @@ When `authorization.json` is omitted, the server synthesizes the following "publ
       "collection": "*",
       "read": true,
       "write": { "$doc.owner_id": { "eq": "$session.userId" } }
+    }
+  ],
+  "actions": [
+    {
+      "action": "*",
+      "invoke": true,
+      "register": false
     }
   ]
 }
