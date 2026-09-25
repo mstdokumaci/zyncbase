@@ -811,6 +811,7 @@ try {
 	client.on("disconnected", () => {
 		if (!stopping) failed("Database disconnected");
 	});
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session replacement stays with the lease and player setup.
 	client.actions.handle("player_join", (ctx, params) => {
 		if (stopping || ending)
 			throw new ActionError("JOIN_REJECTED", "The world is restarting");
@@ -827,6 +828,9 @@ try {
 		const player = tryJoin(ctx.userId, params, performance.now());
 		if (!player)
 			throw new ActionError("JOIN_REJECTED", "Could not join this country");
+		const previousSessionId = playerSessions.get(ctx.userId);
+		if (previousSessionId && previousSessionId !== sessionId)
+			releaseSession(previousSessionId);
 		lease.userId = ctx.userId;
 		lease.name = name;
 		lease.countryId = countryId;

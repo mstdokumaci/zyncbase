@@ -82,6 +82,8 @@ let joining = false;
 // Admission lives in an action: joined means the worker admitted this player,
 // and identity came back in the join reply.
 let joined = false;
+let joinedAt = 0;
+const ADMISSION_GRACE_MS = 1000;
 let joinInFlight = false;
 let worldReady = false;
 let roundNumber = 0;
@@ -664,6 +666,7 @@ async function joinWorld() {
 		throw new Error("Join returned no player identity");
 	myPlayerId = result.user_id;
 	joined = true;
+	joinedAt = performance.now();
 	ownRowMisses = 0;
 	setConnection("");
 }
@@ -1007,6 +1010,7 @@ function checkAdmission() {
 // world dropped us. Returns true when the lobby has been requested.
 function noteOwnRowMissing() {
 	if (!playing || !joined || joinInFlight) return false;
+	if (performance.now() - joinedAt < ADMISSION_GRACE_MS) return false;
 	ownRowMisses++;
 	if (ownRowMisses < 3) return false;
 	returnToLobby("You were away too long — rejoin");
