@@ -1,4 +1,5 @@
 import {
+	ActionExecutionError,
 	createClient,
 	type SubscriptionHandle,
 	type ZyncBaseClient,
@@ -78,6 +79,12 @@ let client: ZyncBaseClient | undefined;
 let online = false;
 let playing = false;
 let joining = false;
+// Admission lives in an action: joined means the worker admitted this player,
+// and identity came back in the join reply.
+let joined = false;
+let joinedAt = 0;
+const ADMISSION_GRACE_MS = 1000;
+let joinInFlight = false;
 let worldReady = false;
 let roundNumber = 0;
 let roundEndsAt = 0;
@@ -85,6 +92,7 @@ let serverSkew = 0;
 let roundTimer: ReturnType<typeof setTimeout> | undefined;
 let leaving = false;
 let selectedCountryId: number | undefined;
+let sessionId = "";
 let lobbyCountries: Country[] = [];
 let availableSlots = 0;
 let myPlayerId = "",
@@ -109,12 +117,16 @@ let scale = 8;
 let width = innerWidth,
 	height = innerHeight;
 let lastOwnDot = 0;
+// Consecutive locate() reads that could not find our own roster row. A live
+// player always has one; a few misses mean the world dropped us (long sleep,
+// expired session, restart) and the lobby is the only way back.
+let ownRowMisses = 0;
 let locating = false;
 // Bumped when a session ends so in-flight locate() failures cannot write
 // status text into the lobby that started after them.
 let sessionGeneration = 0;
 // Dirty-frame rendering: the scene repaints only when something it draws
-// changes. Presence heartbeat runs on its own timer, not as a frame side
+// changes. The input heartbeat runs on its own timer, not as a frame side
 // effect, so it survives idle frames.
 let dirty = true;
 let drawnX = Number.NaN;
@@ -411,6 +423,7 @@ function receiveUserChunk(row: UserChunkRow) {
 	const selfMotion = self ? toMotion(self) : undefined;
 	if (selfMotion) updateSelfMotion(selfMotion, now);
 	if (!self || !selfMotion) return;
+	ownRowMisses = 0;
 	if (lastOwnDot === 0) {
 		clearTimeout(admissionTimer);
 		// First sighting acks our input.
@@ -640,17 +653,51 @@ function refreshMotionColor() {
 	);
 }
 
+// Admission and identity come from the sync join action: its reply carries the
+// internal user id the roster and dots are keyed by.
+async function joinWorld() {
+	if (!client) throw new Error("Not connected");
+	const result = (await client.actions.call("player_join", {
+		name: nickname,
+		country_id: selectedCountryId,
+		session_id: sessionId,
+	})) as { user_id?: unknown };
+	if (typeof result.user_id !== "string" || !result.user_id)
+		throw new Error("Join returned no player identity");
+	myPlayerId = result.user_id;
+	joined = true;
+	joinedAt = performance.now();
+	ownRowMisses = 0;
+	setConnection("");
+}
+
+// A rejected join (full world, missing country, bad name) is final; a worker
+// that is still booting is transient and the heartbeat retries it.
+async function ensureJoined() {
+	if (!client || !online || joined || joinInFlight) return;
+	joinInFlight = true;
+	try {
+		await joinWorld();
+	} catch (error) {
+		if (error instanceof ActionExecutionError) returnToLobby(error.message);
+	} finally {
+		joinInFlight = false;
+	}
+}
+
+// Best-effort: remove the dot now instead of waiting for the input lease.
+// Crashes and dropped sockets still expire on the lease.
+function leave() {
+	if (!client || !online || !joined) return;
+	void client.actions.call("player_leave", {}).catch(() => {});
+}
+
 function publish(changed = false) {
 	if (changed)
 		motion?.update(motion.dot, online ? direction : "idle", performance.now());
-	if (!online || !client) return;
+	if (!online || !client || !joined) return;
 	if (changed) seq++;
-	client.presence.set({
-		name: nickname,
-		country_id: selectedCountryId,
-		direction,
-		seq,
-	});
+	void client.actions.call("player_move", { direction, seq }).catch(() => {});
 }
 
 function setDirection(next: Direction) {
@@ -788,6 +835,7 @@ document.addEventListener("visibilitychange", () => {
 });
 addEventListener("pagehide", () => {
 	release();
+	leave();
 	client?.disconnect();
 });
 // Touch players get a fixed nipplejs stick. Its `move` event carries the
@@ -921,6 +969,10 @@ function returnToLobby(message: string) {
 	clearTimeout(admissionTimer);
 	clearInterval(heartbeat);
 	heartbeat = undefined;
+	leave();
+	joined = false;
+	ownRowMisses = 0;
+	sessionId = "";
 	client?.disconnect();
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
@@ -942,7 +994,7 @@ function returnToLobby(message: string) {
 	void checkHealth();
 }
 
-// The roster can change between the lobby poll and presence admission.
+// The roster can change between the lobby poll and the join action.
 function checkAdmission() {
 	if (!playing || lastOwnDot !== 0) return;
 	if (
@@ -952,6 +1004,42 @@ function checkAdmission() {
 		returnToLobby("That country is no longer available. Choose another one.");
 		return;
 	}
+}
+
+// A live player always has a roster row; consecutive locate() misses mean the
+// world dropped us. Returns true when the lobby has been requested.
+function noteOwnRowMissing() {
+	if (!playing || !joined || joinInFlight) return false;
+	if (performance.now() - joinedAt < ADMISSION_GRACE_MS) return false;
+	ownRowMisses++;
+	if (ownRowMisses < 3) return false;
+	returnToLobby("You were away too long — rejoin");
+	return true;
+}
+
+function hasOwnRow(me: PlayerRow | undefined): me is PlayerRow {
+	return (
+		me !== undefined &&
+		Number.isSafeInteger(me.last_x) &&
+		Number.isSafeInteger(me.last_y) &&
+		me.last_x >= 0 &&
+		me.last_x < WIDTH &&
+		me.last_y >= 0 &&
+		me.last_y < HEIGHT
+	);
+}
+
+function applyOwnRow(me: PlayerRow) {
+	// The camera is the subscription focus, so this move re-targets the
+	// listening ring. Only do it before a local dot exists: the located
+	// cell is the chunk entry, up to COUNTRY_CHUNK_WIDTH-1 cells off, so
+	// it must not fight draw()'s eased follow once motion owns the view.
+	if (!motion) {
+		camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
+		dirty = true;
+	}
+	ownRowMisses = 0;
+	updateSubscriptions();
 }
 
 async function locate() {
@@ -966,25 +1054,8 @@ async function locate() {
 		const me = (await client.store.get(["users", myPlayerId])) as unknown as
 			| PlayerRow
 			| undefined;
-		if (
-			me &&
-			Number.isSafeInteger(me.last_x) &&
-			Number.isSafeInteger(me.last_y) &&
-			me.last_x >= 0 &&
-			me.last_x < WIDTH &&
-			me.last_y >= 0 &&
-			me.last_y < HEIGHT
-		) {
-			// The camera is the subscription focus, so this move re-targets the
-			// listening ring. Only do it before a local dot exists: the located
-			// cell is the chunk entry, up to COUNTRY_CHUNK_WIDTH-1 cells off, so
-			// it must not fight draw()'s eased follow once motion owns the view.
-			if (!motion) {
-				camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
-				dirty = true;
-			}
-			updateSubscriptions();
-		}
+		if (hasOwnRow(me)) applyOwnRow(me);
+		else if (noteOwnRowMissing()) return;
 	} catch (error) {
 		if (generation === sessionGeneration)
 			setConnection(`Connection interrupted: ${String(error)}`, true);
@@ -1034,6 +1105,9 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		const session = await response.json();
 		if (!response.ok) throw new Error(session.error);
+		if (typeof session.session_id !== "string")
+			throw new Error("Session response is missing its player lease");
+		sessionId = session.session_id;
 		if (typeof session.now === "number") serverSkew = session.now - Date.now();
 		if (session.round) {
 			roundNumber = session.round.number;
@@ -1045,16 +1119,17 @@ element("join").addEventListener("submit", async (event) => {
 			url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
 			auth: { token: session.token },
 			storeNamespace: NAMESPACE,
-			presenceNamespace: NAMESPACE,
 		});
 		client.on("error", (error) => {
 			setConnection(`Connection issue: ${String(error)}`, true);
 		});
 		// A transient drop only emits "reconnecting" (the SDK resumes on its
-		// own), but input, presence, and subscription setup must stop until
-		// "connected": a listen issued while down is dropped, not queued.
+		// own), but input and subscription setup must stop until "connected":
+		// a listen issued while down is dropped, not queued. A reconnect must
+		// also re-join, because the worker may have restarted meanwhile.
 		const offline = () => {
 			online = false;
+			joined = false;
 			release();
 			setConnection("Disconnected · Reconnecting…", true);
 		};
@@ -1063,20 +1138,26 @@ element("join").addEventListener("submit", async (event) => {
 		client.on("connected", () => {
 			if (playing) {
 				online = true;
+				joined = false;
+				void ensureJoined();
 				release();
 				setConnection("");
 				void locate();
 			}
 		});
 		await client.connect();
-		// Identity comes from scope setup, not a table scan: the users table
-		// now holds every roster row, so limit:1 would return anyone.
-		myPlayerId = client.presence.localUserId ?? "";
-		for (let i = 0; i < 30 && !myPlayerId; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-			myPlayerId = client.presence.localUserId ?? "";
+		// The join action admits the player and returns the internal user id
+		// the roster and dots are keyed by. The worker may still be booting,
+		// so retry briefly before treating the world as unavailable.
+		for (let i = 0; i < 30 && !joined; i++) {
+			try {
+				await joinWorld();
+			} catch (error) {
+				if (error instanceof ActionExecutionError) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
 		}
-		if (!myPlayerId) throw new Error("Could not resolve your player identity");
+		if (!joined) throw new Error("Could not join the world");
 		playing = online = true;
 		clearTimeout(admissionTimer);
 		admissionTimer = setTimeout(checkAdmission, 3000);
@@ -1112,6 +1193,7 @@ element("join").addEventListener("submit", async (event) => {
 			// The find bar and some browser modals swallow blur: clear held keys
 			// whenever the document itself lost focus.
 			if (!document.hasFocus()) release();
+			void ensureJoined();
 			publish();
 			void locate();
 		}, 500);

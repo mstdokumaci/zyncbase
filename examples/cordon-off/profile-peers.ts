@@ -18,7 +18,10 @@ import {
 
 type Peer = {
 	client: ZyncBaseClient;
-	input: { name: string; country_id: number; direction: string; seq: number };
+	id: string;
+	name: string;
+	countryId: number;
+	input: { direction: string; seq: number };
 	subscriptions: Map<number, () => void>;
 	userSubscriptions: Map<number, () => void>;
 	x: number;
@@ -38,6 +41,7 @@ type Command = {
 	zoom: number;
 	url: string;
 	token: string;
+	session_id?: string;
 	country_id: number;
 	moving: boolean;
 };
@@ -146,7 +150,7 @@ function subscribe(peer: Peer) {
 				if (!row) return;
 				const dot = readCoordinates(
 					(row as unknown as UserChunkRow).coordinates,
-				).find((dot) => dot.player_id === peer.client.presence.localUserId);
+				).find((dot) => dot.player_id === peer.id);
 				if (!dot || (peer.x === dot.x && peer.y === dot.y)) return;
 				peer.moves++;
 				peer.x = dot.x;
@@ -161,7 +165,7 @@ function subscribe(peer: Peer) {
 // position from delta timing instead and a slow flush silently leaves the
 // peer framed on the wrong chunks.
 async function readSpawn(peer: Peer) {
-	const id = peer.client.presence.localUserId;
+	const id = peer.id;
 	if (!id) return undefined;
 	try {
 		const me = (await peer.client.store.get(["users", id])) as unknown as
@@ -207,18 +211,25 @@ const heartbeat = setInterval(() => {
 			peer.input.direction = direction;
 			peer.input.seq++;
 		}
-		peer.client.presence.set({ ...peer.input });
+		void peer.client.actions
+			.call("player_move", {
+				direction: peer.input.direction,
+				seq: peer.input.seq,
+			})
+			.catch(() => {});
 	}
 }, 500);
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep validation next to the worker message it protects.
 self.onmessage = async ({ data }: MessageEvent<Command>) => {
 	try {
 		if (data.type === "add") {
+			const sessionId = data.session_id;
+			if (!sessionId) throw new Error("Player session lease is missing");
 			const client = createClient({
 				url: data.url,
 				auth: { tokenProvider: async () => data.token },
 				storeNamespace: NAMESPACE,
-				presenceNamespace: NAMESPACE,
 				reconnect: false,
 			});
 			client.on("error", (error) => errors.push(String(error)));
@@ -231,6 +242,9 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			});
 			const peer: Peer = {
 				client,
+				id: "",
+				name: `Player ${data.index + 1}`,
+				countryId: data.country_id,
 				index: data.index,
 				width: data.width,
 				height: data.height,
@@ -241,17 +255,17 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				moves: 0,
 				subscriptions: new Map(),
 				userSubscriptions: new Map(),
-				input: {
-					name: `Player ${data.index + 1}`,
-					country_id: data.country_id,
-					direction: "idle",
-					seq: 0,
-				},
+				input: { direction: "idle", seq: 0 },
 			};
 			peers.push(peer);
 			client.store.subscribe("countries", { limit: 1000 }, () => callbacks++);
 			client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
-			client.presence.set(peer.input);
+			const joined = (await client.actions.call("player_join", {
+				name: peer.name,
+				country_id: peer.countryId,
+				session_id: sessionId,
+			})) as { user_id?: string };
+			peer.id = joined.user_id ?? "";
 			subscribe(peer);
 			// Spawn regions are server state, so the placeholder above is only
 			// a camera start. The committed roster row carries the admitted
