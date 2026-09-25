@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const actions_service_mod = @import("actions/service.zig");
 const authorization_evaluate = @import("authorization/evaluate.zig");
 const authorization_types = @import("authorization/types.zig");
 const connection_mod = @import("connection/state.zig");
@@ -31,6 +32,7 @@ pub const MessageHandler = struct {
     violation_tracker: *ViolationTracker,
     store_service: *StoreService,
     presence_service: *PresenceService,
+    actions_service: *actions_service_mod.ActionsService,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
     auth_config: *const authorization_types.AuthConfig,
@@ -47,6 +49,7 @@ pub const MessageHandler = struct {
         violation_tracker: *ViolationTracker,
         store_service: *StoreService,
         presence_service: *PresenceService,
+        actions_service: *actions_service_mod.ActionsService,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
         auth_config: *const authorization_types.AuthConfig,
@@ -61,6 +64,7 @@ pub const MessageHandler = struct {
             .violation_tracker = violation_tracker,
             .store_service = store_service,
             .presence_service = presence_service,
+            .actions_service = actions_service,
             .subscription_engine = subscription_engine,
             .security_config = security_config,
             .auth_config = auth_config,
@@ -207,6 +211,9 @@ pub const MessageHandler = struct {
             .presence_subscribe_shared => try wrap(&MessageHandler.handlePresenceSubscribeShared)(self, arena_allocator, conn, envelope.id, message),
             .presence_unsubscribe_shared => try wrap(&MessageHandler.handlePresenceUnsubscribeShared)(self, arena_allocator, conn, envelope.id, message),
             .presence_remove => try wrap(&MessageHandler.handlePresenceRemove)(self, arena_allocator, conn, envelope.id, message),
+            .action_call => try wrap(&MessageHandler.handleActionCall)(self, arena_allocator, conn, envelope.id, message),
+            .action_register => try wrap(&MessageHandler.handleActionRegister)(self, arena_allocator, conn, envelope.id, message),
+            .action_reply => try wrap(&MessageHandler.handleActionReply)(self, arena_allocator, conn, envelope.id, message),
             // Server response/push types must never be received as client requests.
             .ok,
             .@"error",
@@ -217,6 +224,7 @@ pub const MessageHandler = struct {
             .write_error,
             .presence_broadcast,
             .shared_state_broadcast,
+            .action_forward,
             => error.UnknownMessageType,
         };
     }
@@ -231,6 +239,7 @@ pub const MessageHandler = struct {
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
+        self.actions_service.removeAllForConnection(conn.id);
 
         if (presence_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(presence_ns, presence_user, conn.id);
@@ -247,6 +256,7 @@ pub const MessageHandler = struct {
         transferred = true;
         const scope_seq = conn.scope_seq;
         self.unsubscribeDetached(conn, detached);
+        self.actions_service.invalidateScope(conn.id, .store);
         return scope_seq;
     }
 
@@ -568,6 +578,7 @@ pub const MessageHandler = struct {
         validated.claims = .{};
         validated.deinit(conn.allocator);
         conn.updateSessionClaims(claims, expires_at);
+        self.actions_service.reauthorizeRegistrations(try buildActionSessionContext(conn));
 
         return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }
@@ -803,8 +814,73 @@ pub const MessageHandler = struct {
         if (old_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(old_ns, old_user, conn.id);
         }
+        self.actions_service.invalidateScope(conn.id, .presence);
 
         return scope_seq;
+    }
+
+    // === Action message handlers ===
+
+    fn handleActionCall(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = try wire_decode.extractActionCallFast(message, arena_allocator);
+        const ctx = try buildActionSessionContext(conn);
+
+        const outcome = try self.actions_service.call(ctx, msg_id, req.action_id, &req.params, req.timeoutMs);
+        return switch (outcome) {
+            .accepted => try wire_encode.encodeSuccess(arena_allocator, msg_id),
+            .pending => null,
+        };
+    }
+
+    fn handleActionRegister(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        const req = try wire_decode.extractActionRegisterFast(message, arena_allocator);
+        if (req.action_ids != .arr) return error.InvalidPayload;
+
+        const action_ids = try arena_allocator.alloc(u64, req.action_ids.arr.len);
+        for (req.action_ids.arr, 0..) |item, i| {
+            action_ids[i] = msgpack.extractPayloadUsize(item) orelse return error.InvalidPayload;
+        }
+
+        try self.actions_service.register(try buildActionSessionContext(conn), action_ids);
+        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handleActionReply(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) !?[]const u8 {
+        _ = msg_id;
+        const req = try wire_decode.extractActionReplyFast(message, arena_allocator);
+        self.actions_service.resolveReply(conn.id, req.execId, req.ok, &req.payload);
+        return null;
+    }
+
+    fn buildActionSessionContext(conn: *Connection) !actions_service_mod.SessionContext {
+        return .{
+            .conn_id = conn.id,
+            .user_doc_id = conn.user_doc_id,
+            .external_user_id = conn.getExternalUserId() orelse return error.SessionNotReady,
+            .session_claims = conn.getSessionClaimsPtr(),
+            .store_namespace = conn.getStoreNamespace(),
+            .store_namespace_id = conn.namespace_id,
+            .presence_namespace = conn.getPresenceNamespace(),
+            .presence_namespace_id = conn.presence_namespace_id,
+        };
     }
 
     fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) void {

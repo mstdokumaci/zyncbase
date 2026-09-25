@@ -20,7 +20,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
     const root = parsed.value;
     if (root != .object) return error.InvalidAuthConfig;
 
-    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "namespaces", "store" }, root.object);
+    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "namespaces", "store", "actions" }, root.object);
 
     const namespaces_val = (json_read.getArray(root.object, "namespaces") catch return error.InvalidAuthConfig) orelse return error.MissingNamespaces;
 
@@ -54,10 +54,27 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const 
         try store_rules.append(allocator, rule);
     }
 
+    const actions_val = (json_read.getArray(root.object, "actions") catch return error.InvalidAuthConfig) orelse null;
+
+    var action_rules = std.ArrayListUnmanaged(types.ActionRule).empty;
+    errdefer {
+        for (action_rules.items) |*rule| rule.deinit(allocator);
+        action_rules.deinit(allocator);
+    }
+    if (actions_val) |rules| {
+        try action_rules.ensureTotalCapacityPrecise(allocator, rules.items.len);
+        for (rules.items) |action_val| {
+            var rule = try parseActionRule(allocator, action_val);
+            errdefer rule.deinit(allocator);
+            try action_rules.append(allocator, rule);
+        }
+    }
+
     var config = types.AuthConfig{
         .allocator = allocator,
         .namespace_rules = try namespace_rules.toOwnedSlice(allocator),
         .store_rules = try store_rules.toOwnedSlice(allocator),
+        .action_rules = try action_rules.toOwnedSlice(allocator),
         .wildcard_store_index = wildcard_index,
     };
     errdefer config.deinit();
@@ -137,6 +154,28 @@ fn parseStoreRule(allocator: Allocator, value: std.json.Value) !types.StoreRule 
         .is_wildcard = std.mem.eql(u8, collection_val, "*"),
         .read = read,
         .write = write,
+    };
+}
+
+fn parseActionRule(allocator: Allocator, value: std.json.Value) !types.ActionRule {
+    if (value != .object) return error.InvalidActionRule;
+    const obj = value.object;
+    try json_read.rejectUnknownKeys(error.UnknownAuthKey, &.{ "action", "invoke", "register" }, obj);
+
+    const action_val = (json_read.getString(obj, "action") catch return error.InvalidActionRule) orelse return error.InvalidActionRule;
+    const action = try allocator.dupe(u8, action_val);
+    errdefer allocator.free(action);
+
+    const invoke = try parseCondition(allocator, obj.get("invoke") orelse return error.InvalidActionRule);
+    errdefer invoke.deinit(allocator);
+    const register = try parseCondition(allocator, obj.get("register") orelse return error.InvalidActionRule);
+    errdefer register.deinit(allocator);
+
+    return types.ActionRule{
+        .action = action,
+        .is_wildcard = std.mem.eql(u8, action_val, "*"),
+        .invoke = invoke,
+        .register = register,
     };
 }
 

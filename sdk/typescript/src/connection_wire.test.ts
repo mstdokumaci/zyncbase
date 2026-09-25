@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
+import { packDocId } from "./doc_id.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { StoreDelta } from "./types.js";
+import { generateUUIDv7 } from "./uuid.js";
 
 async function makeCodec(): Promise<ConnectionWireCodec> {
 	const codec = new ConnectionWireCodec();
@@ -13,6 +15,10 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 		fieldFlags: [[0b10, 0, 0]],
 		presenceUserFields: ["cursor__x", "cursor__y", "status"],
 		presenceSharedFields: ["slide", "playing"],
+		actions: ["checkout", "player_move"],
+		actionParams: [["cart_id", "qty"], ["direction"]],
+		actionReturns: [["order_id"], []],
+		actionFlags: [0b01, 0b10],
 	});
 	return codec;
 }
@@ -385,5 +391,128 @@ describe("ConnectionWireCodec", () => {
 				),
 			).toThrow("record field count 1 does not match schema field count 3");
 		}
+	});
+});
+
+describe("ConnectionWireCodec actions", () => {
+	test("encodes ActionCall params and correlates the action name", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{
+				type: "ActionCall",
+				action_id: "checkout",
+				params: { cart_id: "c1", qty: 2 },
+				timeoutMs: 500,
+			},
+			9,
+		);
+
+		expect(encoded.context).toEqual({
+			type: "ActionCall",
+			responseTableIndex: undefined,
+			actionName: "checkout",
+		});
+		expect(decode(encoded.bytes)).toEqual({
+			type: WireMessageType.ActionCall,
+			id: 9,
+			action_id: 0,
+			timeoutMs: 500,
+			params: [
+				[0, "c1"],
+				[1, 2],
+			],
+		});
+	});
+
+	test("omits timeoutMs when not provided", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{ type: "ActionCall", action_id: "checkout", params: { cart_id: "c1" } },
+			10,
+		);
+		expect(decode(encoded.bytes)).toEqual({
+			type: WireMessageType.ActionCall,
+			id: 10,
+			action_id: 0,
+			params: [[0, "c1"]],
+		});
+	});
+
+	test("encodes ActionRegister action ids", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{ type: "ActionRegister", action_ids: ["checkout"] },
+			3,
+		);
+		expect(decode(encoded.bytes)).toEqual({
+			type: WireMessageType.ActionRegister,
+			id: 3,
+			action_ids: [0],
+		});
+	});
+
+	test("encodes ActionReply payloads verbatim", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{
+				type: "ActionReply",
+				execId: 4,
+				ok: false,
+				payload: ["INSUFFICIENT_FUNDS", "too poor"],
+			},
+			0,
+		);
+		expect(decode(encoded.bytes)).toEqual({
+			type: WireMessageType.ActionReply,
+			id: 0,
+			execId: 4,
+			ok: false,
+			payload: ["INSUFFICIENT_FUNDS", "too poor"],
+		});
+	});
+
+	test("decodes ActionForward tuples with bin16 userId", async () => {
+		const codec = await makeCodec();
+		const userId = generateUUIDv7();
+		const decoded = codec.decodeMessage([
+			WireMessageType.ActionForward,
+			5,
+			packDocId(userId, "INVALID_MESSAGE"),
+			2,
+			[[0, "up"]],
+		]);
+
+		expect(decoded).toEqual({
+			type: "ActionForward",
+			execId: 5,
+			userId,
+			action_id: 2,
+			params: [[0, "up"]],
+		});
+	});
+
+	test("rejects malformed ActionForward tuples", async () => {
+		const codec = await makeCodec();
+		expect(codec.decodeMessage([WireMessageType.ActionForward, 5])).toBeNull();
+	});
+
+	test("decodes sync ActionCall ok responses into actionResult", async () => {
+		const codec = await makeCodec();
+		const ok = codec.decodeOkResponse(
+			{ type: "ok", id: 1, value: [[0, "order-9"]] },
+			{ type: "ActionCall", actionName: "checkout" },
+		);
+		expect(ok.actionResult).toEqual({ order_id: "order-9" });
+		expect(ok.value).toBeUndefined();
+	});
+
+	test("leaves async ActionCall ok responses untouched", async () => {
+		const codec = await makeCodec();
+		const ok = codec.decodeOkResponse(
+			{ type: "ok", id: 2 },
+			{ type: "ActionCall", actionName: "player_move" },
+		);
+		expect(ok.actionResult).toBeUndefined();
+		expect(ok.id).toBe(2);
 	});
 });

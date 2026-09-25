@@ -1,11 +1,13 @@
 // ZyncBaseClient and createClient factory
 
+import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
 import type { ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
 import type {
+	Actions,
 	ClientOptions,
 	JsonValue,
 	LifecycleEvent,
@@ -18,11 +20,13 @@ import { generateUUIDv7 } from "./uuid.js";
 export class ZyncBaseClient {
 	readonly store: Store;
 	readonly presence: Presence;
+	readonly actions: Actions;
 	readonly utils: { id: () => string };
 
 	private readonly conn: ConnectionManager;
 	private readonly tracker: SubscriptionTracker;
 	private readonly presenceImpl: PresenceImpl;
+	private readonly actionsImpl: ActionsImpl;
 	/** Error callbacks registered via client.on('error', cb). */
 	private readonly errorCallbacks: Array<(err: ZyncBaseError) => void> = [];
 
@@ -47,6 +51,8 @@ export class ZyncBaseClient {
 		this.store = new StoreImpl(this.conn, this.tracker, emitError);
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
+		this.actionsImpl = new ActionsImpl(this.conn, emitError);
+		this.actions = this.actionsImpl;
 
 		// Presence scope resolution returns the same internal UUID used by entries.
 		this.conn.onPresenceUserId((userId) => {
@@ -96,6 +102,7 @@ export class ZyncBaseClient {
 		this.presenceImpl.invalidate();
 		await this.conn.setPresenceNamespace(namespace);
 		this.presenceImpl.replaySubscriptions();
+		this.actionsImpl.replayRegistrations();
 	}
 
 	/**
@@ -138,6 +145,7 @@ export class ZyncBaseClient {
 	 */
 	private async _handleReconnect(): Promise<void> {
 		this.presenceImpl.replaySubscriptions();
+		this.actionsImpl.replayRegistrations();
 
 		const subIds = this.tracker.allSubIds();
 		if (subIds.length === 0) return;

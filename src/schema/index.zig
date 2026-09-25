@@ -2,16 +2,39 @@ const std = @import("std");
 
 const types = @import("types.zig");
 
-pub fn buildFieldIndex(allocator: std.mem.Allocator, table: *types.Table) !void {
+fn buildNameIndex(allocator: std.mem.Allocator, comptime F: type, fields: []const F) !std.StringHashMapUnmanaged(usize) {
     var map = std.StringHashMapUnmanaged(usize){};
     errdefer map.deinit(allocator);
 
-    for (table.fields, 0..) |field, idx| {
+    for (fields, 0..) |field, idx| {
         if (map.contains(field.name)) return error.DuplicateFieldName;
         try map.put(allocator, field.name, idx);
     }
 
-    table.field_index_map = map;
+    return map;
+}
+
+pub fn buildFieldIndex(allocator: std.mem.Allocator, table: *types.Table) !void {
+    table.field_index_map = try buildNameIndex(allocator, types.Field, table.fields);
+}
+
+pub fn buildActionIndex(allocator: std.mem.Allocator, schema: *types.Schema) !void {
+    var map = std.StringHashMapUnmanaged(usize){};
+    errdefer map.deinit(allocator);
+
+    for (schema.actions, 0..) |action, idx| {
+        if (map.contains(action.name)) return error.DuplicateActionName;
+        try map.put(allocator, action.name, idx);
+    }
+
+    for (schema.actions) |*action| {
+        action.param_index_map = try buildNameIndex(allocator, types.ActionField, action.params);
+        if (action.returns) |returns| {
+            action.return_index_map = try buildNameIndex(allocator, types.ActionField, returns);
+        }
+    }
+
+    schema.action_index_map = map;
 }
 
 pub fn buildTableIndex(allocator: std.mem.Allocator, schema: *types.Schema) !void {

@@ -69,6 +69,7 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
         &app.violation_tracker,
         &app.store_service,
         &app.presence_service,
+        &app.actions_service,
         &app.subscription_engine,
         .{ .max_messages_per_second = 1_000_001 },
         &app.auth_config,
@@ -862,4 +863,96 @@ test "message: concurrent routed requests release response allocations" {
     for (contexts) |ctx| {
         if (ctx.failure) |err| return err;
     }
+}
+
+test "MessageHandler: action register, call, and reply route through the service" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "mh-actions",
+        \\{"version":"1.0.0","store":{},"actions":{
+        \\  "checkout":{
+        \\    "params":{"cart_id":{"type":"string"}},
+        \\    "required":["cart_id"],
+        \\    "returns":{"order_id":{"type":"string"}}
+        \\  }
+        \\}}
+    );
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    // ActionRegister: {type: 0x33, id, action_ids: [0]}
+    var register_map = msgpack.Payload.mapPayload(allocator);
+    defer register_map.free(allocator);
+    try register_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.action_register)));
+    try register_map.mapPut("id", msgpack.Payload.uintToPayload(5));
+    const ids = try allocator.alloc(msgpack.Payload, 1);
+    ids[0] = msgpack.Payload.uintToPayload(0);
+    try register_map.mapPut("action_ids", .{ .arr = ids });
+
+    const register_bytes = try helpers.encodePayloadToBytes(allocator, register_map);
+    defer allocator.free(register_bytes);
+
+    const register_response = try routeWithArena(&app.handler, allocator, worker.conn, register_bytes);
+    defer allocator.free(register_response);
+    const parsed_register = try parseResponse(allocator, register_response);
+    defer if (parsed_register.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.ok, parsed_register.resp_type);
+
+    // Sync ActionCall is deferred until the worker replies.
+    var call_map = msgpack.Payload.mapPayload(allocator);
+    defer call_map.free(allocator);
+    try call_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.action_call)));
+    try call_map.mapPut("id", msgpack.Payload.uintToPayload(6));
+    try call_map.mapPut("action_id", msgpack.Payload.uintToPayload(0));
+    const params = try allocator.alloc(msgpack.Payload, 1);
+    const param_pair = try allocator.alloc(msgpack.Payload, 2);
+    param_pair[0] = msgpack.Payload.uintToPayload(0);
+    param_pair[1] = try msgpack.Payload.strToPayload("cart-1", allocator);
+    params[0] = .{ .arr = param_pair };
+    try call_map.mapPut("params", .{ .arr = params });
+
+    const call_bytes = try helpers.encodePayloadToBytes(allocator, call_map);
+    defer allocator.free(call_bytes);
+
+    try testing.expect((try routeWithArenaOptional(&app.handler, allocator, caller.conn, call_bytes)) == null);
+    try testing.expectEqual(@as(usize, 1), app.actions_service.pendingCount(caller.conn.id));
+
+    // ActionReply settles the pending call.
+    var reply_map = msgpack.Payload.mapPayload(allocator);
+    defer reply_map.free(allocator);
+    try reply_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.action_reply)));
+    try reply_map.mapPut("id", msgpack.Payload.uintToPayload(7));
+    try reply_map.mapPut("execId", msgpack.Payload.uintToPayload(1));
+    try reply_map.mapPut("ok", .{ .bool = true });
+    const returns = try allocator.alloc(msgpack.Payload, 1);
+    const return_pair = try allocator.alloc(msgpack.Payload, 2);
+    return_pair[0] = msgpack.Payload.uintToPayload(0);
+    return_pair[1] = try msgpack.Payload.strToPayload("order-1", allocator);
+    returns[0] = .{ .arr = return_pair };
+    try reply_map.mapPut("payload", .{ .arr = returns });
+
+    const reply_bytes = try helpers.encodePayloadToBytes(allocator, reply_map);
+    defer allocator.free(reply_bytes);
+
+    try testing.expect((try routeWithArenaOptional(&app.handler, allocator, worker.conn, reply_bytes)) == null);
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+
+    // Server-only ActionForward is rejected from clients.
+    var forward_map = msgpack.Payload.mapPayload(allocator);
+    defer forward_map.free(allocator);
+    try forward_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.action_forward)));
+    try forward_map.mapPut("id", msgpack.Payload.uintToPayload(8));
+    const forward_bytes = try helpers.encodePayloadToBytes(allocator, forward_map);
+    defer allocator.free(forward_bytes);
+
+    const forward_response = try routeWithArena(&app.handler, allocator, caller.conn, forward_bytes);
+    defer allocator.free(forward_response);
+    const parsed_forward = try parseResponse(allocator, forward_response);
+    defer if (parsed_forward.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.@"error", parsed_forward.resp_type);
+    try testing.expectEqualStrings("INVALID_MESSAGE_TYPE", parsed_forward.code.?);
 }

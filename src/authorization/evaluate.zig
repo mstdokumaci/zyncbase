@@ -21,6 +21,7 @@ pub const EvalContext = struct {
     value_payload: ?*const msgpack.Payload = null,
     value_table: ?*const schema_types.Table = null,
     presence_fields: ?[]const schema_types.PresenceField = null,
+    action_fields: ?[]const schema_types.ActionField = null,
     doc_id: ?typed_doc_id.DocId = null,
     owner_doc_id: ?typed_doc_id.DocId = null,
 };
@@ -270,6 +271,18 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         // Wire protocol: duplicate field index in one pair-array → last-wins.
         const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
         const value = typed_codec.fromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+        return .{ .owned = value };
+    }
+
+    if (ctx.action_fields) |fields| {
+        const field_index = for (fields, 0..) |f, idx| {
+            if (std.mem.eql(u8, f.name, field)) break idx;
+        } else return null;
+        const field_meta = fields[field_index];
+
+        // Wire protocol: duplicate field index in one pair-array → last-wins.
+        const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
+        const value = typed_codec.fromPayload(ctx.allocator, field_meta.declared_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
         return .{ .owned = value };
     }
 

@@ -1,4 +1,5 @@
 import type {
+	Actions,
 	AuthConfig,
 	BatchOperation,
 	JsonValue,
@@ -25,6 +26,8 @@ export class ZyncBaseClient {
 	readonly store: Store;
 	/** Underlying SDK presence — use for `presence.set`, `presence.subscribe`, etc. */
 	readonly presence: Presence;
+	/** Underlying SDK actions — use for `actions.call` and `actions.handle`. */
+	readonly actions: Actions;
 
 	constructor(
 		urlOrOptions:
@@ -43,6 +46,7 @@ export class ZyncBaseClient {
 		});
 		this.store = this.client.store;
 		this.presence = this.client.presence;
+		this.actions = this.client.actions;
 	}
 
 	connect(): Promise<void> {

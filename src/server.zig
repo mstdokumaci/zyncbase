@@ -12,6 +12,7 @@ const schema_parse = @import("schema/parse.zig");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const uws_timer = @import("uws_timer.zig");
+const ActionsService = @import("actions/service.zig").ActionsService;
 const Jwks = @import("authentication/jwt_validator.zig").Jwks;
 const JwtValidationConfig = @import("authentication/jwt_validator.zig").JwtValidationConfig;
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
@@ -71,6 +72,7 @@ pub const ZyncBaseServer = struct {
     presence_manager: PresenceManager,
     presence_worker: ?*PresenceWorker,
     presence_service: PresenceService,
+    actions_service: ActionsService,
     send_queue: send_queue_type,
     send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     message_handler: MessageHandler,
@@ -184,6 +186,13 @@ pub const ZyncBaseServer = struct {
             &self.schema,
         );
 
+        self.actions_service = ActionsService.init(
+            self.memory_strategy.generalAllocator(),
+            self.io,
+            &self.schema,
+            &self.auth_config,
+        );
+
         try self.initJWT(config);
         errdefer if (self.jwks) |jc| {
             jc.deinit();
@@ -196,6 +205,7 @@ pub const ZyncBaseServer = struct {
 
         try self.initConnectionManagerInternal(config);
         errdefer self.connection_manager.deinit();
+        self.actions_service.setConnectionManager(&self.connection_manager);
 
         var pool = try self.initSubscriptionPoolInternal();
         errdefer {
@@ -378,6 +388,7 @@ pub const ZyncBaseServer = struct {
             &self.violation_tracker,
             &self.store_service,
             &self.presence_service,
+            &self.actions_service,
             &self.subscription_engine,
             config.security,
             &self.auth_config,
@@ -632,6 +643,7 @@ pub const ZyncBaseServer = struct {
         // Close application timers on the event-loop thread before exiting it.
         self.stopShutdownTimeoutTimer();
         self.connection_manager.stopTokenSweepTimer();
+        self.actions_service.stopSweepTimer();
         if (self.jwks) |jc| jc.stopRefreshTimer();
 
         std.log.info("Flushing pending writes and performing final checkpoint", .{});
@@ -664,6 +676,9 @@ pub const ZyncBaseServer = struct {
 
         // Stop token sweep timer.
         self.connection_manager.stopTokenSweepTimer();
+
+        // Stop action deadline sweep timer.
+        self.actions_service.stopSweepTimer();
 
         // Stop shutdown timeout timer.
         self.stopShutdownTimeoutTimer();
@@ -728,6 +743,9 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();
+
+        std.log.debug("Deinitializing actions_service", .{});
+        self.actions_service.deinit();
 
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
@@ -887,6 +905,10 @@ fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
 
     server.connection_manager.startTokenSweepTimer(loop.?) catch |err| {
         std.log.err("Failed to start token sweep timer: {}", .{err});
+    };
+
+    server.actions_service.startSweepTimer(loop.?) catch |err| {
+        std.log.err("Failed to start action deadline sweep timer: {}", .{err});
     };
 
     if (server.jwks) |jc| {

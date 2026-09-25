@@ -1,0 +1,35 @@
+{
+	"namespaces": [
+		{
+			"pattern": "*",
+			"storeFilter": true,
+			"presenceRead": true,
+			"presenceWrite": true,
+			"presenceSharedWrite": true
+		}
+	],
+	"store": [
+		{
+			"collection": "*",
+			"read": true,
+			"write": true
+		}
+	],
+	"actions": [
+		{
+			"action": "checkout",
+			"invoke": true,
+			"register": true
+		},
+		{
+			"action": "player_move",
+			"invoke": true,
+			"register": true
+		},
+		{
+			"action": "locked",
+			"invoke": false,
+			"register": true
+		}
+	]
+}

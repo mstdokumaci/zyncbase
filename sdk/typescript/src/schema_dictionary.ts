@@ -15,6 +15,55 @@ import {
 } from "./path.js";
 import type { JsonValue } from "./types.js";
 
+/** Dense per-action dictionary entry built from SchemaSync. */
+export interface ActionSchemaEntry {
+	id: number;
+	name: string;
+	scope: "store" | "presence";
+	hasReturns: boolean;
+	params: string[];
+	returns: string[];
+	paramFieldToIndex: Map<string, number>;
+	returnFieldToIndex: Map<string, number>;
+	paramPaths: Array<string[] | undefined>;
+	returnPaths: Array<string[] | undefined>;
+}
+
+function buildActionEntry(
+	name: string,
+	id: number,
+	params: string[],
+	returns: string[],
+	flags: number,
+): ActionSchemaEntry {
+	return {
+		id,
+		name,
+		scope: (flags & 0b10) !== 0 ? "presence" : "store",
+		hasReturns: (flags & 0b01) !== 0,
+		params,
+		returns,
+		paramFieldToIndex: buildFieldIndexMap(params),
+		returnFieldToIndex: buildFieldIndexMap(returns),
+		paramPaths: buildFieldPaths(params),
+		returnPaths: buildFieldPaths(returns),
+	};
+}
+
+function buildFieldIndexMap(fields: string[]): Map<string, number> {
+	const map = new Map<string, number>();
+	for (let i = 0; i < fields.length; i++) {
+		map.set(fields[i], i);
+	}
+	return map;
+}
+
+function buildFieldPaths(fields: string[]): Array<string[] | undefined> {
+	return fields.map((field) =>
+		field.includes("__") ? splitFieldPath(field) : undefined,
+	);
+}
+
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
  * schema string identifiers and their positional integer indices.
@@ -50,6 +99,16 @@ export class SchemaDictionary {
 	private presenceUserFieldToIndex = new Map<string, number>();
 	private presenceSharedFieldToIndex = new Map<string, number>();
 
+	// ─── Action arrays (from SchemaSync) ───────────────────────────────────
+	private actionNames: string[] = [];
+	private actionParams: string[][] = [];
+	private actionReturns: string[][] = [];
+	private actionFlags: number[] = [];
+
+	// ─── Action bidirectional maps ─────────────────────────────────────────
+	private actionToIndex = new Map<string, number>();
+	private actionsByIndex: ActionSchemaEntry[] = [];
+
 	// ─── Offline safety hash ───────────────────────────────────────────────
 	private hash: string | null = null;
 	private previousHash: string | null = null;
@@ -75,14 +134,41 @@ export class SchemaDictionary {
 		fieldFlags: number[][];
 		presenceUserFields?: string[];
 		presenceSharedFields?: string[];
+		actions?: string[];
+		actionParams?: string[][];
+		actionReturns?: string[][];
+		actionFlags?: number[];
 	}): Promise<boolean> {
 		this.previousHash = this.hash;
 		this.validateSchemaSyncPayload(payload);
+		this.validateActionArrays(payload);
 		this.buildStoreMaps(payload);
 		this.buildPresenceMaps(payload);
+		this.buildActionMaps(payload);
 		this.hash = await this.computeHash(payload);
 		this.ready = true;
 		return this.previousHash !== null && this.previousHash !== this.hash;
+	}
+
+	private validateActionArrays(payload: {
+		actions?: string[];
+		actionParams?: string[][];
+		actionReturns?: string[][];
+		actionFlags?: number[];
+	}): void {
+		const names = payload.actions ?? [];
+		const params = payload.actionParams ?? [];
+		const returns = payload.actionReturns ?? [];
+		const flags = payload.actionFlags ?? [];
+		if (
+			params.length !== names.length ||
+			returns.length !== names.length ||
+			flags.length !== names.length
+		) {
+			throw new Error(
+				"SchemaDictionary: SchemaSync action dictionary length mismatch",
+			);
+		}
 	}
 
 	private validateSchemaSyncPayload(payload: {
@@ -157,6 +243,33 @@ export class SchemaDictionary {
 		for (let i = 0; i < this.presenceSharedFields.length; i++) {
 			this.presenceSharedFieldToIndex.set(this.presenceSharedFields[i], i);
 		}
+	}
+
+	private buildActionMaps(payload: {
+		actions?: string[];
+		actionParams?: string[][];
+		actionReturns?: string[][];
+		actionFlags?: number[];
+	}): void {
+		this.actionNames = payload.actions ?? [];
+		this.actionParams = payload.actionParams ?? [];
+		this.actionReturns = payload.actionReturns ?? [];
+		this.actionFlags = payload.actionFlags ?? [];
+
+		this.actionToIndex.clear();
+		for (let i = 0; i < this.actionNames.length; i++) {
+			this.actionToIndex.set(this.actionNames[i], i);
+		}
+
+		this.actionsByIndex = this.actionNames.map((name, index) =>
+			buildActionEntry(
+				name,
+				index,
+				this.actionParams[index] ?? [],
+				this.actionReturns[index] ?? [],
+				this.actionFlags[index] ?? 0,
+			),
+		);
 	}
 
 	/** Get the table index for a collection name. Throws if not found. */
@@ -547,6 +660,124 @@ export class SchemaDictionary {
 	 */
 	hasPresenceSharedFields(): boolean {
 		return this.presenceSharedFields.length > 0;
+	}
+
+	// ─── Action Encoding / Decoding ───────────────────────────────────────
+
+	/** Get the dictionary entry for an action name. Throws if not found. */
+	getAction(name: string): ActionSchemaEntry {
+		const idx = this.actionToIndex.get(name);
+		if (idx === undefined) {
+			throw new SchemaError(
+				`SchemaDictionary: unknown action "${name}"`,
+				"ACTION_NOT_FOUND",
+			);
+		}
+		return this.actionsByIndex[idx];
+	}
+
+	/** Get the action name for a given action index. Throws if out of range. */
+	getActionName(index: number): string {
+		const action = this.actionsByIndex[index];
+		if (action === undefined) {
+			throw new SchemaError(
+				`SchemaDictionary: unknown action index ${index}`,
+				"ACTION_NOT_FOUND",
+			);
+		}
+		return action.name;
+	}
+
+	/** Encode a params object into an integer-keyed pair-array. */
+	encodeActionParams(
+		action: ActionSchemaEntry,
+		data: Record<string, JsonValue>,
+	): Array<[number, unknown]> {
+		return this.encodeActionFields(
+			data,
+			action.paramFieldToIndex,
+			`action "${action.name}" params`,
+		);
+	}
+
+	/** Encode a returns object into an integer-keyed pair-array. */
+	encodeActionReturns(
+		action: ActionSchemaEntry,
+		data: Record<string, JsonValue>,
+	): Array<[number, unknown]> {
+		return this.encodeActionFields(
+			data,
+			action.returnFieldToIndex,
+			`action "${action.name}" returns`,
+		);
+	}
+
+	/** Decode a params pair-array into a nested string-keyed object. */
+	decodeActionParams(
+		action: ActionSchemaEntry,
+		wireData: Array<[number, unknown]>,
+	): Record<string, JsonValue> {
+		return this.decodeActionFields(
+			wireData,
+			action.params,
+			action.paramPaths,
+			`action "${action.name}" params`,
+		);
+	}
+
+	/** Decode a returns pair-array into a nested string-keyed object. */
+	decodeActionReturns(
+		action: ActionSchemaEntry,
+		wireData: Array<[number, unknown]>,
+	): Record<string, JsonValue> {
+		return this.decodeActionFields(
+			wireData,
+			action.returns,
+			action.returnPaths,
+			`action "${action.name}" returns`,
+		);
+	}
+
+	private encodeActionFields(
+		data: Record<string, JsonValue>,
+		indexMap: Map<string, number>,
+		label: string,
+	): Array<[number, unknown]> {
+		const flat = flatten(data);
+		const result: Array<[number, unknown]> = [];
+		for (const [key, value] of Object.entries(flat)) {
+			const index = indexMap.get(key);
+			if (index === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown field "${key}" in ${label}`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			result.push([index, value]);
+		}
+		return result;
+	}
+
+	private decodeActionFields(
+		wireData: Array<[number, unknown]>,
+		fields: string[],
+		paths: Array<string[] | undefined>,
+		label: string,
+	): Record<string, JsonValue> {
+		const result: Record<string, JsonValue> = {};
+		for (const [index, value] of wireData) {
+			const fieldName = fields[index];
+			if (fieldName === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown field index ${index} in ${label}`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			const fieldPath = paths[index];
+			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
+			else result[fieldName] = value as JsonValue;
+		}
+		return result;
 	}
 
 	// ─── Private helpers ───────────────────────────────────────────────────

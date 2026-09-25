@@ -144,6 +144,7 @@ pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, t
         version,
         null,
         tables,
+        &[_]schema_types.Action{},
         &[_]schema_types.PresenceField{},
         &[_]schema_types.PresenceField{},
         &[_][]const u8{},

@@ -30,6 +30,8 @@ test {
     _ = @import("authorization/pattern_test.zig");
     _ = @import("authorization/evaluate_test.zig");
     _ = @import("authorization/presence_test.zig");
+    _ = @import("authorization/actions_test.zig");
+    _ = @import("actions/service_test.zig");
     _ = @import("authorization/doc_predicate_test.zig");
     _ = @import("queues/mpsc_queue_test.zig");
     _ = @import("queues/spmc_blocking_queue_test.zig");

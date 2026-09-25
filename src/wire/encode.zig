@@ -44,6 +44,10 @@ const Keys = struct {
     pub const users = comptimeEncodeKey("users");
     pub const shared = comptimeEncodeKey("shared");
     pub const joined_at = comptimeEncodeKey("joinedAt");
+    pub const actions = comptimeEncodeKey("actions");
+    pub const action_params = comptimeEncodeKey("actionParams");
+    pub const action_returns = comptimeEncodeKey("actionReturns");
+    pub const action_flags = comptimeEncodeKey("actionFlags");
 };
 
 // Top-level message names encode as one-byte positive fixints; nested
@@ -225,6 +229,47 @@ pub fn encodeOkWithSession(
     return output.toOwnedSlice();
 }
 
+/// Synchronous action success: `{type: "ok", id, value: <returns pair-array>}`.
+pub fn encodeActionOkWithValue(
+    msgpack_allocator: Allocator,
+    msg_id: u64,
+    value: *const msgpack.Payload,
+) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try msgpack.encodeMapHeader(writer, 3);
+    try writeOkResponseHeader(writer, msg_id);
+    try writer.writeAll(Keys.value);
+    try msgpack.encode(value.*, writer);
+
+    return output.toOwnedSlice();
+}
+
+/// `ActionForward` push tuple: `[0x31, execId, userId(bin16), actionId, paramsPairArray]`.
+pub fn encodeActionForward(
+    allocator: Allocator,
+    exec_id: u64,
+    user_id: typed_doc_id.DocId,
+    action_id: u64,
+    params: *const msgpack.Payload,
+) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try writer.writeByte(0x95);
+    try writer.writeByte(@intFromEnum(MessageType.action_forward));
+    try msgpack.encode(msgpack.Payload.uintToPayload(exec_id), writer);
+    const id_bytes = typed_doc_id.toBytes(user_id);
+    try msgpack.writeMsgPackBin(writer, &id_bytes);
+    try msgpack.encode(msgpack.Payload.uintToPayload(action_id), writer);
+    try msgpack.encode(params.*, writer);
+
+    return output.toOwnedSlice();
+}
+
 pub fn encodeError(
     msgpack_allocator: Allocator,
     msg_id: ?u64,
@@ -262,6 +307,34 @@ pub fn encodeError(
         try writer.writeAll(Keys.message);
         try writer.writeAll(wire_err.message);
     }
+
+    return output.toOwnedSlice();
+}
+
+/// Error response for runtime-supplied code/message strings (worker error tuples).
+/// Unlike `encodeError`, the code and message are not pre-encoded msgpack values.
+pub fn encodeErrorWithStrings(
+    msgpack_allocator: Allocator,
+    msg_id: ?u64,
+    code: []const u8,
+    message: []const u8,
+) ![]const u8 {
+    var output: std.Io.Writer.Allocating = .init(msgpack_allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try msgpack.encodeMapHeader(writer, @as(usize, 3) + @intFromBool(msg_id != null));
+
+    try writer.writeAll(Keys.type);
+    try writer.writeAll(Values.@"error");
+
+    try writer.writeAll(Keys.code);
+    try msgpack.writeMsgPackStr(writer, code);
+
+    try writeOptional(writer, Keys.id, msg_id, encodeUint64, false);
+
+    try writer.writeAll(Keys.message);
+    try msgpack.writeMsgPackStr(writer, message);
 
     return output.toOwnedSlice();
 }
@@ -348,12 +421,48 @@ fn encodePresenceFieldNames(writer: anytype, names: []const []const u8) !void {
     }
 }
 
+fn encodeActionNames(writer: anytype, actions: []const schema_types.Action) !void {
+    try msgpack.encodeArrayHeader(writer, actions.len);
+    for (actions) |action| {
+        try msgpack.writeMsgPackStr(writer, action.name);
+    }
+}
+
+fn encodeActionFieldNames(writer: anytype, actions: []const schema_types.Action, comptime get_fields: fn (*const schema_types.Action) []const schema_types.ActionField) !void {
+    try msgpack.encodeArrayHeader(writer, actions.len);
+    for (actions) |*action| {
+        const fields = get_fields(action);
+        try msgpack.encodeArrayHeader(writer, fields.len);
+        for (fields) |field| {
+            try msgpack.writeMsgPackStr(writer, field.name);
+        }
+    }
+}
+
+fn actionParams(action: *const schema_types.Action) []const schema_types.ActionField {
+    return action.params;
+}
+
+fn actionReturns(action: *const schema_types.Action) []const schema_types.ActionField {
+    return action.returns orelse &.{};
+}
+
+fn encodeActionFlags(writer: anytype, actions: []const schema_types.Action) !void {
+    try msgpack.encodeArrayHeader(writer, actions.len);
+    for (actions) |*action| {
+        var flags: u8 = 0;
+        if (action.isSync()) flags |= 0b01;
+        if (action.scope == .presence) flags |= 0b10;
+        try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
+    }
+}
+
 pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try msgpack.encodeMapHeader(writer, 6);
+    try msgpack.encodeMapHeader(writer, 10);
 
     try writer.writeAll(Keys.type);
     try writer.writeAll(Values.schema_sync);
@@ -374,6 +483,18 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema
 
     try writer.writeAll(Keys.presence_shared_fields);
     try encodePresenceFieldNames(writer, schema.presence_shared_fields_names);
+
+    try writer.writeAll(Keys.actions);
+    try encodeActionNames(writer, schema.actions);
+
+    try writer.writeAll(Keys.action_params);
+    try encodeActionFieldNames(writer, schema.actions, actionParams);
+
+    try writer.writeAll(Keys.action_returns);
+    try encodeActionFieldNames(writer, schema.actions, actionReturns);
+
+    try writer.writeAll(Keys.action_flags);
+    try encodeActionFlags(writer, schema.actions);
 
     return output.toOwnedSlice();
 }

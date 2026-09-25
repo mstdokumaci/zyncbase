@@ -28,6 +28,9 @@ export const ErrorCodes = {
 	INVALID_MESSAGE_FORMAT: "INVALID_MESSAGE_FORMAT",
 	INVALID_MESSAGE_TYPE: "INVALID_MESSAGE_TYPE",
 	SUBSCRIPTION_NOT_FOUND: "SUBSCRIPTION_NOT_FOUND",
+	NO_ACTION_WORKER: "NO_ACTION_WORKER",
+	ACTION_TIMEOUT: "ACTION_TIMEOUT",
+	WORKER_DISCONNECTED: "WORKER_DISCONNECTED",
 } as const;
 
 interface ZyncBaseErrorOptions {
@@ -57,10 +60,16 @@ function deriveCategory(code: string): {
 		case ErrorCodes.REQUEST_SUPERSEDED:
 		case ErrorCodes.NAMESPACE_SWITCH_REJECTED:
 		case ErrorCodes.SUBSCRIPTION_NOT_FOUND:
+		case ErrorCodes.NO_ACTION_WORKER:
 			return { category: "state", retryable: false };
 
 		case ErrorCodes.RATE_LIMITED:
 			return { category: "rate_limit", retryable: true };
+
+		case ErrorCodes.ACTION_TIMEOUT:
+		case ErrorCodes.WORKER_DISCONNECTED:
+			// Server category, but action calls are never auto-retried.
+			return { category: "server", retryable: false };
 
 		case ErrorCodes.INTERNAL_ERROR:
 			return { category: "server", retryable: true };
@@ -146,10 +155,90 @@ export class SchemaError extends Error {
 		public readonly code:
 			| "TABLE_NOT_FOUND"
 			| "FIELD_NOT_FOUND"
+			| "ACTION_NOT_FOUND"
 			| "INVALID_PATH",
 	) {
 		super(message);
 		this.name = "SchemaError";
 		Object.setPrototypeOf(this, SchemaError.prototype);
+	}
+}
+
+// ─── Action errors ────────────────────────────────────────────────────────────
+
+/** No connected worker is registered for the action in the bound namespace. */
+export class NoActionWorkerError extends ZyncBaseError {
+	constructor(message: string, requestId?: number) {
+		super(message, {
+			code: ErrorCodes.NO_ACTION_WORKER,
+			category: "state",
+			retryable: false,
+			requestId,
+		});
+		this.name = "NoActionWorkerError";
+	}
+}
+
+/** Worker failed to reply before the server deadline; the action may still execute. */
+export class ActionTimeoutError extends ZyncBaseError {
+	constructor(message: string, requestId?: number) {
+		super(message, {
+			code: ErrorCodes.ACTION_TIMEOUT,
+			category: "server",
+			retryable: false,
+			requestId,
+		});
+		this.name = "ActionTimeoutError";
+	}
+}
+
+/** Worker disconnected while processing a sync action; it may have partially executed. */
+export class WorkerDisconnectedError extends ZyncBaseError {
+	constructor(message: string, requestId?: number) {
+		super(message, {
+			code: ErrorCodes.WORKER_DISCONNECTED,
+			category: "server",
+			retryable: false,
+			requestId,
+		});
+		this.name = "WorkerDisconnectedError";
+	}
+}
+
+/** Input params or worker return payload violated schema constraints. */
+export class ActionValidationError extends ZyncBaseError {
+	constructor(message: string, requestId?: number) {
+		super(message, {
+			code: ErrorCodes.SCHEMA_VALIDATION_FAILED,
+			category: "validation",
+			retryable: false,
+			requestId,
+		});
+		this.name = "ActionValidationError";
+	}
+}
+
+/** Worker threw an application-level ActionError carrying a custom code. */
+export class ActionExecutionError extends ZyncBaseError {
+	constructor(code: string, message: string, requestId?: number) {
+		super(message, {
+			code,
+			category: "server",
+			retryable: false,
+			requestId,
+		});
+		this.name = "ActionExecutionError";
+	}
+}
+
+/** Error thrown by worker handlers to send a structured error back to the caller. */
+export class ActionError extends Error {
+	readonly code: string;
+
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "ActionError";
+		this.code = code;
+		Object.setPrototypeOf(this, ActionError.prototype);
 	}
 }

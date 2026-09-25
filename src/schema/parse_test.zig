@@ -703,7 +703,19 @@ const unique_allocation_failure_json =
     \\    "profile":{"type":"object","fields":{"handle":{"type":"string"}}}
     \\  },
     \\  "unique":[["slug"],["provider","externalId"],["profile.handle"]]
-    \\}}}
+    \\}},
+    \\"actions":{
+    \\  "checkout":{
+    \\    "params":{
+    \\      "cart_id":{"type":"string"},
+    \\      "items":{"type":"array","items":"integer"},
+    \\      "meta":{"type":"object","fields":{"note":{"type":"string"}}}
+    \\    },
+    \\    "required":["cart_id"],
+    \\    "returns":{"order_id":{"type":"string"},"remaining":{"type":"integer"}}
+    \\  },
+    \\  "ping":{"params":{"seq":{"type":"integer"}},"returns":null,"scope":"presence"}
+    \\}}
 ;
 
 test "schema_property: parse cleanup survives allocation failures with unique constraints" {
@@ -793,4 +805,147 @@ test "schema_parse: bytes field parses with minLength/maxLength, rejects indexed
         \\{"version":"1.0.0","store":{"files":{"fields":{"data":{"type":"bytes","pattern":"^[a-z]+$"}}}}}
     ;
     try std.testing.expectError(error.InvalidConstraint, schema_parse.initFromJson(allocator, pattern_bytes_schema));
+}
+
+test "schema_parse: parses actions with scope, required, and sync tiers" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{
+        \\  "version":"1.0.0",
+        \\  "store":{},
+        \\  "actions":{
+        \\    "player_move":{
+        \\      "params":{
+        \\        "direction":{"type":"string","enum":["up","down"]},
+        \\        "seq":{"type":"integer","minimum":0},
+        \\        "origin":{"type":"object","fields":{"x":{"type":"number"},"y":{"type":"number"}}}
+        \\      },
+        \\      "required":["direction"],
+        \\      "returns":null,
+        \\      "scope":"presence"
+        \\    },
+        \\    "checkout":{
+        \\      "params":{
+        \\        "cart_id":{"type":"string","minLength":1},
+        \\        "tags":{"type":"array","items":"string"}
+        \\      },
+        \\      "required":["cart_id"],
+        \\      "returns":{
+        \\        "order_id":{"type":"string"},
+        \\        "remaining_coins":{"type":"integer"}
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), parsed.actions.len);
+    try std.testing.expectEqual(@as(?usize, 0), parsed.action_index_map.get("player_move"));
+    try std.testing.expectEqual(@as(?usize, 1), parsed.action_index_map.get("checkout"));
+
+    const move = parsed.action("player_move") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(schema_types.ActionScope.presence, move.scope);
+    try std.testing.expect(!move.isSync());
+    try std.testing.expectEqual(@as(usize, 4), move.params.len);
+    try std.testing.expectEqualStrings("direction", move.params[0].name);
+    try std.testing.expect(move.params[0].required);
+    try std.testing.expect(!move.params[1].required);
+    try std.testing.expectEqual(@as(?usize, 0), move.paramIndex("direction"));
+    try std.testing.expectEqual(@as(?usize, 3), move.paramIndex("origin__y"));
+
+    const checkout = parsed.action("checkout") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(schema_types.ActionScope.store, checkout.scope);
+    try std.testing.expect(checkout.isSync());
+    try std.testing.expectEqual(@as(usize, 2), checkout.returns.?.len);
+    try std.testing.expect(checkout.returns.?[0].required);
+    try std.testing.expect(checkout.returns.?[1].required);
+    try std.testing.expectEqual(schema_types.FieldType.text, checkout.params[1].items_type.?);
+}
+
+test "schema_parse: action names without a scope default to store and sync requires returns" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"integer"}},"returns":{"y":{"type":"integer"}}}}}
+    );
+    defer parsed.deinit();
+
+    const act = parsed.action("a") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(schema_types.ActionScope.store, act.scope);
+    try std.testing.expect(act.isSync());
+    try std.testing.expectEqual(@as(usize, 1), act.returns.?.len);
+    try std.testing.expect(act.returns.?[0].required);
+}
+
+test "schema_parse: rejects store-only properties and unknown keys on action fields" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_][]const u8{
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"string","indexed":true}}}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"string","references":"t"}}}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"string","onDelete":"cascade"}}}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"string","metadata":{}}}}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"returns":{"x":{"type":"string","unique":true}}}}}
+        ,
+    };
+    for (cases) |schema_json| {
+        try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator, schema_json));
+    }
+}
+
+test "schema_parse: rejects malformed action definitions" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.InvalidSchema, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":[]}
+    ));
+    try std.testing.expectError(error.InvalidActionDefinition, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":5}}
+    ));
+    try std.testing.expectError(error.UnknownSchemaKey, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"unknown":1,"params":{}}}}
+    ));
+    try std.testing.expectError(error.InvalidActionDefinition, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":[]}}}
+    ));
+    try std.testing.expectError(error.InvalidActionScope, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"scope":"ephemeral"}}}
+    ));
+    try std.testing.expectError(error.InvalidActionReturns, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"returns":5}}}
+    ));
+    try std.testing.expectError(error.InvalidActionName, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"1bad":{}}}
+    ));
+    try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"string"}},"required":["missing"]}}}
+    ));
+    try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"object","fields":{"y":{"type":"string"}}}},"required":["x"]}}}
+    ));
+}
+
+test "schema_parse: caps action params and returns at 500 fields" {
+    const allocator = std.testing.allocator;
+
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, "{\"version\":\"1.0.0\",\"store\":{},\"actions\":{\"a\":{\"params\":{");
+    var i: usize = 0;
+    while (i < 501) : (i += 1) {
+        if (i != 0) try buf.appendSlice(allocator, ",");
+        const entry = try std.fmt.allocPrint(allocator, "\"f{d}\":{{\"type\":\"integer\"}}", .{i});
+        defer allocator.free(entry);
+        try buf.appendSlice(allocator, entry);
+    }
+    try buf.appendSlice(allocator, "}}}}");
+
+    try std.testing.expectError(error.TooManyActionFields, schema_parse.initFromJson(allocator, buf.items));
 }

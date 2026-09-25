@@ -121,6 +121,15 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
     return error.InvalidMessageFormat;
 }
 
+fn readBool(bytes: []const u8, pos: *usize) !bool {
+    if (pos.* >= bytes.len) return error.InvalidMessageFormat;
+    const m = bytes[pos.*];
+    pos.* += 1;
+    if (m == 0xc2) return false;
+    if (m == 0xc3) return true;
+    return error.InvalidMessageFormat;
+}
+
 inline fn freePayload(allocator: std.mem.Allocator, slot: anytype, found: bool) void {
     const T = @TypeOf(slot.*);
     if (@typeInfo(T) == .optional) {
@@ -145,6 +154,9 @@ inline fn assignField(
         .u64 => {
             slot.* = try readU64(bytes, pos);
         },
+        .bool => {
+            slot.* = try readBool(bytes, pos);
+        },
         .payload => {
             const new_payload = try readSubtree(bytes, pos, allocator);
             freePayload(allocator, slot, found.*);
@@ -154,7 +166,7 @@ inline fn assignField(
     found.* = true;
 }
 
-const FieldKind = enum { str, u64, payload };
+const FieldKind = enum { str, u64, bool, payload };
 
 const Field = struct {
     key: []const u8, // wire-format name, e.g. "writeId"
@@ -184,6 +196,11 @@ fn validateTable(comptime T: type, comptime table: []const Field) void {
                     .u64 => {
                         if (base_type != u64) {
                             @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is expected to be u64 for kind .u64, but got " ++ @typeName(field_type));
+                        }
+                    },
+                    .bool => {
+                        if (base_type != bool) {
+                            @compileError("Field '" ++ f.name ++ "' of " ++ @typeName(T) ++ " is expected to be bool for kind .bool, but got " ++ @typeName(field_type));
                         }
                     },
                     .payload => {
@@ -504,4 +521,50 @@ pub const PresenceRemoveRequest = struct {};
 pub fn extractPresenceRemoveFast(bytes: []const u8) !PresenceRemoveRequest {
     // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
     return extractMap(PresenceRemoveRequest, &empty_table, bytes, undefined);
+}
+
+// === Action Message Extractors ===
+
+pub const ActionCallRequest = struct {
+    action_id: u64,
+    params: Payload,
+    timeoutMs: ?u64 = null,
+};
+
+const action_call_table = [_]Field{
+    .{ .key = "action_id", .kind = .u64, .field = "action_id", .required = true },
+    .{ .key = "timeoutMs", .kind = .u64, .field = "timeoutMs", .required = false },
+    .{ .key = "params", .kind = .payload, .field = "params", .required = true },
+};
+
+pub fn extractActionCallFast(bytes: []const u8, allocator: std.mem.Allocator) !ActionCallRequest {
+    return extractMap(ActionCallRequest, &action_call_table, bytes, allocator);
+}
+
+pub const ActionRegisterRequest = struct {
+    action_ids: Payload,
+};
+
+const action_register_table = [_]Field{
+    .{ .key = "action_ids", .kind = .payload, .field = "action_ids", .required = true },
+};
+
+pub fn extractActionRegisterFast(bytes: []const u8, allocator: std.mem.Allocator) !ActionRegisterRequest {
+    return extractMap(ActionRegisterRequest, &action_register_table, bytes, allocator);
+}
+
+pub const ActionReplyRequest = struct {
+    execId: u64,
+    ok: bool,
+    payload: Payload,
+};
+
+const action_reply_table = [_]Field{
+    .{ .key = "execId", .kind = .u64, .field = "execId", .required = true },
+    .{ .key = "ok", .kind = .bool, .field = "ok", .required = true },
+    .{ .key = "payload", .kind = .payload, .field = "payload", .required = true },
+};
+
+pub fn extractActionReplyFast(bytes: []const u8, allocator: std.mem.Allocator) !ActionReplyRequest {
+    return extractMap(ActionReplyRequest, &action_reply_table, bytes, allocator);
 }
