@@ -387,41 +387,55 @@ test "actions service: scope invalidation and auth refresh revocation" {
 }
 
 test "actions service: worker error tuples and return validation settle callers" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-worker-error", schema_json);
+    defer app.deinit();
 
-    var schema = try schema_parse.initFromJson(allocator, schema_json);
-    defer schema.deinit();
-    var config = try authorization_parse.initFromJson(allocator, auth_json, &schema);
-    defer config.deinit();
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
 
-    var service = ActionsService.init(allocator, std.testing.io, &schema, &config);
-    defer service.deinit();
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    caller.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    caller.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
 
-    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
-    var claims = try makeClaims(allocator, "worker");
-    defer claims.deinit(allocator);
-    try service.register(workerCtx(10, user_id, &claims), &.{0});
-
-    const caller = callerCtx(20, user_id);
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
     var params = try makePairs(allocator, &.{
         .{ .index = 0, .value = try msgpack.Payload.strToPayload("cart-1", allocator) },
     });
     defer params.free(allocator);
 
-    // Worker error tuple (no connection manager: encode+send is a no-op, pending still drains).
-    try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 1, 0, &params, null));
-    var err_tuple = try makePairs(allocator, &.{
-        .{ .index = 0, .value = try msgpack.Payload.strToPayload("INSUFFICIENT_FUNDS", allocator) },
-        .{ .index = 1, .value = try msgpack.Payload.strToPayload("too poor", allocator) },
-    });
-    defer err_tuple.free(allocator);
-    service.resolveReply(10, 1, false, &err_tuple);
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    // Worker error tuple: flat [code, message] forwarded verbatim to the caller.
+    try testing.expectEqual(service_mod.CallOutcome.pending, try app.actions_service.call(connectionContext(caller.conn), 1, 0, &params, null));
 
-    // Invalid returns payload fails and drains.
-    try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 2, 0, &params, null));
-    service.resolveReply(10, 2, true, &params);
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    const err_items = try allocator.alloc(msgpack.Payload, 2);
+    err_items[0] = try msgpack.Payload.strToPayload("INSUFFICIENT_FUNDS", allocator);
+    err_items[1] = try msgpack.Payload.strToPayload("too poor", allocator);
+    var err_tuple = msgpack.Payload{ .arr = err_items };
+    defer err_tuple.free(allocator);
+
+    app.actions_service.resolveReply(worker.conn.id, 1, false, &err_tuple);
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    const error_response = try helpers.parseResponse(allocator, recorder.bytes());
+    defer if (error_response.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.@"error", error_response.resp_type);
+    try testing.expectEqualStrings("INSUFFICIENT_FUNDS", error_response.code.?);
+
+    // Missing required return field fails validation and drains.
+    recorder.reset();
+    try testing.expectEqual(service_mod.CallOutcome.pending, try app.actions_service.call(connectionContext(caller.conn), 2, 0, &params, null));
+
+    var empty_returns = msgpack.Payload{ .arr = &.{} };
+    app.actions_service.resolveReply(worker.conn.id, 2, true, &empty_returns);
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    const validation_response = try helpers.parseResponse(allocator, recorder.bytes());
+    defer if (validation_response.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.@"error", validation_response.resp_type);
+    try testing.expectEqualStrings("SCHEMA_VALIDATION_FAILED", validation_response.code.?);
 }
 
 test "actions service: validatePayload enforces required, arrays, and nil" {
