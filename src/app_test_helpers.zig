@@ -21,6 +21,7 @@ const typed = @import("typed/types.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
+const ActionsService = @import("actions/service.zig").ActionsService;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const PresenceService = @import("presence/service.zig").PresenceService;
@@ -174,6 +175,7 @@ pub const AppTestContext = struct {
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
     presence_service: PresenceService,
+    actions_service: ActionsService,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema: Schema,
@@ -247,13 +249,17 @@ pub const AppTestContext = struct {
         // 8b. Initialize Presence Service (null worker — no spawn in tests)
         self.presence_service = PresenceService.init(gpa, null, &self.auth_config, &self.schema);
 
+        // 8c. Initialize Actions Service (event-loop only, no worker)
+        self.actions_service = ActionsService.init(gpa, std.testing.io, &self.schema, &self.auth_config);
+
         // 9. Initialize Handler and Manager
-        self.handler.init(std.testing.io, gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
+        self.handler.init(std.testing.io, gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_service, &self.actions_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
         try self.connection_manager.init(std.testing.io, gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
         errdefer self.connection_manager.deinit();
+        self.actions_service.setConnectionManager(&self.connection_manager);
 
         // 10. Initialize Session Resolver
         self.session_resolver.init(gpa, &self.connection_manager, &self.memory_strategy);
@@ -268,6 +274,7 @@ pub const AppTestContext = struct {
 
         // 2. Shut down subsystems
         self.connection_manager.deinit();
+        self.actions_service.deinit();
 
         // 3. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();

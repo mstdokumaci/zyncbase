@@ -5,6 +5,7 @@ const parse = @import("parse.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
+const ActionRule = types.ActionRule;
 const AuthConfig = types.AuthConfig;
 const Condition = types.Condition;
 const NamespaceRule = types.NamespaceRule;
@@ -34,10 +35,21 @@ pub fn implicitConfig(allocator: Allocator, schema: *const schema_types.Schema) 
     st_rules[0] = try makeWildcardStoreRule(allocator);
     st_rules_len = 1;
 
+    const ac_rules = try allocator.alloc(ActionRule, 1);
+    var ac_rules_len: usize = 0;
+    errdefer {
+        for (ac_rules[0..ac_rules_len]) |*rule| rule.deinit(allocator);
+        allocator.free(ac_rules);
+    }
+
+    ac_rules[0] = try makeWildcardActionRule(allocator);
+    ac_rules_len = 1;
+
     var config = AuthConfig{
         .allocator = allocator,
         .namespace_rules = ns_rules,
         .store_rules = st_rules,
+        .action_rules = ac_rules,
         .wildcard_store_index = 0,
     };
 
@@ -61,6 +73,18 @@ fn makePublicNamespaceRule(allocator: Allocator) !NamespaceRule {
         .presence_read = .{ .boolean = true },
         .presence_write = .{ .boolean = true },
         .presence_shared_write = .{ .boolean = true },
+    };
+}
+
+fn makeWildcardActionRule(allocator: Allocator) !ActionRule {
+    const action = try allocator.dupe(u8, "*");
+    errdefer allocator.free(action);
+
+    return .{
+        .action = action,
+        .is_wildcard = true,
+        .invoke = .{ .boolean = true },
+        .register = .{ .boolean = false },
     };
 }
 

@@ -2,6 +2,10 @@ import { decode, decodeMulti, encode } from "@msgpack/msgpack";
 import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
+	ActionCall,
+	ActionForward,
+	ActionRegister,
+	ActionReply,
 	AuthRefresh,
 	ErrorResponse,
 	InboundMessage,
@@ -63,6 +67,10 @@ export const WireMessageType = {
 	PresenceRemove: 0x27,
 	PresenceBroadcast: 0x28,
 	SharedStateBroadcast: 0x29,
+	ActionCall: 0x30,
+	ActionForward: 0x31,
+	ActionReply: 0x32,
+	ActionRegister: 0x33,
 } as const;
 
 const OUTBOUND_WIRE_TYPES = {
@@ -83,6 +91,9 @@ const OUTBOUND_WIRE_TYPES = {
 	PresenceSubscribeShared: WireMessageType.PresenceSubscribeShared,
 	PresenceUnsubscribeShared: WireMessageType.PresenceUnsubscribeShared,
 	PresenceRemove: WireMessageType.PresenceRemove,
+	ActionCall: WireMessageType.ActionCall,
+	ActionReply: WireMessageType.ActionReply,
+	ActionRegister: WireMessageType.ActionRegister,
 } satisfies Record<OutboundMessage["type"], number>;
 
 // ServerDisconnect (0x05) is intentionally absent: it is known but unsupported,
@@ -96,6 +107,7 @@ const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
 	[WireMessageType.WriteError]: "WriteError",
 	[WireMessageType.PresenceBroadcast]: "PresenceBroadcast",
 	[WireMessageType.SharedStateBroadcast]: "SharedStateBroadcast",
+	[WireMessageType.ActionForward]: "ActionForward",
 } as const;
 
 function isWireDocId(value: unknown): value is number | string | Uint8Array {
@@ -113,6 +125,17 @@ function hasValidStoreDeltaHeader(raw: unknown[]): boolean {
 		Number.isSafeInteger(raw[1]) &&
 		(raw[2] === 0 || raw[2] === 1) &&
 		Number.isSafeInteger(raw[3])
+	);
+}
+
+function isStoreReadContext(
+	context?: PendingRequestContext,
+): context is PendingRequestContext & { responseTableIndex: number } {
+	return (
+		(context?.type === "StoreQuery" ||
+			context?.type === "StoreSubscribe" ||
+			context?.type === "StoreLoadMore") &&
+		typeof context.responseTableIndex === "number"
 	);
 }
 
@@ -169,11 +192,16 @@ export type OutboundRequest =
 	| WithoutId<PresenceUnsubscribe>
 	| WithoutId<PresenceSubscribeShared>
 	| WithoutId<PresenceUnsubscribeShared>
-	| WithoutId<PresenceRemove>;
+	| WithoutId<PresenceRemove>
+	| WithoutId<ActionCall>
+	| WithoutId<ActionReply>
+	| WithoutId<ActionRegister>;
 
 export interface PendingRequestContext {
 	type: OutboundMessage["type"];
 	responseTableIndex?: number;
+	/** Action name for ActionCall responses, used to decode returns. */
+	actionName?: string;
 }
 
 export interface EncodedOutbound {
@@ -213,9 +241,15 @@ export class ConnectionWireCodec {
 				? wireMessage.table_index
 				: undefined);
 
+		const actionId = (debugMessage as ActionCall).action_id;
+		const actionName =
+			debugMessage.type === "ActionCall" && typeof actionId === "string"
+				? actionId
+				: undefined;
+
 		return {
 			bytes: encode(wireMessage) as Uint8Array,
-			context: { type: debugMessage.type, responseTableIndex },
+			context: { type: debugMessage.type, responseTableIndex, actionName },
 			debugMessage,
 		};
 	}
@@ -260,6 +294,8 @@ export class ConnectionWireCodec {
 					return this.decodePresenceBroadcast(raw);
 				case WireMessageType.SharedStateBroadcast:
 					return this.decodeSharedStateBroadcast(raw);
+				case WireMessageType.ActionForward:
+					return this.decodeActionForward(raw);
 				default:
 					return null;
 			}
@@ -273,6 +309,7 @@ export class ConnectionWireCodec {
 			case "StoreDelta":
 			case "PresenceBroadcast":
 			case "SharedStateBroadcast":
+			case "ActionForward":
 				return null;
 		}
 		return msg;
@@ -294,36 +331,12 @@ export class ConnectionWireCodec {
 		ok: OkResponse,
 		context?: PendingRequestContext,
 	): OkResponse {
-		if (
-			(context?.type === "StoreQuery" ||
-				context?.type === "StoreSubscribe" ||
-				context?.type === "StoreLoadMore") &&
-			typeof context.responseTableIndex === "number"
-		) {
-			if (!Array.isArray(ok.value)) {
-				throw new Error("Invalid positional store response");
-			}
-			return {
-				...ok,
-				value: ok.value.map((row) =>
-					this.decodeRow(context.responseTableIndex as number, row),
-				) as OkResponse["value"],
-			};
+		if (isStoreReadContext(context)) {
+			return this.decodeStoreRows(ok, context.responseTableIndex as number);
 		}
-
 		if (context?.type === "PresenceSubscribe" && Array.isArray(ok.users)) {
-			return {
-				...ok,
-				users: ok.users.map((user) => ({
-					userId: user.userId,
-					data: this.schema.decodePresenceUserValue(
-						user.data as unknown as Array<[number, unknown]>,
-					),
-					joinedAt: user.joinedAt,
-				})),
-			};
+			return this.decodePresenceUsers(ok);
 		}
-
 		if (context?.type === "PresenceSubscribeShared" && ok.shared != null) {
 			return {
 				...ok,
@@ -332,8 +345,53 @@ export class ConnectionWireCodec {
 				),
 			};
 		}
-
+		if (context?.type === "ActionCall" && context.actionName) {
+			return this.decodeActionCallOk(ok, context.actionName);
+		}
 		return ok;
+	}
+
+	private decodeStoreRows(ok: OkResponse, tableIndex: number): OkResponse {
+		if (!Array.isArray(ok.value)) {
+			throw new Error("Invalid positional store response");
+		}
+		return {
+			...ok,
+			value: ok.value.map((row) =>
+				this.decodeRow(tableIndex, row),
+			) as OkResponse["value"],
+		};
+	}
+
+	private decodePresenceUsers(ok: OkResponse): OkResponse {
+		if (!Array.isArray(ok.users)) return ok;
+		return {
+			...ok,
+			users: ok.users.map((user) => ({
+				userId: user.userId,
+				data: this.schema.decodePresenceUserValue(
+					user.data as unknown as Array<[number, unknown]>,
+				),
+				joinedAt: user.joinedAt,
+			})),
+		};
+	}
+
+	private decodeActionCallOk(ok: OkResponse, actionName: string): OkResponse {
+		const action = this.schema.getAction(actionName);
+		// Async actions acknowledge admission without a returns payload.
+		if (!action.hasReturns) return ok;
+		if (!Array.isArray(ok.value)) {
+			throw new Error("Invalid action returns payload");
+		}
+		return {
+			...ok,
+			value: undefined,
+			actionResult: this.schema.decodeActionReturns(
+				action,
+				ok.value as unknown as Array<[number, unknown]>,
+			),
+		};
 	}
 
 	async applySchemaSync(msg: SchemaSync): Promise<boolean> {
@@ -343,6 +401,10 @@ export class ConnectionWireCodec {
 			fieldFlags: msg.fieldFlags,
 			presenceUserFields: msg.presenceUserFields,
 			presenceSharedFields: msg.presenceSharedFields,
+			actions: msg.actions,
+			actionParams: msg.actionParams,
+			actionReturns: msg.actionReturns,
+			actionFlags: msg.actionFlags,
 		});
 	}
 
@@ -366,7 +428,35 @@ export class ConnectionWireCodec {
 		if (type.startsWith("Presence")) {
 			return this.encodePresenceMessage(msg, type);
 		}
+		if (type.startsWith("Action")) {
+			return this.encodeActionMessage(msg, type);
+		}
 		return msg;
+	}
+
+	private encodeActionMessage(
+		msg: Record<string, unknown>,
+		type: string,
+	): Record<string, unknown> {
+		const wire: Record<string, unknown> = { ...msg };
+
+		if (type === "ActionCall") {
+			const action = this.schema.getAction(String(wire.action_id));
+			wire.action_id = action.id;
+			const params =
+				wire.params && typeof wire.params === "object"
+					? (wire.params as Record<string, JsonValue>)
+					: {};
+			wire.params = this.schema.encodeActionParams(action, params);
+		} else if (type === "ActionRegister") {
+			if (Array.isArray(wire.action_ids)) {
+				wire.action_ids = wire.action_ids.map((id) =>
+					typeof id === "string" ? this.schema.getAction(id).id : id,
+				);
+			}
+		}
+
+		return wire;
 	}
 
 	private encodeStoreMessage(
@@ -632,6 +722,32 @@ export class ConnectionWireCodec {
 				data.push(this.schema.decodePresenceSharedValue(patch));
 			}
 			return { type: "SharedStateBroadcast", subId: raw[1], data };
+		} catch {
+			return null;
+		}
+	}
+
+	private decodeActionForward(raw: unknown[]): ActionForward | null {
+		if (
+			raw.length !== 5 ||
+			raw[0] !== WireMessageType.ActionForward ||
+			!isNonNegativeSafeInteger(raw[1]) ||
+			!(raw[2] instanceof Uint8Array) ||
+			raw[2].length !== 16 ||
+			!isNonNegativeSafeInteger(raw[3]) ||
+			!isPresencePairArray(raw[4])
+		) {
+			return null;
+		}
+
+		try {
+			return {
+				type: "ActionForward",
+				execId: raw[1],
+				userId: this.schema.decodePresenceUserId(raw[2]),
+				action_id: raw[3],
+				params: raw[4] as Array<[number, unknown]>,
+			};
 		} catch {
 			return null;
 		}

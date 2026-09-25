@@ -521,3 +521,118 @@ test "encodeSchemaSync: fieldFlags match bit encoding rules" {
     // updated_at=5
     try testing.expectEqual(@as(u64, 5), tasks_flags.arr[6].uint);
 }
+
+test "encodeSchemaSync: action dictionaries encode names, fields, and flags" {
+    const allocator = std.heap.smp_allocator;
+
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {},
+        \\  "actions": {
+        \\    "player_move": {
+        \\      "params": { "direction": { "type": "string" }, "seq": { "type": "integer" } },
+        \\      "returns": null,
+        \\      "scope": "presence"
+        \\    },
+        \\    "checkout": {
+        \\      "params": { "cart_id": { "type": "string" } },
+        \\      "returns": { "order_id": { "type": "string" }, "remaining": { "type": "integer" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    var schema = try schema_parse.initFromJson(allocator, schema_json);
+    defer schema.deinit();
+
+    const encoded = try wire_encode.encodeSchemaSync(allocator, &schema);
+    defer allocator.free(encoded);
+
+    var reader: std.Io.Reader = .fixed(encoded);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const actions_val = (try parsed.mapGet("actions")) orelse return error.MissingActions;
+    try testing.expectEqual(@as(usize, 2), actions_val.arr.len);
+    try testing.expectEqualStrings("player_move", actions_val.arr[0].str.value());
+    try testing.expectEqualStrings("checkout", actions_val.arr[1].str.value());
+
+    const params_val = (try parsed.mapGet("actionParams")) orelse return error.MissingActionParams;
+    try testing.expectEqual(@as(usize, 2), params_val.arr[0].arr.len);
+    try testing.expectEqualStrings("direction", params_val.arr[0].arr[0].str.value());
+    try testing.expectEqualStrings("seq", params_val.arr[0].arr[1].str.value());
+    try testing.expectEqual(@as(usize, 1), params_val.arr[1].arr.len);
+    try testing.expectEqualStrings("cart_id", params_val.arr[1].arr[0].str.value());
+
+    const returns_val = (try parsed.mapGet("actionReturns")) orelse return error.MissingActionReturns;
+    try testing.expectEqual(@as(usize, 0), returns_val.arr[0].arr.len);
+    try testing.expectEqual(@as(usize, 2), returns_val.arr[1].arr.len);
+    try testing.expectEqualStrings("order_id", returns_val.arr[1].arr[0].str.value());
+
+    const flags_val = (try parsed.mapGet("actionFlags")) orelse return error.MissingActionFlags;
+    // player_move: presence scope, async → 0b10
+    try testing.expectEqual(@as(u64, 2), flags_val.arr[0].uint);
+    // checkout: store scope, sync → 0b01
+    try testing.expectEqual(@as(u64, 1), flags_val.arr[1].uint);
+}
+
+test "encodeActionForward: fixed tuple with bin16 userId and params" {
+    const allocator = std.heap.smp_allocator;
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
+
+    const params = msgpack.Payload{ .arr = &.{} };
+    const bytes = try wire_encode.encodeActionForward(allocator, 7, user_id, 2, &params);
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    try testing.expectEqual(@as(usize, 5), parsed.arr.len);
+    try testing.expectEqual(@as(u64, 0x31), parsed.arr[0].uint);
+    try testing.expectEqual(@as(u64, 7), parsed.arr[1].uint);
+    try testing.expectEqualSlices(u8, &typed_doc_id.toBytes(user_id), parsed.arr[2].bin.value());
+    try testing.expectEqual(@as(u64, 2), parsed.arr[3].uint);
+    try testing.expectEqual(@as(usize, 0), parsed.arr[4].arr.len);
+}
+
+test "encodeActionOkWithValue: ok response carries returns value" {
+    const allocator = std.heap.smp_allocator;
+
+    var pairs = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    defer pairs.free(allocator);
+    const pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(0);
+    pair[1] = msgpack.Payload.uintToPayload(99);
+    pairs.arr[0] = .{ .arr = pair };
+
+    const bytes = try wire_encode.encodeActionOkWithValue(allocator, 12, &pairs);
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    try testing.expectEqual(@as(u64, 0x00), (try parsed.mapGet("type")).?.uint);
+    try testing.expectEqual(@as(u64, 12), (try parsed.mapGet("id")).?.uint);
+    const value = (try parsed.mapGet("value")) orelse return error.MissingValue;
+    try testing.expectEqual(@as(usize, 1), value.arr.len);
+    try testing.expectEqual(@as(u64, 99), value.arr[0].arr[1].uint);
+}
+
+test "encodeErrorWithStrings: dynamic worker codes encode as valid msgpack strings" {
+    const allocator = std.heap.smp_allocator;
+
+    const bytes = try wire_encode.encodeErrorWithStrings(allocator, 5, "EMPTY_CART", "cart is empty");
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    try testing.expectEqual(@as(u64, 0x01), (try parsed.mapGet("type")).?.uint);
+    try testing.expectEqual(@as(u64, 5), (try parsed.mapGet("id")).?.uint);
+    try testing.expectEqualStrings("EMPTY_CART", (try parsed.mapGet("code")).?.str.value());
+    try testing.expectEqualStrings("cart is empty", (try parsed.mapGet("message")).?.str.value());
+}

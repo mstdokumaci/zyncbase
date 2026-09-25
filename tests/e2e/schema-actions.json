@@ -1,0 +1,47 @@
+{
+	"version": "1.0.0",
+	"store": {
+		"tasks": {
+			"fields": {
+				"title": {
+					"type": "string"
+				}
+			}
+		}
+	},
+	"presence": {
+		"user": {
+			"status": {
+				"type": "string"
+			}
+		}
+	},
+	"actions": {
+		"checkout": {
+			"params": {
+				"cart_id": { "type": "string", "minLength": 1 }
+			},
+			"required": ["cart_id"],
+			"returns": {
+				"order_id": { "type": "string" }
+			}
+		},
+		"player_move": {
+			"params": {
+				"direction": {
+					"type": "string",
+					"enum": ["up", "down", "left", "right"]
+				},
+				"seq": { "type": "integer", "minimum": 0 }
+			},
+			"required": ["direction"],
+			"returns": null,
+			"scope": "presence"
+		},
+		"locked": {
+			"returns": {
+				"ok": { "type": "boolean" }
+			}
+		}
+	}
+}

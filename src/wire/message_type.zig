@@ -36,6 +36,12 @@ pub const MessageType = enum(u8) {
     presence_remove = 0x27, // C->S remove user presence
     presence_broadcast = 0x28, // S->C push user presence changes
     shared_state_broadcast = 0x29, // S->C push shared state changes
+
+    // Actions (0x3x)
+    action_call = 0x30, // C->S invoke an action
+    action_forward = 0x31, // S->W forward a call to a registered worker
+    action_reply = 0x32, // W->S worker reply to a synchronous action call
+    action_register = 0x33, // W->S advertise handled actions
 };
 
 comptime {

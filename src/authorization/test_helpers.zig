@@ -45,10 +45,28 @@ pub fn permissiveTestConfig(allocator: std.mem.Allocator, schema: *const schema_
     st_rules[0] = try makePermissiveStoreRule(allocator);
     st_rules_len = 1;
 
+    const ac_rules = try allocator.alloc(authorization_types.ActionRule, 1);
+    var ac_rules_len: usize = 0;
+    errdefer {
+        for (ac_rules[0..ac_rules_len]) |*rule| rule.deinit(allocator);
+        allocator.free(ac_rules);
+    }
+
+    const action_name = try allocator.dupe(u8, "*");
+    errdefer allocator.free(action_name);
+    ac_rules[0] = .{
+        .action = action_name,
+        .is_wildcard = true,
+        .invoke = .{ .boolean = true },
+        .register = .{ .boolean = true },
+    };
+    ac_rules_len = 1;
+
     var config = AuthConfig{
         .allocator = allocator,
         .namespace_rules = ns_rules,
         .store_rules = st_rules,
+        .action_rules = ac_rules,
         .wildcard_store_index = 0,
     };
 

@@ -249,6 +249,32 @@ export interface PresenceRemove {
 	id: number;
 }
 
+// ─── Outbound wire messages: actions ─────────────────────────────────────────
+
+export interface ActionCall {
+	type: "ActionCall";
+	id: number;
+	/** Action name; the wire codec encodes it to the SchemaSync integer id. */
+	action_id: string | number;
+	timeoutMs?: number;
+	params?: Record<string, unknown>;
+}
+
+export interface ActionReply {
+	type: "ActionReply";
+	id: number;
+	execId: number;
+	ok: boolean;
+	/** Pre-encoded pair-array (returns) or [code, message] error tuple. */
+	payload: unknown;
+}
+
+export interface ActionRegister {
+	type: "ActionRegister";
+	id: number;
+	action_ids: (string | number)[];
+}
+
 /** Union of all outbound message types. */
 export type OutboundMessage =
 	| AuthRefresh
@@ -267,7 +293,10 @@ export type OutboundMessage =
 	| PresenceUnsubscribe
 	| PresenceSubscribeShared
 	| PresenceUnsubscribeShared
-	| PresenceRemove;
+	| PresenceRemove
+	| ActionCall
+	| ActionReply
+	| ActionRegister;
 
 // ─── Inbound wire messages ────────────────────────────────────────────────────
 
@@ -288,6 +317,8 @@ export interface OkResponse {
 	users?: PresenceUserSnapshot[];
 	// PresenceSubscribeShared response fields:
 	shared?: Record<string, unknown> | null;
+	// ActionCall sync response: decoded returns object.
+	actionResult?: Record<string, JsonValue>;
 }
 
 /** User entry in PresenceSubscribe snapshot. */
@@ -324,6 +355,10 @@ export interface SchemaSync {
 	fieldFlags: number[][];
 	presenceUserFields?: string[];
 	presenceSharedFields?: string[];
+	actions?: string[];
+	actionParams?: string[][];
+	actionReturns?: string[][];
+	actionFlags?: number[];
 }
 
 export interface WriteCommitted {
@@ -362,6 +397,16 @@ export interface SharedStateBroadcast {
 	type: "SharedStateBroadcast";
 	subId: number;
 	data: Record<string, unknown>[]; // Array of decoded patches
+}
+
+/** Server push — forward an action call to a registered worker. */
+export interface ActionForward {
+	type: "ActionForward";
+	execId: number;
+	/** Canonical UUIDv7 string decoded from the wire bin16 user id. */
+	userId: string;
+	action_id: number;
+	params: Array<[number, unknown]>;
 }
 
 /** Decoded presence entry exposed to SDK consumers. */
@@ -413,6 +458,52 @@ export interface Presence {
 	remove(): void;
 }
 
+// ─── Actions interface ────────────────────────────────────────────────────────
+
+export type ActionScope = "store" | "presence";
+
+export interface ActionCallOptions {
+	/**
+	 * Upper bound (ms) on how long the server may wait for a sync action reply.
+	 * Defaults to 10000ms on the server; a smaller value only shortens the deadline.
+	 */
+	timeoutMs?: number;
+}
+
+/** Verified request metadata injected by the server for every worker invocation. */
+export interface ActionContext {
+	/** Canonical UUIDv7 string of the authenticated user resolved by the bound scope. */
+	readonly userId: string;
+	/** Active namespace of the action's bound scope. */
+	readonly namespace: string;
+	/** Server-assigned execution id for this invocation. */
+	readonly execId: number;
+}
+
+export type ActionHandler = (
+	ctx: ActionContext,
+	params: Record<string, unknown>,
+) => unknown | Promise<unknown>;
+
+/** Public Actions API interface. */
+export interface Actions {
+	/**
+	 * Invoke an action. Async actions resolve to `undefined` on admission;
+	 * sync actions resolve to the validated returns object.
+	 * Action calls are never auto-retried.
+	 */
+	call(
+		name: string,
+		params?: Record<string, unknown>,
+		options?: ActionCallOptions,
+	): Promise<unknown>;
+	/**
+	 * Register a handler for an action. Throws `SESSION_NOT_READY` when the
+	 * action's bound scope is not ready. A worker is an ordinary client.
+	 */
+	handle(name: string, handler: ActionHandler): void;
+}
+
 /** Union of all inbound message types. */
 export type InboundMessage =
 	| OkResponse
@@ -422,4 +513,5 @@ export type InboundMessage =
 	| WriteCommitted
 	| WriteError
 	| PresenceBroadcast
-	| SharedStateBroadcast;
+	| SharedStateBroadcast
+	| ActionForward;

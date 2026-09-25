@@ -922,12 +922,12 @@ Input validation runs inside the Zig engine before forwarding to workers; invali
 1. **Asynchronous (Fire-and-Forget / Stream)**:
    - When `returns` is `null` or omitted.
    - The server validates input constraints and immediately acknowledges the client (`0x00 OK`) on admission to the forward path.
-   - The SDK returns `Promise<void>`.
+   - The SDK returns `Promise<unknown>`, resolving to `undefined` on admission.
    - Never touches SQLite disk or WAL. Zero peer broadcasting. Delivery is **at-most-once**: no persistence, no redelivery, and no worker-failure feedback.
 2. **Synchronous (RPC)**:
    - When `returns` defines a valid schema.
    - The server tracks the call by a server-minted execution id, routes it to a registered worker, awaits the worker's `ActionReply`, validates return fields, and forwards the response back to the client.
-   - The SDK returns `Promise<TOutput>`.
+   - The SDK returns `Promise<unknown>`; the return shape is validated at runtime and typed action outputs await a future codegen pass.
 
 Sync actions are orchestration, not transactions. The engine provides no atomic increment or compare-and-set, and a sync reply is a worker claim — not committed state. Workers that mutate store must use `confirm: "committed"` where the outcome matters and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
 
@@ -986,7 +986,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 - Schema serves as the single source of truth for validation, execution mode, and scope binding.
 - Sync actions add worker availability and round-trip latency to the caller's path; they are not transactional and cannot express atomic counters or compare-and-set.
 - Async actions are at-most-once, inherit the per-connection message rate limit, and provide no delivery or failure feedback.
-- Clients write clean, boilerplate-free code (`client.actions.call(name, params)`) with end-to-end TypeScript type inference.
+- Clients write clean, boilerplate-free code (`client.actions.call(name, params)`). Action params/returns are schema-validated at runtime; typed action params/returns await action-aware codegen (today the generator covers the store schema only), so sync results are `unknown` and cast by the caller until then.
 - Keeps the Zig core fast and lean: business logic stays in external worker processes (Node/Bun/Go) while ZyncBase acts as the high-speed binary multiplexer.
 
 **Principles**: P-RTF, P-TSF, P-PPF, P-SBD, P-POM

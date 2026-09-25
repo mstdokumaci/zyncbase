@@ -132,3 +132,34 @@ describe("SchemaDictionary doc IDs", () => {
 		});
 	});
 });
+
+describe("SchemaDictionary schema changes", () => {
+	test("detects action-only changes", async () => {
+		const schema = new SchemaDictionary();
+		const store = {
+			tables: ["users"],
+			fields: [["id", "name"]],
+			fieldFlags: [[3, 0]],
+		};
+
+		expect(await schema.processSchemaSync(store)).toBe(false);
+		expect(
+			await schema.processSchemaSync({
+				...store,
+				actions: ["greet"],
+				actionParams: [["message"]],
+				actionReturns: [["reply"]],
+				actionFlags: [1],
+			}),
+		).toBe(true);
+		expect(
+			await schema.processSchemaSync({
+				...store,
+				actions: ["greet"],
+				actionParams: [["message"]],
+				actionReturns: [["reply"]],
+				actionFlags: [1],
+			}),
+		).toBe(false);
+	});
+});

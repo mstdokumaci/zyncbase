@@ -13,6 +13,7 @@ import {
 	runE2ETest,
 	withServer,
 } from "./harness";
+import { run as runActions } from "./test-actions";
 import { run as runBatch } from "./test-batch";
 import { run as runComboStress } from "./test-combo-stress";
 import { run as runErrors } from "./test-errors";
@@ -125,6 +126,23 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
+				},
+			);
+		});
+	});
+
+	test("actions: sync RPC, async stream, worker errors, and authorization", async () => {
+		await runE2ETest("Actions", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-actions.json"),
+					dataDir: ctx.dataPath("actions"),
+					configName: "zyncbase-config-actions.json",
+					authPath: ctx.schemaPath("auth-actions.json"),
+				},
+				async ({ port }) => {
+					await runActions(port);
 				},
 			);
 		});

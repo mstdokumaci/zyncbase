@@ -32,7 +32,7 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     const root = parsed.value;
     if (root != .object) return error.InvalidSchema;
 
-    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "version", "store", "metadata", "presence" }, root.object);
+    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "version", "store", "metadata", "presence", "actions" }, root.object);
 
     const version_val = (json_read.getString(root.object, "version") catch return error.InvalidVersion) orelse return error.MissingVersion;
 
@@ -75,11 +75,19 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     try shared_names.ensureTotalCapacityPrecise(allocator, presence_shared_fields.items.len);
     for (presence_shared_fields.items) |f| shared_names.appendAssumeCapacity(f.name);
 
+    var actions = std.ArrayListUnmanaged(types.Action).empty;
+    defer {
+        for (actions.items) |*action| action.deinit(allocator);
+        actions.deinit(allocator);
+    }
+    try collectActions(allocator, root.object, &actions);
+
     return initFromTables(
         allocator,
         version_val,
         root_metadata,
         declared_tables.items,
+        actions.items,
         presence_user_fields.items,
         presence_shared_fields.items,
         user_names.items,
@@ -159,6 +167,172 @@ fn parsePresenceTier(
     var ctx = PresenceFieldContext{ .fields_list = fields_list };
     try parseObjectFields(allocator, tier_val.object, "", PresenceFieldContext, &ctx);
 }
+
+pub const max_action_fields: usize = 500;
+
+const action_keys = [_][]const u8{ "params", "required", "returns", "scope" };
+
+const action_leaf_field_keys = [_][]const u8{ "type", "items" } ++ constraint_keys;
+
+fn collectActions(
+    allocator: Allocator,
+    root_obj: std.json.ObjectMap,
+    actions: *std.ArrayListUnmanaged(types.Action),
+) !void {
+    const actions_val = root_obj.get("actions") orelse return;
+    if (actions_val != .object) return error.InvalidSchema;
+
+    var it = actions_val.object.iterator();
+    while (it.next()) |entry| {
+        var action = try parseAction(allocator, entry.key_ptr.*, entry.value_ptr.*);
+        var appended = false;
+        errdefer if (!appended) action.deinit(allocator);
+        try actions.append(allocator, action);
+        appended = true;
+    }
+}
+
+fn parseActionScope(scope_val: ?std.json.Value) !types.ActionScope {
+    const val = scope_val orelse return .store;
+    if (val != .string) return error.InvalidActionScope;
+    if (std.mem.eql(u8, val.string, "store")) return .store;
+    if (std.mem.eql(u8, val.string, "presence")) return .presence;
+    return error.InvalidActionScope;
+}
+
+fn parseActionRequiredSet(allocator: Allocator, action_obj: std.json.ObjectMap) !std.StringHashMap(bool) {
+    var required_set = std.StringHashMap(bool).init(allocator);
+    errdefer deinitRequiredSet(allocator, &required_set);
+
+    const required = (json_read.getArray(action_obj, "required") catch return error.InvalidActionDefinition) orelse return required_set;
+
+    for (required.items) |item| {
+        if (item != .string) return error.InvalidActionDefinition;
+        const normalized = try field_path.normalizeDots(allocator, item.string);
+        errdefer allocator.free(normalized);
+        const gop = try required_set.getOrPut(normalized);
+        if (gop.found_existing) {
+            allocator.free(normalized);
+        } else {
+            gop.value_ptr.* = false;
+        }
+    }
+    return required_set;
+}
+
+fn parseActionFields(
+    allocator: Allocator,
+    fields_val: std.json.Value,
+    required_set: *std.StringHashMap(bool),
+    force_required: bool,
+) ![]const types.ActionField {
+    if (fields_val != .object) return error.InvalidActionDefinition;
+
+    var fields = std.ArrayListUnmanaged(types.ActionField).empty;
+    errdefer {
+        for (fields.items) |f| f.deinit(allocator);
+        fields.deinit(allocator);
+    }
+
+    var ctx = ActionFieldContext{
+        .fields = &fields,
+        .required_set = required_set,
+        .force_required = force_required,
+    };
+    try parseObjectFields(allocator, fields_val.object, "", ActionFieldContext, &ctx);
+    return fields.toOwnedSlice(allocator);
+}
+
+fn parseAction(allocator: Allocator, action_name_raw: []const u8, action_def: std.json.Value) !types.Action {
+    if (!isValidTableIdentifier(action_name_raw)) return error.InvalidActionName;
+    if (action_def != .object) return error.InvalidActionDefinition;
+    try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &action_keys, action_def.object);
+
+    const name = try allocator.dupe(u8, action_name_raw);
+    errdefer allocator.free(name);
+
+    const scope = try parseActionScope(action_def.object.get("scope"));
+
+    var required_set = try parseActionRequiredSet(allocator, action_def.object);
+    defer deinitRequiredSet(allocator, &required_set);
+
+    const params = if (action_def.object.get("params")) |params_val|
+        try parseActionFields(allocator, params_val, &required_set, false)
+    else
+        &[_]types.ActionField{};
+    errdefer {
+        for (params) |f| f.deinit(allocator);
+        allocator.free(params);
+    }
+    try ensureRequiredFieldsResolved(&required_set);
+
+    // Every declared return field must be present in a successful reply.
+    const returns: ?[]const types.ActionField = if (action_def.object.get("returns")) |returns_val| blk: {
+        if (returns_val == .null) break :blk null;
+        if (returns_val != .object) return error.InvalidActionReturns;
+        var empty_required = std.StringHashMap(bool).init(allocator);
+        defer empty_required.deinit();
+        break :blk try parseActionFields(allocator, returns_val, &empty_required, true);
+    } else null;
+    errdefer if (returns) |fields| {
+        for (fields) |f| f.deinit(allocator);
+        allocator.free(fields);
+    };
+
+    return .{
+        .name = name,
+        .scope = scope,
+        .params = params,
+        .returns = returns,
+    };
+}
+
+/// Context for action params/returns parsing. Allowed keys exclude every
+/// store-only property, so `indexed`, `references`, `onDelete`, `unique`,
+/// and `metadata` are rejected as unknown schema keys.
+const ActionFieldContext = struct {
+    fields: *std.ArrayListUnmanaged(types.ActionField),
+    required_set: *std.StringHashMap(bool),
+    force_required: bool,
+
+    fn preValidate(_: *@This(), _: []const u8, type_str: []const u8, def: std.json.Value) !void {
+        if (std.mem.eql(u8, type_str, "object")) {
+            try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &.{ "type", "fields" }, def.object);
+        } else {
+            try json_read.rejectUnknownKeys(error.UnknownSchemaKey, &action_leaf_field_keys, def.object);
+        }
+    }
+
+    fn preObjectValidate(ctx: *@This(), full_name: []const u8) !void {
+        if (!ctx.force_required and ctx.required_set.contains(full_name)) return error.InvalidRequiredField;
+    }
+
+    fn fieldType(type_str: []const u8) !types.FieldType {
+        return field_type_map.get(type_str) orelse error.UnknownFieldType;
+    }
+
+    fn emitField(ctx: *@This(), allocator: Allocator, full_name: []const u8, declared_type: types.FieldType, field_def: std.json.Value) !void {
+        if (ctx.fields.items.len >= max_action_fields) return error.TooManyActionFields;
+
+        var required = ctx.force_required;
+        if (ctx.required_set.getPtr(full_name)) |seen| {
+            seen.* = true;
+            required = true;
+        }
+
+        const items_type = try extractArrayItemsType(declared_type, field_def);
+        const constraints = try parseConstraints(allocator, declared_type, field_def.object);
+        errdefer if (constraints) |c| c.deinit(allocator);
+
+        try ctx.fields.append(allocator, .{
+            .name = full_name,
+            .declared_type = declared_type,
+            .items_type = items_type,
+            .required = required,
+            .constraints = constraints,
+        });
+    }
+};
 
 fn hasConstraintKeys(field_obj: std.json.ObjectMap) bool {
     for (constraint_keys) |key| {
@@ -459,6 +633,7 @@ pub fn initFromTables(
     version: []const u8,
     root_metadata: ?types.Metadata,
     declared_tables: []const types.Table,
+    actions: []const types.Action,
     presence_user_fields: []const types.PresenceField,
     presence_shared_fields: []const types.PresenceField,
     presence_user_fields_names: []const []const u8,
@@ -492,6 +667,10 @@ pub fn initFromTables(
     var presence_owned_by_schema = false;
     errdefer if (!presence_owned_by_schema) presence_state.deinit(allocator);
 
+    const cloned_actions = try cloneActions(allocator, actions);
+    var actions_owned_by_schema = false;
+    errdefer if (!actions_owned_by_schema) deinitClonedActions(allocator, cloned_actions);
+
     var schema = types.Schema{
         .allocator = allocator,
         .version = version_owned,
@@ -501,14 +680,17 @@ pub fn initFromTables(
         .presence_shared_fields = presence_state.shared_fields,
         .presence_user_fields_names = presence_state.user_fields_names,
         .presence_shared_fields_names = presence_state.shared_fields_names,
+        .actions = cloned_actions,
     };
     version_owned_by_schema = true;
     metadata_owned_by_schema = true;
     tables_owned_by_schema = true;
     presence_owned_by_schema = true;
+    actions_owned_by_schema = true;
     errdefer schema.deinit();
 
     try index.buildTableIndex(allocator, &schema);
+    try index.buildActionIndex(allocator, &schema);
     try validateReferences(&schema);
     return schema;
 }
@@ -539,6 +721,25 @@ fn cloneStringSlice(allocator: Allocator, strings: []const []const u8) ![]const 
         built += 1;
     }
     return cloned;
+}
+
+fn cloneActions(allocator: Allocator, actions: []const types.Action) ![]types.Action {
+    const cloned = try allocator.alloc(types.Action, actions.len);
+    var built: usize = 0;
+    errdefer {
+        for (cloned[0..built]) |*action| action.deinit(allocator);
+        allocator.free(cloned);
+    }
+    for (actions) |action| {
+        cloned[built] = try action.clone(allocator);
+        built += 1;
+    }
+    return cloned;
+}
+
+fn deinitClonedActions(allocator: Allocator, actions: []types.Action) void {
+    for (actions) |*action| action.deinit(allocator);
+    allocator.free(actions);
 }
 
 const OwnedTables = struct {

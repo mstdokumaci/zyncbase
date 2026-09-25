@@ -358,6 +358,118 @@ pub const PresenceField = struct {
     }
 };
 
+pub const ActionScope = enum {
+    store,
+    presence,
+
+    pub fn schemaName(self: ActionScope) []const u8 {
+        return switch (self) {
+            .store => "store",
+            .presence => "presence",
+        };
+    }
+};
+
+/// One flattened action param or return field. Actions are never persisted,
+/// so there is no storage_type, indexing, or reference metadata.
+pub const ActionField = struct {
+    name: []const u8,
+    declared_type: FieldType,
+    items_type: ?FieldType = null,
+    required: bool = false,
+    constraints: ?Constraints = null,
+
+    pub fn clone(self: ActionField, allocator: Allocator) !ActionField {
+        const cloned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(cloned_name);
+
+        const cloned_constraints = if (self.constraints) |c| try c.clone(allocator) else null;
+        errdefer if (cloned_constraints) |c| c.deinit(allocator);
+
+        return .{
+            .name = cloned_name,
+            .declared_type = self.declared_type,
+            .items_type = self.items_type,
+            .required = self.required,
+            .constraints = cloned_constraints,
+        };
+    }
+
+    pub fn deinit(self: ActionField, allocator: Allocator) void {
+        allocator.free(self.name);
+        if (self.constraints) |c| c.deinit(allocator);
+    }
+};
+
+pub const Action = struct {
+    name: []const u8,
+    scope: ActionScope = .store,
+    params: []const ActionField,
+    /// `null` declares an asynchronous action.
+    returns: ?[]const ActionField = null,
+    param_index_map: std.StringHashMapUnmanaged(usize) = .{},
+    return_index_map: std.StringHashMapUnmanaged(usize) = .{},
+
+    pub fn isSync(self: *const Action) bool {
+        return self.returns != null;
+    }
+
+    pub fn paramIndex(self: *const Action, name: []const u8) ?usize {
+        return self.param_index_map.get(name);
+    }
+
+    pub fn returnIndex(self: *const Action, name: []const u8) ?usize {
+        return self.return_index_map.get(name);
+    }
+
+    pub fn clone(self: Action, allocator: Allocator) !Action {
+        const cloned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(cloned_name);
+
+        const cloned_params = try cloneActionFields(allocator, self.params);
+        errdefer deinitActionFields(cloned_params, allocator);
+
+        const cloned_returns = if (self.returns) |returns| try cloneActionFields(allocator, returns) else null;
+        errdefer if (cloned_returns) |returns| deinitActionFields(returns, allocator);
+
+        return .{
+            .name = cloned_name,
+            .scope = self.scope,
+            .params = cloned_params,
+            .returns = cloned_returns,
+            // Index maps are rebuilt by `buildActionIndex` after cloning.
+        };
+    }
+
+    pub fn deinit(self: *Action, allocator: Allocator) void {
+        self.param_index_map.deinit(allocator);
+        self.return_index_map.deinit(allocator);
+        deinitActionFields(self.params, allocator);
+        if (self.returns) |returns| deinitActionFields(returns, allocator);
+        allocator.free(self.name);
+    }
+};
+
+fn cloneActionFields(allocator: Allocator, fields: []const ActionField) ![]const ActionField {
+    if (fields.len == 0) return &.{};
+    const cloned = try allocator.alloc(ActionField, fields.len);
+    var built: usize = 0;
+    errdefer {
+        for (cloned[0..built]) |f| f.deinit(allocator);
+        allocator.free(cloned);
+    }
+    for (fields) |field| {
+        cloned[built] = try field.clone(allocator);
+        built += 1;
+    }
+    return cloned;
+}
+
+fn deinitActionFields(fields: []const ActionField, allocator: Allocator) void {
+    for (fields) |f| f.deinit(allocator);
+    if (fields.len > 0) allocator.free(fields);
+}
+
 pub const Schema = struct {
     allocator: Allocator,
     version: []const u8,
@@ -373,6 +485,11 @@ pub const Schema = struct {
     presence_shared_fields: []const PresenceField,
     presence_user_fields_names: []const []const u8,
     presence_shared_fields_names: []const []const u8,
+
+    // Actions
+    actions: []Action = &.{},
+    /// Always populated for runtime schemas (built by `buildActionIndex`).
+    action_index_map: std.StringHashMapUnmanaged(usize) = .{},
 
     pub fn deinit(self: *Schema) void {
         self.table_index_map.deinit(self.allocator);
@@ -390,6 +507,10 @@ pub const Schema = struct {
         self.allocator.free(self.presence_user_fields_names);
         for (self.presence_shared_fields_names) |name| self.allocator.free(name);
         self.allocator.free(self.presence_shared_fields_names);
+
+        self.action_index_map.deinit(self.allocator);
+        for (self.actions) |*act| act.deinit(self.allocator);
+        self.allocator.free(self.actions);
     }
 
     pub fn table(self: *const Schema, name: []const u8) ?*const Table {
@@ -400,5 +521,15 @@ pub const Schema = struct {
     pub fn tableByIndex(self: *const Schema, index: usize) ?*const Table {
         if (index >= self.tables.len) return null;
         return &self.tables[index];
+    }
+
+    pub fn action(self: *const Schema, name: []const u8) ?*const Action {
+        const idx = self.action_index_map.get(name) orelse return null;
+        return &self.actions[idx];
+    }
+
+    pub fn actionByIndex(self: *const Schema, index: usize) ?*const Action {
+        if (index >= self.actions.len) return null;
+        return &self.actions[index];
     }
 };

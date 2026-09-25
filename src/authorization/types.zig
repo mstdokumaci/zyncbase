@@ -21,6 +21,7 @@ pub const AuthConfig = struct {
     allocator: Allocator,
     namespace_rules: []NamespaceRule,
     store_rules: []StoreRule,
+    action_rules: []ActionRule = &.{},
     wildcard_store_index: ?usize,
 
     pub fn deinit(self: *AuthConfig) void {
@@ -28,6 +29,8 @@ pub const AuthConfig = struct {
         self.allocator.free(self.namespace_rules);
         for (self.store_rules) |*rule| rule.deinit(self.allocator);
         self.allocator.free(self.store_rules);
+        for (self.action_rules) |*rule| rule.deinit(self.allocator);
+        self.allocator.free(self.action_rules);
     }
 
     /// Find the StoreRule for a given collection name.
@@ -36,6 +39,17 @@ pub const AuthConfig = struct {
         var found: ?*const StoreRule = null;
         for (self.store_rules) |*rule| {
             if (std.mem.eql(u8, rule.collection, collection)) return rule;
+            if (rule.is_wildcard) found = rule;
+        }
+        return found;
+    }
+
+    /// Find the ActionRule for a given action name.
+    /// Returns the first exact match, then wildcard, then null.
+    pub fn actionRuleFor(self: *const AuthConfig, action: []const u8) ?*const ActionRule {
+        var found: ?*const ActionRule = null;
+        for (self.action_rules) |*rule| {
+            if (std.mem.eql(u8, rule.action, action)) return rule;
             if (rule.is_wildcard) found = rule;
         }
         return found;
@@ -92,6 +106,19 @@ pub const StoreRule = struct {
         allocator.free(self.collection);
         self.read.deinit(allocator);
         self.write.deinit(allocator);
+    }
+};
+
+pub const ActionRule = struct {
+    action: []const u8,
+    is_wildcard: bool,
+    invoke: Condition,
+    register: Condition,
+
+    pub fn deinit(self: *ActionRule, allocator: Allocator) void {
+        allocator.free(self.action);
+        self.invoke.deinit(allocator);
+        self.register.deinit(allocator);
     }
 };
 

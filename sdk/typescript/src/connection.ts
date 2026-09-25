@@ -10,6 +10,7 @@ import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { PendingRequests } from "./pending_requests.js";
 import { RetryPolicy } from "./retry_policy.js";
 import type {
+	ActionForward,
 	ClientOptions,
 	ErrorResponse,
 	InboundMessage,
@@ -52,6 +53,7 @@ export class ConnectionManager {
 	private deltaHandler: DeltaHandler | null = null;
 	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
 	private presenceUserIdHandler: ((userId: string) => void) | null = null;
+	private actionForwardHandler: ((msg: ActionForward) => void) | null = null;
 
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -225,6 +227,19 @@ export class ConnectionManager {
 		return this.dispatchWithRetry(msg, 0, responseTableIndex);
 	}
 
+	/**
+	 * Dispatch a request without any automatic retry. Used by action calls,
+	 * which must never be retried because the first attempt may have executed.
+	 */
+	dispatchNoRetry(msg: OutboundRequest): Promise<OkResponse> {
+		return this.sendRequest(msg).result;
+	}
+
+	/** Encode a one-way outbound message (ActionReply). The request id is unused. */
+	encodeOutbound(msg: OutboundRequest): Uint8Array {
+		return this.wire.encode(msg, 0).bytes;
+	}
+
 	private sendRequest(
 		msg: OutboundRequest,
 		responseTableIndex?: number,
@@ -310,6 +325,10 @@ export class ConnectionManager {
 
 	onPresenceBroadcast(handler: PresenceBroadcastHandler): void {
 		this.presenceBroadcastHandler = handler;
+	}
+
+	onActionForward(handler: (msg: ActionForward) => void): void {
+		this.actionForwardHandler = handler;
 	}
 
 	disconnect(): void {
@@ -488,6 +507,9 @@ export class ConnectionManager {
 			case "PresenceBroadcast":
 			case "SharedStateBroadcast":
 				this.presenceBroadcastHandler?.(msg);
+				break;
+			case "ActionForward":
+				this.actionForwardHandler?.(msg);
 				break;
 		}
 

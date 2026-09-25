@@ -311,3 +311,116 @@ test "readSubtree decodes a large batch-style array payload in a single pass" {
     try testing.expect(payload == .arr);
     try testing.expectEqual(@as(usize, 300), payload.arr.len);
 }
+
+// === Action Message Extractor Tests ===
+
+fn makeParamsPair(allocator: std.mem.Allocator, field_index: usize, value: msgpack.Payload) !msgpack.Payload {
+    const pair = try allocator.alloc(msgpack.Payload, 2);
+    pair[0] = msgpack.Payload.uintToPayload(field_index);
+    pair[1] = value;
+    const pairs = try allocator.alloc(msgpack.Payload, 1);
+    pairs[0] = .{ .arr = pair };
+    return .{ .arr = pairs };
+}
+
+test "extractActionCallFast: parses action_id, timeoutMs, and params" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("action_id", msgpack.Payload.uintToPayload(3));
+    try map.mapPut("timeoutMs", msgpack.Payload.uintToPayload(250));
+    try map.mapPut("params", try makeParamsPair(allocator, 0, msgpack.Payload.uintToPayload(7)));
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const req = try decode.extractActionCallFast(bytes, allocator);
+    defer req.params.free(allocator);
+    try testing.expectEqual(@as(u64, 3), req.action_id);
+    try testing.expectEqual(@as(?u64, 250), req.timeoutMs);
+    try testing.expectEqual(@as(usize, 1), req.params.arr.len);
+}
+
+test "extractActionCallFast: optional timeoutMs defaults to null" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("action_id", msgpack.Payload.uintToPayload(1));
+    try map.mapPut("params", .{ .arr = try allocator.alloc(msgpack.Payload, 0) });
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const req = try decode.extractActionCallFast(bytes, allocator);
+    defer req.params.free(allocator);
+    try testing.expectEqual(@as(?u64, null), req.timeoutMs);
+}
+
+test "extractActionCallFast: missing params is rejected" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("action_id", msgpack.Payload.uintToPayload(1));
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, decode.extractActionCallFast(bytes, allocator));
+}
+
+test "extractActionRegisterFast: parses action_ids" {
+    const allocator = std.testing.allocator;
+
+    const ids = try allocator.alloc(msgpack.Payload, 2);
+    ids[0] = msgpack.Payload.uintToPayload(0);
+    ids[1] = msgpack.Payload.uintToPayload(2);
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("action_ids", .{ .arr = ids });
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const req = try decode.extractActionRegisterFast(bytes, allocator);
+    defer req.action_ids.free(allocator);
+    try testing.expectEqual(@as(usize, 2), req.action_ids.arr.len);
+    try testing.expectEqual(@as(u64, 2), req.action_ids.arr[1].uint);
+}
+
+test "extractActionReplyFast: parses execId, ok, and payload" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("execId", msgpack.Payload.uintToPayload(9));
+    try map.mapPut("ok", .{ .bool = true });
+    try map.mapPut("payload", try makeParamsPair(allocator, 1, msgpack.Payload.uintToPayload(42)));
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const req = try decode.extractActionReplyFast(bytes, allocator);
+    defer req.payload.free(allocator);
+    try testing.expectEqual(@as(u64, 9), req.execId);
+    try testing.expect(req.ok);
+    try testing.expectEqual(@as(usize, 1), req.payload.arr.len);
+}
+
+test "extractActionReplyFast: non-bool ok is rejected" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("execId", msgpack.Payload.uintToPayload(9));
+    try map.mapPut("ok", msgpack.Payload.uintToPayload(1));
+    try map.mapPut("payload", .{ .arr = try allocator.alloc(msgpack.Payload, 0) });
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.InvalidMessageFormat, decode.extractActionReplyFast(bytes, allocator));
+}

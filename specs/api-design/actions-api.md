@@ -75,7 +75,7 @@ An action's operational mode is determined directly by the presence or absence o
 | **Primary Use Case** | Ephemeral inputs (joystick, movement, telemetry) | Backend-enforced operations (purchases, RPC) |
 | **Storage Impact** | Zero (In-memory only, no SQLite I/O) | Zero (Worker may choose to mutate store) |
 | **Acknowledgment** | Accepted on forward-path admission (`0x00 OK`) | Awaits worker response and returns data |
-| **Client Return Type** | `Promise<void>` | `Promise<TOutput>` |
+| **Client Return Type** | `Promise<unknown>` (resolves to `undefined`) | `Promise<unknown>` |
 | **Delivery** | At-most-once: no persistence, no redelivery, no failure report | Exactly one reply per call, or a typed failure |
 | **Routing** | Round-robin to registered workers in the bound scope | Round-robin to registered workers in the bound scope |
 | **Peer Visibility** | Private (Delivered to worker only) | Private (Delivered to caller only) |
@@ -112,17 +112,19 @@ Clients invoke actions through `client.actions.call(name, params, options?)`.
 
 ```typescript
 // 1. Invoking an Asynchronous Action (e.g., game loop movement)
-// Resolves immediately upon server forward-path admission (Promise<void>)
+// Resolves immediately upon server forward-path admission (Promise<unknown>,
+// resolving to undefined)
 await client.actions.call('player_move', {
   direction: 'up',
   seq: 42,
 });
 
 // 2. Invoking a Synchronous Action (e.g., checkout)
-// Awaits worker response and returns typed output (Promise<TOutput>)
-const result = await client.actions.call('checkout', {
+// Awaits worker response. The server validates the runtime shape; the SDK
+// exposes the result as unknown because the schema is received at runtime.
+const result = (await client.actions.call('checkout', {
   cart_id: 'cart_123',
-});
+})) as { order_id: string; remaining_coins: number };
 
 console.log(result.order_id, result.remaining_coins);
 ```
@@ -314,7 +316,7 @@ try {
 }
 ```
 
-An unhandled handler exception surfaces to the caller as `INTERNAL_ERROR`. A worker return payload that fails schema validation rejects the call with `SCHEMA_VALIDATION_FAILED`.
+An unhandled handler exception surfaces to the caller as `INTERNAL_ERROR` with a generic message; the original exception stays worker-local so internal details are not leaked to callers. A worker return payload that fails schema validation rejects the call with `SCHEMA_VALIDATION_FAILED`.
 
 ---
 
@@ -352,7 +354,7 @@ function CheckoutButton({ cartId }: { cartId: string }) {
 }
 ```
 
-- `execute` always returns the call's own promise. Async actions resolve to `void`; sync actions resolve to the typed output and also populate `data`.
+- `execute` always returns the call's own promise. Async actions resolve to `void`; sync results are validated by the server and exposed as `unknown` by the SDK because action schemas arrive at runtime.
 - `loading` and `error` reflect the most recent `execute` call; concurrent calls do not cancel each other.
 - Errors are `ZyncBaseError` instances and are never auto-retried.
 
@@ -364,17 +366,3 @@ function CheckoutButton({ cartId }: { cartId: string }) {
 - `maxMessageSize` applies to encoded params and returns.
 - Async actions are at-most-once: no persistence, no redelivery, no failure feedback.
 - Each `params` and `returns` schema supports up to 500 flat fields.
-
----
-
-## Wire Protocol Mapping
-
-Actions follow ZyncBase's integer-routed binary MessagePack architecture:
-
-1. **`SchemaSync`**: Assigns dense integer action ids plus per-action flattened `params`/`returns` field dictionaries, a sync bitset, and per-action scope flags.
-2. **`0x30 ActionCall` (Client → Server)**: `[0x30, reqId, actionId, timeoutMs | nil, paramsPairArray]`.
-3. **`0x31 ActionForward` (Server → Worker)**: `[0x31, execId, userId, actionId, paramsPairArray]`. `execId` is minted by the server; client request ids are never used as cross-connection correlation keys.
-4. **`0x32 ActionReply` (Worker → Server)**: `[0x32, execId, ok, returnsPairArray | [code, message]]`. Sent only for synchronous actions; omitted for asynchronous actions.
-5. **`0x33 ActionRegister` (Worker → Server)**: `[0x33, actionIds]`. The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
-
-`0x31` and `0x32` are worker/server-only message types; application clients sending them are rejected with `INVALID_MESSAGE_TYPE`. `0x33` (`ActionRegister`) is accepted from a worker connection and is subject to the action `register` authorization rule.

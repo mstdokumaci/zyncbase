@@ -1,8 +1,22 @@
 // Public API re-exports
 
 export { createClient, ZyncBaseClient } from "./client.js";
-export { ErrorCodes, ZyncBaseError } from "./errors.js";
+export {
+	ActionError,
+	ActionExecutionError,
+	ActionTimeoutError,
+	ActionValidationError,
+	ErrorCodes,
+	NoActionWorkerError,
+	WorkerDisconnectedError,
+	ZyncBaseError,
+} from "./errors.js";
 export type {
+	ActionCallOptions,
+	ActionContext,
+	ActionHandler,
+	ActionScope,
+	Actions,
 	AuthConfig,
 	BatchOperation,
 	ClientOptions,

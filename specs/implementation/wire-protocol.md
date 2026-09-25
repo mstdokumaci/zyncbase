@@ -138,8 +138,8 @@ accepted from any client whose `$session` passes the action `register` rule.
 Unknown or unassigned IDs are rejected the same way.
 Legacy string `type` values fail envelope decoding with
 `INVALID_MESSAGE_FORMAT`. Map-form messages retain the string `"type"` key;
-only its value is numeric. `StoreDelta`, `PresenceBroadcast`, and
-`SharedStateBroadcast` use the fixed tuples described below.
+only its value is numeric. `StoreDelta`, `PresenceBroadcast`,
+`SharedStateBroadcast`, and `ActionForward` use the fixed tuples described below.
 
 ## Client Messages
 
@@ -190,6 +190,7 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
 | `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
+| `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns pair-array. |
 | `error` | `id`, `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome. |
 
 Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
@@ -198,7 +199,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 | Push | Fields | Meaning |
 |------|--------|---------|
-| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, action dictionaries (`actions`, per-action `params`/`returns` field dictionaries, sync bitset, scope flags) | Integer dictionaries used by store, query, presence, and action messages. |
+| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, `actions`, `actionParams`, `actionReturns`, `actionFlags` | Integer dictionaries used by store, query, presence, and action messages. Action arrays are parallel: `actions[i]` is the action name, `actionParams[i]`/`actionReturns[i]` are its flattened param/return field names (empty for no params / async), and `actionFlags[i]` bit 0 marks sync (has `returns`), bit 1 marks presence scope. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
@@ -216,14 +217,14 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 ## Action Messages
 
-- `ActionCall` uses the fixed five-element tuple `[0x30, reqId, actionId, timeoutMs, paramsPairArray]`. `reqId` is the client envelope `id`; `timeoutMs` is a non-negative integer or `nil` and may only shorten the server deadline; `paramsPairArray` is an array of `[field_index, value]` pairs.
+- `ActionCall` is a map request `{type: 0x30, id, action_id, timeoutMs?, params}`. `id` is the client envelope id used for the correlated response; `timeoutMs` is a non-negative integer or omitted and may only shorten the server deadline; `params` is a pair-array of `[field_index, value]` pairs.
 - `ActionForward` uses the fixed five-element tuple `[0x31, execId, userId, actionId, paramsPairArray]`. `execId` is minted by the server for this execution and is the only cross-connection correlation key; `userId` is `bin16` from the action's bound scope.
-- `ActionReply` uses the fixed four-element tuple `[0x32, execId, ok, payload]`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. The server accepts a reply only from the worker the call was forwarded to; unknown or foreign replies are discarded. Workers send `ActionReply` only for synchronous actions; a reply received for an asynchronous execution id is discarded.
-- `ActionRegister` uses the fixed two-element tuple `[0x33, actionIds]`. The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
+- `ActionReply` is a map message `{type: 0x32, id, execId, ok, payload}`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. The `id` satisfies the standard client envelope but the server does not answer `ActionReply`. The server accepts a reply only from the worker the call was forwarded to; unknown or foreign replies are discarded. Workers send `ActionReply` only for synchronous actions; a reply received for an asynchronous execution id is discarded.
+- `ActionRegister` is a map request `{type: 0x33, id, action_ids}`. `action_ids` is an array of registered action ids. Registration is correlated with `id` and answers `ok` or `error` (for example `SESSION_NOT_READY` or `PERMISSION_DENIED`). The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
 - `0x31` is a server-only message type. Application clients sending it are rejected with `INVALID_MESSAGE_TYPE`.
 - `0x32` (`ActionReply`) is accepted only from the worker the call was forwarded to.
 - `0x33` (`ActionRegister`) is accepted from any client whose `$session` passes the action `register` rule.
-- Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
+- A synchronous `ActionCall` success responds `ok` with `value` set to the validated returns pair-array. Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
 
 ## Scoped Session Rules
 
