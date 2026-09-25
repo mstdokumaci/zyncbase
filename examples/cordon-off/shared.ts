@@ -24,9 +24,10 @@ export const MAX_PLAYERS = 1024;
 export const MAX_COUNTRIES = 64;
 export const MAX_PLAYER_NAME_LENGTH = 16;
 export const INPUT_LEASE_MS = 2000;
-// Departed players keep their store row briefly so a same-id reconnect
-// respawns in place; rows never draw anything. ponytail: raise only if
-// flap-reconnects still jump on slow networks.
+// One knob for both ends of a player's absence: silence this long removes the
+// player from the world, and the store row then lingers the same span so a
+// same-id reconnect respawns in place. Rows never draw anything.
+// ponytail: raise only if flap-reconnects still jump on slow networks.
 export const PLAYER_GRACE_MS = INPUT_LEASE_MS * 5;
 // Farthest-point sampling in OKLab, seeded with eight vivid colors.
 // Lightness 0.55–0.94 and chroma >= 0.055 keep claims visible on the dark map.

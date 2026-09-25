@@ -41,16 +41,29 @@
 			}
 		}
 	},
-	"presence": {
-		"user": {
-			"name": { "type": "string", "minLength": 1, "maxLength": 16 },
-			"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
-			"direction": {
-				"type": "string",
-				"enum": ["idle", "up", "down", "left", "right"]
+	"actions": {
+		"player_join": {
+			"params": {
+				"name": { "type": "string", "minLength": 1, "maxLength": 16 },
+				"country_id": { "type": "integer", "minimum": 1, "maximum": 65535 },
+				"session_id": { "type": "string", "minLength": 36, "maxLength": 36 }
 			},
-			"seq": { "type": "integer", "minimum": 0 }
+			"required": ["name", "country_id", "session_id"],
+			"returns": { "user_id": { "type": "string" } }
 		},
-		"shared": {}
+		"player_move": {
+			"params": {
+				"direction": {
+					"type": "string",
+					"enum": ["idle", "up", "down", "left", "right"]
+				},
+				"seq": { "type": "integer", "minimum": 0 }
+			},
+			"required": ["direction", "seq"],
+			"returns": null
+		},
+		"player_leave": {
+			"returns": null
+		}
 	}
 }

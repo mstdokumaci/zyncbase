@@ -834,27 +834,33 @@ export class World {
 		return this.spawnAt(country.country_id, bot, team, now, id);
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep untrusted input validation adjacent to player admission.
+	/** Admit a joining player from name and country alone. Returns the live
+	 * player, or undefined when the join is rejected. */
+	join(id: string, data: Record<string, unknown>, now: number) {
+		const existing = this.players.get(id);
+		if (existing) return existing;
+		if (this.humanCount >= MAX_PLAYERS) return undefined;
+		if (!Number.isSafeInteger(data.country_id)) return undefined;
+		const country = this.countries.get(Number(data.country_id));
+		if (!country || country.is_bot) return undefined;
+		let nickname: string;
+		try {
+			nickname = playerName(data.name);
+		} catch {
+			return undefined;
+		}
+		const player = this.add(id, country, now);
+		player.name = nickname;
+		return player;
+	}
+
 	input(id: string, data: Record<string, unknown>, now: number) {
 		const direction = data.direction;
 		if (typeof direction !== "string" || !Object.hasOwn(steps, direction))
 			return;
 		if (!Number.isSafeInteger(data.seq) || Number(data.seq) < 0) return;
-		let player = this.players.get(id);
-		if (!player) {
-			if (this.humanCount >= MAX_PLAYERS) return;
-			if (!Number.isSafeInteger(data.country_id)) return;
-			const country = this.countries.get(Number(data.country_id));
-			if (!country || country.is_bot) return;
-			let nickname: string;
-			try {
-				nickname = playerName(data.name);
-			} catch {
-				return;
-			}
-			player = this.add(id, country, now);
-			player.name = nickname;
-		}
+		const player = this.players.get(id) ?? this.join(id, data, now);
+		if (!player) return;
 		this.inputMessages++;
 		player.heardAt = now;
 		if (Number(data.seq) < player.seq) return;
@@ -895,7 +901,7 @@ export class World {
 		this.ticks++;
 		for (const player of this.players.values()) {
 			if (player.is_bot) continue;
-			if (now - player.heardAt > INPUT_LEASE_MS * 5) {
+			if (now - player.heardAt > PLAYER_GRACE_MS) {
 				this.remove(player.id, now);
 				continue;
 			}

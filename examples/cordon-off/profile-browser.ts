@@ -1,4 +1,4 @@
-// Real browser + SDK peers using normal admission, subscriptions and presence.
+// Real browser + SDK peers using normal admission, actions and subscriptions.
 // Run against isolated local data, or an explicitly supplied dedicated test URL.
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
@@ -185,6 +185,7 @@ async function addPeer(codes: number[]) {
 	assert(response.ok, `Session ${admitted + 1} failed: ${response.status}`);
 	const session = (await response.json()) as {
 		token: string;
+		session_id: string;
 		country_id?: number;
 	};
 	if (creating) {
@@ -204,6 +205,7 @@ async function addPeer(codes: number[]) {
 		index: admitted,
 		url: peerUrl,
 		token: session.token,
+		session_id: session.session_id,
 		country_id: countryId,
 		width,
 		height,

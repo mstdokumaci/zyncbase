@@ -4,7 +4,7 @@
 			"pattern": "world-1",
 			"storeFilter": true,
 			"presenceRead": true,
-			"presenceWrite": { "$session.role": { "eq": "player" } },
+			"presenceWrite": false,
 			"presenceSharedWrite": false
 		}
 	],
@@ -33,6 +33,28 @@
 			"collection": "countries",
 			"read": true,
 			"write": { "$session.role": { "eq": "simulation" } }
+		}
+	],
+	"actions": [
+		{
+			"action": "player_join",
+			"invoke": { "$session.role": { "eq": "player" } },
+			"register": { "$session.role": { "eq": "simulation" } }
+		},
+		{
+			"action": "player_move",
+			"invoke": { "$session.role": { "eq": "player" } },
+			"register": { "$session.role": { "eq": "simulation" } }
+		},
+		{
+			"action": "player_leave",
+			"invoke": { "$session.role": { "eq": "player" } },
+			"register": { "$session.role": { "eq": "simulation" } }
+		},
+		{
+			"action": "*",
+			"invoke": false,
+			"register": false
 		}
 	]
 }

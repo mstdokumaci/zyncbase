@@ -708,7 +708,39 @@ test("human names are required, limited to 16 characters, and published separate
 	).toBe(true);
 });
 
-test("presence only joins country codes and unused country reservations can be released", () => {
+test("join admits from name and country, and input cannot admit without them", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	// A move for an unknown player carries no name or country: it must not admit.
+	world.input("ghost", { direction: "idle", seq: 0 }, 0);
+	expect(world.players.has("ghost")).toBe(false);
+	const country = world.country("North");
+	if (!country) throw new Error("Country missing");
+	expect(
+		world.join(
+			"alice",
+			{ name: "  Ａlice   Smith ", country_id: country.country_id },
+			0,
+		),
+	).toBeDefined();
+	expect(world.players.get("alice")?.name).toBe("Alice Smith");
+	expect(world.players.get("alice")?.direction).toBe("idle");
+	// Joining again returns the live player instead of respawning it.
+	const alice = world.players.get("alice");
+	expect(
+		world.join("alice", { name: "Changed", country_id: country.country_id }, 1),
+	).toBe(alice);
+	expect(alice?.name).toBe("Alice Smith");
+	// Unknown countries and invalid names are rejected without admission.
+	expect(
+		world.join("bob", { name: "Bob", country_id: 9999 }, 0),
+	).toBeUndefined();
+	expect(
+		world.join("bob", { name: "", country_id: country.country_id }, 0),
+	).toBeUndefined();
+	expect(world.players.has("bob")).toBe(false);
+});
+
+test("input only joins country codes and unused country reservations can be released", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = { name: "Alice", direction: "idle", seq: 1 };
 	world.input("alice", { ...data, country: "Must not create" }, 0);

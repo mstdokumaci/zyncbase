@@ -62,7 +62,7 @@ bun examples/cordon-off/profile.ts --mode bots --publish
 GAME_BENCH=1 bun test examples/cordon-off/enclosure.perf.test.ts
 ```
 
-`--ticks`, `--warmup`, and `--output` control run length and artifact placement. `--profile` saves Bun's function summary, bytecode summary, and sampling traces in `.profile.json`; run sampling separately from timing. `--publish` uses an isolated real ZyncBase database, the game schema, test authorization, the SDK, and committed acknowledgments, paced at 20 Hz. It requires the repository's native build prerequisites. No browser subscribers, presence inputs, TLS, or subscriber fan-out are simulated.
+`--ticks`, `--warmup`, and `--output` control run length and artifact placement. `--profile` saves Bun's function summary, bytecode summary, and sampling traces in `.profile.json`; run sampling separately from timing. `--publish` uses an isolated real ZyncBase database, the game schema, test authorization, the SDK, and committed acknowledgments, paced at 20 Hz. It requires the repository's native build prerequisites. No browser subscribers, action input traffic, TLS, or subscriber fan-out are simulated.
 
 Every successful run checks player/country counts, owner IDs, country totals against the full ownership bitmap, and player positions. Checksums cover ownership and player state. Publishing confirms commits but does not independently reload the full persisted map.
 
@@ -222,7 +222,7 @@ and no update exceeded 50 ms. Bun used 5.37 CPU seconds, averaging 0.089 CPU
 cores over the run. The final checksum matches the local fragmented-bot run.
 
 This control does not saturate ZyncBase or measure its maximum throughput.
-The fixtures use synthetic land and omit browser subscribers, presence input
+The fixtures use synthetic land and omit browser subscribers, action input
 traffic, TLS and subscriber fan-out. They identify a local simulation
 bottleneck without establishing the cause of sustained load on a deployed VM.
 

@@ -237,20 +237,16 @@ async function runLifecycle() {
 		true,
 	);
 	const player = await connect("Rounders");
-	const heartbeat = () => {
-		try {
-			player.client.presence.set({
-				name: "Rounder",
-				country_id: player.countryId,
-				direction: "right",
-				seq: 1,
-			});
-		} catch {
-			// The server is exiting; the archive was already written.
-		}
-	};
-	heartbeat();
-	const heartbeatTimer = setInterval(heartbeat, 500);
+	await joinPlayer(
+		player.client,
+		player.countryId,
+		"Rounder",
+		player.sessionId,
+	);
+	const heartbeatTimer = setInterval(
+		() => move(player.client, "right", 1),
+		500,
+	);
 	timers.push(heartbeatTimer);
 	await eventually(
 		async () => claimedAnyLand(player.client),
@@ -304,20 +300,8 @@ async function runLifecycle() {
 		true,
 	);
 	const idler = await connect("Idlers");
-	const idleHeartbeat = () => {
-		try {
-			idler.client.presence.set({
-				name: "Idler",
-				country_id: idler.countryId,
-				direction: "right",
-				seq: 1,
-			});
-		} catch {
-			// The server is exiting.
-		}
-	};
-	idleHeartbeat();
-	const idleTimer = setInterval(idleHeartbeat, 500);
+	await joinPlayer(idler.client, idler.countryId, "Idler", idler.sessionId);
+	const idleTimer = setInterval(() => move(idler.client, "right", 1), 500);
 	timers.push(idleTimer);
 	await eventually(
 		async () => claimedAnyLand(idler.client),
@@ -377,20 +361,13 @@ async function runLifecycle() {
 		true,
 	);
 	const crasher = await connect("Crashers");
-	const crashHeartbeat = () => {
-		try {
-			crasher.client.presence.set({
-				name: "Crasher",
-				country_id: crasher.countryId,
-				direction: "right",
-				seq: 1,
-			});
-		} catch {
-			// The server is exiting.
-		}
-	};
-	crashHeartbeat();
-	const crashTimer = setInterval(crashHeartbeat, 500);
+	await joinPlayer(
+		crasher.client,
+		crasher.countryId,
+		"Crasher",
+		crasher.sessionId,
+	);
+	const crashTimer = setInterval(() => move(crasher.client, "right", 1), 500);
 	timers.push(crashTimer);
 	await eventually(
 		async () => claimedAnyLand(crasher.client),
@@ -431,20 +408,8 @@ async function runLifecycle() {
 		true,
 	);
 	const leaver = await connect("Leavers");
-	const leaveHeartbeat = () => {
-		try {
-			leaver.client.presence.set({
-				name: "Leaver",
-				country_id: leaver.countryId,
-				direction: "right",
-				seq: 1,
-			});
-		} catch {
-			// The server is exiting.
-		}
-	};
-	leaveHeartbeat();
-	const leaveTimer = setInterval(leaveHeartbeat, 500);
+	await joinPlayer(leaver.client, leaver.countryId, "Leaver", leaver.sessionId);
+	const leaveTimer = setInterval(() => move(leaver.client, "right", 1), 500);
 	timers.push(leaveTimer);
 	await eventually(
 		async () => claimedAnyLand(leaver.client),
@@ -480,6 +445,63 @@ async function runLifecycle() {
 		"a played round advances even after its humans left",
 	);
 	console.log("PASS: a played round archives after its humans leave");
+
+	// 6. A short disconnect keeps the session outliving the tombstone, so a
+	// same-token reconnect re-admits the same player.
+	await stop();
+	await startWithRunway({ GAME_ROUND_MS: "120000" }, 30_000, true);
+	const blip = await connect("Blip");
+	const blipId = await joinPlayer(
+		blip.client,
+		blip.countryId,
+		"Blipper",
+		blip.sessionId,
+	);
+	const hasDot = async (client: ZyncBaseClient) =>
+		(await userChunks(client))
+			.flatMap((row) => readCoordinates(row.coordinates))
+			.some((dot) => dot.player_id === blipId);
+	await eventually(async () => hasDot(blip.client), "blip player has a dot");
+	// Claim land first: a landless country is deleted when its player ages out,
+	// and then the reconnect would have nothing left to rejoin.
+	const blipMoves = setInterval(() => move(blip.client, "right", 1), 500);
+	timers.push(blipMoves);
+	await eventually(async () => {
+		const rows = (await blip.client.store.query(
+			"countries",
+		)) as unknown as Country[];
+		return (
+			(rows.find((row) => row.country_id === blip.countryId)?.count ?? 0) > 0
+		);
+	}, "blip country claims land");
+	clearInterval(blipMoves);
+	blip.client.disconnect();
+	await eventually(
+		async () => (await healthState()).players === 0,
+		"blip player ages out",
+	);
+	const revived = createClient({
+		url: `ws://localhost:${edge.port}/ws`,
+		auth: { token: blip.token },
+		storeNamespace: NAMESPACE,
+		reconnect: false,
+	});
+	clients.push(revived);
+	await revived.connect();
+	const revivedId = await joinPlayer(
+		revived,
+		blip.countryId,
+		"Blipper",
+		blip.sessionId,
+	);
+	assert.equal(revivedId, blipId, "reconnect keeps the player identity");
+	await eventually(
+		async () => hasDot(revived),
+		"reconnect restores the player dot",
+	);
+	leave(revived);
+	revived.disconnect();
+	console.log("PASS: a short disconnect resumes the same player");
 }
 
 async function connect(countryName?: string) {
@@ -489,7 +511,11 @@ async function connect(countryName?: string) {
 		body: JSON.stringify(countryName === undefined ? {} : { countryName }),
 	});
 	assert.equal(response.status, 200);
-	const { token, country_id: countryId } = await response.json();
+	const {
+		token,
+		country_id: countryId,
+		session_id: sessionId,
+	} = await response.json();
 	if (countryName !== undefined) assert.equal(typeof countryId, "number");
 	const ticketResponse = await fetch(`${origin}/auth/ticket`, {
 		method: "POST",
@@ -512,20 +538,48 @@ async function connect(countryName?: string) {
 		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token },
 		storeNamespace: NAMESPACE,
-		presenceNamespace: NAMESPACE,
 		reconnect: false,
 	});
 	clients.push(client);
 	await client.connect();
-	// Identity comes from scope setup: the users table now holds the whole
-	// public roster, so a table scan can no longer identify self.
-	let id = client.presence.localUserId ?? "";
-	for (let i = 0; i < 100 && !id; i++) {
-		await Bun.sleep(100);
-		id = client.presence.localUserId ?? "";
+	return { client, countryId, sessionId, token };
+}
+
+/** Admit a player through the sync join action and return its identity. */
+async function joinPlayer(
+	client: ZyncBaseClient,
+	countryId: number | undefined,
+	name: string,
+	sessionId: string,
+) {
+	assert.equal(typeof countryId, "number");
+	// The worker registers handlers just after /health turns ready; retry
+	// briefly so tests do not race that registration.
+	const deadline = Date.now() + 5000;
+	for (;;) {
+		try {
+			const result = (await client.actions.call("player_join", {
+				name,
+				country_id: countryId,
+				session_id: sessionId,
+			})) as { user_id?: string };
+			assert.equal(typeof result.user_id, "string");
+			return result.user_id as string;
+		} catch (error) {
+			if (Date.now() >= deadline) throw error;
+			await Bun.sleep(50);
+		}
 	}
-	assert.ok(id, "scope setup resolves our own identity");
-	return { client, id, countryId };
+}
+
+/** Fire-and-forget input, mirroring the browser's publish(). */
+function move(client: ZyncBaseClient, direction: string, seq = 1) {
+	void client.actions.call("player_move", { direction, seq }).catch(() => {});
+}
+
+/** Best-effort immediate leave on top of the input lease. */
+function leave(client: ZyncBaseClient) {
+	void client.actions.call("player_leave", {}).catch(() => {});
 }
 
 async function countryChunks(client: ZyncBaseClient) {
@@ -601,30 +655,32 @@ try {
 	);
 	const alice = await connect("North"),
 		bob = await connect("South");
-	assert.notEqual(alice.id, bob.id);
-	// Subscribe before any presence is set: the admitted rows must arrive as
-	// deltas, not the initial snapshot (the browser creates the roster
-	// subscription before its first presence.set too).
+	// Subscribe before anyone joins: the admitted rows must arrive as deltas,
+	// not the initial snapshot (the browser creates the roster subscription
+	// before its join too).
 	const subscribed = new Map<string, PlayerRow>();
 	bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
 		subscribed.clear();
 		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
-	const input = {
-		name: "Ａlice",
-		country_id: alice.countryId,
-		direction: "idle",
-		seq: 1,
-	};
-	const send = () => alice.client.presence.set({ ...input });
+	const aliceId = await joinPlayer(
+		alice.client,
+		alice.countryId,
+		"Ａlice",
+		alice.sessionId,
+	);
+	let direction = "idle",
+		seq = 1;
+	const send = () => move(alice.client, direction, seq);
 	send();
 	timers.push(setInterval(send, 500));
-	bob.client.presence.set({
-		name: "Bob",
-		country_id: bob.countryId,
-		direction: "idle",
-		seq: 1,
-	});
+	const bobId = await joinPlayer(
+		bob.client,
+		bob.countryId,
+		"Bob",
+		bob.sessionId,
+	);
+	assert.notEqual(aliceId, bobId);
 	let visible: UserChunkRow[] = [];
 	bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
 		visible = rows as UserChunkRow[];
@@ -632,7 +688,7 @@ try {
 	const dot = () =>
 		visible
 			.flatMap((row) => readCoordinates(row.coordinates))
-			.find((dot) => dot.player_id === alice.id);
+			.find((dot) => dot.player_id === aliceId);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
 			((await client.store.query("users", { limit: 2048 })) as PlayerRow[]).map(
@@ -641,14 +697,14 @@ try {
 		);
 	const first = await eventually(
 		async () => dot(),
-		"presence input creates a subscribed dot",
+		"join action creates a subscribed dot",
 	);
 	const aliceRow = await eventually(async () => {
-		const row = (await rosterOf(bob.client)).get(alice.id);
+		const row = (await rosterOf(bob.client)).get(aliceId);
 		return row?.name === "Alice" ? row : undefined;
 	}, "roster carries normalized player names");
 	await eventually(
-		async () => subscribed.get(alice.id)?.name === "Alice",
+		async () => subscribed.get(aliceId)?.name === "Alice",
 		"users subscription receives live roster deltas",
 	);
 	assert.equal(aliceRow.country_id, alice.countryId);
@@ -658,8 +714,8 @@ try {
 		async () =>
 			visible
 				.flatMap((row) => readCoordinates(row.coordinates))
-				.some((dot) => dot.player_id === bob.id) &&
-			(await rosterOf(bob.client)).get(bob.id)?.name === "Bob",
+				.some((dot) => dot.player_id === bobId) &&
+			(await rosterOf(bob.client)).get(bobId)?.name === "Bob",
 		"other humans have roster-backed map dots",
 	);
 	const roster = (await (await fetch(`${origin}/health`)).json())
@@ -673,18 +729,18 @@ try {
 		"session returns the persisted country id",
 	);
 	const teammate = await connect();
-	teammate.client.presence.set({
-		name: "Teammate",
-		country_id: north.country_id,
-		direction: "idle",
-		seq: 1,
-	});
+	const teammateId = await joinPlayer(
+		teammate.client,
+		north.country_id,
+		"Teammate",
+		teammate.sessionId,
+	);
 	await eventually(
 		async () =>
 			visible
 				.flatMap((row) => readCoordinates(row.coordinates))
-				.some((dot) => dot.player_id === teammate.id) &&
-			(await rosterOf(bob.client)).get(teammate.id)?.country_id ===
+				.some((dot) => dot.player_id === teammateId) &&
+			(await rosterOf(bob.client)).get(teammateId)?.country_id ===
 				north.country_id,
 		"lobby selection joins an existing country by id",
 	);
@@ -692,6 +748,7 @@ try {
 		async () => (await (await fetch(`${origin}/health`)).json()).bots === 3,
 		"a point's second human leaves one bot",
 	);
+	leave(teammate.client);
 	teammate.client.disconnect();
 	const botRoster = await eventually(async () => {
 		const state = await (await fetch(`${origin}/health`)).json();
@@ -707,17 +764,17 @@ try {
 		"bot country colors come from the palette",
 	);
 	console.log(
-		`PASS: open admission, identity, player names, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, presence → store subscription`,
+		`PASS: open admission, identity, player names, same-origin routing, ${useTls ? "IPv6 HTTPS/WSS" : "HTTP/WS"}, actions → store subscription`,
 	);
-	input.direction = "right";
-	input.seq++;
+	direction = "right";
+	seq++;
 	send();
 	await eventually(async () => {
 		const current = dot();
 		return current && current.x > first.x + 2;
 	}, "movement");
-	input.direction = "idle";
-	input.seq++;
+	direction = "idle";
+	seq++;
 	send();
 	// No per-dot ack echo remains: wait until the dot holds still instead.
 	const stopped = await eventually(async () => {
@@ -734,7 +791,7 @@ try {
 		"key release stops movement",
 	);
 	const row = visible.find((row) =>
-		readCoordinates(row.coordinates).some((dot) => dot.player_id === alice.id),
+		readCoordinates(row.coordinates).some((dot) => dot.player_id === aliceId),
 	);
 	assert.ok(row);
 	await assert.rejects(
@@ -753,16 +810,25 @@ try {
 		}),
 		{ code: "PERMISSION_DENIED" },
 	);
-	let sharedDenied = false;
+	let actionDenied = false;
 	alice.client.on("error", (error) => {
-		if ((error as { code?: string })?.code === "NAMESPACE_UNAUTHORIZED")
-			sharedDenied = true;
+		if ((error as { code?: string })?.code === "PERMISSION_DENIED")
+			actionDenied = true;
 	});
-	alice.client.presence.setShared({});
-	await eventually(async () => sharedDenied, "shared presence write denied");
+	alice.client.actions.handle("player_move", () => {});
+	await eventually(
+		async () => actionDenied,
+		"player worker registration denied",
+	);
+	await assert.rejects(
+		alice.client.actions.call("player_move", { direction: "sideways", seq: 2 }),
+		{ code: "SCHEMA_VALIDATION_FAILED" },
+	);
 	for (const timer of timers.splice(0)) clearInterval(timer);
+	leave(alice.client);
 	alice.client.disconnect();
 	await eventually(async () => !dot(), "disconnected dot removed");
+	leave(bob.client);
 	bob.client.disconnect();
 	const observer = await connect();
 	await eventually(async () => {
@@ -815,7 +881,7 @@ try {
 	// stubs (connected-but-never-admitted clients) carry no roster data.
 	const isStub = (row: PlayerRow) => row.country_id == null;
 	assert.ok(
-		![alice.id, bob.id, teammate.id].some((id) => restoredRoster.has(id)),
+		![aliceId, bobId, teammateId].some((id) => restoredRoster.has(id)),
 		"stale human roster rows purged on restart",
 	);
 	assert.ok(
@@ -939,30 +1005,54 @@ try {
 		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
 	);
 	await stop();
-	// Per-network admission: a connected player holds its slot, a leave frees it.
-	await start(true, { GAME_PLAYERS_PER_IP: "1" });
+	// Per-network admission: a joined player holds its slot, a leave frees it,
+	// and an issued-but-unjoined session expires on its lease.
+	await start(true, {
+		GAME_PLAYERS_PER_IP: "1",
+		GAME_SESSION_LEASE_MS: "5000",
+	});
 	const askSession = (ip?: string) =>
 		fetch(`${origin}/session`, {
 			method: "POST",
 			...(ip ? { headers: { "X-Forwarded-For": ip } } : {}),
 		});
-	const solo = await connect();
+	const solo = await connect("Soloers");
+	await joinPlayer(solo.client, solo.countryId, "Solo", solo.sessionId);
 	assert.equal(
 		(await askSession()).status,
 		429,
 		"a second session from one network is rejected",
 	);
+	leave(solo.client);
 	solo.client.disconnect();
 	await eventually(
+		async () => (await healthState()).players === 0,
+		"leave removes the player before its session lease expires",
+		1000,
+	);
+	await eventually(
 		async () => (await askSession()).status === 200,
-		"a leave frees the network slot",
+		"leave frees the network slot before its session lease expires",
+		1000,
+	);
+	// The eventual's successful call issued an unjoined session; it holds the
+	// slot until its lease expires.
+	assert.equal(
+		(await askSession()).status,
+		429,
+		"an unjoined session holds its slot",
+	);
+	await eventually(
+		async () => (await askSession()).status === 200,
+		"abandoned sessions expire",
 	);
 	await stop();
 	// The same IPv6 /64 shares its five slots whatever the notation; abandoned
-	// admissions expire, and a different /64 keeps its own pool.
+	// sessions expire, and a different /64 keeps its own pool.
 	await start(true, {
 		GAME_PLAYERS_PER_IP: "5",
 		GAME_COUNTRY_LEASE_MS: "500",
+		GAME_SESSION_LEASE_MS: "500",
 	});
 	for (const ip of [
 		"2001:db8:1:1::1",
