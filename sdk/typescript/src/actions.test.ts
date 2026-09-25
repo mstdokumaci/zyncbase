@@ -254,6 +254,37 @@ describe("ActionsImpl.handle", () => {
 		});
 	});
 
+	test("hides unexpected worker exception details from callers", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schemaDictionary);
+		const errors: ZyncBaseError[] = [];
+		const actions = new ActionsImpl(conn, (err) => errors.push(err));
+
+		actions.handle("checkout", () => {
+			throw new Error("database password leaked");
+		});
+		conn.fireForward({
+			type: "ActionForward",
+			execId: 8,
+			userId: "user-1",
+			action_id: 1,
+			params: [[0, "cart-1"]],
+		});
+		await nextTick();
+
+		expect(conn.replies[0]).toMatchObject({
+			type: "ActionReply",
+			execId: 8,
+			ok: false,
+			payload: [ErrorCodes.INTERNAL_ERROR, "Action handler failed"],
+		});
+		expect(JSON.stringify(conn.replies[0])).not.toContain("database password");
+
+		// The original exception stays worker-local for diagnostics.
+		expect(errors).toHaveLength(1);
+		expect(errors[0].message).toContain("database password leaked");
+	});
+
 	test("does not reply for async actions and reports handler errors", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schemaDictionary);

@@ -248,9 +248,11 @@ pub const ActionsService = struct {
             params,
         );
         defer self.allocator.free(forward);
-        self.sendTo(worker_conn_id, forward);
 
-        if (!action.isSync()) return .accepted;
+        if (!action.isSync()) {
+            self.sendTo(worker_conn_id, forward);
+            return .accepted;
+        }
 
         const deadline_ms = if (client_timeout_ms) |t| @min(t, default_timeout_ms) else default_timeout_ms;
         try self.addPending(exec_id, .{
@@ -261,6 +263,7 @@ pub const ActionsService = struct {
             .scope = action.scope,
             .deadline_ns = nowNs(self.io) + @as(i96, deadline_ms) * std.time.ns_per_ms,
         });
+        self.sendTo(worker_conn_id, forward);
         return .pending;
     }
 
@@ -299,6 +302,11 @@ pub const ActionsService = struct {
     pub fn resolveReply(self: *ActionsService, worker_conn_id: u64, exec_id: u64, ok: bool, payload: *const Payload) void {
         const pending = self.pending.get(exec_id) orelse return;
         if (pending.worker_conn_id != worker_conn_id) return;
+        if (pending.deadline_ns <= nowNs(self.io)) {
+            _ = self.removePending(exec_id);
+            self.sendError(pending.caller_conn_id, pending.req_id, wire_errors.getWireError(error.ActionTimeout));
+            return;
+        }
         const action = self.schema.actionByIndex(pending.action_id) orelse {
             _ = self.removePending(exec_id);
             return;

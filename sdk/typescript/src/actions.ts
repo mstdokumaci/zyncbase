@@ -217,6 +217,10 @@ export class ActionsImpl implements Actions {
 				),
 			};
 		} catch (err) {
+			// Keep internal failure details worker-local; callers get a generic error.
+			if (!(err instanceof ActionError)) {
+				this.emitError(toZyncError(err, "Sync action failed"));
+			}
 			return { ok: false, payload: actionErrorPayload(err) };
 		}
 	}
@@ -283,8 +287,5 @@ function actionErrorPayload(err: unknown): unknown {
 	if (err instanceof ActionError) {
 		return [err.code, err.message];
 	}
-	return [
-		ErrorCodes.INTERNAL_ERROR,
-		err instanceof Error ? err.message : "Action handler failed",
-	];
+	return [ErrorCodes.INTERNAL_ERROR, "Action handler failed"];
 }

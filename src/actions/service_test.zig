@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const helpers = @import("../app_test_helpers.zig");
 const authorization_parse = @import("../authorization/parse.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema_parse = @import("../schema/parse.zig");
@@ -7,11 +8,26 @@ const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const service_mod = @import("service.zig");
+const MessageType = @import("../wire/message_type.zig").MessageType;
 
 const testing = std.testing;
+const AppTestContext = helpers.AppTestContext;
 const ActionsService = service_mod.ActionsService;
 const RegistryKey = service_mod.RegistryKey;
 const SessionContext = service_mod.SessionContext;
+
+fn connectionContext(conn: anytype) SessionContext {
+    return .{
+        .conn_id = conn.id,
+        .user_doc_id = conn.user_doc_id,
+        .external_user_id = conn.getExternalUserId() orelse "",
+        .session_claims = conn.getSessionClaimsPtr(),
+        .store_namespace = conn.getStoreNamespace(),
+        .store_namespace_id = conn.namespace_id,
+        .presence_namespace = conn.getPresenceNamespace(),
+        .presence_namespace_id = conn.presence_namespace_id,
+    };
+}
 
 const schema_json =
     \\{"version":"1.0.0","store":{},"actions":{
@@ -165,6 +181,80 @@ test "actions service: round-robin registration and sync pending bookkeeping" {
     service.removeAllForConnection(10);
     try testing.expectEqual(@as(usize, 1), service.workerCount(key));
     try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+}
+
+test "actions service: rate-limited sync calls are not forwarded" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-pending-limit", schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [1]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = try msgpack.Payload.strToPayload("cart-1", allocator) },
+    });
+    defer params.free(allocator);
+
+    var accepted: usize = 0;
+    while (true) {
+        _ = app.actions_service.call(connectionContext(caller.conn), accepted + 1, 0, &params, null) catch |err| {
+            if (err != error.RateLimited) return err;
+            break;
+        };
+        accepted += 1;
+    }
+
+    try testing.expect(accepted > 0);
+    try testing.expectEqual(accepted, app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(u64, @intCast(accepted)), recorder.send_count.load(.monotonic));
+}
+
+test "actions service: late worker reply times out instead of succeeding" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-late-reply", schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    caller.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    caller.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = try msgpack.Payload.strToPayload("cart-1", allocator) },
+    });
+    defer params.free(allocator);
+
+    try testing.expectEqual(service_mod.CallOutcome.pending, try app.actions_service.call(connectionContext(caller.conn), 7, 0, &params, null));
+    var pending_it = app.actions_service.pending.iterator();
+    const pending_entry = pending_it.next() orelse return error.TestExpectedValue;
+    pending_entry.value_ptr.deadline_ns = std.math.minInt(i96);
+
+    app.actions_service.resolveReply(worker.conn.id, pending_entry.key_ptr.*, true, &params);
+
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    const response = try helpers.parseResponse(allocator, recorder.bytes());
+    defer if (response.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.@"error", response.resp_type);
+    try testing.expectEqualStrings("ACTION_TIMEOUT", response.code.?);
 }
 
 test "actions service: validates params and requires ready bound scope" {

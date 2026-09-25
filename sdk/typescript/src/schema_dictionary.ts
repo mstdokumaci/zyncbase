@@ -805,13 +805,19 @@ export class SchemaDictionary {
 	}
 
 	/**
-	 * Compute an xxHash64 of the canonical JSON representation of
-	 * the tables + fields arrays. Used for offline safety detection.
+	 * Compute an xxHash64 of the canonical SchemaSync routing dictionaries.
+	 * Used for offline safety detection.
 	 */
 	private async computeHash(payload: {
 		tables: string[];
 		fields: string[][];
 		fieldFlags: number[][];
+		presenceUserFields?: string[];
+		presenceSharedFields?: string[];
+		actions?: string[];
+		actionParams?: string[][];
+		actionReturns?: string[][];
+		actionFlags?: number[];
 	}): Promise<string> {
 		if (!SchemaDictionary.xxhashPromise) {
 			SchemaDictionary.xxhashPromise = xxhash();
@@ -821,6 +827,12 @@ export class SchemaDictionary {
 			tables: payload.tables,
 			fields: payload.fields,
 			fieldFlags: payload.fieldFlags,
+			presenceUserFields: payload.presenceUserFields ?? [],
+			presenceSharedFields: payload.presenceSharedFields ?? [],
+			actions: payload.actions ?? [],
+			actionParams: payload.actionParams ?? [],
+			actionReturns: payload.actionReturns ?? [],
+			actionFlags: payload.actionFlags ?? [],
 		});
 		return hasher.h64ToString(canonical).padStart(16, "0");
 	}
