@@ -440,7 +440,7 @@ function ownerAt(x: number, y: number) {
 	if (!land[y * WIDTH + wrapped]) return 0;
 	return chunks.get(countryChunkIndex(wrapped, y))?.colorIndexes[
 		(y % COUNTRY_CHUNK_HEIGHT) * COUNTRY_CHUNK_WIDTH +
-			(wrapped % COUNTRY_CHUNK_WIDTH)
+		(wrapped % COUNTRY_CHUNK_WIDTH)
 	];
 }
 
@@ -594,7 +594,7 @@ function maybeUpdateSubscriptions() {
 }
 
 function scoreboard(rows: Country[]) {
-	// ponytail: roster rows include 10s grace tombstones, so a departed player
+	// roster rows include 10s grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
 	const headcount = new Map<number, number>();
 	for (const player of roster.values())
@@ -689,7 +689,7 @@ async function ensureJoined() {
 // Crashes and dropped sockets still expire on the lease.
 function leave() {
 	if (!client || !online || !joined) return;
-	void client.actions.call("player_leave", {}).catch(() => {});
+	void client.actions.call("player_leave", {}).catch(() => { });
 }
 
 function publish(changed = false) {
@@ -697,7 +697,7 @@ function publish(changed = false) {
 		motion?.update(motion.dot, online ? direction : "idle", performance.now());
 	if (!online || !client || !joined) return;
 	if (changed) seq++;
-	void client.actions.call("player_move", { direction, seq }).catch(() => {});
+	void client.actions.call("player_move", { direction, seq }).catch(() => { });
 }
 
 function setDirection(next: Direction) {
