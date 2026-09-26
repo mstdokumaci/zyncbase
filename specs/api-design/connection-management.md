@@ -50,8 +50,8 @@ const client = createClient({
 | `maxReconnectAttempts` | number | `Infinity` | Max retry attempts before giving up |
 | `reconnectJitter` | boolean | `true` | Add ±10% randomness to retry timing (prevents thundering herd) |
 | `liveness.enabled` | boolean | `true` | Probe a silent connection to detect a broken path that never delivered a close |
-| `liveness.intervalMs` | number | `15000` | Probe cadence. Silence after which a probe is sent, measured from the last reply to a probe. Inbound traffic does not reset it |
-| `liveness.timeoutMs` | number | `10000` | Wait for the probe's `ok` before declaring the connection dead |
+| `liveness.intervalMs` | number | `15000` | Maximum silence after a correlated response to a client request before probing. Must be an integer of at least `1000` ms. |
+| `liveness.timeoutMs` | number | `10000` | Maximum wait for a correlated response after a probe before declaring the connection dead. Must be a positive integer no greater than `2147483647` ms. |
 
 ### Namespace Examples
 
@@ -121,13 +121,9 @@ client.disconnect()
 
 A connection can be **closed** or merely **broken**. A closed one receives a FIN or RST and reaches a terminal state. A broken one — a NAT timeout, a dropped mobile network, a server that died — stays `OPEN` at the socket layer while carrying nothing, because a send on a dead path buffers locally and resolves. No client-side signal distinguishes them: `readyState` says `OPEN`, sends succeed, and outstanding promises never settle.
 
-The SDK closes that gap on a timer. Every `liveness.intervalMs` it sends a `Ping` and starts a `liveness.timeoutMs` deadline. Only the `ok` matching that probe's id satisfies it — a reply to a different request, or any other inbound frame, does not. On expiry the SDK closes the socket and enters the ordinary reconnect path, so recovery is identical whether the connection was closed or broken and no application needs a second branch for the silent case.
+The SDK treats any correlated response (`ok` or `error`) to a client-originated request as proof that the round trip is working. If no such response arrives within `liveness.intervalMs`, it probes; server pushes and successful local sends do not reset the interval. Any correlated response during the probe wait satisfies the check and restarts the interval. If no response arrives within `liveness.timeoutMs`, the SDK closes the socket and enters the ordinary reconnect path.
 
-Inbound traffic deliberately does **not** suppress probing. A connection still receiving deltas proves the server-to-client path and nothing more, so a client that can receive but can no longer send would never be detected if pushes counted as proof of life. Probing on a fixed interval regardless of traffic bounds that failure at the cost of one round trip per connection per interval, independent of how active the connection is. Applications expecting very many quiet connections can raise `intervalMs` to trade detection latency for that overhead.
-
-Client and server liveness are independent. These options are client-side and have no relationship to the server's idle timeout, which reaps peers that stop answering at the protocol level. Tuning one does not tune the other.
-
-The probe is a correlated request answered with `ok`, and is never retried — a retry would mask a dead connection behind its own backoff. It is subject to the same per-connection rate limit as any other client message.
+Client liveness starts after WebSocket open, before store or presence scopes are ready. These options configure only client-side detection; they do not tune the server's separate idle timeout policy.
 
 Applications do not implement a keepalive on top of this. A *domain* liveness need — expiring a user who stops sending, re-admitting a participant whose tab slept — is application policy built on these signals, not a substitute for them.
 
@@ -239,7 +235,7 @@ A connection can end for reasons that demand opposite responses — refresh a to
 ```typescript
 client.on('disconnected', (detail) => {
   // detail.code:      'AUTH_FAILED' | 'TOKEN_EXPIRED' | 'SERVER_SHUTDOWN'
-  //                  | 'IDLE_TIMEOUT' | 'BACKPRESSURE_LIMIT' | 'MAX_CONNECTIONS'
+  //                  | 'BACKPRESSURE_LIMIT' | 'MAX_CONNECTIONS'
   //                  | 'CLIENT_DISCONNECT' | 'RETRIES_EXHAUSTED' | 'CONNECTION_FAILED'
   // detail.reason:    human-readable text from the server, when it sent one
   // detail.category:  ZyncBaseError category, for existing retry logic
@@ -305,9 +301,9 @@ Each attempt that reaches a fully restored client emits `connected`/`reconnected
 
 Update the connection's session with a new external JWT without disconnecting. The server re-validates the new JWT and updates the session claims and token expiry in-place. Active store and presence scopes continue without interruption.
 
-`tokenExpired` is emitted **before** the connection closes, so `authRefresh()` is sent on a live socket and the refresh completes without a reconnect. The window is bounded by the server's configured [`session.tokenGracePeriodSeconds`](./configuration.md), and the close follows only when no replacement arrives within it — no `auth.tokenProvider` is configured, the provider rejects, the server rejects the refreshed token, or the window times out. An application supplying tokens itself therefore has until the window closes to call `authRefresh()`; once `disconnected` has fired the socket is gone and reconnecting with a fresh ticket via `connect()` is the only remaining option.
+`tokenExpired` is emitted **before** the connection closes, so `authRefresh()` is sent on a live socket and a valid refresh completes without a reconnect. The window is bounded by the server's configured [`session.tokenGracePeriodSeconds`](./configuration.md). If no replacement is submitted — because there is no `auth.tokenProvider`, the provider fails, or the window times out — the server closes with `TOKEN_EXPIRED`/`4006`. An application supplying tokens itself therefore has until the window closes to call `authRefresh()`; once `disconnected` has fired the socket is gone and reconnecting with a fresh ticket via `connect()` is the only remaining option.
 
-If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED`, closes with code `4001`, and the SDK emits `disconnected` with `retryable: false`. A failed `AuthRefresh` is terminal for the connection — the SDK does not reconnect, because the credentials it would present are the ones the server just rejected.
+If a submitted JWT is invalid, expired, or has a different subject, the server immediately sends `ServerDisconnect` with code `AUTH_FAILED`, closes with code `4001`, and the SDK emits `disconnected` with `retryable: false`. A rejected token is distinct from no submitted replacement: the former is an authentication failure; the latter reaches the end of the grace window and becomes `TOKEN_EXPIRED`/`4006`.
 
 ```typescript
 client.on('tokenExpired', async () => {

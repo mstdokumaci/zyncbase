@@ -157,7 +157,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
 | `ActionCall` | `action_id`, optional `timeoutMs`, `params` | Ready bound scope (store or presence per the action's schema `scope`) and `invoke` authorization. | Invoke an action. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
-| `Ping` | *(none)* | Established connection; requires no scope. | Liveness probe. Answered with `ok`. |
+| `Ping` | *(none)* | Established connection; requires no scope. | Minimal liveness request containing only the common `type` and `id` fields. See Liveness Probing for its response contract. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |
 | `PresenceSet` | `data` | Ready presence scope. | Merge user presence fields. |
 | `PresenceSetShared` | `data` | Ready presence scope and shared-write authorization. | Merge namespace shared presence fields. |
@@ -204,7 +204,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
-| `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. Sent before every server-initiated close; `code` is owned by [Error Taxonomy → Disconnect Codes](./error-taxonomy.md#disconnect-codes). |
+| `ServerDisconnect` | `code`, `message` | Best-effort reason for a classified server-initiated close; its `code` is owned by [Error Taxonomy](./error-taxonomy.md#public-catalog). See [Close Codes](#close-codes) for transport mapping. |
 | `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
 | `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
 
@@ -240,18 +240,16 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 ## Liveness Probing
 
-A transport can be open yet unable to carry traffic, and no data message reveals it (ADR-015). Detection is split by direction because neither side's signal reaches the other.
+A broken network path can leave the WebSocket open. Server and client liveness use separate mechanisms (ADR-015).
 
-**Server side.** uWebSockets emits a WebSocket PING once a connection has been idle past a margin derived from the idle timeout, and force-closes when no PONG arrives. Clients answer PING at the protocol layer, so this needs no cooperation from them.
+**Server side.** WebSocket control Ping/Pong behavior and idle timeout are defined in [Networking](./networking.md).
 
-**Client side.** A browser cannot emit a PING frame: `WebSocket` exposes no `ping()`, and a send on a broken path buffers locally and resolves. The client probes with `Ping` instead.
+**Client side.** A browser cannot emit a control Ping frame. It uses the correlated MessagePack `Ping` request (type `0x02`), which requires an established WebSocket but no resolved scope.
 
-- `Ping` is correlated like every other client message. The server answers `ok` with no additional fields. That `ok`, when it carries the probe's own id, is the proof of life. It is never answered with `error` under normal operation.
-- A probe is satisfied **only** by the reply matching its id. Inbound traffic does not satisfy it: a connection still receiving deltas proves the server-to-client path and nothing more, so a client that can receive but cannot send would never be detected.
-- Probes are therefore issued on a fixed interval regardless of concurrent traffic, which bounds detection of a one-way failure. The cost is one round trip per connection per interval, independent of how active that connection is.
-- The SDK never retries a probe. A retry would mask a dead connection behind its own backoff instead of detecting it.
-- `Ping` requires an established connection but no resolved scope, so it is answerable while store or presence scope is still resolving, and before it.
-- `Ping` is ordinary client traffic for rate-limiting purposes. It does not bypass the per-connection token bucket.
+- `Ping` contains only the common `type` and `id` fields. The server normally answers with correlated `ok`; a Ping rejected by its dedicated limit receives correlated `RATE_LIMITED`.
+- Any correlated `ok` or `error` response to a client-originated request proves a round trip. Server pushes and uncorrelated errors do not.
+
+The server fast path and limiter are specified in [Message Handler](./message-handler.md). Client probe scheduling is specified in the [TypeScript SDK](./typescript-sdk.md); its developer-visible behavior is defined in [Connection Management](../api-design/connection-management.md).
 
 ## Token Expiry Notification
 
@@ -259,19 +257,18 @@ Token expiry is signalled in two steps, so a client can replace its token withou
 
 1. **Notification.** When a token expires, the server sends an `error` carrying `TOKEN_EXPIRED`. It is **uncorrelated** — `id` is omitted, because no request is being answered and the message must not resolve or reject an unrelated pending request. The connection stays open.
 2. **Refresh window.** The client answers with `AuthRefresh`, which updates the session in place; active scopes continue without interruption. The window is bounded by the server's configured `tokenGracePeriodSeconds`.
-3. **Termination.** Only if no valid replacement arrives within the window — no provider, a rejected refresh, or a timeout — does the server send `ServerDisconnect` with code `TOKEN_EXPIRED` and close with `4006`.
+3. **Termination.** If no valid replacement is submitted before the window closes — no provider, provider failure, or timeout — the server sends `ServerDisconnect` with code `TOKEN_EXPIRED` and closes with `4006`. A submitted but invalid, expired, or subject-mismatched token instead fails immediately with `AUTH_FAILED` and `4001`.
 
 The notification is therefore the normal path and the disconnect is the fallback. A client that has no way to obtain a token receives the notification, cannot act on it, and is terminated when the window closes.
 
 ## Close Codes
 
-Server-initiated closes carry a WebSocket close code in addition to the `ServerDisconnect` message. Both are specified because the in-band message is best-effort: a connection already over its backpressure limit may drop the frame, leaving the close code as the only signal.
+Classified server-initiated closes pair `ServerDisconnect` with a WebSocket close code. The in-band message is best-effort: a connection already over its backpressure limit may drop the frame, leaving the close code as the only signal.
 
 | Close code | Meaning | `ServerDisconnect` code |
 |------------|---------|--------------------------|
-| `4001` | Authentication or session token is no longer valid. | `AUTH_FAILED` |
+| `4001` | Submitted credentials are invalid or the session identity cannot be authenticated. | `AUTH_FAILED` |
 | `4002` | Server is draining or restarting. | `SERVER_SHUTDOWN` |
-| `4003` | Connection exceeded the server's idle deadline. | `IDLE_TIMEOUT` |
 | `4004` | Outbound buffer exceeded the per-connection limit. | `BACKPRESSURE_LIMIT` |
 | `4005` | Server connection cap reached. | `MAX_CONNECTIONS` |
 | `4006` | Session token expired and the refresh window closed. | `TOKEN_EXPIRED` |
@@ -280,7 +277,7 @@ Server-initiated closes carry a WebSocket close code in addition to the `ServerD
 
 Because the in-band `ServerDisconnect` is best-effort, the close code alone must be unambiguous. `4001` and `4006` are therefore distinct: a rejected credential cannot be recovered by replacing the token, whereas an expired one can, and the SDK cannot attempt a token refresh without knowing which occurred.
 
-Every classified close is produced by ZyncBase, which sends `ServerDisconnect` and then closes with the matching code. That includes `4003`: the server performs its own idle check and classifies the peer before the transport's reaper can act. The transport's reaper is a backstop for peers that check did not catch, and it ends in a raw socket close carrying no WebSocket close frame at all — so such a close delivers neither a `ServerDisconnect` nor a code, and surfaces as an unclassified transport failure.
+For a classified close, the server best-effort sends `ServerDisconnect` followed by a WebSocket close frame carrying the mapped code. A raw transport close has no ZyncBase code and is unclassified.
 
 Client-initiated closes carry no ZyncBase code. A client closing its own socket already knows why, and one would imply a server-originated reason it did not produce.
 

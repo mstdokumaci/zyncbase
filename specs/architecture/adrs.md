@@ -523,11 +523,7 @@ Before a scope is ready, the server accepts only lifecycle messages: authenticat
 
 An open transport is not a working transport. A connection whose network path has failed silently — a NAT timeout, a dropped mobile network, a peer that stopped reading — stays open at the socket layer while carrying nothing. No data message would ever reveal it, because the message disappears rather than arriving broken.
 
-Liveness is therefore detected from both ends, because neither end's signal reaches the other. The server reaps peers that stop answering at the protocol level: uWebSockets emits a WebSocket PING once a connection has been idle past a margin derived from the idle timeout, and force-closes it when no PONG arrives. A client cannot use that mechanism, because a browser `WebSocket` exposes no way to emit a PING frame, and a send on a broken path buffers locally and resolves without error. The client therefore round-trips an application-level probe that requires no resolved scope.
-
-Only the reply to a probe counts as proof of life. Inbound traffic establishes the server-to-client path and nothing more, so a connection that still receives pushes but can no longer send would never be detected if server traffic were allowed to satisfy a probe. Probes are therefore issued on a fixed interval regardless of concurrent traffic, which makes a client-to-server-only failure observable within a known bound.
-
-Both directions are required and neither substitutes for the other. Server-side probing bounds how long a dead peer occupies a connection slot. Client-side probing is the only mechanism by which a client learns that its own connection is unusable. A connection that fails liveness is torn down through the same path as a closed one, so recovery never branches on how the failure presented.
+Liveness uses independent signals at each end. The server uses WebSocket control Ping/Pong; browser clients cannot emit control Ping, so the SDK uses a correlated request to detect a broken client-to-server path. A correlated response proves both directions, while a server push proves only server-to-client delivery. Transport liveness is independent of store and presence readiness.
 
 ### What a Scope Consists Of
 
