@@ -334,6 +334,10 @@ try {
 	};
 	for (let current = 8; current !== zoom; current += zoom > 8 ? 2 : -2)
 		await page.locator(zoom > 8 ? "#zoom-in" : "#zoom-out").click();
+	await until(
+		async () => (await health()).players >= 1,
+		"observer admitted to the world",
+	);
 	const codes = [
 		(await health()).countries.find((row) => row.name === "Profile 1")
 			?.country_id,
