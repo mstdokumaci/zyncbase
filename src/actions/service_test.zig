@@ -467,3 +467,63 @@ test "actions service: validatePayload enforces required, arrays, and nil" {
     defer bad_item.free(allocator);
     try testing.expectError(error.TypeMismatch, service_mod.validatePayload(allocator, &fields, &bad_item));
 }
+
+const async_schema_json =
+    \\{"version":"1.0.0","store":{},"actions":{
+    \\  "fire":{"params":{"n":{"type":"integer"}},"required":["n"],"returns":null}
+    \\}}
+;
+
+test "actions service: async forwards stage until flush and concatenate in order" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-async-stage", async_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = msgpack.Payload.uintToPayload(5) },
+    });
+    defer params.free(allocator);
+
+    const caller_ctx = connectionContext(caller.conn);
+    for (0..3) |i| {
+        try testing.expectEqual(
+            service_mod.CallOutcome.accepted,
+            try app.actions_service.call(caller_ctx, @intCast(i + 1), 0, &params, null),
+        );
+    }
+
+    // Nothing is on the wire until the event-loop flush.
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+
+    // One frame carries three complete forwards in exec-id order.
+    var reader: std.Io.Reader = .fixed(recorder.bytes());
+    for (1..4) |exec_id| {
+        const msg = try msgpack.decode(allocator, &reader);
+        defer msg.free(allocator);
+        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
+        try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
+        try testing.expectEqual(@as(u64, 0), msg.arr[3].uint);
+    }
+
+    // Flushing again is a no-op.
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+}

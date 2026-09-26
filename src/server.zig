@@ -621,6 +621,10 @@ pub const ZyncBaseServer = struct {
             self.websocket_server.listen_socket = null;
         }
 
+        // Deliver staged async forwards before disconnects so accepted work
+        // reaches workers ahead of the close.
+        self.actions_service.flushOutbox();
+
         // Send ServerDisconnect to all connections and close them
         self.connection_manager.sendDisconnectToAll("SHUTDOWN", "Server is shutting down.");
 
@@ -841,6 +845,7 @@ pub const ZyncBaseServer = struct {
         }
 
         self.connection_manager.drainSendQueue(&self.send_queue);
+        self.actions_service.flushOutbox();
     }
 
     fn armShutdownTimeout(self: *ZyncBaseServer, loop: *uws_c.struct_us_loop_t) !void {
