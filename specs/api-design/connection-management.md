@@ -50,7 +50,7 @@ const client = createClient({
 | `maxReconnectAttempts` | number | `Infinity` | Max retry attempts before giving up |
 | `reconnectJitter` | boolean | `true` | Add ±10% randomness to retry timing (prevents thundering herd) |
 | `liveness.enabled` | boolean | `true` | Probe a silent connection to detect a broken path that never delivered a close |
-| `liveness.intervalMs` | number | `15000` | Maximum silence after a correlated response to a client request before probing. Must be an integer of at least `1000` ms. |
+| `liveness.intervalMs` | number | `15000` | Maximum silence after a correlated response to a client request before probing. The first probe phase is randomized within this interval to spread reconnect bursts; this is fixed SDK behavior independent of `reconnectJitter`. Must be an integer of at least `1000` ms. |
 | `liveness.timeoutMs` | number | `10000` | Maximum wait for a correlated response after a probe before declaring the connection dead. Must be a positive integer no greater than `2147483647` ms. |
 
 ### Namespace Examples
@@ -89,14 +89,13 @@ Initiates the connection sequence:
 2. **WebSocket upgrade** (`GET /ws?ticket=...`) — opens the WebSocket connection
 3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-009)
 4. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
-
 5. **Recovery** — the SDK replays the application's store subscriptions, presence subscriptions, and action registrations
 
 The SDK waits for all five steps before resolving the `connect()` promise, so a resolved promise means the client is fully restored. Presence scope acknowledgement installs the canonical internal user UUID before replay begins.
 
 ```typescript
 await client.connect()
-// Required store and presence scopes are ready.
+// Connection is synced; subscriptions and registrations are restored.
 ```
 
 The promise resolves at `synced`, so the ordinary `await client.connect()` followed by a request is safe: subscriptions and registrations are already in place when it settles. The intermediate `connected` event still fires, for applications that need to observe the transport coming up before the replay finishes.
@@ -239,7 +238,7 @@ client.on('disconnected', (detail) => {
   //                  | 'CLIENT_DISCONNECT' | 'RETRIES_EXHAUSTED' | 'CONNECTION_FAILED'
   // detail.reason:    human-readable text from the server, when it sent one
   // detail.category:  ZyncBaseError category, for existing retry logic
-  // detail.retryable: whether reconnecting can succeed without changes
+  // detail.retryable: whether the SDK retries on normal backoff
   // detail.attempt:   reconnect attempts made before giving up
 })
 ```

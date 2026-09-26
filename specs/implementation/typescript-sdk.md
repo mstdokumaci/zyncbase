@@ -61,7 +61,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 
 ## Liveness Implementation
 
-`ConnectionManager` implements the public contract in [Connection Management](../api-design/connection-management.md). It owns the randomized probe timer and single in-flight Ping id, sends Ping through `ConnectionWireCodec` before scope readiness, resets the timer from the response-correlation path, and closes the socket on probe timeout to use the existing reconnect path.
+`ConnectionManager` implements the public contract in [Connection Management](../api-design/connection-management.md). It owns the probe timer, randomizes the first deadline within `liveness.intervalMs`, tracks a single in-flight Ping id, sends Ping through `ConnectionWireCodec` before scope readiness, resets the timer from the response-correlation path, and closes the socket on probe timeout to use the existing reconnect path.
 
 ## Complete Store Record Decoding
 
