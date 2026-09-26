@@ -25,6 +25,9 @@ const Schema = schema_types.Schema;
 pub const default_timeout_ms: u64 = 10_000;
 /// Client `timeoutMs` may only shorten the deadline; values above this clamp.
 const max_pending_per_connection: usize = 256;
+/// Staged bursts at or below this capacity keep their buffer across flushes;
+/// larger buffers are released after the frame is sent.
+const max_retained_staging_capacity: usize = 64 * 1024;
 const sweep_interval_ms: u32 = 500;
 
 pub const CallOutcome = enum {
@@ -274,6 +277,9 @@ pub const ActionsService = struct {
             .scope = action.scope,
             .deadline_ns = nowNs(self.io) + @as(i96, deadline_ms) * std.time.ns_per_ms,
         });
+        // Preserve per-worker admission order: staged async forwards reach the
+        // worker before this direct sync forward.
+        self.flushWorker(worker_conn_id);
         self.sendTo(worker_conn_id, forward);
         return .pending;
     }
@@ -293,21 +299,26 @@ pub const ActionsService = struct {
     /// defined.
     pub fn flushOutbox(self: *ActionsService) void {
         var it = self.outbox.iterator();
-        while (it.next()) |entry| {
-            const staged = entry.value_ptr;
-            if (staged.bytes.items.len == 0) continue;
-            self.sendTo(entry.key_ptr.*, staged.bytes.items);
-            staged.bytes.clearRetainingCapacity();
-        }
+        while (it.next()) |entry| self.flushStaged(entry.key_ptr.*, entry.value_ptr);
     }
 
     /// Flush one worker's staged forwards. Used before a scope-change response
-    /// so accepted forwards precede it on the wire.
+    /// and before a direct sync forward so accepted forwards precede them.
     pub fn flushWorker(self: *ActionsService, conn_id: u64) void {
         const staged = self.outbox.getPtr(conn_id) orelse return;
+        self.flushStaged(conn_id, staged);
+    }
+
+    fn flushStaged(self: *ActionsService, conn_id: u64, staged: *StagedForwards) void {
         if (staged.bytes.items.len == 0) return;
         self.sendTo(conn_id, staged.bytes.items);
         staged.bytes.clearRetainingCapacity();
+        // Normal bursts retain their buffer; a pathological burst releases
+        // capacity after the frame is on the wire.
+        if (staged.bytes.capacity > max_retained_staging_capacity) {
+            staged.bytes.deinit(self.allocator);
+            staged.bytes = .empty;
+        }
     }
 
     /// Discard a worker's staged forwards. At-most-once delivery makes dropping
