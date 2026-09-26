@@ -69,9 +69,9 @@ const tlsConfig =
 		: undefined;
 const tls = tlsConfig
 	? {
-		cert: await readFile(tlsConfig.certFile),
-		key: await readFile(tlsConfig.keyFile),
-	}
+			cert: await readFile(tlsConfig.certFile),
+			key: await readFile(tlsConfig.keyFile),
+		}
 	: undefined;
 const databaseUrl = new URL("/ws", origin);
 databaseUrl.protocol = tls ? "wss:" : "ws:";

@@ -153,7 +153,7 @@ export class World {
 	// Spawn-point wave latch: 1 = first three points, 2 = six, 3 = all nine.
 	private wave = 1;
 
-	constructor(readonly land: Uint8Array) { }
+	constructor(readonly land: Uint8Array) {}
 
 	get humanCount() {
 		return [...this.players.values()].filter((player) => !player.is_bot).length;
@@ -697,18 +697,18 @@ export class World {
 		const passes: { spaced: boolean; own?: boolean; paint?: boolean }[] =
 			anchor.own
 				? [
-					{ spaced: true, own: true },
-					{ spaced: true, paint: true },
-					{ spaced: false, paint: true },
-					{ spaced: true, own: false },
-					{ spaced: false, own: false },
-				]
+						{ spaced: true, own: true },
+						{ spaced: true, paint: true },
+						{ spaced: false, paint: true },
+						{ spaced: true, own: false },
+						{ spaced: false, own: false },
+					]
 				: [
-					{ spaced: true, paint: true },
-					{ spaced: false, paint: true },
-					{ spaced: true, own: false },
-					{ spaced: false, own: false },
-				];
+						{ spaced: true, paint: true },
+						{ spaced: false, paint: true },
+						{ spaced: true, own: false },
+						{ spaced: false, own: false },
+					];
 		// Prefer breathing room, but tiny islands must still admit players on free land.
 		for (const pass of passes) {
 			// A bounded ring cannot reach a border on a conquered map; one
@@ -726,7 +726,7 @@ export class World {
 				: pass.spaced
 					? 128
 					: Math.max(anchor.x, WIDTH - anchor.x, anchor.y, HEIGHT - anchor.y) +
-					1;
+						1;
 			for (let radius = 0; radius < reach; radius++) {
 				for (let d = -radius; d <= radius; d++) {
 					const candidates = [
