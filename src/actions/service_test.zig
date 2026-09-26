@@ -467,3 +467,161 @@ test "actions service: validatePayload enforces required, arrays, and nil" {
     defer bad_item.free(allocator);
     try testing.expectError(error.TypeMismatch, service_mod.validatePayload(allocator, &fields, &bad_item));
 }
+
+const async_schema_json =
+    \\{"version":"1.0.0","store":{},"actions":{
+    \\  "fire":{"params":{"n":{"type":"integer"}},"required":["n"],"returns":null}
+    \\}}
+;
+
+test "actions service: async forwards stage until flush and concatenate in order" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-async-stage", async_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = msgpack.Payload.uintToPayload(5) },
+    });
+    defer params.free(allocator);
+
+    const caller_ctx = connectionContext(caller.conn);
+    for (0..3) |i| {
+        try testing.expectEqual(
+            service_mod.CallOutcome.accepted,
+            try app.actions_service.call(caller_ctx, @intCast(i + 1), 0, &params, null),
+        );
+    }
+
+    // Nothing is on the wire until the event-loop flush.
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+
+    // One frame carries three complete forwards in exec-id order.
+    var reader: std.Io.Reader = .fixed(recorder.bytes());
+    for (1..4) |exec_id| {
+        const msg = try msgpack.decode(allocator, &reader);
+        defer msg.free(allocator);
+        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
+        try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
+        try testing.expectEqual(@as(u64, 0), msg.arr[3].uint);
+    }
+
+    // Flushing again is a no-op.
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+}
+
+const mixed_schema_json =
+    \\{"version":"1.0.0","store":{},"actions":{
+    \\  "fire":{"params":{"n":{"type":"integer"}},"required":["n"],"returns":null},
+    \\  "compute":{"params":{"n":{"type":"integer"}},"required":["n"],"returns":{"r":{"type":"integer"}}}
+    \\}}
+;
+
+test "actions service: sync forward flushes staged async forwards first" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-sync-flush", mixed_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{ 0, 1 });
+
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = msgpack.Payload.uintToPayload(1) },
+    });
+    defer params.free(allocator);
+
+    const caller_ctx = connectionContext(caller.conn);
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &params, null));
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &params, null));
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+
+    // The sync call flushes the two staged forwards, then sends its own.
+    try testing.expectEqual(service_mod.CallOutcome.pending, try app.actions_service.call(caller_ctx, 3, 1, &params, null));
+    try testing.expectEqual(@as(u64, 2), recorder.send_count.load(.monotonic));
+
+    var reader: std.Io.Reader = .fixed(recorder.bytes());
+    const expected_action_ids = [_]u64{ 0, 0, 1 };
+    for (expected_action_ids, 1..) |action_id, exec_id| {
+        const msg = try msgpack.decode(allocator, &reader);
+        defer msg.free(allocator);
+        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
+        try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
+        try testing.expectEqual(action_id, msg.arr[3].uint);
+    }
+}
+
+const big_schema_json =
+    \\{"version":"1.0.0","store":{},"actions":{
+    \\  "push":{"params":{"data":{"type":"string"}},"required":["data"],"returns":null}
+    \\}}
+;
+
+test "actions service: oversized staging buffers release capacity after flush" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-staging-capacity", big_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+    const caller_ctx = connectionContext(caller.conn);
+
+    // 96 KiB exceeds the 64 KiB retain threshold, so the buffer is released
+    // after the flush instead of pinning capacity for the connection lifetime.
+    const big = try allocator.alloc(u8, 96 * 1024);
+    defer allocator.free(big);
+    @memset(big, 'x');
+    var big_params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = try msgpack.Payload.strToPayload(big, allocator) },
+    });
+    defer big_params.free(allocator);
+
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &big_params, null));
+    const staged = app.actions_service.outbox.getPtr(worker.conn.id).?; // zwanzig-disable-line: optional-unwrap
+    try testing.expect(staged.bytes.capacity >= 96 * 1024);
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(usize, 0), staged.bytes.capacity);
+
+    // Small bursts keep their buffer for the next iteration.
+    var small_params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = try msgpack.Payload.strToPayload("tiny", allocator) },
+    });
+    defer small_params.free(allocator);
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &small_params, null));
+    app.actions_service.flushOutbox();
+    try testing.expect(staged.bytes.capacity > 0);
+}

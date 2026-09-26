@@ -25,6 +25,9 @@ const Schema = schema_types.Schema;
 pub const default_timeout_ms: u64 = 10_000;
 /// Client `timeoutMs` may only shorten the deadline; values above this clamp.
 const max_pending_per_connection: usize = 256;
+/// Staged bursts at or below this capacity keep their buffer across flushes;
+/// larger buffers are released after the frame is sent.
+const max_retained_staging_capacity: usize = 64 * 1024;
 const sweep_interval_ms: u32 = 500;
 
 pub const CallOutcome = enum {
@@ -58,6 +61,13 @@ const Bucket = struct {
     next: usize = 0,
 };
 
+/// Event-loop-staged async forwards for one worker connection. Bytes are
+/// complete msgpack messages concatenated in call order; one flush sends the
+/// whole buffer as a single frame.
+const StagedForwards = struct {
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
+};
+
 const PendingCall = struct {
     caller_conn_id: u64,
     worker_conn_id: u64,
@@ -83,6 +93,7 @@ pub const ActionsService = struct {
     registry: std.AutoHashMapUnmanaged(RegistryKey, Bucket) = .{},
     pending: std.AutoHashMapUnmanaged(u64, PendingCall) = .{},
     pending_counts: std.AutoHashMapUnmanaged(u64, usize) = .{},
+    outbox: std.AutoHashMapUnmanaged(u64, StagedForwards) = .{},
     next_exec_id: u64 = 1,
     sweep_timer: ?*c.struct_us_timer_t = null,
 
@@ -106,6 +117,9 @@ pub const ActionsService = struct {
 
     pub fn deinit(self: *ActionsService) void {
         self.stopSweepTimer();
+        var out_it = self.outbox.valueIterator();
+        while (out_it.next()) |staged| staged.bytes.deinit(self.allocator);
+        self.outbox.deinit(self.allocator);
         var it = self.registry.valueIterator();
         while (it.next()) |bucket| bucket.workers.deinit(self.allocator);
         self.registry.deinit(self.allocator);
@@ -250,7 +264,7 @@ pub const ActionsService = struct {
         defer self.allocator.free(forward);
 
         if (!action.isSync()) {
-            self.sendTo(worker_conn_id, forward);
+            try self.stageForward(worker_conn_id, forward);
             return .accepted;
         }
 
@@ -263,8 +277,56 @@ pub const ActionsService = struct {
             .scope = action.scope,
             .deadline_ns = nowNs(self.io) + @as(i96, deadline_ms) * std.time.ns_per_ms,
         });
+        // Preserve per-worker admission order: staged async forwards reach the
+        // worker before this direct sync forward.
+        self.flushWorker(worker_conn_id);
         self.sendTo(worker_conn_id, forward);
         return .pending;
+    }
+
+    // === Staged async forwards ===
+
+    /// Append a complete forward to the worker's staging buffer. The buffer is
+    /// flushed as one concatenated frame at the end of the event-loop iteration.
+    fn stageForward(self: *ActionsService, worker_conn_id: u64, bytes: []const u8) !void {
+        const gop = try self.outbox.getOrPut(self.allocator, worker_conn_id);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        try gop.value_ptr.bytes.appendSlice(self.allocator, bytes);
+    }
+
+    /// Send one concatenated frame per worker that has staged async forwards.
+    /// Event-loop only. Per-worker order is preserved; cross-worker order is not
+    /// defined.
+    pub fn flushOutbox(self: *ActionsService) void {
+        var it = self.outbox.iterator();
+        while (it.next()) |entry| self.flushStaged(entry.key_ptr.*, entry.value_ptr);
+    }
+
+    /// Flush one worker's staged forwards. Used before a scope-change response
+    /// and before a direct sync forward so accepted forwards precede them.
+    pub fn flushWorker(self: *ActionsService, conn_id: u64) void {
+        const staged = self.outbox.getPtr(conn_id) orelse return;
+        self.flushStaged(conn_id, staged);
+    }
+
+    fn flushStaged(self: *ActionsService, conn_id: u64, staged: *StagedForwards) void {
+        if (staged.bytes.items.len == 0) return;
+        self.sendTo(conn_id, staged.bytes.items);
+        staged.bytes.clearRetainingCapacity();
+        // Normal bursts retain their buffer; a pathological burst releases
+        // capacity after the frame is on the wire.
+        if (staged.bytes.capacity > max_retained_staging_capacity) {
+            staged.bytes.deinit(self.allocator);
+            staged.bytes = .empty;
+        }
+    }
+
+    /// Discard a worker's staged forwards. At-most-once delivery makes dropping
+    /// on disconnect correct: nothing is retried or persisted.
+    fn dropStaged(self: *ActionsService, conn_id: u64) void {
+        const kv = self.outbox.fetchRemove(conn_id) orelse return;
+        var staged = kv.value;
+        staged.bytes.deinit(self.allocator);
     }
 
     /// Round-robin worker selection. Returns null when no worker is registered.
@@ -345,6 +407,7 @@ pub const ActionsService = struct {
     /// Caller disconnect drops its pending calls; worker disconnect fails the
     /// calls it was processing and removes its registrations.
     pub fn removeAllForConnection(self: *ActionsService, conn_id: u64) void {
+        self.dropStaged(conn_id);
         self.unregister(conn_id, null);
 
         var caller_exec_ids = std.ArrayListUnmanaged(u64).empty;
@@ -371,6 +434,9 @@ pub const ActionsService = struct {
     /// Bound-scope namespace change: drop registrations for that scope and
     /// reject the connection's pending calls in that scope.
     pub fn invalidateScope(self: *ActionsService, conn_id: u64, scope: ActionScope) void {
+        // Staged forwards were accepted under the old scope; deliver them
+        // before the scope-change response for this connection.
+        self.flushWorker(conn_id);
         self.unregister(conn_id, scope);
 
         var exec_ids = std.ArrayListUnmanaged(u64).empty;
