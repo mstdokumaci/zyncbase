@@ -982,7 +982,7 @@ export class World {
 		this.dirtyUserChunks.add(userChunkIndex(x, y));
 		// Roster position tracks country-chunk crossings only (not every cell):
 		// exact enough for O(1) locate, quiet enough to keep the cold
-		// subscription cold. ponytail: per-tick sync if locate misses on fast movers.
+		// subscription cold. per-tick sync if locate misses on fast movers.
 		if (after !== before) {
 			player.last_x = x;
 			player.last_y = y;

@@ -171,7 +171,7 @@ async function body(req: IncomingMessage) {
 	return size ? JSON.parse(Buffer.concat(chunks).toString()) : {};
 }
 
-// ponytail: shared session budget; add per-client quotas if one caller starves others.
+// shared session budget; add per-client quotas if one caller starves others.
 let logins = 0,
 	loginWindow = Date.now();
 // The public demo admits 120 sessions/minute. A load profile that needs a

@@ -99,6 +99,7 @@ void uws_ws(int ssl, uws_app_t* app, void* upgrade_context,
 uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t* ws,
                              const char* msg, size_t len, uws_opcode_t opcode);
 void uws_ws_close(int ssl, uws_websocket_t* ws);
+void uws_ws_end(int ssl, uws_websocket_t* ws, int code);
 void* uws_ws_get_user_data(int ssl, uws_websocket_t* ws);
 
 // Request and upgrade helpers
@@ -129,6 +130,10 @@ behavior.idleTimeout            = 120; // seconds by default
 behavior.maxBackpressure        = 16 * 1024 * 1024;
 behavior.sendPingsAutomatically = true;
 ```
+
+uWebSockets handles native WebSocket Ping/Pong with the configured idle timeout; a peer that does not answer is force-closed by its idle reaper. ZyncBase does not add a second server-side idle timer. A reaper close carries no ZyncBase close frame or code.
+
+The C bridge adds `uws_ws_end`, wrapping the vendored `WebSocket::end(code)`, and the Zig `WebSocket` wrapper exposes it. On the owning event loop, classified closes best-effort send `ServerDisconnect` and then call `end(code)` so the close frame carries the mapped code. Keep `uws_ws_close` for raw, unclassified transport closes.
 
 ## Pinned Upgrade Rules
 

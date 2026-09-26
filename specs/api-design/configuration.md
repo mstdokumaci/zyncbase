@@ -259,7 +259,7 @@ Authentication source and ticket settings. ZyncBase validates external identity 
 
 The `users` row is not loaded into `$session` for authorization. The reserved `users` collection maps the external subject to an internal `users.id` for `owner_id`, presence identity, and profile/display data.
 
-- `session.tokenGracePeriodSeconds` - Grace period after JWT expiry before the server terminates the connection. The SDK is expected to refresh tokens before expiry; this grace period is a safety net for slow refreshes. Default: 30 seconds.
+- `session.tokenGracePeriodSeconds` - Refresh window opened when a JWT expires. The client is notified and may replace the token in place; the server terminates the connection only if no valid replacement arrives within the window. Default: 30 seconds.
 
 **Anonymous Auth:**
 

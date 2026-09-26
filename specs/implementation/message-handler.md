@@ -30,9 +30,13 @@
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Tracks store subscriptions and evaluates record changes for fanout. |
 | `PresenceService` | `PresenceWorker`, schema, authorization | Accepts presence requests on the event loop and hands work to the dedicated presence thread. |
 
+## Ping Fast Path
+
+Before ordinary request rate limiting or arena acquisition, `MessageHandler` attempts bounded, low-allocation extraction of the Ping envelope. A recognized Ping uses a separate per-connection limit of two requests per second with a burst of two, then sends the correlated response defined by the wire protocol. It bypasses full payload decoding, generic routing, scope resolution, and per-message authorization. Non-Ping messages continue through the normal lifecycle below.
+
 ## Request Lifecycle
 
-1. Apply per-connection message rate limiting from `Config.SecurityConfig`.
+1. Apply ordinary per-connection message rate limiting from `Config.SecurityConfig` to non-Ping messages.
 2. Decode `wire.Envelope` from the raw MessagePack frame.
 3. Acquire a request arena from `MemoryStrategy`.
 4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.
@@ -53,6 +57,7 @@
 | Store write | `StoreSet`, `StoreRemove`, `StoreBatch` | Requires ready store scope and write authorization. |
 | Store read | `StoreQuery`, `StoreSubscribe`, `StoreLoadMore` | Requires ready store scope and read authorization. |
 | Store subscription control | `StoreUnsubscribe` | Connection-local subscription id. |
+| Liveness | `Ping` | Established WebSocket; handled by the fast path without scope or per-message authorization. |
 | Auth | `AuthRefresh` | Requires valid refresh token/JWT validation path. |
 | Presence write | `PresenceSet`, `PresenceSetShared`, `PresenceRemove` | Requires ready presence scope and presence authorization. |
 | Presence subscription control | `PresenceSubscribe`, `PresenceUnsubscribe`, `PresenceSubscribeShared`, `PresenceUnsubscribeShared` | Requires ready presence scope except local cleanup paths. |
