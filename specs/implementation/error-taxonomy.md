@@ -84,7 +84,7 @@ The server sends `ServerDisconnect` and then closes. That send is **best-effort*
 | `ServerDisconnect` code | Close code | Retryable | Client behavior |
 |-------------------------|-----------|-----------|-----------------|
 | `AUTH_FAILED` | `4001` | No | Credentials are broken; reconnecting fails identically until they change. Stop retrying and surface an auth error. |
-| `TOKEN_EXPIRED` | `4001` | No | The session outlived its token. With `auth.tokenProvider` configured the SDK refreshes and reconnects; otherwise it emits `tokenExpired` and waits for the application. |
+| `TOKEN_EXPIRED` | `4001` | No | The session outlived its token. With `auth.tokenProvider` configured the SDK refreshes in place and continues on the same connection; otherwise it emits `tokenExpired` and waits for the application. |
 | `SERVER_SHUTDOWN` | `4002` | Yes | The server is draining. Reconnect on the standard backoff. |
 | `IDLE_TIMEOUT` | `4003` | Yes | The connection was silent too long. Reconnect. |
 | `BACKPRESSURE_LIMIT` | `4004` | Yes | The client is not consuming fast enough. Reconnect, but reduce subscription fan-out. |

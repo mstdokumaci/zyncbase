@@ -50,7 +50,7 @@ const client = createClient({
 | `maxReconnectAttempts` | number | `Infinity` | Max retry attempts before giving up |
 | `reconnectJitter` | boolean | `true` | Add ±10% randomness to retry timing (prevents thundering herd) |
 | `liveness.enabled` | boolean | `true` | Probe a silent connection to detect a broken path that never delivered a close |
-| `liveness.intervalMs` | number | `15000` | Silence after which a probe is sent, measured from the last frame received in either direction |
+| `liveness.intervalMs` | number | `15000` | Silence after which a probe is sent, measured from the last frame received from the server. A local send does not reset it |
 | `liveness.timeoutMs` | number | `10000` | Wait for the probe's `ok` before declaring the connection dead |
 
 ### Namespace Examples
@@ -119,7 +119,7 @@ client.disconnect()
 
 A connection can be **closed** or merely **broken**. A closed one receives a FIN or RST and reaches a terminal state. A broken one — a NAT timeout, a dropped mobile network, a server that died — stays `OPEN` at the socket layer while carrying nothing, because a send on a dead path buffers locally and resolves. No client-side signal distinguishes them: `readyState` says `OPEN`, sends succeed, and outstanding promises never settle.
 
-The SDK closes that gap on a timer. It tracks the last frame received in either direction. After `liveness.intervalMs` of silence it sends a `Ping` and starts a `liveness.timeoutMs` deadline; any frame arriving in that window proves liveness and cancels the probe. On expiry the SDK closes the socket and enters the ordinary reconnect path, so recovery is identical whether the connection was closed or broken and no application needs a second branch for the silent case.
+The SDK closes that gap on a timer. It tracks the last frame received from the server. After `liveness.intervalMs` of silence it sends a `Ping` and starts a `liveness.timeoutMs` deadline; any frame arriving in that window proves liveness and cancels the probe. On expiry the SDK closes the socket and enters the ordinary reconnect path, so recovery is identical whether the connection was closed or broken and no application needs a second branch for the silent case.
 
 Two properties keep it free:
 
@@ -228,7 +228,7 @@ client.on('tokenExpired', async () => {
 | `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
 | `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
-| `tokenExpired` | `() => void` | Server indicates token has expired; SDK should refresh |
+| `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
 
 ### `disconnected` Detail
@@ -251,7 +251,7 @@ client.on('disconnected', (detail) => {
 
 Two behaviors follow from `retryable`, and replace matching on error text:
 
-- **`retryable: false`** — reconnecting fails identically. An `AUTH_FAILED` or `TOKEN_EXPIRED` close stops the SDK's retry loop; with `auth.tokenProvider` configured it refreshes the token first, otherwise it emits `tokenExpired` and waits for the application.
+- **`retryable: false`** — reconnecting fails until something changes. `AUTH_FAILED` is terminal: nothing the SDK can do succeeds, so it stops the retry loop and surfaces the failure. `TOKEN_EXPIRED` is recoverable: the SDK stops the retry loop but, with `auth.tokenProvider` configured, obtains a new token and continues on the same connection; otherwise it emits `tokenExpired` and waits for the application.
 - **`retryable: true`** — the SDK reconnects on the normal backoff and the application does nothing.
 
 `disconnected` fires for a client-initiated `disconnect()` and after retries are exhausted as well, so teardown handlers are registered once instead of per exit path.
@@ -301,6 +301,8 @@ Each attempt that reaches a fully restored client emits `connected`/`reconnected
 ### `client.authRefresh(token)`
 
 Update the connection's session with a new external JWT without disconnecting. The server re-validates the new JWT and updates the session claims and token expiry in-place. Active store and presence scopes continue without interruption.
+
+`tokenExpired` is emitted **before** the connection closes, so `authRefresh()` is sent on a live socket and the refresh completes without a reconnect. The close follows only when no refresh is possible — no `auth.tokenProvider` is configured, the provider rejects, or the server rejects the refreshed token. An application supplying tokens itself therefore has until `disconnected` to call `authRefresh()`; once `disconnected` has fired the socket is gone and reconnecting with a fresh ticket via `connect()` is the only remaining option.
 
 If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED`, closes with code `4001`, and the SDK emits `disconnected` with `retryable: false`. A failed `AuthRefresh` is terminal for the connection — the SDK does not reconnect, because the credentials it would present are the ones the server just rejected.
 
