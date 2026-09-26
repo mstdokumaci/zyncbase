@@ -594,7 +594,7 @@ Authorization rules evaluate in RAM against `$session`, `$namespace`, `$path`, `
 
 Tokens should be short-lived (≤15 minutes recommended). The SDK is expected to refresh tokens before expiry. On successful auth refresh, `$session` is updated in-place — active scopes continue without interruption. On refresh failure, the connection is terminated.
 
-ZyncBase does not maintain a server-side revocation list by default. Token expiry is the primary revocation mechanism. If a token expires without a valid replacement within a configurable grace period, the connection is terminated.
+ZyncBase does not maintain a server-side revocation list by default. Token expiry is the primary revocation mechanism. When a token expires the server notifies the client and holds the connection for a configurable grace period, giving the client the opportunity to replace the token in place; if no valid replacement arrives within that grace period, the connection is terminated.
 
 ZyncBase enforces a maximum limit on JWT claim array element counts to prevent payload and parsing bloat.
 

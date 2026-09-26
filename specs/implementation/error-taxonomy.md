@@ -42,7 +42,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | Code | Category | Origin | Meaning |
 |------|----------|--------|---------|
 | `AUTH_FAILED` | `authentication` | Server | Identity verification failed or the connection lacks required external identity. |
-| `TOKEN_EXPIRED` | `authentication` | Server | Session token expired and the client must refresh/reconnect. |
+| `TOKEN_EXPIRED` | `authentication` | Server | Session token expired. The client is notified and may replace the token in place before the connection is terminated. |
 | `NAMESPACE_UNAUTHORIZED` | `authorization` | Server | Namespace-level authorization denied access. |
 | `PERMISSION_DENIED` | `authorization` | Server | Store, presence, or action rule denied the operation. |
 | `SESSION_NOT_READY` | `state` | Server | Store/presence operation arrived before the required scoped session was ready. |
@@ -84,7 +84,7 @@ The server sends `ServerDisconnect` and then closes. That send is **best-effort*
 | `ServerDisconnect` code | Close code | Retryable | Client behavior |
 |-------------------------|-----------|-----------|-----------------|
 | `AUTH_FAILED` | `4001` | No | Credentials are broken; reconnecting fails identically until they change. Stop retrying and surface an auth error. |
-| `TOKEN_EXPIRED` | `4001` | No | The session outlived its token. With `auth.tokenProvider` configured the SDK refreshes in place and continues on the same connection; otherwise it emits `tokenExpired` and waits for the application. |
+| `TOKEN_EXPIRED` | `4001` | No | Reached only after the refresh window closed without a replacement — no provider, a rejected refresh, or a timeout. Terminal: the socket is already gone, so the client reconnects with a fresh ticket. |
 | `SERVER_SHUTDOWN` | `4002` | Yes | The server is draining. Reconnect on the standard backoff. |
 | `IDLE_TIMEOUT` | `4003` | Yes | The connection was silent too long. Reconnect. |
 | `BACKPRESSURE_LIMIT` | `4004` | Yes | The client is not consuming fast enough. Reconnect, but reduce subscription fan-out. |
@@ -108,6 +108,7 @@ Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable,
 - Asynchronous scope resolution failures: background resolution checks `scope_seq`; superseded work reports `REQUEST_SUPERSEDED` or is dropped if no longer relevant.
 - Deferred write failures: the write path emits `WriteError` when the request asked for committed acknowledgement and storage fails after the immediate request phase.
 - Local SDK failures: the SDK creates `ZyncBaseError` directly for path validation, timeout, and connection failures.
+- Token expiry is signalled twice: an uncorrelated `error` carrying `TOKEN_EXPIRED` when the token expires, which resolves no pending request, and a `ServerDisconnect(TOKEN_EXPIRED)` only if the refresh window closes without a replacement. The SDK treats the first as `tokenExpired` and the second as a terminal disconnect.
 - Disconnects: the server encodes `ServerDisconnect` with a code from [Disconnect Codes](#disconnect-codes) and closes the connection, on the event loop or from a timer sweep. A failed send is logged and the close proceeds, leaving the close code authoritative. The SDK surfaces the code as a `ZyncBaseError` and rejects the connection's pending requests with it.
 
 ## Retry Policy

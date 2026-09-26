@@ -228,7 +228,7 @@ client.on('tokenExpired', async () => {
 | `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
 | `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
-| `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place |
+| `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place. Rejects no pending request |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
 
 ### `disconnected` Detail
@@ -302,7 +302,7 @@ Each attempt that reaches a fully restored client emits `connected`/`reconnected
 
 Update the connection's session with a new external JWT without disconnecting. The server re-validates the new JWT and updates the session claims and token expiry in-place. Active store and presence scopes continue without interruption.
 
-`tokenExpired` is emitted **before** the connection closes, so `authRefresh()` is sent on a live socket and the refresh completes without a reconnect. The close follows only when no refresh is possible — no `auth.tokenProvider` is configured, the provider rejects, or the server rejects the refreshed token. An application supplying tokens itself therefore has until `disconnected` to call `authRefresh()`; once `disconnected` has fired the socket is gone and reconnecting with a fresh ticket via `connect()` is the only remaining option.
+`tokenExpired` is emitted **before** the connection closes, so `authRefresh()` is sent on a live socket and the refresh completes without a reconnect. The window is bounded by the server's configured [`session.tokenGracePeriodSeconds`](./configuration.md), and the close follows only when no replacement arrives within it — no `auth.tokenProvider` is configured, the provider rejects, the server rejects the refreshed token, or the window times out. An application supplying tokens itself therefore has until the window closes to call `authRefresh()`; once `disconnected` has fired the socket is gone and reconnecting with a fresh ticket via `connect()` is the only remaining option.
 
 If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED`, closes with code `4001`, and the SDK emits `disconnected` with `retryable: false`. A failed `AuthRefresh` is terminal for the connection — the SDK does not reconnect, because the credentials it would present are the ones the server just rejected.
 

@@ -192,7 +192,7 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
 | `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
 | `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns pair-array. |
-| `error` | `id`, `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome. |
+| `error` | `id` (omitted when uncorrelated), `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome, or a proactive uncorrelated server notification (see [Token Expiry Notification](#token-expiry-notification)). |
 
 Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 
@@ -252,13 +252,23 @@ A transport can be open yet unable to carry traffic, and no data message reveals
 - `Ping` requires an established connection but no resolved scope, so it is answerable while store or presence scope is still resolving, and before it.
 - `Ping` is ordinary client traffic for rate-limiting purposes. It does not bypass the per-connection token bucket.
 
+## Token Expiry Notification
+
+Token expiry is signalled in two steps, so a client can replace its token without losing the connection.
+
+1. **Notification.** When a token expires, the server sends an `error` carrying `TOKEN_EXPIRED`. It is **uncorrelated** — `id` is omitted, because no request is being answered and the message must not resolve or reject an unrelated pending request. The connection stays open.
+2. **Refresh window.** The client answers with `AuthRefresh`, which updates the session in place; active scopes continue without interruption. The window is bounded by the server's configured `tokenGracePeriodSeconds`.
+3. **Termination.** Only if no valid replacement arrives within the window — no provider, a rejected refresh, or a timeout — does the server send `ServerDisconnect` with code `TOKEN_EXPIRED` and close with `4001`.
+
+The notification is therefore the normal path and the disconnect is the fallback. A client that has no way to obtain a token receives the notification, cannot act on it, and is terminated when the window closes.
+
 ## Close Codes
 
 Server-initiated closes carry a WebSocket close code in addition to the `ServerDisconnect` message. Both are specified because the in-band message is best-effort: a connection already over its backpressure limit may drop the frame, leaving the close code as the only signal.
 
 | Close code | Meaning | `ServerDisconnect` code |
 |------------|---------|--------------------------|
-| `4001` | Authentication or session token is no longer valid. | `AUTH_FAILED` / `TOKEN_EXPIRED` |
+| `4001` | Authentication or session token is no longer valid. `TOKEN_EXPIRED` reaches this only after the refresh window closes. | `AUTH_FAILED` / `TOKEN_EXPIRED` |
 | `4002` | Server is draining or restarting. | `SERVER_SHUTDOWN` |
 | `4003` | Connection exceeded the server's idle deadline. | `IDLE_TIMEOUT` |
 | `4004` | Outbound buffer exceeded the per-connection limit. | `BACKPRESSURE_LIMIT` |
