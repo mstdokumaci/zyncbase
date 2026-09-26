@@ -288,7 +288,7 @@ The SDK is responsible for translating developer-facing syntax into compact wire
 
 ### Message Type IDs
 
-Message type discriminators are fixed numeric IDs (`0x00`–`0x29`), a single byte each on the wire. The registry is a shared contract — the Zig enum (`src/wire/message_type.zig`) and the SDK registry (`sdk/typescript/src/connection_wire.ts`) encode the same table, and routing is an exhaustive switch: server-only or unknown IDs sent by a client return `INVALID_MESSAGE_TYPE`, and legacy string types fail with `INVALID_MESSAGE_FORMAT`. The SDK maps IDs back to logical type names on decode, so the wire change is invisible above the codec boundary.
+Message type discriminators are fixed numeric IDs (`0x00`–`0x33`), a single byte each on the wire. The registry is a shared contract — the Zig enum (`src/wire/message_type.zig`) and the SDK registry (`sdk/typescript/src/connection_wire.ts`) encode the same table, and routing is an exhaustive switch: server-only or unknown IDs sent by a client return `INVALID_MESSAGE_TYPE`, and legacy string types fail with `INVALID_MESSAGE_FORMAT`. The SDK maps IDs back to logical type names on decode, so the wire change is invisible above the codec boundary.
 
 Nested field paths are flattened in the SDK using the `__` separator convention before being mapped to integer indices. The server sees only flat field names.
 
@@ -517,7 +517,15 @@ A WebSocket transport can be open before the server has enough context to safely
 
 Transport connectivity and scoped session readiness are distinct states. Store and presence maintain independent scopes — they can be resolved in different namespaces when `users.namespaced = false`.
 
-Before a scope is ready, the server accepts only lifecycle messages: authentication, namespace selection, ping/pong, and close. All data messages — subscriptions, queries, mutations, presence operations — are rejected with `SESSION_NOT_READY`.
+Before a scope is ready, the server accepts only lifecycle messages: authentication, namespace selection, liveness probing, and close. All data messages — subscriptions, queries, mutations, presence operations — are rejected with `SESSION_NOT_READY`.
+
+### Liveness Is a Lifecycle Message
+
+An open transport is not a working transport. A connection whose network path has failed silently — a NAT timeout, a dropped mobile network, a peer that stopped reading — stays open at the socket layer while carrying nothing. No data message would ever reveal it, because the message disappears rather than arriving broken.
+
+Liveness is therefore detected from both ends, because neither end's signal reaches the other. The server reaps peers that stop answering at the protocol level: uWebSockets emits a WebSocket PING once a connection has been idle past a margin derived from the idle timeout, and force-closes it when no PONG arrives. A client cannot use that mechanism, because a browser `WebSocket` exposes no way to emit a PING frame, and a send on a broken path buffers locally and resolves without error. The client therefore probes with an application-level round trip that requires no resolved scope, and treats any inbound frame as sufficient proof of life.
+
+Both directions are required and neither substitutes for the other. Server-side probing bounds how long a dead peer occupies a connection slot. Client-side probing is the only mechanism by which a client learns that its own connection is unusable. A connection that fails liveness is torn down through the same path as a closed one, so recovery never branches on how the failure presented.
 
 ### What a Scope Consists Of
 
@@ -553,8 +561,10 @@ A per-connection monotonic counter is incremented on each scope reset. Carried i
 - The uWS reactor is never blocked during identity or namespace resolution.
 - Warm-cache resolution (~1μs) makes repeated connections and namespace switches essentially free.
 - The full TCP handshake → data-ready path is async with no reactor blocking.
+- Liveness probing is answerable before scope readiness, so a connection is never unobservable while it comes up.
+- A silently broken connection is detected on both ends, and its failure is indistinguishable from a close by the time recovery runs.
 
-**Principles**: P-POM, P-SOT, P-SBD, P-PPF
+**Principles**: P-POM, P-SOT, P-SBD, P-PPF, P-RTF
 
 ---
 

@@ -8,10 +8,12 @@ SDK client lifecycle: creating clients, connecting, namespace switching, reconne
 
 1. [Creating a Client](#creating-a-client)
 2. [Connection Lifecycle](#connection-lifecycle)
-3. [Namespace Switching](#namespace-switching)
-4. [Event Listeners](#event-listeners)
-5. [Reconnection Strategy](#reconnection-strategy)
-6. [Token Refresh](#token-refresh)
+3. [Liveness Detection](#liveness-detection)
+4. [Recovery Complete](#recovery-complete)
+5. [Namespace Switching](#namespace-switching)
+6. [Event Listeners](#event-listeners)
+7. [Reconnection Strategy](#reconnection-strategy)
+8. [Token Refresh](#token-refresh)
 
 ---
 
@@ -29,7 +31,8 @@ const client = createClient({
   reconnectDelay: 1000,
   maxReconnectDelay: 30000,
   maxReconnectAttempts: Infinity,
-  reconnectJitter: true
+  reconnectJitter: true,
+  liveness: { enabled: true, intervalMs: 15000, timeoutMs: 10000 }
 })
 ```
 
@@ -46,6 +49,9 @@ const client = createClient({
 | `maxReconnectDelay` | number | `30000` | Maximum delay cap (ms) for exponential backoff |
 | `maxReconnectAttempts` | number | `Infinity` | Max retry attempts before giving up |
 | `reconnectJitter` | boolean | `true` | Add ±10% randomness to retry timing (prevents thundering herd) |
+| `liveness.enabled` | boolean | `true` | Probe a silent connection to detect a broken path that never delivered a close |
+| `liveness.intervalMs` | number | `15000` | Silence after which a probe is sent, measured from the last frame received in either direction |
+| `liveness.timeoutMs` | number | `10000` | Wait for the probe's `ok` before declaring the connection dead |
 
 ### Namespace Examples
 
@@ -91,19 +97,64 @@ await client.connect()
 // Required store and presence scopes are ready.
 ```
 
+This promise resolves at `connected`, when the transport is up and the required scopes are resolved. It does **not** mean subscriptions and action registrations have been replayed — that completes later, at `synced`. Register a `synced` handler before calling `connect()` if you need to react to a fully restored client; see [Recovery Complete](#recovery-complete).
+
 **Returns:** `Promise<void>`  
 **Throws:** `ZyncBaseError` with code `AUTH_FAILED` or `CONNECTION_FAILED`
 
 ### `client.disconnect()`
 
-Gracefully closes the connection. Automatically clears presence in the active namespace.
+Gracefully closes the connection. Automatically clears presence in the active namespace. Emits `disconnected` with code `CLIENT_DISCONNECT` and stops the reconnect loop; pending requests are rejected as non-retryable.
 
 ```typescript
 client.disconnect()
 ```
 
 > [!NOTE]
-> For full wire-level details of the connection lifecycle (ticket format, scope acknowledgements, heartbeat, graceful close), see the [Wire Protocol](../implementation/wire-protocol.md#connection-lifecycle).
+> For full wire-level details of the connection lifecycle (ticket format, scope acknowledgements, liveness probing, close codes, graceful close), see the [Wire Protocol](../implementation/wire-protocol.md#liveness-probing).
+
+---
+
+## Liveness Detection
+
+A connection can be **closed** or merely **broken**. A closed one receives a FIN or RST and reaches a terminal state. A broken one — a NAT timeout, a dropped mobile network, a server that died — stays `OPEN` at the socket layer while carrying nothing, because a send on a dead path buffers locally and resolves. No client-side signal distinguishes them: `readyState` says `OPEN`, sends succeed, and outstanding promises never settle.
+
+The SDK closes that gap on a timer. It tracks the last frame received in either direction. After `liveness.intervalMs` of silence it sends a `Ping` and starts a `liveness.timeoutMs` deadline; any frame arriving in that window proves liveness and cancels the probe. On expiry the SDK closes the socket and enters the ordinary reconnect path, so recovery is identical whether the connection was closed or broken and no application needs a second branch for the silent case.
+
+Two properties keep it free:
+
+- **An active connection is never probed.** A client receiving deltas is already demonstrably alive, so the probe is suppressed. Liveness traffic exists only for idle connections.
+- **Client and server liveness are independent.** These options are client-side and have no relationship to the server's idle timeout, which is a much longer dead-peer reaper. Tuning one does not tune the other.
+
+The probe is a correlated request answered with `ok`, and is never retried — a retry would mask a dead connection behind its own backoff. It is subject to the same per-connection rate limit as any other client message.
+
+Applications do not implement a keepalive on top of this. A *domain* liveness need — expiring a user who stops sending, re-admitting a participant whose tab slept — is application policy built on these signals, not a substitute for them.
+
+---
+
+## Recovery Complete
+
+Restoring a client is not one event. The transport comes up, then the required scopes resolve, and only then can the SDK replay the subscriptions and action registrations the application asked for. A single event at the first step leaves every application racing its own SDK.
+
+The SDK therefore emits three ordered events:
+
+| Event | Fires when |
+|-------|-----------|
+| `connected` | The WebSocket is open and the initial required store and presence scopes are resolved. |
+| `reconnected` | The same, but a connection existed earlier in this process. Does not fire on a first connect. |
+| `synced` | Store subscriptions, presence subscriptions, and action registrations have all been replayed. The client is fully restored. |
+
+**`synced` is the only point at which it is safe to issue requests.** It fires on every successful recovery, including a first connect, so an application writes one handler rather than branching on cold versus warm:
+
+```typescript
+client.on('synced', () => {
+  // Subscriptions are live and registrations are advertised.
+})
+```
+
+Anything issued before `synced` — from a `connected` handler, or after a drop while the SDK is still replaying — reaches a connection whose subscriptions are not yet restored, and is dropped rather than queued. Applications that must survive a gap do their setup in `synced` and treat a connection failure as retryable from the last confirmed point.
+
+`reconnected` exists for where the two must differ: an application resuming an interrupted workflow resets state there, while one wanting a clean slate resets on `connected`. Without it, every application guesses with its own flag.
 
 ---
 
@@ -145,12 +196,16 @@ client.on('connected', () => {
   console.log('Connected to server')
 })
 
-client.on('disconnected', () => {
-  console.log('Disconnected from server')
+client.on('synced', () => {
+  // Subscriptions and registrations are restored. Safe to use the client.
 })
 
-client.on('reconnecting', () => {
-  console.log('Reconnecting...')
+client.on('disconnected', (detail) => {
+  console.log('Disconnected:', detail.code, '—', detail.reason)
+})
+
+client.on('reconnecting', (attempt, delayMs) => {
+  console.log(`Reconnecting (attempt ${attempt} in ${delayMs}ms)`)
 })
 
 client.on('error', (error: ZyncBaseError) => {
@@ -168,11 +223,38 @@ client.on('tokenExpired', async () => {
 | Event | Callback Signature | Description |
 |-------|-------------------|-------------|
 | `connected` | `() => void` | WebSocket established and initial required scopes are ready |
-| `disconnected` | `() => void` | Connection closed (manually or after max retries) |
-| `reconnecting` | `() => void` | Attempting to reconnect after unexpected disconnect |
+| `reconnected` | `() => void` | The same, after a previous connection in this process. Does not fire on a first connect |
+| `synced` | `() => void` | Subscriptions and action registrations fully replayed; the client is safe to use |
+| `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
+| `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
 | `tokenExpired` | `() => void` | Server indicates token has expired; SDK should refresh |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
+
+### `disconnected` Detail
+
+A connection can end for reasons that demand opposite responses — refresh a token, back off, or give up — so the reason is data rather than a bare notification.
+
+```typescript
+client.on('disconnected', (detail) => {
+  // detail.code:      'AUTH_FAILED' | 'TOKEN_EXPIRED' | 'SERVER_SHUTDOWN'
+  //                  | 'IDLE_TIMEOUT' | 'BACKPRESSURE_LIMIT' | 'MAX_CONNECTIONS'
+  //                  | 'CLIENT_DISCONNECT' | 'RETRIES_EXHAUSTED' | 'CONNECTION_FAILED'
+  // detail.reason:    human-readable text from the server, when it sent one
+  // detail.category:  ZyncBaseError category, for existing retry logic
+  // detail.retryable: whether reconnecting can succeed without changes
+  // detail.attempt:   reconnect attempts made before giving up
+})
+```
+
+`code` is always set. `CLIENT_DISCONNECT` and `RETRIES_EXHAUSTED` are both non-retryable, since neither is a condition reconnecting can fix. Server-originated codes and their close-code equivalents are defined in [Error Taxonomy → Disconnect Codes](../implementation/error-taxonomy.md#disconnect-codes).
+
+Two behaviors follow from `retryable`, and replace matching on error text:
+
+- **`retryable: false`** — reconnecting fails identically. An `AUTH_FAILED` or `TOKEN_EXPIRED` close stops the SDK's retry loop; with `auth.tokenProvider` configured it refreshes the token first, otherwise it emits `tokenExpired` and waits for the application.
+- **`retryable: true`** — the SDK reconnects on the normal backoff and the application does nothing.
+
+`disconnected` fires for a client-initiated `disconnect()` and after retries are exhausted as well, so teardown handlers are registered once instead of per exit path.
 
 ### `statusChange` Detail
 
@@ -208,7 +290,9 @@ Attempt 5: ~16s
 Attempt 6+: ~30s (capped)
 ```
 
-The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emit `disconnected` and stop.
+The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emit `disconnected` with code `RETRIES_EXHAUSTED` and stop.
+
+Each attempt that reaches a fully restored client emits `connected`/`reconnected` and then `synced`; an attempt that fails during the handshake emits no `synced`, and the next begins from nothing. Reconnect attempts are also subject to [Liveness Detection](#liveness-detection) — a connection that stops responding fails its probe and restarts the backoff schedule rather than counting as healthy.
 
 ---
 
@@ -218,7 +302,7 @@ The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emi
 
 Update the connection's session with a new external JWT without disconnecting. The server re-validates the new JWT and updates the session claims and token expiry in-place. Active store and presence scopes continue without interruption.
 
-If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED` and closes the connection.
+If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED`, closes with code `4001`, and the SDK emits `disconnected` with `retryable: false`. A failed `AuthRefresh` is terminal for the connection — the SDK does not reconnect, because the credentials it would present are the ones the server just rejected.
 
 ```typescript
 client.on('tokenExpired', async () => {
@@ -230,7 +314,7 @@ client.on('tokenExpired', async () => {
 **Parameters:** `token` (string) — new external JWT  
 **Returns:** `Promise<void>`
 
-Under the hood, this sends an `AuthRefresh` wire message. See [Wire Protocol](../implementation/wire-protocol.md#authrefresh) for details.
+Under the hood, this sends an `AuthRefresh` wire message. See [Wire Protocol → Client Messages](../implementation/wire-protocol.md#client-messages) for details.
 
 ---
 

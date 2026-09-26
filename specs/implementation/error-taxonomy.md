@@ -64,12 +64,35 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `BATCH_TOO_LARGE` | `client` | Server + SDK | Batch exceeds the configured maximum operation count. |
 | `MESSAGE_TOO_LARGE` | `client` | Server + SDK | Payload exceeded configured parser or message-size limits. |
 | `RATE_LIMITED` | `rate_limit` | Server | Per-connection request token bucket rejected the message. |
+| `MAX_CONNECTIONS` | `rate_limit` | Server | Server connection cap reached; the connection was not accepted. |
 | `ACTION_TIMEOUT` | `server` | Server | Sync action worker failed to reply before the server deadline. The action may still execute; action calls are never auto-retried. |
 | `WORKER_DISCONNECTED` | `server` | Server | Worker disconnected while processing a sync action. The action may have partially executed; action calls are never auto-retried. |
 | `INTERNAL_ERROR` | `server` | Server | Unclassified internal failure. This is a bug or operational problem. |
 | `ENGINE_UNHEALTHY` | `server` | Server | Storage/write engine is degraded and cannot complete the request now. |
+| `SERVER_SHUTDOWN` | `server` | Server | Server is draining or restarting and closed the connection. |
 | `CONNECTION_FAILED` | `network` | SDK | WebSocket connection failed or closed unexpectedly. |
+| `IDLE_TIMEOUT` | `network` | Server | Connection exceeded the server's idle deadline and was closed. |
+| `BACKPRESSURE_LIMIT` | `network` | Server | Outbound buffer exceeded the per-connection limit; the peer is not consuming fast enough. |
 | `TIMEOUT` | `network` | SDK | Pending request exceeded the SDK timeout. |
+
+## Disconnect Codes
+
+`ServerDisconnect` carries a code the client is expected to *act* on rather than display. Its `code` is a closed subset of the [Public Catalog](#public-catalog) — a disconnect never introduces a code absent from that table, so a connection has one error vocabulary rather than one for requests and another for teardown.
+
+The server sends `ServerDisconnect` and then closes. That send is **best-effort**: a connection already over its backpressure limit may drop the frame. The WebSocket close code is therefore the authoritative signal, and both channels are specified to carry the same information so a client can always determine why it was disconnected. Close codes are defined in [Wire Protocol → Close Codes](./wire-protocol.md#close-codes).
+
+| `ServerDisconnect` code | Close code | Retryable | Client behavior |
+|-------------------------|-----------|-----------|-----------------|
+| `AUTH_FAILED` | `4001` | No | Credentials are broken; reconnecting fails identically until they change. Stop retrying and surface an auth error. |
+| `TOKEN_EXPIRED` | `4001` | No | The session outlived its token. With `auth.tokenProvider` configured the SDK refreshes and reconnects; otherwise it emits `tokenExpired` and waits for the application. |
+| `SERVER_SHUTDOWN` | `4002` | Yes | The server is draining. Reconnect on the standard backoff. |
+| `IDLE_TIMEOUT` | `4003` | Yes | The connection was silent too long. Reconnect. |
+| `BACKPRESSURE_LIMIT` | `4004` | Yes | The client is not consuming fast enough. Reconnect, but reduce subscription fan-out. |
+| `MAX_CONNECTIONS` | `4005` | Yes | The server is at capacity. Reconnect on the standard backoff. |
+
+Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable, and a bug or operational problem on the server.
+
+`ServerDisconnect` carries no `retryAfter`; its payload is exactly `code` and `message`. Capacity and rate signals pace a reconnecting client through the SDK's backoff schedule rather than a server-supplied delay.
 
 ## Internal Error Mapping Rules
 
@@ -85,6 +108,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 - Asynchronous scope resolution failures: background resolution checks `scope_seq`; superseded work reports `REQUEST_SUPERSEDED` or is dropped if no longer relevant.
 - Deferred write failures: the write path emits `WriteError` when the request asked for committed acknowledgement and storage fails after the immediate request phase.
 - Local SDK failures: the SDK creates `ZyncBaseError` directly for path validation, timeout, and connection failures.
+- Disconnects: the server encodes `ServerDisconnect` with a code from [Disconnect Codes](#disconnect-codes) and closes the connection, on the event loop or from a timer sweep. A failed send is logged and the close proceeds, leaving the close code authoritative. The SDK surfaces the code as a `ZyncBaseError` and rejects the connection's pending requests with it.
 
 ## Retry Policy
 

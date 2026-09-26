@@ -93,13 +93,13 @@ Every top-level message carries a fixed numeric `type` ID. The registry is the
 single source of truth shared by the Zig enum (`src/wire/message_type.zig`),
 the SDK registry (`sdk/typescript/src/connection_wire.ts`), and this spec.
 All IDs are ≤ `0x7f` so MessagePack encodes them as a one-byte positive
-fixint. **Never reuse or renumber an assigned ID.**
+fixint.
 
 | ID | Name | Direction | Purpose |
 |----|------|-----------|---------|
 | `0x00` | `ok` | S→C | Successful correlated response. |
 | `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
-| `0x02` | Reserved | — | Formerly `Connected`; must not be reused. |
+| `0x02` | `Ping` | C→S | Application-level liveness probe. |
 | `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
 | `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
 | `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
@@ -131,7 +131,7 @@ fixint. **Never reuse or renumber an assigned ID.**
 
 **Direction rules:** server-only IDs (`0x00`–`0x01`, `0x03`, `0x05`,
 `0x18`–`0x1a`, `0x28`–`0x29`, `0x31`) received as client requests are rejected
-with `INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`) and
+with `INVALID_MESSAGE_TYPE`. `0x02` (`Ping`), `0x04` (`AuthRefresh`), and
 `0x30` (`ActionCall`) are client requests. `0x32` (`ActionReply`) is accepted
 only from the worker the call was forwarded to; `0x33` (`ActionRegister`) is
 accepted from any client whose `$session` passes the action `register` rule.
@@ -157,6 +157,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
 | `ActionCall` | `action_id`, optional `timeoutMs`, `params` | Ready bound scope (store or presence per the action's schema `scope`) and `invoke` authorization. | Invoke an action. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
+| `Ping` | *(none)* | Established connection; requires no scope. | Liveness probe. Answered with `ok`. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |
 | `PresenceSet` | `data` | Ready presence scope. | Merge user presence fields. |
 | `PresenceSetShared` | `data` | Ready presence scope and shared-write authorization. | Merge namespace shared presence fields. |
@@ -203,7 +204,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
-| `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
+| `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. Sent before every server-initiated close; `code` is owned by [Error Taxonomy → Disconnect Codes](./error-taxonomy.md#disconnect-codes). |
 | `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
 | `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
 
@@ -236,6 +237,36 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.
 - When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.
+
+## Liveness Probing
+
+A transport can be open yet unable to carry traffic, and no data message reveals it (ADR-015). Detection is split by direction because neither side's signal reaches the other.
+
+**Server side.** uWebSockets emits a WebSocket PING once a connection has been idle past a margin derived from the idle timeout, and force-closes when no PONG arrives. Clients answer PING at the protocol layer, so this needs no cooperation from them.
+
+**Client side.** A browser cannot emit a PING frame: `WebSocket` exposes no `ping()`, and a send on a broken path buffers locally and resolves. The client probes with `Ping` instead.
+
+- `Ping` is correlated like every other client message. The server answers `ok` with no additional fields, and the reply is itself the proof of life. It is never answered with `error` under normal operation.
+- The SDK never retries a probe. A retry would mask a dead connection behind its own backoff instead of detecting it.
+- Any inbound frame satisfies the probe, not only the `ok`. A connection receiving deltas is demonstrably alive and is not probed on top of that traffic.
+- `Ping` requires an established connection but no resolved scope, so it is answerable while store or presence scope is still resolving, and before it.
+- `Ping` is ordinary client traffic for rate-limiting purposes. It does not bypass the per-connection token bucket.
+
+## Close Codes
+
+Server-initiated closes carry a WebSocket close code in addition to the `ServerDisconnect` message. Both are specified because the in-band message is best-effort: a connection already over its backpressure limit may drop the frame, leaving the close code as the only signal.
+
+| Close code | Meaning | `ServerDisconnect` code |
+|------------|---------|--------------------------|
+| `4001` | Authentication or session token is no longer valid. | `AUTH_FAILED` / `TOKEN_EXPIRED` |
+| `4002` | Server is draining or restarting. | `SERVER_SHUTDOWN` |
+| `4003` | Connection exceeded the server's idle deadline. | `IDLE_TIMEOUT` |
+| `4004` | Outbound buffer exceeded the per-connection limit. | `BACKPRESSURE_LIMIT` |
+| `4005` | Server connection cap reached. | `MAX_CONNECTIONS` |
+
+`4000`–`4999` is the private-use range, so these cannot collide with codes assigned by the WebSocket specification. A close code outside this set was not produced by ZyncBase — a proxy, load balancer, or the peer sent it — and must not be interpreted as a ZyncBase reason.
+
+Client-initiated closes carry no ZyncBase code. A client closing its own socket already knows why, and one would imply a server-originated reason it did not produce.
 
 ## Extensibility
 
