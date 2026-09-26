@@ -246,9 +246,10 @@ A transport can be open yet unable to carry traffic, and no data message reveals
 
 **Client side.** A browser cannot emit a PING frame: `WebSocket` exposes no `ping()`, and a send on a broken path buffers locally and resolves. The client probes with `Ping` instead.
 
-- `Ping` is correlated like every other client message. The server answers `ok` with no additional fields, and the reply is itself the proof of life. It is never answered with `error` under normal operation.
+- `Ping` is correlated like every other client message. The server answers `ok` with no additional fields. That `ok`, when it carries the probe's own id, is the proof of life. It is never answered with `error` under normal operation.
+- A probe is satisfied **only** by the reply matching its id. Inbound traffic does not satisfy it: a connection still receiving deltas proves the server-to-client path and nothing more, so a client that can receive but cannot send would never be detected.
+- Probes are therefore issued on a fixed interval regardless of concurrent traffic, which bounds detection of a one-way failure. The cost is one round trip per connection per interval, independent of how active that connection is.
 - The SDK never retries a probe. A retry would mask a dead connection behind its own backoff instead of detecting it.
-- Any inbound frame satisfies the probe, not only the `ok`. A connection receiving deltas is demonstrably alive and is not probed on top of that traffic.
 - `Ping` requires an established connection but no resolved scope, so it is answerable while store or presence scope is still resolving, and before it.
 - `Ping` is ordinary client traffic for rate-limiting purposes. It does not bypass the per-connection token bucket.
 
@@ -258,7 +259,7 @@ Token expiry is signalled in two steps, so a client can replace its token withou
 
 1. **Notification.** When a token expires, the server sends an `error` carrying `TOKEN_EXPIRED`. It is **uncorrelated** — `id` is omitted, because no request is being answered and the message must not resolve or reject an unrelated pending request. The connection stays open.
 2. **Refresh window.** The client answers with `AuthRefresh`, which updates the session in place; active scopes continue without interruption. The window is bounded by the server's configured `tokenGracePeriodSeconds`.
-3. **Termination.** Only if no valid replacement arrives within the window — no provider, a rejected refresh, or a timeout — does the server send `ServerDisconnect` with code `TOKEN_EXPIRED` and close with `4001`.
+3. **Termination.** Only if no valid replacement arrives within the window — no provider, a rejected refresh, or a timeout — does the server send `ServerDisconnect` with code `TOKEN_EXPIRED` and close with `4006`.
 
 The notification is therefore the normal path and the disconnect is the fallback. A client that has no way to obtain a token receives the notification, cannot act on it, and is terminated when the window closes.
 
@@ -268,13 +269,18 @@ Server-initiated closes carry a WebSocket close code in addition to the `ServerD
 
 | Close code | Meaning | `ServerDisconnect` code |
 |------------|---------|--------------------------|
-| `4001` | Authentication or session token is no longer valid. `TOKEN_EXPIRED` reaches this only after the refresh window closes. | `AUTH_FAILED` / `TOKEN_EXPIRED` |
+| `4001` | Authentication or session token is no longer valid. | `AUTH_FAILED` |
 | `4002` | Server is draining or restarting. | `SERVER_SHUTDOWN` |
 | `4003` | Connection exceeded the server's idle deadline. | `IDLE_TIMEOUT` |
 | `4004` | Outbound buffer exceeded the per-connection limit. | `BACKPRESSURE_LIMIT` |
 | `4005` | Server connection cap reached. | `MAX_CONNECTIONS` |
+| `4006` | Session token expired and the refresh window closed. | `TOKEN_EXPIRED` |
 
 `4000`–`4999` is the private-use range, so these cannot collide with codes assigned by the WebSocket specification. A close code outside this set was not produced by ZyncBase — a proxy, load balancer, or the peer sent it — and must not be interpreted as a ZyncBase reason.
+
+Because the in-band `ServerDisconnect` is best-effort, the close code alone must be unambiguous. `4001` and `4006` are therefore distinct: a rejected credential cannot be recovered by replacing the token, whereas an expired one can, and the SDK cannot attempt a token refresh without knowing which occurred.
+
+Every classified close is produced by ZyncBase, which sends `ServerDisconnect` and then closes with the matching code. That includes `4003`: the server performs its own idle check and classifies the peer before the transport's reaper can act. The transport's reaper is a backstop for peers that check did not catch, and it ends in a raw socket close carrying no WebSocket close frame at all — so such a close delivers neither a `ServerDisconnect` nor a code, and surfaces as an unclassified transport failure.
 
 Client-initiated closes carry no ZyncBase code. A client closing its own socket already knows why, and one would imply a server-originated reason it did not produce.
 

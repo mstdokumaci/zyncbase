@@ -84,13 +84,17 @@ The server sends `ServerDisconnect` and then closes. That send is **best-effort*
 | `ServerDisconnect` code | Close code | Retryable | Client behavior |
 |-------------------------|-----------|-----------|-----------------|
 | `AUTH_FAILED` | `4001` | No | Credentials are broken; reconnecting fails identically until they change. Stop retrying and surface an auth error. |
-| `TOKEN_EXPIRED` | `4001` | No | Reached only after the refresh window closed without a replacement — no provider, a rejected refresh, or a timeout. Terminal: the socket is already gone, so the client reconnects with a fresh ticket. |
+| `TOKEN_EXPIRED` | `4006` | No | Reached only after the refresh window closed without a replacement — no provider, a rejected refresh, or a timeout. Terminal: the socket is already gone, so the client reconnects with a fresh ticket. |
 | `SERVER_SHUTDOWN` | `4002` | Yes | The server is draining. Reconnect on the standard backoff. |
 | `IDLE_TIMEOUT` | `4003` | Yes | The connection was silent too long. Reconnect. |
-| `BACKPRESSURE_LIMIT` | `4004` | Yes | The client is not consuming fast enough. Reconnect, but reduce subscription fan-out. |
+| `BACKPRESSURE_LIMIT` | `4004` | Yes | The client is not consuming fast enough. Reconnect, but reduce subscription fan-out or the condition recurs on replay. |
 | `MAX_CONNECTIONS` | `4005` | Yes | The server is at capacity. Reconnect on the standard backoff. |
 
 Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable, and a bug or operational problem on the server.
+
+`retryable` states whether the SDK reconnects on the normal backoff, not whether the cause is resolved. A retryable close can recur if its cause is unchanged — most obviously `BACKPRESSURE_LIMIT`, where replaying the same subscriptions reproduces the condition — so an application may still need to change something after reconnecting.
+
+Not every server-initiated close is classified. ZyncBase checks idleness itself and emits `ServerDisconnect` with `IDLE_TIMEOUT` before the transport can act, but the transport's own reaper is a backstop for peers that check does not catch. It ends in a raw socket close with no WebSocket close frame, so such a close delivers no code and no reason, and surfaces as `CONNECTION_FAILED`.
 
 `ServerDisconnect` carries no `retryAfter`; its payload is exactly `code` and `message`. Capacity and rate signals pace a reconnecting client through the SDK's backoff schedule rather than a server-supplied delay.
 
