@@ -288,7 +288,7 @@ The SDK is responsible for translating developer-facing syntax into compact wire
 
 ### Message Type IDs
 
-Message type discriminators are fixed numeric IDs (`0x00`–`0x29`), a single byte each on the wire. The registry is a shared contract — the Zig enum (`src/wire/message_type.zig`) and the SDK registry (`sdk/typescript/src/connection_wire.ts`) encode the same table, and routing is an exhaustive switch: server-only or unknown IDs sent by a client return `INVALID_MESSAGE_TYPE`, and legacy string types fail with `INVALID_MESSAGE_FORMAT`. The SDK maps IDs back to logical type names on decode, so the wire change is invisible above the codec boundary.
+Message type discriminators are fixed numeric IDs (`0x00`–`0x33`), a single byte each on the wire. The registry is a shared contract — the Zig enum (`src/wire/message_type.zig`) and the SDK registry (`sdk/typescript/src/connection_wire.ts`) encode the same table, and routing is an exhaustive switch: server-only or unknown IDs sent by a client return `INVALID_MESSAGE_TYPE`, and legacy string types fail with `INVALID_MESSAGE_FORMAT`. The SDK maps IDs back to logical type names on decode, so the wire change is invisible above the codec boundary.
 
 Nested field paths are flattened in the SDK using the `__` separator convention before being mapped to integer indices. The server sees only flat field names.
 
@@ -517,7 +517,13 @@ A WebSocket transport can be open before the server has enough context to safely
 
 Transport connectivity and scoped session readiness are distinct states. Store and presence maintain independent scopes — they can be resolved in different namespaces when `users.namespaced = false`.
 
-Before a scope is ready, the server accepts only lifecycle messages: authentication, namespace selection, ping/pong, and close. All data messages — subscriptions, queries, mutations, presence operations — are rejected with `SESSION_NOT_READY`.
+Before a scope is ready, the server accepts only lifecycle messages: authentication, namespace selection, liveness probing, and close. All data messages — subscriptions, queries, mutations, presence operations — are rejected with `SESSION_NOT_READY`.
+
+### Liveness Is a Lifecycle Message
+
+An open transport is not a working transport. A connection whose network path has failed silently — a NAT timeout, a dropped mobile network, a peer that stopped reading — stays open at the socket layer while carrying nothing. No data message would ever reveal it, because the message disappears rather than arriving broken.
+
+Liveness uses independent signals at each end. The server uses WebSocket control Ping/Pong; browser clients cannot emit control Ping, so the SDK uses a correlated request to detect a broken client-to-server path. A correlated response proves both directions, while a server push proves only server-to-client delivery. Transport liveness is independent of store and presence readiness.
 
 ### What a Scope Consists Of
 
@@ -553,8 +559,10 @@ A per-connection monotonic counter is incremented on each scope reset. Carried i
 - The uWS reactor is never blocked during identity or namespace resolution.
 - Warm-cache resolution (~1μs) makes repeated connections and namespace switches essentially free.
 - The full TCP handshake → data-ready path is async with no reactor blocking.
+- Liveness probing is answerable before scope readiness, so a connection is never unobservable while it comes up.
+- A silently broken connection is detected on both ends, and its failure is indistinguishable from a close by the time recovery runs.
 
-**Principles**: P-POM, P-SOT, P-SBD, P-PPF
+**Principles**: P-POM, P-SOT, P-SBD, P-PPF, P-RTF
 
 ---
 
@@ -584,7 +592,7 @@ Authorization rules evaluate in RAM against `$session`, `$namespace`, `$path`, `
 
 Tokens should be short-lived (≤15 minutes recommended). The SDK is expected to refresh tokens before expiry. On successful auth refresh, `$session` is updated in-place — active scopes continue without interruption. On refresh failure, the connection is terminated.
 
-ZyncBase does not maintain a server-side revocation list by default. Token expiry is the primary revocation mechanism. If a token expires without a valid replacement within a configurable grace period, the connection is terminated.
+ZyncBase does not maintain a server-side revocation list by default. Token expiry is the primary revocation mechanism. When a token expires the server notifies the client and holds the connection for a configurable grace period, giving the client the opportunity to replace the token in place; if no valid replacement arrives within that grace period, the connection is terminated.
 
 ZyncBase enforces a maximum limit on JWT claim array element counts to prevent payload and parsing bloat.
 

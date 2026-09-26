@@ -93,13 +93,13 @@ Every top-level message carries a fixed numeric `type` ID. The registry is the
 single source of truth shared by the Zig enum (`src/wire/message_type.zig`),
 the SDK registry (`sdk/typescript/src/connection_wire.ts`), and this spec.
 All IDs are ≤ `0x7f` so MessagePack encodes them as a one-byte positive
-fixint. **Never reuse or renumber an assigned ID.**
+fixint.
 
 | ID | Name | Direction | Purpose |
 |----|------|-----------|---------|
 | `0x00` | `ok` | S→C | Successful correlated response. |
 | `0x01` | `error` | S→C | Failed correlated or uncorrelated response. |
-| `0x02` | Reserved | — | Formerly `Connected`; must not be reused. |
+| `0x02` | `Ping` | C→S | Application-level liveness probe. |
 | `0x03` | `SchemaSync` | S→C | Schema dictionary bootstrap. |
 | `0x04` | `AuthRefresh` | C→S | Refresh connection authentication. |
 | `0x05` | `ServerDisconnect` | S→C | Structured disconnect reason. |
@@ -131,7 +131,7 @@ fixint. **Never reuse or renumber an assigned ID.**
 
 **Direction rules:** server-only IDs (`0x00`–`0x01`, `0x03`, `0x05`,
 `0x18`–`0x1a`, `0x28`–`0x29`, `0x31`) received as client requests are rejected
-with `INVALID_MESSAGE_TYPE`. `0x02` is reserved. `0x04` (`AuthRefresh`) and
+with `INVALID_MESSAGE_TYPE`. `0x02` (`Ping`), `0x04` (`AuthRefresh`), and
 `0x30` (`ActionCall`) are client requests. `0x32` (`ActionReply`) is accepted
 only from the worker the call was forwarded to; `0x33` (`ActionRegister`) is
 accepted from any client whose `$session` passes the action `register` rule.
@@ -157,6 +157,7 @@ All client messages include `type` and `id`. The fields below are additional mes
 | `StoreUnsubscribe` | `subId` | Connection-local subscription id. | Stop a store subscription. |
 | `ActionCall` | `action_id`, optional `timeoutMs`, `params` | Ready bound scope (store or presence per the action's schema `scope`) and `invoke` authorization. | Invoke an action. |
 | `AuthRefresh` | `token` | Existing connection. | Refresh base session claims and token expiry. |
+| `Ping` | *(none)* | Established connection; requires no scope. | Minimal liveness request containing only the common `type` and `id` fields. See Liveness Probing for its response contract. |
 | `PresenceSetNamespace` | `namespace` | Authenticated connection; may run before presence scope is ready. | Resolve and activate presence namespace/user scope. |
 | `PresenceSet` | `data` | Ready presence scope. | Merge user presence fields. |
 | `PresenceSetShared` | `data` | Ready presence scope and shared-write authorization. | Merge namespace shared presence fields. |
@@ -191,7 +192,7 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
 | `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
 | `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns pair-array. |
-| `error` | `id`, `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome. |
+| `error` | `id` (omitted when uncorrelated), `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome, or a proactive uncorrelated server notification (see [Token Expiry Notification](#token-expiry-notification)). |
 
 Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 
@@ -203,7 +204,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
-| `ServerDisconnect` | `code`, `message` | Server will close the connection for an unrecoverable session/transport condition. |
+| `ServerDisconnect` | `code`, `message` | Best-effort reason for a classified server-initiated close; its `code` is owned by [Error Taxonomy](./error-taxonomy.md#public-catalog). See [Close Codes](#close-codes) for transport mapping. |
 | `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
 | `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
 
@@ -236,6 +237,49 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.
 - When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.
+
+## Liveness Probing
+
+A broken network path can leave the WebSocket open. Server and client liveness use separate mechanisms (ADR-015).
+
+**Server side.** WebSocket control Ping/Pong behavior and idle timeout are defined in [Networking](./networking.md).
+
+**Client side.** A browser cannot emit a control Ping frame. It uses the correlated MessagePack `Ping` request (type `0x02`), which requires an established WebSocket but no resolved scope.
+
+- `Ping` contains only the common `type` and `id` fields. The server normally answers with correlated `ok`; a Ping rejected by its dedicated limit receives correlated `RATE_LIMITED`.
+- Any correlated `ok` or `error` response to a client-originated request proves a round trip. Server pushes and uncorrelated errors do not.
+
+The server fast path and limiter are specified in [Message Handler](./message-handler.md). Client probe scheduling is specified in the [TypeScript SDK](./typescript-sdk.md); its developer-visible behavior is defined in [Connection Management](../api-design/connection-management.md).
+
+## Token Expiry Notification
+
+Token expiry is signalled in two steps, so a client can replace its token without losing the connection.
+
+1. **Notification.** When a token expires, the server sends an `error` carrying `TOKEN_EXPIRED`. It is **uncorrelated** — `id` is omitted, because no request is being answered and the message must not resolve or reject an unrelated pending request. The connection stays open.
+2. **Refresh window.** The client answers with `AuthRefresh`, which updates the session in place; active scopes continue without interruption. The window is bounded by the server's configured `tokenGracePeriodSeconds`.
+3. **Termination.** If no valid replacement is submitted before the window closes — no provider, provider failure, or timeout — the server sends `ServerDisconnect` with code `TOKEN_EXPIRED` and closes with `4006`. A submitted but invalid, expired, or subject-mismatched token instead fails immediately with `AUTH_FAILED` and `4001`.
+
+The notification is therefore the normal path and the disconnect is the fallback. A client that has no way to obtain a token receives the notification, cannot act on it, and is terminated when the window closes.
+
+## Close Codes
+
+Classified server-initiated closes pair `ServerDisconnect` with a WebSocket close code. The in-band message is best-effort: a connection already over its backpressure limit may drop the frame, leaving the close code as the only signal.
+
+| Close code | Meaning | `ServerDisconnect` code |
+|------------|---------|--------------------------|
+| `4001` | Submitted credentials are invalid or the session identity cannot be authenticated. | `AUTH_FAILED` |
+| `4002` | Server is draining or restarting. | `SERVER_SHUTDOWN` |
+| `4004` | Outbound buffer exceeded the per-connection limit. | `BACKPRESSURE_LIMIT` |
+| `4005` | Server connection cap reached. | `MAX_CONNECTIONS` |
+| `4006` | Session token expired and the refresh window closed. | `TOKEN_EXPIRED` |
+
+`4000`–`4999` is the private-use range, so these cannot collide with codes assigned by the WebSocket specification. A close code outside this set was not produced by ZyncBase — a proxy, load balancer, or the peer sent it — and must not be interpreted as a ZyncBase reason.
+
+Because the in-band `ServerDisconnect` is best-effort, the close code alone must be unambiguous. `4001` and `4006` are therefore distinct: a rejected credential cannot be recovered by replacing the token, whereas an expired one can, and the SDK cannot attempt a token refresh without knowing which occurred.
+
+For a classified close, the server best-effort sends `ServerDisconnect` followed by a WebSocket close frame carrying the mapped code. A raw transport close has no ZyncBase code and is unclassified.
+
+Client-initiated closes carry no ZyncBase code. A client closing its own socket already knows why, and one would imply a server-originated reason it did not produce.
 
 ## Extensibility
 

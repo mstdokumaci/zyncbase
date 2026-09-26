@@ -594,7 +594,7 @@ function maybeUpdateSubscriptions() {
 }
 
 function scoreboard(rows: Country[]) {
-	// ponytail: roster rows include 10s grace tombstones, so a departed player
+	// roster rows include 10s grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
 	const headcount = new Map<number, number>();
 	for (const player of roster.values())

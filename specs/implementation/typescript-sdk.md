@@ -59,6 +59,10 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
 7. Server pushes update subscription and presence listeners independently of mutation responses.
 
+## Liveness Implementation
+
+`ConnectionManager` implements the public contract in [Connection Management](../api-design/connection-management.md). It owns the randomized probe timer and single in-flight Ping id, sends Ping through `ConnectionWireCodec` before scope readiness, resets the timer from the response-correlation path, and closes the socket on probe timeout to use the existing reconnect path.
+
 ## Complete Store Record Decoding
 
 - `SchemaDictionary.decodeRecord` is the single authority for complete positional records from `StoreQuery`, `StoreSubscribe`, `StoreLoadMore`, and `StoreDelta` set operations. It validates the schema field count, decodes typed fields, and constructs the final nested SDK record in one pass.

@@ -89,7 +89,7 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `claims` | `object<string,string>` | `{}` | Maps JWT claim names to `$session` variable names. |
-| `tokenGracePeriodSeconds` | `number` | `30` | Grace period allowed after token expiry before WebSocket close. |
+| `tokenGracePeriodSeconds` | `number` | `30` | Refresh window opened when a token expires. The client is notified and may replace the token in place; the WebSocket closes only if no valid replacement arrives within the window. |
 
 ### `security` Settings
 

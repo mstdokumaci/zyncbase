@@ -42,7 +42,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | Code | Category | Origin | Meaning |
 |------|----------|--------|---------|
 | `AUTH_FAILED` | `authentication` | Server | Identity verification failed or the connection lacks required external identity. |
-| `TOKEN_EXPIRED` | `authentication` | Server | Session token expired and the client must refresh/reconnect. |
+| `TOKEN_EXPIRED` | `authentication` | Server | Session token expired. The client is notified and may replace the token in place before the connection is terminated. |
 | `NAMESPACE_UNAUTHORIZED` | `authorization` | Server | Namespace-level authorization denied access. |
 | `PERMISSION_DENIED` | `authorization` | Server | Store, presence, or action rule denied the operation. |
 | `SESSION_NOT_READY` | `state` | Server | Store/presence operation arrived before the required scoped session was ready. |
@@ -63,13 +63,34 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `INVALID_PATH` | `client` | SDK | Client path parsing failed before the request was sent. |
 | `BATCH_TOO_LARGE` | `client` | Server + SDK | Batch exceeds the configured maximum operation count. |
 | `MESSAGE_TOO_LARGE` | `client` | Server + SDK | Payload exceeded configured parser or message-size limits. |
-| `RATE_LIMITED` | `rate_limit` | Server | Per-connection request token bucket rejected the message. |
+| `RATE_LIMITED` | `rate_limit` | Server | A per-connection request or Ping limit rejected the message. |
+| `MAX_CONNECTIONS` | `rate_limit` | Server | Server connection cap reached; the connection was not accepted. |
 | `ACTION_TIMEOUT` | `server` | Server | Sync action worker failed to reply before the server deadline. The action may still execute; action calls are never auto-retried. |
 | `WORKER_DISCONNECTED` | `server` | Server | Worker disconnected while processing a sync action. The action may have partially executed; action calls are never auto-retried. |
 | `INTERNAL_ERROR` | `server` | Server | Unclassified internal failure. This is a bug or operational problem. |
 | `ENGINE_UNHEALTHY` | `server` | Server | Storage/write engine is degraded and cannot complete the request now. |
+| `SERVER_SHUTDOWN` | `server` | Server | Server is draining or restarting and closed the connection. |
 | `CONNECTION_FAILED` | `network` | SDK | WebSocket connection failed or closed unexpectedly. |
+| `BACKPRESSURE_LIMIT` | `network` | Server | Outbound buffer exceeded the per-connection limit; the peer is not consuming fast enough. |
 | `TIMEOUT` | `network` | SDK | Pending request exceeded the SDK timeout. |
+
+## Disconnect Codes
+
+`ServerDisconnect.code` uses a subset of the [Public Catalog](#public-catalog). Classified WebSocket close-code mappings are owned by [Wire Protocol](./wire-protocol.md#close-codes). If neither a classified message nor close code reaches the SDK, including after a raw uWebSockets idle-reaper close, it reports `CONNECTION_FAILED`.
+
+| `ServerDisconnect` code | Retryable | Client behavior |
+|-------------------------|-----------|-----------------|
+| `AUTH_FAILED` | No | Credentials are broken; stop retrying until they change. |
+| `TOKEN_EXPIRED` | No | The refresh window closed without a replacement. Reconnect with a fresh ticket. |
+| `SERVER_SHUTDOWN` | Yes | Reconnect on the standard backoff. |
+| `BACKPRESSURE_LIMIT` | Yes | Reconnect; reduce subscription fan-out if it recurs. |
+| `MAX_CONNECTIONS` | Yes | Reconnect on the standard backoff. |
+
+Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable, and a bug or operational problem on the server.
+
+`retryable` states whether the SDK reconnects on the normal backoff, not whether the cause is resolved. A retryable close can recur if its cause is unchanged.
+
+`ServerDisconnect` carries no `retryAfter`; its payload is exactly `code` and `message`. Capacity and rate signals pace a reconnecting client through the SDK's backoff schedule rather than a server-supplied delay.
 
 ## Internal Error Mapping Rules
 
@@ -85,6 +106,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 - Asynchronous scope resolution failures: background resolution checks `scope_seq`; superseded work reports `REQUEST_SUPERSEDED` or is dropped if no longer relevant.
 - Deferred write failures: the write path emits `WriteError` when the request asked for committed acknowledgement and storage fails after the immediate request phase.
 - Local SDK failures: the SDK creates `ZyncBaseError` directly for path validation, timeout, and connection failures.
+- Token expiry first emits an uncorrelated `TOKEN_EXPIRED` error (`id` omitted); the terminal disconnect behavior is defined above.
 
 ## Retry Policy
 
