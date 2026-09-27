@@ -270,7 +270,7 @@ struct us_listen_socket_t *us_socket_context_listen(int ssl, struct us_socket_co
     struct us_listen_socket_t *ls = (struct us_listen_socket_t *) p;
 
     ls->s.context = context;
-    ls->s.timeout = 255;
+    ls->s.timeout = LIBUS_TIMEOUT_DISABLED;
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
     ls->s.next = 0;
@@ -301,7 +301,7 @@ struct us_listen_socket_t *us_socket_context_listen_unix(int ssl, struct us_sock
     struct us_listen_socket_t *ls = (struct us_listen_socket_t *) p;
 
     ls->s.context = context;
-    ls->s.timeout = 255;
+    ls->s.timeout = LIBUS_TIMEOUT_DISABLED;
     ls->s.long_timeout = 255;
     ls->s.low_prio_state = 0;
     ls->s.next = 0;
@@ -333,7 +333,7 @@ struct us_socket_t *us_socket_context_connect(int ssl, struct us_socket_context_
 
     /* Link it into context so that timeout fires properly */
     connect_socket->context = context;
-    connect_socket->timeout = 255;
+    connect_socket->timeout = LIBUS_TIMEOUT_DISABLED;
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
     us_internal_socket_context_link_socket(context, connect_socket);
@@ -362,7 +362,7 @@ struct us_socket_t *us_socket_context_connect_unix(int ssl, struct us_socket_con
 
     /* Link it into context so that timeout fires properly */
     connect_socket->context = context;
-    connect_socket->timeout = 255;
+    connect_socket->timeout = LIBUS_TIMEOUT_DISABLED;
     connect_socket->long_timeout = 255;
     connect_socket->low_prio_state = 0;
     us_internal_socket_context_link_socket(context, connect_socket);
@@ -401,7 +401,7 @@ struct us_socket_t *us_socket_context_adopt_socket(int ssl, struct us_socket_con
     }
 
     struct us_socket_t *new_s = (struct us_socket_t *) us_poll_resize(&s->p, s->context->loop, sizeof(struct us_socket_t) + ext_size);
-    new_s->timeout = 255;
+    new_s->timeout = LIBUS_TIMEOUT_DISABLED;
     new_s->long_timeout = 255;
 
     if (new_s->low_prio_state == 1) {

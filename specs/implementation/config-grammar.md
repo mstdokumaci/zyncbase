@@ -19,7 +19,7 @@ This document defines the schema, properties, and constraints for the server run
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
 | `Config` | `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig` | Root configuration structure representing the complete JSON layout. |
-| `ServerConfig` | none | Host, port, and interface binding parameters. |
+| `ServerConfig` | none | Host, port, WebSocket idle timeout, and interface binding parameters. |
 | `AuthConfig` | `jwt`, `ticket`, `anonymous`, `session` config keys | JWT validation, ticket exchange, anonymous-auth, projected claims, and token grace periods. |
 | `SecurityConfig` | none | Allowed origins, rate limiting bounds, message caps, and violation thresholds. |
 | `LoggingConfig` | none | Output format (JSON/text) and minimum log level threshold. |
@@ -48,6 +48,7 @@ This document defines the schema, properties, and constraints for the server run
 |:---|:---:|:---|:---|
 | `port` | `number` | `3000` | Port to bind (1-65535). |
 | `host` | `string` | `"0.0.0.0"` | Bind address host interface. |
+| `idleTimeoutSeconds` | `integer` | `15` | Total WebSocket idle timeout in seconds (2-600) → `ServerConfig.idle_timeout_seconds`. |
 | `tls` | `object \| null` | `null` | TLS settings object. Semantics owned by [Server configuration](../api-design/configuration.md#server); this section only maps fields to loader types. |
 
 ### `server.tls` Settings

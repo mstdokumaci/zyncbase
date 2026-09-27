@@ -64,9 +64,10 @@ struct us_socket_context_t *us_socket_context(int ssl, struct us_socket_t *s) {
 
 void us_socket_timeout(int ssl, struct us_socket_t *s, unsigned int seconds) {
     if (seconds) {
-        s->timeout = ((unsigned int)s->context->timestamp + ((seconds + 3) >> 2)) % 240;
+        unsigned int timeout_ticks = (seconds + LIBUS_TIMEOUT_GRANULARITY - 1) / LIBUS_TIMEOUT_GRANULARITY;
+        s->timeout = ((unsigned int)s->context->timestamp + timeout_ticks) % LIBUS_TIMEOUT_TICK_COUNT;
     } else {
-        s->timeout = 255;
+        s->timeout = LIBUS_TIMEOUT_DISABLED;
     }
 }
 

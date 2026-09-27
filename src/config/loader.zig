@@ -134,6 +134,11 @@ pub const ConfigLoader = struct {
             if (port < 0 or port > 65535) return error.InvalidPort;
             config.server.port = @intCast(port);
         }
+        const idle_timeout_opt = try json_read.getInt(server_obj, "idleTimeoutSeconds");
+        if (idle_timeout_opt) |idle_timeout_seconds| {
+            if (idle_timeout_seconds < 2 or idle_timeout_seconds > 600) return error.InvalidIdleTimeout;
+            config.server.idle_timeout_seconds = @intCast(idle_timeout_seconds);
+        }
         try json_read.replaceString(allocator, &config.server.host, server_obj, "host");
         if (server_obj.get("tls")) |v| {
             if (v == .null) return error.TypeMismatch;

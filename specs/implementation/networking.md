@@ -126,12 +126,14 @@ The uWebSockets socket behaviour is configured at server initialization using th
 ```zig
 behavior.compression            = c.UWS_COMPRESS_DISABLED;
 behavior.maxPayloadLength       = config.security.max_message_size;
-behavior.idleTimeout            = 120; // seconds by default
+behavior.idleTimeout            = config.server.idle_timeout_seconds;
 behavior.maxBackpressure        = 16 * 1024 * 1024;
 behavior.sendPingsAutomatically = true;
 ```
 
-uWebSockets handles native WebSocket Ping/Pong with the configured idle timeout; a peer that does not answer is force-closed by its idle reaper. ZyncBase does not add a second server-side idle timer. A reaper close carries no ZyncBase close frame or code.
+uWebSockets treats the configured timeout as one total inbound-idle budget. It sends a native Ping after the derived idle period and force-closes the peer if no inbound frame, including Pong, arrives within the remaining grace period. At 2 seconds, the split is 1 second before Ping and 1 second for Pong. ZyncBase does not add another server-side idle timer. A reaper close carries no ZyncBase close frame or code.
+
+µSockets sweeps socket timeouts once per second. The timeout wheel has 600 short ticks; minute-based timeouts continue to advance once per 60 sweeps. Because expiry is aligned to sweep ticks, a 2-second timeout closes an unresponsive connection roughly 1–2 seconds after its last inbound frame. Each sweep scans sockets in each context, so the fourfold increase in sweep frequency should be included in connection-scale performance measurements.
 
 The C bridge adds `uws_ws_end`, wrapping the vendored `WebSocket::end(code)`, and the Zig `WebSocket` wrapper exposes it. On the owning event loop, classified closes best-effort send `ServerDisconnect` and then call `end(code)` so the close frame carries the mapped code. Keep `uws_ws_close` for raw, unclassified transport closes.
 
@@ -151,7 +153,7 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 |----------|-------|-------|
 | Max message size | 1 MB | Passed to uWS `maxPayloadLength` (connections sending larger frames are dropped). |
 | Max backpressure | 16 MB | Maximum bytes uWS will buffer per connection before dropping. |
-| Idle timeout | 120 sec | Seconds of inactivity before uWS closes the connection. |
+| Idle timeout | 15 sec default; configurable 2–600 sec | Total inbound-idle budget, including native Ping and Pong grace. |
 | Max connections | 100,000 | Hard cap on concurrent WebSocket connections. |
 
 ### Rate Limiting
