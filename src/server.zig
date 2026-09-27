@@ -626,7 +626,7 @@ pub const ZyncBaseServer = struct {
         self.actions_service.flushOutbox();
 
         // Send ServerDisconnect to all connections and close them
-        self.connection_manager.sendDisconnectToAll("SHUTDOWN", "Server is shutting down.");
+        self.connection_manager.sendDisconnectToAll("SERVER_SHUTDOWN", "Server is shutting down.", 4002);
 
         // Wake loop to ensure another post-handler iteration fires so
         // finishGracefulShutdown can be called once all connections drain.

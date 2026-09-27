@@ -52,6 +52,11 @@ export interface ClientOptions {
 	maxReconnectDelay?: number; // ms, default: 30_000
 	maxReconnectAttempts?: number; // default: Infinity
 	reconnectJitter?: boolean; // default: true
+	liveness?: {
+		enabled?: boolean; // default: true
+		intervalMs?: number; // default: 15_000; minimum: 1_000
+		timeoutMs?: number; // default: 10_000; range: 1..2_147_483_647
+	};
 	retryRateLimits?: boolean; // default: true — auto-retry RATE_LIMITED
 	retryServerErrors?: boolean; // default: true — auto-retry INTERNAL_ERROR, ENGINE_UNHEALTHY
 	maxServerRetries?: number; // default: 3 — max attempts for server errors
@@ -128,6 +133,11 @@ export interface AuthRefresh {
 	type: "AuthRefresh";
 	id: number;
 	token: string;
+}
+
+export interface Ping {
+	type: "Ping";
+	id: number;
 }
 
 // ─── Outbound wire messages: writes ──────────────────────────────────────────
@@ -278,6 +288,7 @@ export interface ActionRegister {
 /** Union of all outbound message types. */
 export type OutboundMessage =
 	| AuthRefresh
+	| Ping
 	| StoreSet
 	| StoreRemove
 	| StoreBatch
@@ -330,12 +341,18 @@ export interface PresenceUserSnapshot {
 
 export interface ErrorResponse {
 	type: "error";
-	id: number;
+	id?: number;
 	code: string;
 	message: string;
 	category?: string;
 	retryAfter?: number;
 	details?: Record<string, JsonValue>;
+}
+
+export interface ServerDisconnect {
+	type: "ServerDisconnect";
+	code: string;
+	message: string;
 }
 
 /** Server push — record-level delta for an active subscription. No request id. */
@@ -508,6 +525,7 @@ export interface Actions {
 export type InboundMessage =
 	| OkResponse
 	| ErrorResponse
+	| ServerDisconnect
 	| StoreDelta
 	| SchemaSync
 	| WriteCommitted

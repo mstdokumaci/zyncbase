@@ -40,6 +40,9 @@ pub const Connection = struct {
     created_at: i64,
     request_tokens: u64,
     last_request_time: ?i64,
+    ping_tokens: u64,
+    last_ping_time: ?i64,
+    token_expiry_notified: bool,
 
     pub fn initPool(self: *Connection, allocator: Allocator) void {
         self.allocator = allocator;
@@ -69,11 +72,15 @@ pub const Connection = struct {
         self.created_at = std.Io.Clock.real.now(io).toSeconds();
         self.request_tokens = 0;
         self.last_request_time = null;
+        self.ping_tokens = 0;
+        self.last_ping_time = null;
+        self.token_expiry_notified = false;
     }
 
     pub fn resetSessionLocked(self: *Connection) void {
         if (self.session) |*sess| sess.deinit(self.allocator);
         self.session = null;
+        self.token_expiry_notified = false;
         self.resetStoreScopeLocked();
         self.resetPresenceScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
@@ -85,6 +92,7 @@ pub const Connection = struct {
             old.deinit(self.allocator);
         }
         self.session = sess;
+        self.token_expiry_notified = false;
         self.resetStoreScopeLocked();
         self.resetPresenceScopeLocked();
     }
@@ -100,6 +108,7 @@ pub const Connection = struct {
         sess.claims.deinit(self.allocator);
         sess.claims = new_claims;
         sess.token_expires_at = token_expires_at;
+        self.token_expiry_notified = false;
     }
 
     pub fn dupeExternalUserId(self: *Connection, allocator: Allocator) ![]const u8 {

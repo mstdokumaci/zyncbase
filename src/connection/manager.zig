@@ -121,7 +121,7 @@ pub const ConnectionManager = struct {
         if (self.map.count() >= self.max_connections) {
             std.log.warn("Rejecting connection {}: limit reached", .{conn_id});
             sess.deinit(self.allocator);
-            ws.close();
+            sendDisconnectAndEnd(ws, self.allocator, "MAX_CONNECTIONS", "Server connection limit reached.", 4005);
             return;
         }
 
@@ -144,7 +144,7 @@ pub const ConnectionManager = struct {
 
         conn.send(self.schema_sync_msg) catch {
             std.log.warn("Connection {}: dropped on schema_sync message, closing", .{conn_id});
-            conn.ws.close();
+            self.message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
             return;
         };
     }
@@ -161,7 +161,7 @@ pub const ConnectionManager = struct {
                 defer self.allocator.free(error_msg);
                 switch (ws.send(error_msg, .binary)) {
                     .success, .backpressure => {},
-                    .dropped => ws.close(),
+                    .dropped => sendDisconnectAndEnd(ws, self.allocator, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004),
                 }
             } else |err| {
                 std.log.err("Failed to encode error response for invalid message type: {}", .{err});
@@ -221,10 +221,10 @@ pub const ConnectionManager = struct {
         return conn;
     }
 
-    fn sendOrClose(conn: *Connection, data: []const u8) void {
+    fn sendOrClose(conn: *Connection, data: []const u8, message_handler: *MessageHandler) void {
         conn.send(data) catch |err| {
             std.log.warn("Connection {} send failed ({}), closing", .{ conn.id, err });
-            conn.ws.close();
+            message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
         };
     }
 
@@ -233,7 +233,7 @@ pub const ConnectionManager = struct {
         const conn = self.acquireConnection(conn_id) catch return;
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-        sendOrClose(conn, data);
+        sendOrClose(conn, data, self.message_handler);
     }
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
@@ -276,17 +276,17 @@ pub const ConnectionManager = struct {
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            sendConcatenatedOrClose(conn, group.items, alloc);
+            sendConcatenatedOrClose(conn, group.items, alloc, self.message_handler);
         }
     }
 
     /// Send ServerDisconnect message to all active connections and initiate socket close
-    pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8) void {
-        const msg = wire_encode.encodeServerDisconnect(self.allocator, code, message) catch |err| {
+    pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8, close_code: u16) void {
+        const msg = wire_encode.encodeServerDisconnect(self.allocator, code, message) catch |err| blk: {
             std.log.err("Failed to encode ServerDisconnect: {}", .{err});
-            return;
+            break :blk null;
         };
-        defer self.allocator.free(msg);
+        defer if (msg) |bytes| self.allocator.free(bytes);
 
         var connections = std.ArrayListUnmanaged(*Connection).empty;
         defer connections.deinit(self.allocator);
@@ -308,10 +308,12 @@ pub const ConnectionManager = struct {
         }
 
         for (connections.items) |conn| {
-            conn.send(msg) catch |err| {
-                std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
-            };
-            conn.ws.close();
+            if (msg) |bytes| {
+                conn.send(bytes) catch |err| {
+                    std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
+                };
+            }
+            conn.ws.end(close_code);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
@@ -321,8 +323,15 @@ pub const ConnectionManager = struct {
     pub fn sweepExpiredTokens(self: *ConnectionManager) void {
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         const grace_period_seconds = self.token_grace_period_seconds;
-        var to_close: std.ArrayListUnmanaged(*Connection) = .empty;
-        defer to_close.deinit(self.allocator);
+        const ExpiryAction = struct {
+            conn: *Connection,
+            notify: bool,
+            close: bool,
+        };
+        var actions: std.ArrayListUnmanaged(ExpiryAction) = .empty;
+        defer actions.deinit(self.allocator);
+        var should_notify = false;
+        var should_close = false;
 
         self.mutex.lockUncancelable(self.io);
 
@@ -330,34 +339,68 @@ pub const ConnectionManager = struct {
         while (it.next()) |state| {
             const conn = state.*;
             if (conn.session) |sess| {
-                if (!sess.is_anonymous and now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds))) {
+                if (!sess.is_anonymous and now >= sess.token_expires_at) {
+                    const close = now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds));
+                    const notify = !conn.token_expiry_notified;
+                    if (!notify and !close) continue;
                     conn.acquire();
-                    to_close.append(self.allocator, conn) catch |err| {
-                        std.log.err("Failed to add expired connection to close list: {}", .{err});
+                    actions.append(self.allocator, .{ .conn = conn, .notify = notify, .close = close }) catch |err| {
+                        std.log.err("Failed to add expired connection to sweep list: {}", .{err});
                         if (conn.release()) {
                             self.memory_strategy.releaseConnection(conn);
                         }
+                        continue;
                     };
+                    if (notify) conn.token_expiry_notified = true;
+                    should_notify = should_notify or notify;
+                    should_close = should_close or close;
                 }
             }
         }
 
         self.mutex.unlock(self.io);
 
-        for (to_close.items) |conn| {
-            const msg = wire_encode.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {
-                std.log.err("Failed to encode TOKEN_EXPIRED: {}", .{err});
-                conn.ws.close();
-                if (conn.release()) {
-                    self.memory_strategy.releaseConnection(conn);
+        var notify_msg: ?[]const u8 = null;
+        var disconnect_msg: ?[]const u8 = null;
+        if (should_notify) {
+            notify_msg = wire_encode.encodeError(self.allocator, null, wire_errors.getWireError(error.TokenExpired)) catch |err| blk: {
+                std.log.err("Failed to encode TOKEN_EXPIRED notification: {}", .{err});
+                break :blk null;
+            };
+        }
+        if (should_close) {
+            disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| blk: {
+                std.log.err("Failed to encode TOKEN_EXPIRED disconnect: {}", .{err});
+                break :blk null;
+            };
+        }
+        defer if (notify_msg) |bytes| self.allocator.free(bytes);
+        defer if (disconnect_msg) |bytes| self.allocator.free(bytes);
+
+        for (actions.items) |action| {
+            const conn = action.conn;
+            var backpressure_close = false;
+            if (action.notify) {
+                if (notify_msg) |bytes| {
+                    conn.send(bytes) catch |err| {
+                        std.log.warn("Failed to notify connection {} about token expiry: {}", .{ conn.id, err });
+                        self.message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+                        backpressure_close = true;
+                    };
+                } else if (!action.close) {
+                    self.mutex.lockUncancelable(self.io);
+                    conn.token_expiry_notified = false;
+                    self.mutex.unlock(self.io);
                 }
-                continue;
-            };
-            conn.send(msg) catch |err| {
-                std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
-            };
-            self.allocator.free(msg);
-            conn.ws.close();
+            }
+            if (action.close and !backpressure_close) {
+                if (disconnect_msg) |bytes| {
+                    conn.send(bytes) catch |err| {
+                        std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
+                    };
+                }
+                conn.ws.end(4006);
+            }
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
@@ -383,15 +426,22 @@ pub const ConnectionManager = struct {
     }
 };
 
+fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, message: []const u8, close_code: u16) void {
+    defer ws.end(close_code);
+    const payload = wire_encode.encodeServerDisconnect(allocator, code, message) catch return;
+    defer allocator.free(payload);
+    _ = ws.send(payload, .binary);
+}
+
 /// Send a group of send-queue entries as a single frame: complete msgpack
 /// messages concatenated in pop order. A lone entry is sent directly without
 /// copying. Falls back to per-entry sends if the concat buffer cannot be
 /// allocated (graceful degradation). Deinits every entry after sending —
 /// uWS copies the payload into its send buffer synchronously, so the concat
 /// buffer (drain arena) may be reset on the next drain pass.
-fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator) void {
+fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator, message_handler: *MessageHandler) void {
     if (entries.len == 1) {
-        ConnectionManager.sendOrClose(conn, entries[0].data);
+        ConnectionManager.sendOrClose(conn, entries[0].data, message_handler);
         entries[0].deinit();
         return;
     }
@@ -401,7 +451,7 @@ fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, a
 
     const buf = alloc.alloc(u8, total) catch {
         for (entries) |e| {
-            ConnectionManager.sendOrClose(conn, e.data);
+            ConnectionManager.sendOrClose(conn, e.data, message_handler);
             e.deinit();
         }
         return;
@@ -413,6 +463,6 @@ fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, a
         offset += e.data.len;
     }
 
-    ConnectionManager.sendOrClose(conn, buf);
+    ConnectionManager.sendOrClose(conn, buf, message_handler);
     for (entries) |e| e.deinit();
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
 const msgpack_skip = @import("msgpack_skip.zig");
+const MessageType = @import("message_type.zig").MessageType;
 
 const Payload = msgpack.Payload;
 
@@ -295,6 +296,36 @@ const envelope_table = [_]Field{
 pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
     // SAFETY: allocator unused — table has no .payload fields; parameter is comptime-dead.
     return extractMap(Envelope, &envelope_table, bytes, undefined);
+}
+
+/// Extract only the exact two-field Ping shape without walking arbitrary values.
+/// Malformed and non-Ping messages fall through to the ordinary decoder.
+pub fn extractMinimalPingEnvelopeFast(bytes: []const u8) ?Envelope {
+    return extractMinimalPingEnvelope(bytes) catch null; // zwanzig-disable-line: swallowed-error
+}
+
+fn extractMinimalPingEnvelope(bytes: []const u8) !?Envelope {
+    var pos: usize = 0;
+    if (try readMapHeader(bytes, &pos) != 2) return null;
+
+    var message_type: ?u64 = null;
+    var message_id: ?u64 = null;
+    for (0..2) |_| {
+        const key = try readStr(bytes, &pos);
+        const value = try readU64(bytes, &pos);
+        if (std.mem.eql(u8, key, "type")) {
+            if (message_type != null) return null;
+            message_type = value;
+        } else if (std.mem.eql(u8, key, "id")) {
+            if (message_id != null) return null;
+            message_id = value;
+        } else {
+            return null;
+        }
+    }
+
+    if (pos != bytes.len or message_type != @intFromEnum(MessageType.ping)) return null;
+    return .{ .type = message_type.?, .id = message_id orelse return null };
 }
 
 // === Type-Specific Fast Decoders ===

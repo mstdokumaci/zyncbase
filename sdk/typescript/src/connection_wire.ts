@@ -12,6 +12,7 @@ import type {
 	JsonValue,
 	OkResponse,
 	OutboundMessage,
+	Ping,
 	PresenceBroadcast,
 	PresenceRemove,
 	PresenceSet,
@@ -42,7 +43,7 @@ import type {
 export const WireMessageType = {
 	ok: 0x00,
 	error: 0x01,
-	// 0x02 reserved (formerly Connected)
+	Ping: 0x02,
 	SchemaSync: 0x03,
 	AuthRefresh: 0x04,
 	ServerDisconnect: 0x05,
@@ -74,6 +75,7 @@ export const WireMessageType = {
 } as const;
 
 const OUTBOUND_WIRE_TYPES = {
+	Ping: WireMessageType.Ping,
 	AuthRefresh: WireMessageType.AuthRefresh,
 	StoreSet: WireMessageType.StoreSet,
 	StoreRemove: WireMessageType.StoreRemove,
@@ -96,11 +98,10 @@ const OUTBOUND_WIRE_TYPES = {
 	ActionRegister: WireMessageType.ActionRegister,
 } satisfies Record<OutboundMessage["type"], number>;
 
-// ServerDisconnect (0x05) is intentionally absent: it is known but unsupported,
-// so it decodes to null rather than being surfaced to consumers.
 const INBOUND_WIRE_TYPES: { [id: number]: InboundMessage["type"] } = {
 	[WireMessageType.ok]: "ok",
 	[WireMessageType.error]: "error",
+	[WireMessageType.ServerDisconnect]: "ServerDisconnect",
 	[WireMessageType.SchemaSync]: "SchemaSync",
 	[WireMessageType.StoreDelta]: "StoreDelta",
 	[WireMessageType.WriteCommitted]: "WriteCommitted",
@@ -177,6 +178,7 @@ type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
 export type OutboundRequest =
 	| WithoutId<AuthRefresh>
+	| WithoutId<Ping>
 	| WithoutId<StoreSet>
 	| WithoutId<StoreRemove>
 	| WithoutId<StoreBatch>

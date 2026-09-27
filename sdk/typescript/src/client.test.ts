@@ -30,6 +30,7 @@ const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
 	auth: { anonymous: true },
 	reconnect: false,
+	liveness: { enabled: false },
 };
 
 beforeEach(() => {

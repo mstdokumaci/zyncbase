@@ -27,6 +27,30 @@ test "extractEnvelopeFast: valid envelope" {
     try testing.expectEqual(@as(u64, 42), result.id);
 }
 
+test "extractMinimalPingEnvelopeFast accepts only a minimal correlated Ping" {
+    const allocator = std.testing.allocator;
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("id", msgpack.Payload.uintToPayload(42));
+    try map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.ping)));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const ping = decode.extractMinimalPingEnvelopeFast(bytes) orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@intFromEnum(MessageType.ping), ping.type);
+    try testing.expectEqual(@as(u64, 42), ping.id);
+
+    var extended = msgpack.Payload.mapPayload(allocator);
+    defer extended.free(allocator);
+    try extended.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.ping)));
+    try extended.mapPut("id", msgpack.Payload.uintToPayload(42));
+    try extended.mapPut("extra", msgpack.Payload.uintToPayload(1));
+    const extended_bytes = try encodePayload(allocator, extended);
+    defer allocator.free(extended_bytes);
+    try testing.expect(decode.extractMinimalPingEnvelopeFast(extended_bytes) == null);
+}
+
 test "extractEnvelopeFast: missing type" {
     const allocator = std.heap.smp_allocator;
 

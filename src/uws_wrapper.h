@@ -99,6 +99,7 @@ void uws_loop_removePostHandler(void *loop, void *key);
 void uws_ws(int ssl, uws_app_t *app, void *upgrade_context, const char *pattern, size_t pattern_length, size_t id, const uws_socket_behavior_t *behavior);
 uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t *ws, const char *message, size_t length, uws_opcode_t opcode);
 void uws_ws_close(int ssl, uws_websocket_t *ws);
+void uws_ws_end(int ssl, uws_websocket_t *ws, int code);
 void *uws_ws_get_user_data(int ssl, uws_websocket_t *ws);
 
 // Upgrade and Request helpers
@@ -153,4 +154,3 @@ int openssl_verify_ec_with_key(
 #ifdef __cplusplus
 }
 #endif
-
