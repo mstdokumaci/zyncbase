@@ -83,6 +83,16 @@ const success_header = blk: {
     break :blk buf[0..].*;
 };
 
+pub const success_response_buffer_len = success_header.len + 9;
+
+/// Encode a correlated empty success into caller-owned storage.
+pub fn encodeSuccessIntoBuffer(msg_id: u64, buffer: *[success_response_buffer_len]u8) []const u8 {
+    @memcpy(buffer[0..success_header.len], &success_header);
+    buffer[success_header.len] = 0xcf;
+    std.mem.writeInt(u64, buffer[success_header.len + 1 ..][0..8], msg_id, .big);
+    return buffer[0..];
+}
+
 const error_type_header = blk: {
     var buf: [Keys.type.len + Values.@"error".len + Keys.code.len]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);

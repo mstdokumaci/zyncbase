@@ -36,6 +36,69 @@ type ConnectionStatus =
 	| "reconnecting"
 	| "disconnected";
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const SERVER_DISCONNECT_CODES: Readonly<Record<string, string>> = {
+	AUTH_FAILED: ErrorCodes.AUTH_FAILED,
+	TOKEN_EXPIRED: ErrorCodes.TOKEN_EXPIRED,
+	SERVER_SHUTDOWN: ErrorCodes.SERVER_SHUTDOWN,
+	BACKPRESSURE_LIMIT: ErrorCodes.BACKPRESSURE_LIMIT,
+	MAX_CONNECTIONS: ErrorCodes.MAX_CONNECTIONS,
+};
+const SOCKET_CLOSE_CODES: Readonly<Record<number, string>> = {
+	4001: ErrorCodes.AUTH_FAILED,
+	4002: ErrorCodes.SERVER_SHUTDOWN,
+	4004: ErrorCodes.BACKPRESSURE_LIMIT,
+	4005: ErrorCodes.MAX_CONNECTIONS,
+	4006: ErrorCodes.TOKEN_EXPIRED,
+};
+
+function serverDisconnectError(code: string, message: string): ZyncBaseError {
+	return ZyncBaseError.fromServerResponse({
+		code: SERVER_DISCONNECT_CODES[code] ?? ErrorCodes.INTERNAL_ERROR,
+		message: message || code,
+	});
+}
+
+function socketCloseError(code: number, reason: string): ZyncBaseError {
+	const errorCode = SOCKET_CLOSE_CODES[code] ?? ErrorCodes.CONNECTION_FAILED;
+	return ZyncBaseError.fromServerResponse({
+		code: errorCode,
+		message:
+			reason ||
+			(errorCode === ErrorCodes.CONNECTION_FAILED
+				? "Connection closed"
+				: errorCode),
+	});
+}
+
+type ResolvedLivenessOptions = Required<NonNullable<ClientOptions["liveness"]>>;
+
+function resolveLivenessOptions(
+	options: ClientOptions["liveness"],
+): ResolvedLivenessOptions {
+	const enabled = options?.enabled ?? true;
+	const intervalMs = options?.intervalMs ?? 15_000;
+	const timeoutMs = options?.timeoutMs ?? 10_000;
+	if (options?.enabled !== undefined && typeof options.enabled !== "boolean") {
+		throw new TypeError("liveness.enabled must be a boolean");
+	}
+	if (!Number.isSafeInteger(intervalMs) || intervalMs < 1_000) {
+		throw new RangeError(
+			"liveness.intervalMs must be an integer of at least 1000",
+		);
+	}
+	if (
+		!Number.isSafeInteger(timeoutMs) ||
+		timeoutMs < 1 ||
+		timeoutMs > MAX_TIMER_DELAY_MS
+	) {
+		throw new RangeError(
+			"liveness.timeoutMs must be an integer from 1 to 2147483647",
+		);
+	}
+	return { enabled, intervalMs, timeoutMs };
+}
+
 export class ConnectionManager {
 	private readonly options: ClientOptions;
 	private readonly wire = new ConnectionWireCodec();
@@ -70,10 +133,20 @@ export class ConnectionManager {
 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
 	private _refreshInFlight: Promise<void> | null = null;
+	private readonly livenessEnabled: boolean;
+	private readonly livenessIntervalMs: number;
+	private readonly livenessTimeoutMs: number;
+	private livenessTimer: ReturnType<typeof setTimeout> | null = null;
+	private livenessPingId: number | null = null;
+	private pendingDisconnectError: ZyncBaseError | null = null;
 
 	constructor(options: ClientOptions) {
 		this.options = options;
 		this.retryPolicy = new RetryPolicy(options);
+		const liveness = resolveLivenessOptions(options.liveness);
+		this.livenessEnabled = liveness.enabled;
+		this.livenessIntervalMs = liveness.intervalMs;
+		this.livenessTimeoutMs = liveness.timeoutMs;
 		this.storeNamespace = options.storeNamespace ?? "public";
 		this.presenceNamespace = options.presenceNamespace ?? this.storeNamespace;
 	}
@@ -141,6 +214,8 @@ export class ConnectionManager {
 
 	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
+		this.pendingDisconnectError = null;
+		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
 		this.resetSchemaSyncPromise();
@@ -155,6 +230,7 @@ export class ConnectionManager {
 			this.ws = ws;
 
 			ws.onopen = () => {
+				this.startLiveness();
 				this.setStoreNamespace(this.storeNamespace)
 					.then(() => this.setPresenceNamespace(this.presenceNamespace))
 					.then(() => {
@@ -164,6 +240,7 @@ export class ConnectionManager {
 						resolve();
 					})
 					.catch((err) => {
+						this.stopLiveness();
 						if (this.ws) {
 							const ws = this.ws;
 							this.ws = null;
@@ -217,7 +294,69 @@ export class ConnectionManager {
 				retryable: true,
 			});
 		}
-		this.ws.send(data);
+		this.ws.send(data as Uint8Array<ArrayBuffer>);
+	}
+
+	private startLiveness(): void {
+		this.stopLiveness();
+		if (this.livenessEnabled) {
+			this.scheduleLivenessProbe(Math.random() * this.livenessIntervalMs);
+		}
+	}
+
+	private stopLiveness(): void {
+		if (this.livenessTimer !== null) clearTimeout(this.livenessTimer);
+		this.livenessTimer = null;
+		this.livenessPingId = null;
+	}
+
+	private scheduleLivenessProbe(delayMs: number): void {
+		if (!this.livenessEnabled || !this.ws || this.intentionalDisconnect) return;
+		if (this.livenessTimer !== null) clearTimeout(this.livenessTimer);
+
+		const schedule = (remaining: number): void => {
+			const waitMs = Math.min(remaining, MAX_TIMER_DELAY_MS);
+			this.livenessTimer = setTimeout(() => {
+				this.livenessTimer = null;
+				if (remaining > waitMs) {
+					schedule(remaining - waitMs);
+				} else {
+					this.sendLivenessPing();
+				}
+			}, waitMs);
+		};
+		schedule(delayMs);
+	}
+
+	private sendLivenessPing(): void {
+		const ws = this.ws;
+		if (!ws || ws.readyState !== WebSocket.OPEN || this.intentionalDisconnect)
+			return;
+
+		const id = this.pending.nextId();
+		let bytes: Uint8Array;
+		try {
+			bytes = this.wire.encode({ type: "Ping" }, id).bytes;
+		} catch (err) {
+			this.emit("error", err);
+			ws.close();
+			return;
+		}
+
+		this.livenessPingId = id;
+		try {
+			this.send(bytes);
+		} catch {
+			ws.close();
+			return;
+		}
+
+		this.livenessTimer = setTimeout(() => {
+			this.livenessTimer = null;
+			if (this.livenessPingId !== id) return;
+			this.livenessPingId = null;
+			ws.close();
+		}, this.livenessTimeoutMs);
 	}
 
 	dispatch(
@@ -333,6 +472,7 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
+		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
 			clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = null;
@@ -389,27 +529,37 @@ export class ConnectionManager {
 	}
 
 	private handleSocketClose(code: number, reason: string): void {
-		const err = new ZyncBaseError("Connection closed", {
-			code: ErrorCodes.CONNECTION_FAILED,
-			category: "network",
-			retryable: true,
-		});
+		this.stopLiveness();
+		const closeError = socketCloseError(code, reason);
+		const messageError = this.pendingDisconnectError;
+		const err =
+			closeError.code === ErrorCodes.CONNECTION_FAILED
+				? (messageError ?? closeError)
+				: messageError?.code === closeError.code
+					? messageError
+					: closeError;
+		this.pendingDisconnectError = null;
 		this.rejectSchemaSync(err);
 		this.pending.rejectAll(err);
 
-		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
-			this.scheduleReconnect();
+		if (
+			!this.intentionalDisconnect &&
+			err.retryable &&
+			(this.options.reconnect ?? true)
+		) {
+			this.scheduleReconnect(err);
 			return;
 		}
 
-		this.setStatus("disconnected");
-		this.emit("disconnected", code, reason);
+		this.setStatus("disconnected", { error: err });
+		this.emit("error", err);
+		this.emit("disconnected", code, reason, err);
 	}
 
-	private scheduleReconnect(): void {
+	private scheduleReconnect(error?: ZyncBaseError): void {
 		const maxAttempts = this.options.maxReconnectAttempts ?? Infinity;
 		if (this.reconnectAttempt >= maxAttempts) {
-			this.setStatus("disconnected");
+			this.setStatus("disconnected", { error });
 			this.emit("disconnected");
 			return;
 		}
@@ -420,6 +570,7 @@ export class ConnectionManager {
 		this.setStatus("reconnecting", {
 			retryCount: this.reconnectAttempt,
 			retryIn: delay,
+			error,
 		});
 		this.emit("reconnecting", this.reconnectAttempt, delay);
 
@@ -493,13 +644,19 @@ export class ConnectionManager {
 			case "SchemaSync":
 				return this.handleSchemaSync(msg);
 			case "ok":
-				this.handleOkResponse(msg);
+				if (this.handleOkResponse(msg)) return;
 				break;
 			case "error":
-				this.handleErrorResponse(msg);
+				if (this.handleErrorResponse(msg)) return;
 				if (msg.code === ErrorCodes.TOKEN_EXPIRED) {
 					this.handleTokenExpired();
 				}
+				break;
+			case "ServerDisconnect":
+				this.pendingDisconnectError = serverDisconnectError(
+					msg.code,
+					msg.message,
+				);
 				break;
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
@@ -516,19 +673,44 @@ export class ConnectionManager {
 		this.messageHandler?.(msg);
 	}
 
-	private handleOkResponse(ok: OkResponse): void {
+	private handleOkResponse(ok: OkResponse): boolean {
+		if (this.livenessPingId === ok.id) {
+			this.noteCorrelatedResponse(ok.id);
+			return true;
+		}
 		const context = this.pending.context(ok.id);
-		if (!context) return;
+		if (!context) return false;
+		this.noteCorrelatedResponse(ok.id);
 
 		try {
 			this.pending.resolve(ok.id, this.wire.decodeOkResponse(ok, context));
 		} catch (err) {
 			this.pending.reject(ok.id, err);
 		}
+		return false;
 	}
 
-	private handleErrorResponse(err: ErrorResponse): void {
-		this.pending.reject(err.id, errorResponseToError(err));
+	private handleErrorResponse(err: ErrorResponse): boolean {
+		if (err.id === undefined) return false;
+		if (this.livenessPingId === err.id) {
+			this.noteCorrelatedResponse(err.id);
+			return true;
+		}
+		if (this.pending.reject(err.id, errorResponseToError(err))) {
+			this.noteCorrelatedResponse(err.id);
+		}
+		return false;
+	}
+
+	private noteCorrelatedResponse(id: number): boolean {
+		const isPingResponse = this.livenessPingId === id;
+		if (!isPingResponse && this.pending.context(id) === undefined) return false;
+		if (!this.livenessEnabled) return isPingResponse;
+		if (this.livenessTimer !== null) clearTimeout(this.livenessTimer);
+		this.livenessTimer = null;
+		this.livenessPingId = null;
+		this.scheduleLivenessProbe(this.livenessIntervalMs);
+		return isPingResponse;
 	}
 
 	private async handleSchemaSync(msg: SchemaSync): Promise<void> {

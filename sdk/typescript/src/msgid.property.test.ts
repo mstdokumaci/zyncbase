@@ -36,6 +36,7 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 			url: "ws://localhost:9999",
 			auth: { anonymous: true },
 			reconnect: false,
+			liveness: { enabled: false },
 		};
 
 		const manager = new ConnectionManager(options);

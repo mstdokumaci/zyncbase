@@ -205,6 +205,7 @@ export const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
 	auth: { anonymous: true } as AuthConfig,
 	reconnect: false,
+	liveness: { enabled: false },
 };
 
 /** Create a manager with a patched mock WebSocket and pre-seeded schema. */

@@ -21,6 +21,7 @@ describe("ConnectionManager", () => {
 						url: "ws://localhost:1234",
 						reconnectDelay: opts.reconnectDelay,
 						maxReconnectDelay: opts.maxReconnectDelay,
+						liveness: { enabled: false },
 					};
 					const manager = new ConnectionManager(options);
 					const delay = manager._computeBackoffDelay(attempt);

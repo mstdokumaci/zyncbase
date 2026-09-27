@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const helpers = @import("../app_test_helpers.zig");
+const msgpack = @import("../msgpack_utils.zig");
 const test_helpers = @import("test_helpers.zig");
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("../wire/message_type.zig").MessageType;
 const send_queue_type = @import("send_queue.zig").send_queue;
 
 const testing = std.testing;
@@ -354,7 +356,8 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     const session = if (conn.session) |*session| session else return error.MissingSession;
 
     recorder.reset();
-    session.token_expires_at = 0;
+    app.connection_manager.token_grace_period_seconds = 30;
+    session.token_expires_at = std.Io.Clock.real.now(std.testing.io).toSeconds();
     session.is_anonymous = true;
     app.connection_manager.sweepExpiredTokens();
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
@@ -362,6 +365,25 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     session.is_anonymous = false;
     app.connection_manager.sweepExpiredTokens();
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    const notification = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
+    defer if (notification.code) |code| std.heap.smp_allocator.free(code);
+    try testing.expectEqual(@as(u8, 1), @intFromEnum(notification.resp_type));
+    var notification_reader: std.Io.Reader = .fixed(recorder.bytes());
+    const notification_map = try msgpack.decode(std.heap.smp_allocator, &notification_reader);
+    defer notification_map.free(std.heap.smp_allocator);
+    try testing.expect((try notification_map.mapGet("id")) == null);
+
+    app.connection_manager.sweepExpiredTokens();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+
+    app.connection_manager.token_grace_period_seconds = 0;
+    recorder.reset();
+    app.connection_manager.sweepExpiredTokens();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    const terminal = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
+    defer if (terminal.code) |code| std.heap.smp_allocator.free(code);
+    try testing.expectEqual(MessageType.server_disconnect, terminal.resp_type);
+    try testing.expectEqualStrings("TOKEN_EXPIRED", terminal.code.?);
 }
 
 test "ConnectionManager: generated IDs are unique under concurrent opens" {

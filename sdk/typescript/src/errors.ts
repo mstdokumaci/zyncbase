@@ -4,6 +4,9 @@ import type { JsonValue } from "./types.js";
 export const ErrorCodes = {
 	AUTH_FAILED: "AUTH_FAILED",
 	TOKEN_EXPIRED: "TOKEN_EXPIRED",
+	MAX_CONNECTIONS: "MAX_CONNECTIONS",
+	SERVER_SHUTDOWN: "SERVER_SHUTDOWN",
+	BACKPRESSURE_LIMIT: "BACKPRESSURE_LIMIT",
 	SESSION_NOT_READY: "SESSION_NOT_READY",
 	NAMESPACE_UNAUTHORIZED: "NAMESPACE_UNAUTHORIZED",
 	PERMISSION_DENIED: "PERMISSION_DENIED",
@@ -62,6 +65,15 @@ function deriveCategory(code: string): {
 		case ErrorCodes.SUBSCRIPTION_NOT_FOUND:
 		case ErrorCodes.NO_ACTION_WORKER:
 			return { category: "state", retryable: false };
+
+		case ErrorCodes.MAX_CONNECTIONS:
+			return { category: "rate_limit", retryable: true };
+
+		case ErrorCodes.SERVER_SHUTDOWN:
+			return { category: "server", retryable: true };
+
+		case ErrorCodes.BACKPRESSURE_LIMIT:
+			return { category: "network", retryable: true };
 
 		case ErrorCodes.RATE_LIMITED:
 			return { category: "rate_limit", retryable: true };

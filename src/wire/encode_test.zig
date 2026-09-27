@@ -69,6 +69,16 @@ test "encodeSuccess: produces valid MsgPack" {
     try testing.expectEqual(@as(u64, 12345), id_val.uint);
 }
 
+test "encodeSuccessIntoBuffer matches the allocated response" {
+    const allocator = std.heap.smp_allocator;
+    const expected = try wire_encode.encodeSuccess(allocator, 12345);
+    defer allocator.free(expected);
+
+    var buffer: [wire_encode.success_response_buffer_len]u8 = undefined;
+    const actual = wire_encode.encodeSuccessIntoBuffer(12345, &buffer);
+    try testing.expectEqualSlices(u8, expected, actual);
+}
+
 test "encodeError: produces valid MsgPack" {
     const allocator = std.heap.smp_allocator;
     const wire_err = wire_errors.getWireError(error.UnknownTable);

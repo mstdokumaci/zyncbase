@@ -162,6 +162,11 @@ static void uws_ws_close_impl(uws_websocket_t *ws) {
 }
 
 template<bool SSL>
+static void uws_ws_end_impl(uws_websocket_t *ws, int code) {
+    ((uWS::WebSocket<SSL, true, void *> *)ws)->end(code);
+}
+
+template<bool SSL>
 static uws_sendstatus_t uws_ws_send_impl(uws_websocket_t *ws,
                                          const char *message, size_t length,
                                          uws_opcode_t opcode) {
@@ -282,6 +287,12 @@ extern "C"
     {
         if (ssl) uws_ws_close_impl<true>(ws);
         else     uws_ws_close_impl<false>(ws);
+    }
+
+    void uws_ws_end(int ssl, uws_websocket_t *ws, int code)
+    {
+        if (ssl) uws_ws_end_impl<true>(ws, code);
+        else     uws_ws_end_impl<false>(ws, code);
     }
 
     uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t *ws,

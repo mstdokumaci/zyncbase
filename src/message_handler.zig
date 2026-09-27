@@ -103,7 +103,7 @@ pub const MessageHandler = struct {
         const response = try wire_encode.encodeError(arena_allocator, message_id, wire_errors.getWireError(err));
         conn.send(response) catch {
             std.log.warn("Connection {}: dropped while sending error response, closing", .{conn.id});
-            conn.ws.close();
+            self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
         };
     }
 
@@ -114,8 +114,12 @@ pub const MessageHandler = struct {
         conn: *Connection,
         message: []const u8,
     ) !void {
-        const ws = &conn.ws;
         const conn_id = conn.id;
+
+        if (wire_decode.extractMinimalPingEnvelopeFast(message)) |ping| {
+            try self.handlePing(conn, ping.id);
+            return;
+        }
 
         // 1. Enforce rate limiting (integer token bucket)
         if (self.security_config.max_messages_per_second > 0) {
@@ -178,9 +182,40 @@ pub const MessageHandler = struct {
         if (response) |payload| {
             conn.send(payload) catch {
                 std.log.warn("Connection {}: dropped while sending response, closing", .{conn_id});
-                ws.close();
+                self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
             };
         }
+    }
+
+    fn handlePing(self: *MessageHandler, conn: *Connection, msg_id: u64) !void {
+        const now_us = std.Io.Clock.real.now(self.io).toMicroseconds();
+        const is_rate_limited = blk: {
+            if (conn.last_ping_time == null) {
+                conn.ping_tokens = 2_000_000;
+                conn.last_ping_time = now_us;
+            } else {
+                const elapsed_us: u64 = @intCast(@max(0, now_us - conn.last_ping_time.?));
+                conn.ping_tokens = @min(2_000_000, conn.ping_tokens + @min(elapsed_us, 1_000_000) * 2);
+                conn.last_ping_time = now_us;
+            }
+
+            if (conn.ping_tokens < 1_000_000) break :blk true;
+            conn.ping_tokens -= 1_000_000;
+            break :blk false;
+        };
+
+        if (is_rate_limited) {
+            var wire_err = wire_errors.getWireError(error.RateLimited);
+            wire_err.retry_after_ms = 500;
+            try self.sendError(self.allocator, conn, msg_id, wire_err);
+            return;
+        }
+
+        var response: [wire_encode.success_response_buffer_len]u8 = undefined;
+        conn.send(wire_encode.encodeSuccessIntoBuffer(msg_id, &response)) catch |err| {
+            std.log.warn("Connection {}: dropped Ping response ({}), closing", .{ conn.id, err });
+            self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+        };
     }
 
     pub fn routeMessageFast(
@@ -203,6 +238,7 @@ pub const MessageHandler = struct {
             .store_unsubscribe => try wrap(&MessageHandler.handleStoreUnsubscribe)(self, arena_allocator, conn, envelope.id, message),
             .store_load_more => try wrap(&MessageHandler.handleStoreLoadMore)(self, arena_allocator, conn, envelope.id, message),
             .auth_refresh => try wrap(&MessageHandler.handleAuthRefresh)(self, arena_allocator, conn, envelope.id, message),
+            .ping => error.InvalidMessageFormat,
             .presence_set_namespace => try wrap(&MessageHandler.handlePresenceSetNamespace)(self, arena_allocator, conn, envelope.id, message),
             .presence_set => try wrap(&MessageHandler.handlePresenceSet)(self, arena_allocator, conn, envelope.id, message),
             .presence_set_shared => try wrap(&MessageHandler.handlePresenceSetShared)(self, arena_allocator, conn, envelope.id, message),
@@ -267,12 +303,12 @@ pub const MessageHandler = struct {
         }
     }
 
-    pub fn sendError(_: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire_errors.WireError) !void {
+    pub fn sendError(self: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire_errors.WireError) !void {
         const error_msg = try wire_encode.encodeError(allocator, msg_id, wire_err);
         defer allocator.free(error_msg);
-        conn.send(error_msg) catch {
-            std.log.warn("Connection {}: dropped while sending error, closing", .{conn.id});
-            conn.ws.close();
+        conn.send(error_msg) catch |err| {
+            std.log.warn("Connection {}: dropped while sending error ({}), closing", .{ conn.id, err });
+            self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
         };
     }
 
@@ -547,29 +583,29 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const token = wire_decode.extractAuthRefreshFast(message) catch {
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message", 4001);
             return null;
         };
 
         const validator = self.jwt_validator orelse {
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured", 4001);
             return null;
         };
 
         var validated = validator.validateWithClaims(conn.allocator, token, self.session_claims_mapping.*) catch {
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed", 4001);
             return null;
         };
 
         const sess = conn.session orelse {
             validated.deinit(conn.allocator);
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session", 4001);
             return null;
         };
 
         if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
             validated.deinit(conn.allocator);
-            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
+            self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch", 4001);
             return null;
         }
 
@@ -883,8 +919,8 @@ pub const MessageHandler = struct {
         };
     }
 
-    fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) void {
-        defer conn.ws.close();
+    pub fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8, close_code: u16) void {
+        defer conn.ws.end(close_code);
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         conn.send(disconnect_msg) catch |err| {

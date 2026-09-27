@@ -261,6 +261,12 @@ pub const WebSocket = struct {
         c.uws_ws_close(if (self.ssl) 1 else 0, self.ws.?);
     }
 
+    pub fn end(self: *WebSocket, code: u16) void {
+        if (comptime builtin.is_test) return;
+        if (self.ws == null) return;
+        c.uws_ws_end(if (self.ssl) 1 else 0, self.ws.?, @intCast(code));
+    }
+
     pub fn takeSession(self: *WebSocket) ?Session {
         const sess = self.session;
         self.session = null;

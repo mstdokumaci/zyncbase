@@ -85,6 +85,48 @@ test "MessageHandler: oversized rate limit does not divide by zero" {
     try app.handler.handleMessage(sc.conn, &message);
 }
 
+test "MessageHandler: Ping bypasses ordinary limit and uses its dedicated limit" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-ping-limit", &.{});
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    app.handler.security_config.max_messages_per_second = 1;
+    sc.conn.request_tokens = 0;
+    sc.conn.last_request_time = std.Io.Clock.real.now(std.testing.io).toMicroseconds();
+    sc.conn.store_ready = false;
+    sc.conn.presence_ready = false;
+
+    var captured: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&captured);
+    sc.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    sc.conn.ws.test_send_observer_ctx = &recorder;
+
+    var ping_map = msgpack.Payload.mapPayload(allocator);
+    defer ping_map.free(allocator);
+    try ping_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.ping)));
+    try ping_map.mapPut("id", msgpack.Payload.uintToPayload(10));
+    const ping = try helpers.encodePayloadToBytes(allocator, ping_map);
+    defer allocator.free(ping);
+
+    try app.handler.handleMessage(sc.conn, ping);
+    const ok = try parseResponse(allocator, recorder.bytes());
+    defer if (ok.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.ok, ok.resp_type);
+    try testing.expectEqual(@as(u64, 0), sc.conn.request_tokens);
+
+    try app.handler.handleMessage(sc.conn, ping);
+    recorder.reset();
+    try app.handler.handleMessage(sc.conn, ping);
+    const limited = try parseResponse(allocator, recorder.bytes());
+    defer if (limited.code) |code| allocator.free(code);
+    try testing.expectEqual(MessageType.@"error", limited.resp_type);
+    try testing.expectEqualStrings("RATE_LIMITED", limited.code.?);
+}
+
 test "MessageHandler: store operations require ready scope" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;

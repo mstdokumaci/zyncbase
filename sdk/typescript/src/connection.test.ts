@@ -140,6 +140,53 @@ describe("ConnectionManager", () => {
 		});
 	});
 
+	describe("liveness", () => {
+		test("enables liveness by default and closes when a probe times out", async () => {
+			const { manager, mockWs } = makeManager({
+				liveness: { intervalMs: 1_000, timeoutMs: 300 },
+			});
+			await connectManager(manager, mockWs);
+
+			const wait = (ms: number) =>
+				new Promise((resolve) => setTimeout(resolve, ms));
+			const seenPingIds = new Set<number>();
+			const findPing = () =>
+				mockWs.sentMessages
+					.map((bytes) => decode(bytes))
+					.find(
+						(message): message is { type: number; id: number } =>
+							message !== null &&
+							typeof message === "object" &&
+							"type" in message &&
+							message.type === 0x02 &&
+							"id" in message &&
+							typeof message.id === "number" &&
+							!seenPingIds.has(message.id),
+					);
+			const waitForPing = async () => {
+				for (let attempt = 0; attempt < 200; attempt++) {
+					const ping = findPing();
+					if (ping) {
+						seenPingIds.add(ping.id);
+						return ping;
+					}
+					await wait(10);
+				}
+				throw new Error("Ping request was not sent");
+			};
+			const ping = await waitForPing();
+
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: ping.id }));
+			await wait(20);
+			expect(mockWs.readyState).toBe(MockWebSocket.OPEN);
+
+			await waitForPing();
+			await wait(350);
+			expect(mockWs.readyState).toBe(MockWebSocket.CLOSED);
+			manager.disconnect();
+		});
+	});
+
 	describe("dispatch() — msg_id and PendingRequests", () => {
 		test("assigns incrementing msg_ids starting at 1", async () => {
 			const { manager, mockWs } = makeManager();
@@ -442,6 +489,7 @@ describe("ConnectionManager", () => {
 				reconnect: true,
 				reconnectDelay: 50,
 				maxReconnectDelay: 5000,
+				liveness: { enabled: false },
 			});
 
 			const events: string[] = [];
@@ -455,6 +503,46 @@ describe("ConnectionManager", () => {
 			expect(events).toContain("reconnecting");
 
 			manager.disconnect();
+		});
+
+		test("classifies close codes and stops retrying non-retryable auth failures", async () => {
+			const { manager, mockWs } = makeManager({ reconnect: true });
+			await connectManager(manager, mockWs);
+
+			const errors: unknown[] = [];
+			let reconnecting = false;
+			manager.on("error", (error) => errors.push(error));
+			manager.on("reconnecting", () => (reconnecting = true));
+			mockWs.triggerClose(4001, "Invalid credentials");
+
+			expect(reconnecting).toBe(false);
+			expect(errors[0]).toMatchObject({
+				code: "AUTH_FAILED",
+				retryable: false,
+			});
+		});
+
+		test("uses ServerDisconnect when the transport close code is unavailable", async () => {
+			const { manager, mockWs } = makeManager({ reconnect: false });
+			await connectManager(manager, mockWs);
+
+			const errors: unknown[] = [];
+			manager.on("error", (error) => errors.push(error));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ServerDisconnect",
+					code: "AUTH_FAILED",
+					message: "Refresh was rejected",
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerClose(1006, "");
+
+			expect(errors[0]).toMatchObject({
+				code: "AUTH_FAILED",
+				message: "Refresh was rejected",
+				retryable: false,
+			});
 		});
 
 		test("does NOT reconnect when reconnect=false", async () => {
