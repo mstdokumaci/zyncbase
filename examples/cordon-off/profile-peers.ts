@@ -266,6 +266,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				session_id: sessionId,
 			})) as { user_id?: string };
 			peer.id = joined.user_id ?? "";
+			client.presence.set({});
 			subscribe(peer);
 			// Spawn regions are server state, so the placeholder above is only
 			// a camera start. The committed roster row carries the admitted

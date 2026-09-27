@@ -112,7 +112,6 @@ function fixture() {
 			seq: 0,
 			direction: "idle",
 			credit: 0,
-			heardAt: 0,
 		});
 		world.dirtyUserChunks.add(userChunkIndex(start.x, start.y));
 		world.dirtyPlayerRows.add(id);
@@ -154,7 +153,6 @@ function steer(world: World, tick: number) {
 	const directions: Direction[] = ["right", "down", "left", "up"];
 	let index = 0;
 	for (const player of world.players.values()) {
-		player.heardAt = tick * RULES.tickMs;
 		player.direction =
 			directions[(Math.floor(tick / 120) + (index++ % 2) * 2) % 4];
 	}

@@ -32,13 +32,14 @@ import {
 	runPublishBatches,
 } from "./publish";
 import {
+	COUNTRY_RESERVATION_MS,
 	type Country,
 	type CountryChunkRow,
 	HEIGHT,
 	MAX_PLAYERS,
 	NAMESPACE,
 	nextRoundBoundary,
-	PLAYER_GRACE_MS,
+	PLAYER_RESUME_GRACE_MS,
 	type PlayerRow,
 	type RoundCursor,
 	RULES,
@@ -184,21 +185,20 @@ if (!Number.isSafeInteger(sessionBudget) || sessionBudget < 0)
 // An unused country reservation expires if the browser never joins. Tests
 // shorten it so the cleanup path does not sit on the production grace window.
 const countryLeaseMs = Number(
-	process.env.GAME_COUNTRY_LEASE_MS ?? PLAYER_GRACE_MS,
+	process.env.GAME_COUNTRY_LEASE_MS ?? COUNTRY_RESERVATION_MS,
 );
 if (!Number.isSafeInteger(countryLeaseMs) || countryLeaseMs < 0)
 	throw new Error("GAME_COUNTRY_LEASE_MS must be a non-negative integer");
-// A session slot outlives its player by the tombstone window so a reconnect
-// inside the resume window can re-join in place. Tests shorten it.
+// A disconnected player's session and saved cell share one reconnect window.
 const sessionLeaseMs = Number(
-	process.env.GAME_SESSION_LEASE_MS ?? PLAYER_GRACE_MS * 2,
+	process.env.GAME_SESSION_LEASE_MS ?? PLAYER_RESUME_GRACE_MS,
 );
 if (!Number.isSafeInteger(sessionLeaseMs) || sessionLeaseMs < 0)
 	throw new Error("GAME_SESSION_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
-// Per-network player cap. 0 disables it. Active slots renew on input and expire
-// one resume window after the last heartbeat: a fairness guard, not security.
+// Per-network player cap. 0 disables it. Active slots expire after presence
+// reports a disconnect and the reconnect window passes.
 const playersPerIp = Number(process.env.GAME_PLAYERS_PER_IP ?? 5);
 if (!Number.isSafeInteger(playersPerIp) || playersPerIp < 0)
 	throw new Error("GAME_PLAYERS_PER_IP must be a non-negative integer");
@@ -208,10 +208,11 @@ type SessionLease = {
 	userId?: string;
 	name?: string;
 	countryId?: number;
-	expiresAt: number;
+	expiryTimer?: ReturnType<typeof setTimeout>;
 };
 const sessionLeases = new Map<string, SessionLease>();
 const playerSessions = new Map<string, string>();
+const presentUsers = new Set<string>();
 
 /** Network key: IPv4 exact, IPv6 grouped by /64 so rotating interface ids
  * share one pool. Cloudflare sets cf-connecting-ip and strips client copies. */
@@ -238,12 +239,26 @@ function clientKey(req: IncomingMessage) {
 		.join(":")}::/64`;
 }
 
-/** Renew by writing a deadline: no per-move timer allocation, just a sweep. */
-function renewSession(sessionId: string) {
-	const lease = sessionLeases.get(sessionId);
-	if (!lease) return false;
-	lease.expiresAt = performance.now() + sessionLeaseMs;
-	return true;
+function scheduleSessionExpiry(
+	sessionId: string,
+	lease = sessionLeases.get(sessionId),
+) {
+	if (!lease) return;
+	clearTimeout(lease.expiryTimer);
+	const timer = setTimeout(() => {
+		if (sessionLeases.get(sessionId) !== lease || lease.expiryTimer !== timer)
+			return;
+		lease.expiryTimer = undefined;
+		if (lease.userId) world.remove(lease.userId, performance.now());
+		releaseSession(sessionId);
+	}, sessionLeaseMs);
+	lease.expiryTimer = timer;
+	timer.unref();
+}
+
+function activateSession(lease: SessionLease) {
+	clearTimeout(lease.expiryTimer);
+	lease.expiryTimer = undefined;
 }
 
 function holdSession(key: string, sessionId: string) {
@@ -253,26 +268,21 @@ function holdSession(key: string, sessionId: string) {
 		ipSessions.set(key, subs);
 	}
 	subs.add(sessionId);
-	sessionLeases.set(sessionId, { key, expiresAt: 0 });
-	renewSession(sessionId);
+	const lease = { key };
+	sessionLeases.set(sessionId, lease);
+	scheduleSessionExpiry(sessionId, lease);
 }
 
 function releaseSession(sessionId: string) {
 	const lease = sessionLeases.get(sessionId);
 	if (!lease) return;
+	clearTimeout(lease.expiryTimer);
 	if (lease.userId && playerSessions.get(lease.userId) === sessionId)
 		playerSessions.delete(lease.userId);
 	sessionLeases.delete(sessionId);
 	const subs = ipSessions.get(lease.key);
 	subs?.delete(sessionId);
 	if (!subs?.size) ipSessions.delete(lease.key);
-}
-
-/** Release every session past its deadline. Runs from the game tick, before
- * the commit-pending guard, so expiry never waits on storage. */
-function sweepSessions(now: number) {
-	for (const [sessionId, lease] of sessionLeases)
-		if (lease.expiresAt <= now) releaseSession(sessionId);
 }
 
 /** `world.join` throws only when no land is available; callers treat that as a
@@ -289,18 +299,22 @@ function tryJoin(
 	}
 }
 
-/** Re-admit a player whose world entity aged out while the session survived,
- * using the identity the session stored at join. */
-function readmitPlayer(userId: string, lease: SessionLease): boolean {
-	if (lease.name === undefined || lease.countryId === undefined) return false;
-	return (
-		tryJoin(
-			userId,
-			{ name: lease.name, country_id: lease.countryId },
-			performance.now(),
-		) !== undefined
-	);
+function onPlayerPresenceJoin(userId: string) {
+	presentUsers.add(userId);
+	const sessionId = playerSessions.get(userId);
+	const lease = sessionId && sessionLeases.get(sessionId);
+	if (lease) activateSession(lease);
 }
+
+function onPlayerPresenceLeave(userId: string) {
+	presentUsers.delete(userId);
+	const sessionId = playerSessions.get(userId);
+	const lease = sessionId && sessionLeases.get(sessionId);
+	if (!lease) return;
+	world.remove(userId, performance.now());
+	scheduleSessionExpiry(sessionId, lease);
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: login validation stays together with its rate limit and responses.
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 	try {
@@ -411,6 +425,7 @@ await writeFile(
 		server: {
 			host,
 			port: databasePort,
+			idleTimeoutSeconds: 2,
 			...(tlsConfig ? { tls: tlsConfig } : {}),
 		},
 		dataDir,
@@ -835,7 +850,8 @@ try {
 		lease.name = name;
 		lease.countryId = countryId;
 		playerSessions.set(ctx.userId, sessionId);
-		renewSession(sessionId);
+		if (presentUsers.has(ctx.userId)) activateSession(lease);
+		else scheduleSessionExpiry(sessionId, lease);
 		return { user_id: ctx.userId };
 	});
 	client.actions.handle("player_move", (ctx, params) => {
@@ -847,25 +863,29 @@ try {
 			playerSessions.delete(ctx.userId);
 			return;
 		}
-		// A blip can outlive the world player but not the session: re-admit so a
-		// still-connected tab resumes on its tombstone without a reconnect.
-		if (!world.players.has(ctx.userId) && !readmitPlayer(ctx.userId, lease)) {
-			releaseSession(sessionId);
-			return;
-		}
-		if (!renewSession(sessionId)) return;
+		if (!world.players.has(ctx.userId)) return;
 		world.input(ctx.userId, params, performance.now());
 	});
-	client.actions.handle("player_leave", (ctx) => {
-		if (stopping || ending) return;
-		const sessionId = playerSessions.get(ctx.userId);
-		if (sessionId) releaseSession(sessionId);
-		world.remove(ctx.userId, performance.now());
+	let resolvePresenceSnapshot!: () => void;
+	const presenceSnapshot = new Promise<void>((resolve) => {
+		resolvePresenceSnapshot = resolve;
 	});
+	client.presence.subscribeChanges((batch) => {
+		if (batch.type === "snapshot") {
+			presentUsers.clear();
+			for (const entry of batch.users) onPlayerPresenceJoin(entry.userId);
+			resolvePresenceSnapshot();
+			return;
+		}
+		for (const change of batch.changes) {
+			if (change.type === "leave") onPlayerPresenceLeave(change.userId);
+			else onPlayerPresenceJoin(change.entry.userId);
+		}
+	});
+	await presenceSnapshot;
 	ready = true;
 	if (deployEnabled) void runDeploy(0);
 	tick = setInterval(() => {
-		sweepSessions(performance.now());
 		if (inFlight || stopping || ending) return;
 		const now = Date.now();
 		if (world.humanCount > 0) {

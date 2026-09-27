@@ -7,9 +7,8 @@ import {
 	countryChunkIndex,
 	encodeColorIndexes,
 	HEIGHT,
-	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
-	PLAYER_GRACE_MS,
+	PLAYER_RESUME_GRACE_MS,
 	playerName,
 	RULES,
 	readColorIndexes,
@@ -166,7 +165,7 @@ test("bots join a point's first human, thin out as it crowds, and return when it
 	world.startBots(0);
 	expect(world.players.size).toBe(0);
 	expect(world.countries.size).toBe(0);
-	let now = INPUT_LEASE_MS * 10;
+	let now = 100_000;
 	const join = (id: string) =>
 		world.input(
 			id,
@@ -336,7 +335,7 @@ test("a planned step across the seam steers the short way", () => {
 	cross(WIDTH - 1, 0, 2);
 });
 
-test("input validation, borders, and expired input stop movement; map mask is deterministic", () => {
+test("input validation and borders; connection teardown controls player lifetime", () => {
 	const land = terrain();
 	expect(land.reduce((sum, cell) => sum + cell, 0)).toBe(661453);
 	// The seam columns are water, so no owned wall can wrap and the planar
@@ -358,27 +357,31 @@ test("input validation, borders, and expired input stop movement; map mask is de
 	const player = world.players.get("valid");
 	if (!player) throw new Error("Player missing");
 	const start = [player.x, player.y];
-	world.tick(INPUT_LEASE_MS + 1);
+	world.input("valid", { ...data, direction: "idle", seq: 2 }, 1);
+	world.tick(PLAYER_RESUME_GRACE_MS + 1);
 	expect([player.x, player.y]).toEqual(start);
-	world.input("valid", { ...data, seq: 2 }, INPUT_LEASE_MS + 2);
+	expect(world.players.has("valid")).toBe(true);
+	world.input("valid", { ...data, seq: 3 }, PLAYER_RESUME_GRACE_MS + 2);
 	// Horizontal movement wraps across the water seam: 1999 -> 0 costs a
 	// neutral crossing. One tick banks credit, the next moves.
 	player.x = WIDTH - 1;
 	player.y = 0;
-	world.tick(INPUT_LEASE_MS + 3);
+	world.tick(PLAYER_RESUME_GRACE_MS + 3);
 	expect(player.x).toBe(WIDTH - 1);
-	world.tick(INPUT_LEASE_MS + 4);
+	world.tick(PLAYER_RESUME_GRACE_MS + 4);
 	expect(player.x).toBe(0);
 	// Vertical edges still block movement.
 	player.y = HEIGHT - 1;
 	world.input(
 		"valid",
-		{ ...data, direction: "down", seq: 3 },
-		INPUT_LEASE_MS + 5,
+		{ ...data, direction: "down", seq: 4 },
+		PLAYER_RESUME_GRACE_MS + 5,
 	);
-	world.tick(INPUT_LEASE_MS + 6);
+	world.tick(PLAYER_RESUME_GRACE_MS + 6);
 	expect(player.y).toBe(HEIGHT - 1);
-	world.tick(INPUT_LEASE_MS * 7);
+	world.tick(PLAYER_RESUME_GRACE_MS + 7000);
+	expect(world.players.size).toBe(1);
+	world.remove("valid", PLAYER_RESUME_GRACE_MS + 7000);
 	expect(world.players.size).toBe(0);
 });
 
@@ -759,7 +762,7 @@ test("input only joins country codes and unused country reservations can be rele
 	);
 });
 
-test("leave keeps a 10s tombstone row so same-id reconnects resume in place", () => {
+test("leave keeps a 20s tombstone row so same-id reconnects resume in place", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Alice",
@@ -801,7 +804,7 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
 	// After the window the row is queued for removal.
 	world.remove("alice", 1);
-	world.tick(1 + PLAYER_GRACE_MS);
+	world.tick(1 + PLAYER_RESUME_GRACE_MS);
 	expect(world.playerRow("alice")).toBeUndefined();
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 	const drained = drainPublishState(world);
@@ -809,7 +812,7 @@ test("leave keeps a 10s tombstone row so same-id reconnects resume in place", ()
 	expect(ops).toContainEqual({ op: "remove", path: ["users", "alice"] });
 });
 
-test("silent-timeout removal still grants the full grace window on reconnect", () => {
+test("explicit disconnect grants the full reconnect window", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Alice",
@@ -821,19 +824,15 @@ test("silent-timeout removal still grants the full grace window on reconnect", (
 	const player = world.players.get("alice");
 	if (!player) throw new Error("Player missing");
 	const [x, y] = [player.x, player.y];
-	// Go silent past the input lease: the tick removes at now, so expiry must
-	// run from removal (10001 + grace), not last contact (0 + grace).
-	const removedAt = INPUT_LEASE_MS * 5 + 1;
-	world.tick(removedAt);
+	// Presence leave removes the entity and starts the resume window.
+	const removedAt = 5000;
+	world.remove("alice", removedAt);
 	expect(world.players.has("alice")).toBe(false);
 	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
-	// A tick past the old heardAt-based expiry must NOT collect the row.
-	world.tick(removedAt + 2000);
+	world.tick(removedAt + PLAYER_RESUME_GRACE_MS - 1);
 	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
-	// Reconnect inside the removal-based window but past the old
-	// heardAt-based one: the exact cell must resume, not a fresh spawn.
-	const rejoinAt = removedAt + PLAYER_GRACE_MS - 5000;
+	const rejoinAt = removedAt + PLAYER_RESUME_GRACE_MS - 5000;
 	const revived = world.country("North")?.country_id;
 	world.input("alice", { ...data, country_id: revived, seq: 2 }, rejoinAt);
 	const returned = world.players.get("alice");
@@ -841,7 +840,7 @@ test("silent-timeout removal still grants the full grace window on reconnect", (
 	expect(returned?.country_id).toBe(revived);
 	// And a tombstone left alone still expires on schedule.
 	world.remove("alice", rejoinAt);
-	world.tick(rejoinAt + PLAYER_GRACE_MS + 1);
+	world.tick(rejoinAt + PLAYER_RESUME_GRACE_MS + 1);
 	expect(world.playerRow("alice")).toBeUndefined();
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 });
@@ -1070,7 +1069,7 @@ test("human joiners reinforce their territory, teammates, or a region", () => {
 	world.remove("founder", 0);
 	world.remove("mate", 0);
 	world.remove("reinforcement", 0);
-	join("returning", PLAYER_GRACE_MS * 10);
+	join("returning", PLAYER_RESUME_GRACE_MS * 10);
 	const returning = world.players.get("returning");
 	if (!returning) throw new Error("Missing returning player");
 	expect(world.owners[returning.y * WIDTH + returning.x]).toBe(
@@ -1083,7 +1082,7 @@ test("joining an abandoned country's territory still brings its bots", () => {
 	world.startBots(0);
 	const country = world.country("Homeland");
 	if (!country) throw new Error("Missing country");
-	let now = INPUT_LEASE_MS * 10;
+	let now = 100_000;
 	world.input(
 		"founder",
 		{

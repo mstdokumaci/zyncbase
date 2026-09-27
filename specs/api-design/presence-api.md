@@ -87,6 +87,8 @@ client.presence.set({ status: 'idle' })
 
 Fire-and-forget. Server validates field types at accept time.
 
+Calling `presence.set({})` creates an empty user presence record and broadcasts a join. This lets applications use presence for connection membership without storing user fields. The record is removed on disconnect or with `presence.remove()`.
+
 > [!NOTE]
 > The SDK automatically throttles high-frequency `presence.set()` calls to ~60fps (16ms intervals) to prevent network saturation.
 

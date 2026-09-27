@@ -243,11 +243,7 @@ async function runLifecycle() {
 		"Rounder",
 		player.sessionId,
 	);
-	const heartbeatTimer = setInterval(
-		() => move(player.client, "right", 1),
-		500,
-	);
-	timers.push(heartbeatTimer);
+	move(player.client, "right", 1);
 	await eventually(
 		async () => claimedAnyLand(player.client),
 		"player claims land before the boundary",
@@ -256,7 +252,6 @@ async function runLifecycle() {
 		async () => processHandle?.exitCode != null,
 		"boundary restarts the process",
 	);
-	clearInterval(heartbeatTimer);
 	assert.equal(processHandle?.exitCode, 0);
 	const historyDir = join(assets, "history");
 	const saved = JSON.parse(
@@ -564,6 +559,7 @@ async function joinPlayer(
 				session_id: sessionId,
 			})) as { user_id?: string };
 			assert.equal(typeof result.user_id, "string");
+			client.presence.set({});
 			return result.user_id as string;
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
@@ -579,7 +575,7 @@ function move(client: ZyncBaseClient, direction: string, seq = 1) {
 
 /** Best-effort immediate leave on top of the input lease. */
 function leave(client: ZyncBaseClient) {
-	void client.actions.call("player_leave", {}).catch(() => {});
+	client.presence.remove();
 }
 
 async function countryChunks(client: ZyncBaseClient) {

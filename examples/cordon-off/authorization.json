@@ -4,7 +4,7 @@
 			"pattern": "world-1",
 			"storeFilter": true,
 			"presenceRead": true,
-			"presenceWrite": false,
+			"presenceWrite": { "$session.role": { "eq": "player" } },
 			"presenceSharedWrite": false
 		}
 	],
@@ -43,11 +43,6 @@
 		},
 		{
 			"action": "player_move",
-			"invoke": { "$session.role": { "eq": "player" } },
-			"register": { "$session.role": { "eq": "simulation" } }
-		},
-		{
-			"action": "player_leave",
 			"invoke": { "$session.role": { "eq": "player" } },
 			"register": { "$session.role": { "eq": "simulation" } }
 		},
