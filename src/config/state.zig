@@ -17,6 +17,7 @@ pub const Config = struct {
     const ServerConfig = struct {
         port: u16 = 3000,
         host: []const u8 = "0.0.0.0",
+        idle_timeout_seconds: u16 = 15,
         tls_cert_file: ?[]const u8 = null,
         tls_key_file: ?[]const u8 = null,
     };

@@ -36,6 +36,7 @@ test "ConfigLoader loads defaults when file not found" {
     // Verify default values
     try std.testing.expectEqual(@as(u16, 3000), config.server.port);
     try std.testing.expectEqualStrings("0.0.0.0", config.server.host);
+    try std.testing.expectEqual(@as(u16, 15), config.server.idle_timeout_seconds);
     try std.testing.expectEqualStrings("./data", config.data_dir);
     try std.testing.expectEqual(@as(usize, 500), config.performance.batch_size);
 }
@@ -452,6 +453,46 @@ test "config: validation - port zero" {
 
     const result = loadConfig(allocator, temp_file_path);
     try std.testing.expectError(error.InvalidPort, result);
+}
+
+test "config: server idle timeout accepts 2 through 600 seconds" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-idle-timeout");
+    defer context.deinit();
+
+    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-idle-timeout.json" });
+    defer allocator.free(schema_file_path);
+
+    const cases = [_]struct { value: i64, expected: ?u16 }{
+        .{ .value = 2, .expected = 2 },
+        .{ .value = 600, .expected = 600 },
+        .{ .value = 1, .expected = null },
+        .{ .value = 601, .expected = null },
+    };
+
+    for (cases, 0..) |case, index| {
+        const config_content = try std.fmt.allocPrint(allocator,
+            \\{{
+            \\  "server": {{"idleTimeoutSeconds": {d}}},
+            \\  "schema": "{s}"
+            \\}}
+        , .{ case.value, schema_file_path });
+        defer allocator.free(config_content);
+
+        const config_file_name = try std.fmt.allocPrint(allocator, "test-config-idle-timeout-{d}.json", .{index});
+        defer allocator.free(config_file_name);
+        const config_file_path = try writeConfigWithSchema(allocator, context.test_dir, config_file_name, schema_file_path, config_content);
+        defer allocator.free(config_file_path);
+
+        if (case.expected) |expected| {
+            var config = try loadConfig(allocator, config_file_path);
+            defer config.deinit();
+            try std.testing.expectEqual(expected, config.server.idle_timeout_seconds);
+        } else {
+            try std.testing.expectError(error.InvalidIdleTimeout, loadConfig(allocator, config_file_path));
+        }
+    }
 }
 
 test "config: validation - invalid max message size" {

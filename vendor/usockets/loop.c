@@ -91,8 +91,8 @@ void us_internal_timer_sweep(struct us_loop_t *loop) {
 
         /* Update this context's timestamps (this could be moved to loop and done once) */
         context->global_tick++;
-        unsigned char short_ticks = context->timestamp = context->global_tick % 240;
-        unsigned char long_ticks = context->long_timestamp = (context->global_tick / 15) % 240;
+        unsigned short short_ticks = context->timestamp = context->global_tick % LIBUS_TIMEOUT_TICK_COUNT;
+        unsigned char long_ticks = context->long_timestamp = (context->global_tick / (60 / LIBUS_TIMEOUT_GRANULARITY)) % 240;
 
         /* Begin at head */
         struct us_socket_t *s = context->head_sockets;
@@ -114,7 +114,7 @@ void us_internal_timer_sweep(struct us_loop_t *loop) {
             context->iterator = s;
 
             if (short_ticks == s->timeout) {
-                s->timeout = 255;
+                s->timeout = LIBUS_TIMEOUT_DISABLED;
                 context->on_socket_timeout(s);
             }
 
@@ -209,7 +209,7 @@ struct us_socket_t *us_adopt_accepted_socket(int ssl, struct us_socket_context_t
     struct us_socket_t *s = (struct us_socket_t *) accepted_p;
 
     s->context = context;
-    s->timeout = 255;
+    s->timeout = LIBUS_TIMEOUT_DISABLED;
     s->long_timeout = 255;
     s->low_prio_state = 0;
 

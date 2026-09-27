@@ -57,8 +57,8 @@ pub const WebSocketServer = struct {
         max_payload_length: usize = 1024 * 1024,
         /// Maximum bytes uWS will buffer per connection before dropping frames.
         max_backpressure: usize = 16 * 1024 * 1024,
-        /// Seconds of inactivity before uWS closes the connection (0 = disabled).
-        idle_timeout: u16 = 120,
+        /// Total seconds allowed without inbound activity, including the uWS Ping/Pong grace period.
+        idle_timeout: u16 = 15,
     };
 
     pub const Error = error{
@@ -70,6 +70,8 @@ pub const WebSocketServer = struct {
 
     /// Initialize WebSocket server
     pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
+        if (config.idle_timeout < 2 or config.idle_timeout > 600) return error.InvalidConfig;
+
         const host_z = allocator.dupeZ(u8, config.host) catch return error.OutOfMemory;
         errdefer allocator.free(host_z);
 

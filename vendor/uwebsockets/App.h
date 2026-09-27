@@ -301,14 +301,14 @@ public:
         }
 
         /* Terminate on misleading idleTimeout values */
-        if (behavior.idleTimeout && behavior.idleTimeout < 8) {
-            std::cerr << "Error: idleTimeout must be either 0 or greater than 8!" << std::endl;
+        if (behavior.idleTimeout && behavior.idleTimeout < 2) {
+            std::cerr << "Error: idleTimeout must be either 0 or at least 2 seconds!" << std::endl;
             std::terminate();
         }
 
-        /* Maximum idleTimeout is 16 minutes */
-        if (behavior.idleTimeout > 240 * 4) {
-            std::cerr << "Error: idleTimeout must not be greater than 960 seconds!" << std::endl;
+        /* Maximum idleTimeout is 10 minutes */
+        if (behavior.idleTimeout > LIBUS_TIMEOUT_TICK_COUNT * LIBUS_TIMEOUT_GRANULARITY) {
+            std::cerr << "Error: idleTimeout must not be greater than 600 seconds!" << std::endl;
             std::terminate();
         }
 
