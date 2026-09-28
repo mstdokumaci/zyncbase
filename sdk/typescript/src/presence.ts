@@ -291,6 +291,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	remove(): Promise<void> {
+		this.clearThrottle();
 		return this.conn.dispatch({ type: "PresenceRemove" }).then(
 			() => {},
 			(err) => {

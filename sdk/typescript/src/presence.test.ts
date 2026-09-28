@@ -143,6 +143,28 @@ describe("PresenceImpl", () => {
 		expect(conn.dispatched[0].type).toBe("PresenceRemove");
 	});
 
+	test("remove() cancels a queued throttled PresenceSet", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		jest.useFakeTimers();
+		try {
+			jest.advanceTimersByTime(16);
+			presence.set({ status: "active" });
+			presence.set({ status: "away" });
+			await presence.remove();
+			jest.advanceTimersByTime(16);
+
+			expect(conn.dispatched.map((message) => message.type)).toEqual([
+				"PresenceSet",
+				"PresenceRemove",
+			]);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	test("subscribe() dispatches PresenceSubscribe and populates cache from snapshot", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
