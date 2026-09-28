@@ -166,7 +166,7 @@ A worker is a client that handles actions. A backend service becomes a worker by
 > [!IMPORTANT]
 > **Granting `register` is a trust decision.** A worker receives raw action params and replies on the action's behalf. Run workers as trusted backend service processes with service identities, deployed alongside your infrastructure, and keep `register` rules narrow (for example, a dedicated service claim).
 
-Calling `server.actions.handle()` registers the handler locally and sends `ActionRegister` to the server. Registration requires the connection to be established with the action's bound scope ready; calling `handle()` before that throws `SESSION_NOT_READY`.
+Calling `server.actions.handle()` registers the handler locally and sends `ActionRegister` to the server. It returns a promise that resolves when the server accepts the registration. Registration requires the connection to be established with the action's bound scope ready; calling `handle()` before that throws `SESSION_NOT_READY`.
 
 ```typescript
 import { createClient } from '@zyncbase/client';
@@ -181,12 +181,12 @@ const server = createClient({
 await server.connect();
 
 // Async Action Handler (no return value required)
-server.actions.handle('player_move', async (ctx, params) => {
+await server.actions.handle('player_move', async (ctx, params) => {
   world.queueInput(ctx.userId, params.direction, params.seq);
 });
 
 // Sync Action Handler (must return an object matching the schema's returns definition)
-server.actions.handle('checkout', async (ctx, params) => {
+await server.actions.handle('checkout', async (ctx, params) => {
   const user = await server.store.get(['users', ctx.userId]);
   if (user.coins < 100) {
     throw new ActionError('INSUFFICIENT_FUNDS', 'Balance is too low');

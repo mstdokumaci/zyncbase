@@ -113,7 +113,7 @@ await client.store.remove('elements.rect-1')
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
 ```typescript
-const unlisten = client.store.listen('elements.rect-1', (element) => {
+const unlisten = await client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
 ```
@@ -123,7 +123,7 @@ const unlisten = client.store.listen('elements.rect-1', (element) => {
 - **Object** when listening to a document
 - **Scalar** when listening to a field
 
-**Returns**: An unlisten function.
+**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the listen request. The callback delivers the initial value and subsequent updates. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
 
 ---
 
@@ -171,7 +171,7 @@ When `orderBy` is omitted, results use `created_at ASC`. Store `created_at` and 
 Subscribe to filtered query results (real-time).
 
 ```typescript
-const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
+const { unsubscribe, loadMore, hasMore } = await client.store.subscribe('tasks', {
   where: { status: { eq: 'active' } },
   limit: 50
 }, (tasks) => {
@@ -187,7 +187,7 @@ if (hasMore) await loadMore()
 - `options` (object) - Query options (same as `query()`)
 - `callback` (function) - Called when results change
 
-**Returns**: `{ unsubscribe: () => void, loadMore: () => Promise<void>, hasMore: boolean }`
+**Returns**: `Promise<{ unsubscribe: () => Promise<void>, loadMore: () => Promise<void>, hasMore: boolean }>`. The promise resolves when the server accepts the subscription. Initial and subsequent results are delivered through the callback.
 
 **Full Syntax**: See [Query Language Reference](./query-language.md) for all operators (`eq`, `gte`, `contains`, `in`, etc.).
 

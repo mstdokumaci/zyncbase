@@ -22,8 +22,8 @@ type Peer = {
 	name: string;
 	countryId: number;
 	input: { direction: string; seq: number };
-	subscriptions: Map<number, () => void>;
-	userSubscriptions: Map<number, () => void>;
+	subscriptions: Map<number, PendingUnlisten>;
+	userSubscriptions: Map<number, PendingUnlisten>;
 	x: number;
 	y: number;
 	positioned: boolean;
@@ -33,6 +33,7 @@ type Peer = {
 	zoom: number;
 	moves: number;
 };
+type PendingUnlisten = Promise<() => Promise<void>>;
 type Command = {
 	type: "add" | "move" | "reset" | "stats" | "close";
 	index: number;
@@ -100,13 +101,13 @@ function visibleFor(
 
 // Bring one grid's subscription set in line with its viewport.
 function syncSubscriptions(
-	subscriptions: Map<number, () => void>,
+	subscriptions: Map<number, PendingUnlisten>,
 	visible: Set<number>,
-	listenFor: (index: number) => () => void,
+	listenFor: (index: number) => PendingUnlisten,
 ) {
-	for (const [index, unsub] of subscriptions) {
+	for (const [index, unlisten] of subscriptions) {
 		if (visible.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		subscriptions.delete(index);
 	}
 	for (const index of visible) {
@@ -258,8 +259,12 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				input: { direction: "idle", seq: 0 },
 			};
 			peers.push(peer);
-			client.store.subscribe("countries", { limit: 1000 }, () => callbacks++);
-			client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
+			await client.store.subscribe(
+				"countries",
+				{ limit: 1000 },
+				() => callbacks++,
+			);
+			await client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
 			const joined = (await client.actions.call("player_join", {
 				name: peer.name,
 				country_id: peer.countryId,

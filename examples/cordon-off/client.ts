@@ -67,14 +67,15 @@ const countries = new Map<number, Country>();
 // player plus reconnect-grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
 const roster = new Map<string, PlayerRow>();
-let rosterUnsub: SubscriptionHandle | undefined;
+let rosterUnsub: Promise<SubscriptionHandle> | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
 const userChunks = new Map<number, Dot[]>();
-const subscriptions = new Map<number, () => void>();
-const userSubscriptions = new Map<number, () => void>();
+type PendingUnlisten = Promise<() => Promise<void>>;
+const subscriptions = new Map<number, PendingUnlisten>();
+const userSubscriptions = new Map<number, PendingUnlisten>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -537,9 +538,9 @@ function updateSubscriptions() {
 	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
 	lastUserSubKey = subscriptionKey(USER_GRID);
 	const visibleCountry = visibleChunks(COUNTRY_GRID);
-	for (const [index, unsub] of subscriptions) {
+	for (const [index, unlisten] of subscriptions) {
 		if (visibleCountry.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		subscriptions.delete(index);
 		chunks.delete(index);
 	}
@@ -548,7 +549,7 @@ function updateSubscriptions() {
 		// Direct document listens: chunk ids are the store primary keys, so
 		// no secondary index or query-subscription group is needed per tile.
 		const key = index;
-		const unsub = client.store.listen(
+		const unlisten = client.store.listen(
 			["country_chunks", String(index)],
 			(row) => {
 				if (!subscriptions.has(key)) return;
@@ -559,27 +560,30 @@ function updateSubscriptions() {
 				}
 			},
 		);
-		subscriptions.set(index, unsub);
+		subscriptions.set(index, unlisten);
 	}
 	const visibleUser = visibleChunks(USER_GRID);
-	for (const [index, unsub] of userSubscriptions) {
+	for (const [index, unlisten] of userSubscriptions) {
 		if (visibleUser.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		userSubscriptions.delete(index);
 		userChunks.delete(index);
 	}
 	for (const index of visibleUser) {
 		if (userSubscriptions.has(index)) continue;
 		const key = index;
-		const unsub = client.store.listen(["user_chunks", String(index)], (row) => {
-			if (!userSubscriptions.has(key)) return;
-			if (row) receiveUserChunk(row as UserChunkRow);
-			else {
-				userChunks.delete(key);
-				dirty = true;
-			}
-		});
-		userSubscriptions.set(index, unsub);
+		const unlisten = client.store.listen(
+			["user_chunks", String(index)],
+			(row) => {
+				if (!userSubscriptions.has(key)) return;
+				if (row) receiveUserChunk(row as UserChunkRow);
+				else {
+					userChunks.delete(key);
+					dirty = true;
+				}
+			},
+		);
+		userSubscriptions.set(index, unlisten);
 	}
 }
 
@@ -665,9 +669,9 @@ async function joinWorld() {
 	})) as { user_id?: unknown };
 	if (typeof result.user_id !== "string" || !result.user_id)
 		throw new Error("Join returned no player identity");
+	await client.presence.set({});
 	myPlayerId = result.user_id;
 	joined = true;
-	client.presence.set({});
 	joinedAt = performance.now();
 	lastOwnDot = 0;
 	ownRowMisses = 0;
@@ -998,13 +1002,18 @@ function returnToLobby(message: string) {
 	sessionId = "";
 	playing = online = false;
 	void leavePromise.catch(() => {}).finally(() => leavingClient?.disconnect());
-	for (const unsub of subscriptions.values()) unsub();
+	for (const unlisten of subscriptions.values())
+		void unlisten.then((fn) => fn()).catch(() => {});
 	subscriptions.clear();
 	chunks.clear();
-	for (const unsub of userSubscriptions.values()) unsub();
+	for (const unlisten of userSubscriptions.values())
+		void unlisten.then((fn) => fn()).catch(() => {});
 	userSubscriptions.clear();
 	userChunks.clear();
-	rosterUnsub?.unsubscribe();
+	if (rosterUnsub)
+		void rosterUnsub
+			.then((subscription) => subscription.unsubscribe())
+			.catch(() => {});
 	rosterUnsub = undefined;
 	roster.clear();
 	lobby.hidden = false;
@@ -1200,14 +1209,14 @@ element("join").addEventListener("submit", async (event) => {
 		canvas.focus({ preventScroll: true });
 		if (matchMedia("(pointer: coarse)").matches) startJoystick();
 		else flash(element("controls-hint"));
-		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+		await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
 			const list = rows as Country[];
 			latestCountries = list;
 			scoreboard(list);
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		rosterUnsub?.unsubscribe();
+		if (rosterUnsub) await (await rosterUnsub).unsubscribe();
 		rosterUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
 			roster.clear();
 			for (const row of rows as PlayerRow[]) roster.set(row.id, row);

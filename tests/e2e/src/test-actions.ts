@@ -85,14 +85,14 @@ export async function run(port: number = 3000): Promise<void> {
 		}> = [];
 		const moves: Array<Record<string, unknown>> = [];
 
-		worker.actions.handle("checkout", (ctx, params) => {
+		await worker.actions.handle("checkout", (ctx, params) => {
 			contexts.push(ctx);
 			if (params.cart_id === "empty") {
 				throw new ActionError("EMPTY_CART", "cart is empty");
 			}
 			return { order_id: `order-${params.cart_id}` };
 		});
-		worker.actions.handle("player_move", (_ctx, params) => {
+		await worker.actions.handle("player_move", (_ctx, params) => {
 			moves.push(params);
 		});
 

@@ -827,7 +827,7 @@ try {
 		if (!stopping) failed("Database disconnected");
 	});
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session replacement stays with the lease and player setup.
-	client.actions.handle("player_join", (ctx, params) => {
+	await client.actions.handle("player_join", (ctx, params) => {
 		if (stopping || ending)
 			throw new ActionError("JOIN_REJECTED", "The world is restarting");
 		const sessionId = params.session_id;
@@ -854,7 +854,7 @@ try {
 		else scheduleSessionExpiry(sessionId, lease);
 		return { user_id: ctx.userId };
 	});
-	client.actions.handle("player_move", (ctx, params) => {
+	await client.actions.handle("player_move", (ctx, params) => {
 		if (stopping || ending) return;
 		const sessionId = playerSessions.get(ctx.userId);
 		if (!sessionId) return;
@@ -870,7 +870,7 @@ try {
 	const presenceSnapshot = new Promise<void>((resolve) => {
 		resolvePresenceSnapshot = resolve;
 	});
-	client.presence.subscribeChanges((batch) => {
+	await client.presence.subscribeChanges((batch) => {
 		if (batch.type === "snapshot") {
 			presentUsers.clear();
 			for (const entry of batch.users) onPlayerPresenceJoin(entry.userId);

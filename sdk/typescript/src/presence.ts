@@ -15,6 +15,11 @@ import type {
 
 const THROTTLE_INTERVAL_MS = 16;
 
+interface SetWaiter {
+	resolve: () => void;
+	reject: (reason?: unknown) => void;
+}
+
 export interface PresenceConnection {
 	dispatch(msg: Record<string, unknown>): Promise<OkResponse>;
 	onPresenceBroadcast(
@@ -42,6 +47,7 @@ export class PresenceImpl implements Presence {
 	private _localUserId: string | null = null;
 	private lastSetTime = 0;
 	private pendingSetData: Record<string, unknown> | null = null;
+	private pendingSetWaiters: SetWaiter[] = [];
 	private throttleTimer: ReturnType<typeof setTimeout> | null = null;
 	private conn: PresenceConnection;
 	private readonly emitError: (err: ZyncBaseError) => void;
@@ -65,7 +71,16 @@ export class PresenceImpl implements Presence {
 		return this._localUserId;
 	}
 
-	set(data: Record<string, unknown>): void {
+	set(data: Record<string, unknown>): Promise<void> {
+		let resolve!: () => void;
+		let reject!: (reason?: unknown) => void;
+		const accepted = new Promise<void>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		accepted.catch(() => {});
+		this.pendingSetWaiters.push({ resolve, reject });
+
 		const now = performance.now();
 		const elapsed = now - this.lastSetTime;
 
@@ -77,7 +92,10 @@ export class PresenceImpl implements Presence {
 			const pending = this.pendingSetData;
 			this.pendingSetData = null;
 			this.lastSetTime = now;
-			this.sendSet(pending ? { ...pending, ...data } : data);
+			this.sendSet(
+				pending ? { ...pending, ...data } : data,
+				this.pendingSetWaiters.splice(0),
+			);
 		} else {
 			this.pendingSetData = { ...(this.pendingSetData ?? {}), ...data };
 			if (this.throttleTimer === null) {
@@ -85,40 +103,80 @@ export class PresenceImpl implements Presence {
 					this.throttleTimer = null;
 					if (this.pendingSetData) {
 						this.lastSetTime = performance.now();
-						this.sendSet(this.pendingSetData);
+						this.sendSet(this.pendingSetData, this.pendingSetWaiters.splice(0));
 						this.pendingSetData = null;
 					}
 				}, THROTTLE_INTERVAL_MS - elapsed);
 			}
 		}
+		return accepted;
 	}
 
-	setShared(data: Record<string, unknown>): void {
-		this.conn.dispatch({ type: "PresenceSetShared", data }).catch((err) => {
-			this.emitError(this.normalizeError(err, "Presence setShared failed"));
-		});
+	setShared(data: Record<string, unknown>): Promise<void> {
+		return this.dispatchAccepted(
+			{ type: "PresenceSetShared", data },
+			"Presence setShared failed",
+		);
 	}
 
 	private hasUserSubscribers(): boolean {
 		return this.userCallbacks.size > 0 || this.userChangeCallbacks.size > 0;
 	}
 
-	private ensureUserSubscription(): void {
-		if (this.userSubId !== null || this.userSubPromise !== null) return;
+	private ensureUserSubscription(): Promise<void> {
+		if (this.userSubId !== null) return Promise.resolve();
+		if (this.userSubPromise !== null) return this.userSubPromise;
 		const gen = this.userSubGen;
-		this.userSubPromise = this.conn
-			.dispatch({ type: "PresenceSubscribe" })
-			.then((ok) => {
-				this.handleUserSubscribeResponse(gen, ok);
-			})
-			.catch((err) => {
-				if (gen !== this.userSubGen) return;
-				this.userSubPromise = null;
-				this.emitError(this.normalizeError(err, "Presence subscribe failed"));
-			});
+		const pending = this.establishUserSubscription(gen).catch((err) => {
+			const error = this.normalizeError(err, "Presence subscribe failed");
+			if (gen === this.userSubGen) this.emitError(error);
+			throw error;
+		});
+		this.userSubPromise = pending;
+		pending.then(
+			() => {
+				if (gen === this.userSubGen && this.userSubPromise === pending)
+					this.userSubPromise = null;
+			},
+			() => {
+				if (gen === this.userSubGen && this.userSubPromise === pending)
+					this.userSubPromise = null;
+			},
+		);
+		return pending;
 	}
 
-	private cleanupUserSubscription(): void {
+	private async establishUserSubscription(gen: number): Promise<void> {
+		while (gen === this.userSubGen) {
+			const ok = await this.conn.dispatch({ type: "PresenceSubscribe" });
+			if (ok.subId === undefined) {
+				throw new ZyncBaseError("PresenceSubscribe response missing subId", {
+					code: ErrorCodes.INVALID_MESSAGE,
+					category: "client",
+					retryable: false,
+				});
+			}
+			if (gen !== this.userSubGen || !this.hasUserSubscribers()) {
+				await this.dispatchAccepted(
+					{ type: "PresenceUnsubscribe", subId: ok.subId },
+					"Presence unsubscribe failed",
+				);
+				if (gen !== this.userSubGen || !this.hasUserSubscribers()) return;
+				continue;
+			}
+			this.userSubId = ok.subId;
+			this.populateUserCacheFromSnapshot(ok);
+			this.fireUserSubscribersOnInitialSnapshot();
+			return;
+		}
+		throw new ZyncBaseError("Presence subscription superseded", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
+		});
+	}
+
+	private cleanupUserSubscription(): Promise<void> {
 		if (
 			!this.hasUserSubscribers() &&
 			(this.userSubId !== null || this.userSubPromise !== null)
@@ -127,63 +185,186 @@ export class PresenceImpl implements Presence {
 			this.userSubId = null;
 			this.clearUserCache();
 			if (subId !== null) {
-				this.conn
-					.dispatch({
-						type: "PresenceUnsubscribe",
-						subId,
-					})
-					.catch(() => {});
+				return this.dispatchAccepted(
+					{ type: "PresenceUnsubscribe", subId },
+					"Presence unsubscribe failed",
+				);
 			}
+			if (this.userSubPromise !== null) return this.userSubPromise;
 		}
+		return Promise.resolve();
 	}
 
-	subscribe(callback: (users: PresenceEntry[]) => void): () => void {
-		this.userCallbacks.add(callback);
-
-		if (this.userSubId !== null) {
-			callback(this.getAll());
-		} else {
-			this.ensureUserSubscription();
-		}
-
-		return () => {
-			this.userCallbacks.delete(callback);
-			this.cleanupUserSubscription();
-		};
+	private ensureSharedSubscription(): Promise<void> {
+		if (this.sharedSubId !== null) return Promise.resolve();
+		if (this.sharedSubPromise !== null) return this.sharedSubPromise;
+		const gen = this.sharedSubGen;
+		const pending = this.establishSharedSubscription(gen).catch((err) => {
+			const error = this.normalizeError(err, "Presence subscribeShared failed");
+			if (gen === this.sharedSubGen) this.emitError(error);
+			throw error;
+		});
+		this.sharedSubPromise = pending;
+		pending.then(
+			() => {
+				if (gen === this.sharedSubGen && this.sharedSubPromise === pending)
+					this.sharedSubPromise = null;
+			},
+			() => {
+				if (gen === this.sharedSubGen && this.sharedSubPromise === pending)
+					this.sharedSubPromise = null;
+			},
+		);
+		return pending;
 	}
 
-	subscribeChanges(callback: (batch: PresenceChangeBatch) => void): () => void {
-		this.userChangeCallbacks.add(callback);
-
-		if (this.userSubId !== null) {
-			callback({ type: "snapshot", users: this.getAll() });
-		} else {
-			this.ensureUserSubscription();
-		}
-
-		return () => {
-			this.userChangeCallbacks.delete(callback);
-			this.cleanupUserSubscription();
-		};
-	}
-
-	private handleUserSubscribeResponse(gen: number, ok: OkResponse): void {
-		if (gen !== this.userSubGen) return;
-		this.userSubPromise = null;
-		if (!this.hasUserSubscribers()) {
-			if (ok.subId !== undefined) {
-				this.conn
-					.dispatch({
-						type: "PresenceUnsubscribe",
-						subId: ok.subId,
-					})
-					.catch(() => {});
+	private async establishSharedSubscription(gen: number): Promise<void> {
+		while (gen === this.sharedSubGen) {
+			const ok = await this.conn.dispatch({ type: "PresenceSubscribeShared" });
+			if (ok.subId === undefined) {
+				throw new ZyncBaseError(
+					"PresenceSubscribeShared response missing subId",
+					{
+						code: ErrorCodes.INVALID_MESSAGE,
+						category: "client",
+						retryable: false,
+					},
+				);
 			}
+			if (!this.hasCurrentSharedSubscribers(gen)) {
+				await this.dispatchAccepted(
+					{ type: "PresenceUnsubscribeShared", subId: ok.subId },
+					"Presence unsubscribeShared failed",
+				);
+				if (!this.hasCurrentSharedSubscribers(gen)) return;
+				continue;
+			}
+			this.sharedSubId = ok.subId;
+			this.sharedCache =
+				ok.shared != null ? (ok.shared as Record<string, unknown>) : null;
+			this.fireSharedCallbacks();
 			return;
 		}
-		this.userSubId = ok.subId ?? null;
-		this.populateUserCacheFromSnapshot(ok);
-		this.fireUserSubscribersOnInitialSnapshot();
+		throw new ZyncBaseError("Presence shared subscription superseded", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
+		});
+	}
+
+	private hasCurrentSharedSubscribers(gen: number): boolean {
+		return gen === this.sharedSubGen && this.sharedCallbacks.size > 0;
+	}
+
+	private cleanupSharedSubscription(): Promise<void> {
+		if (
+			this.sharedCallbacks.size === 0 &&
+			(this.sharedSubId !== null || this.sharedSubPromise !== null)
+		) {
+			const subId = this.sharedSubId;
+			this.sharedSubId = null;
+			this.sharedCache = null;
+			if (subId !== null) {
+				return this.dispatchAccepted(
+					{ type: "PresenceUnsubscribeShared", subId },
+					"Presence unsubscribeShared failed",
+				);
+			}
+			if (this.sharedSubPromise !== null) return this.sharedSubPromise;
+		}
+		return Promise.resolve();
+	}
+
+	subscribe(
+		callback: (users: PresenceEntry[]) => void,
+	): Promise<() => Promise<void>> {
+		return this.subscribeCallback(
+			this.userCallbacks,
+			callback,
+			() => this.ensureUserSubscription(),
+			() => this.cleanupUserSubscription(),
+			() => (this.userSubId === null ? undefined : this.getAll()),
+		);
+	}
+
+	subscribeChanges(
+		callback: (batch: PresenceChangeBatch) => void,
+	): Promise<() => Promise<void>> {
+		return this.subscribeCallback(
+			this.userChangeCallbacks,
+			callback,
+			() => this.ensureUserSubscription(),
+			() => this.cleanupUserSubscription(),
+			() =>
+				this.userSubId === null
+					? undefined
+					: { type: "snapshot" as const, users: this.getAll() },
+		);
+	}
+
+	private subscribeCallback<T>(
+		callbacks: Set<(value: T) => void>,
+		callback: (value: T) => void,
+		start: () => Promise<void>,
+		cleanup: () => Promise<void>,
+		initial?: () => T | undefined,
+	): Promise<() => Promise<void>> {
+		let closed = false;
+		let initialDelivered = false;
+		const pending: T[] = [];
+		let flushTimer: ReturnType<typeof setTimeout> | null = null;
+		const listener = (value: T) => {
+			if (closed) return;
+			if (initialDelivered) {
+				callback(value);
+				return;
+			}
+			pending.push(value);
+			if (flushTimer !== null) return;
+			flushTimer = setTimeout(() => {
+				flushTimer = null;
+				initialDelivered = true;
+				for (const next of pending.splice(0)) {
+					if (closed) break;
+					callback(next);
+				}
+			}, 0);
+		};
+		callbacks.add(listener);
+		const snapshot = initial?.();
+		if (snapshot !== undefined) listener(snapshot);
+
+		let ready: Promise<void>;
+		try {
+			ready = start();
+		} catch (err) {
+			ready = Promise.reject(err);
+		}
+
+		const result = ready.then(
+			() => {
+				let closing: Promise<void> | null = null;
+				return () => {
+					if (closing) return closing;
+					closed = true;
+					callbacks.delete(listener);
+					if (flushTimer !== null) clearTimeout(flushTimer);
+					pending.length = 0;
+					closing = cleanup();
+					closing.catch(() => {});
+					return closing;
+				};
+			},
+			(err) => {
+				closed = true;
+				callbacks.delete(listener);
+				if (flushTimer !== null) clearTimeout(flushTimer);
+				pending.length = 0;
+				throw err;
+			},
+		);
+		result.catch(() => {});
+		return result;
 	}
 
 	private fireUserSubscribersOnInitialSnapshot(): void {
@@ -203,69 +384,14 @@ export class PresenceImpl implements Presence {
 
 	subscribeShared(
 		callback: (shared: Record<string, unknown> | null) => void,
-	): () => void {
-		this.sharedCallbacks.add(callback);
-
-		if (this.sharedSubId !== null) {
-			callback(this.sharedCache);
-		} else if (!this.sharedSubPromise) {
-			const gen = this.sharedSubGen;
-			this.sharedSubPromise = this.conn
-				.dispatch({ type: "PresenceSubscribeShared" })
-				.then((ok) => {
-					if (gen !== this.sharedSubGen) return;
-					this.sharedSubPromise = null;
-					this.handleSharedSubscribeResponse(ok);
-				})
-				.catch((err) => {
-					if (gen !== this.sharedSubGen) return;
-					this.sharedSubPromise = null;
-					this.emitError(
-						this.normalizeError(err, "Presence subscribeShared failed"),
-					);
-				});
-		}
-
-		return () => {
-			this.sharedCallbacks.delete(callback);
-			if (
-				this.sharedCallbacks.size === 0 &&
-				(this.sharedSubId !== null || this.sharedSubPromise !== null)
-			) {
-				const subId = this.sharedSubId;
-				this.sharedSubId = null;
-				this.sharedCache = null;
-				if (subId !== null) {
-					this.conn
-						.dispatch({
-							type: "PresenceUnsubscribeShared",
-							subId,
-						})
-						.catch(() => {});
-				}
-			}
-		};
-	}
-
-	private handleSharedSubscribeResponse(ok: OkResponse): void {
-		if (this.sharedCallbacks.size === 0) {
-			if (ok.subId !== undefined) {
-				this.conn
-					.dispatch({
-						type: "PresenceUnsubscribeShared",
-						subId: ok.subId,
-					})
-					.catch(() => {});
-			}
-			return;
-		}
-		this.sharedSubId = ok.subId ?? null;
-		if (ok.shared != null) {
-			this.sharedCache = ok.shared as Record<string, unknown>;
-		} else {
-			this.sharedCache = null;
-		}
-		this.fireSharedCallbacks();
+	): Promise<() => Promise<void>> {
+		return this.subscribeCallback(
+			this.sharedCallbacks,
+			callback,
+			() => this.ensureSharedSubscription(),
+			() => this.cleanupSharedSubscription(),
+			() => (this.sharedSubId === null ? undefined : this.sharedCache),
+		);
 	}
 
 	get(userId: string): PresenceEntry | undefined {
@@ -291,18 +417,26 @@ export class PresenceImpl implements Presence {
 	}
 
 	remove(): Promise<void> {
-		this.clearThrottle();
-		return this.conn.dispatch({ type: "PresenceRemove" }).then(
-			() => {},
-			(err) => {
-				const error = this.normalizeError(err, "Presence remove failed");
-				this.emitError(error);
-				throw error;
-			},
+		this.clearThrottle(
+			new ZyncBaseError("Presence set superseded by remove", {
+				code: ErrorCodes.REQUEST_SUPERSEDED,
+				category: "state",
+				retryable: false,
+			}),
+		);
+		return this.dispatchAccepted(
+			{ type: "PresenceRemove" },
+			"Presence remove failed",
 		);
 	}
 
-	invalidate(): void {
+	invalidate(
+		reason = new ZyncBaseError("Presence set superseded by scope change", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
+		}),
+	): void {
 		this.userSubGen++;
 		this.sharedSubGen++;
 		this._localUserId = null;
@@ -312,51 +446,49 @@ export class PresenceImpl implements Presence {
 		this.sharedSubId = null;
 		this.userSubPromise = null;
 		this.sharedSubPromise = null;
-		this.clearThrottle();
+		this.clearThrottle(reason);
 	}
 
 	replaySubscriptions(): void {
 		if (this.hasUserSubscribers() && !this.userSubPromise) {
 			this.userSubId = null;
-			const gen = this.userSubGen;
-			this.userSubPromise = this.conn
-				.dispatch({ type: "PresenceSubscribe" })
-				.then((ok) => {
-					this.handleUserSubscribeResponse(gen, ok);
-				})
-				.catch((err) => {
-					if (gen !== this.userSubGen) return;
-					this.userSubPromise = null;
-					this.emitError(
-						this.normalizeError(err, "Presence replay subscribe failed"),
-					);
-				});
+			void this.ensureUserSubscription().catch(() => {});
 		}
 
 		if (this.sharedCallbacks.size > 0 && !this.sharedSubPromise) {
 			this.sharedSubId = null;
-			const gen = this.sharedSubGen;
-			this.sharedSubPromise = this.conn
-				.dispatch({ type: "PresenceSubscribeShared" })
-				.then((ok) => {
-					if (gen !== this.sharedSubGen) return;
-					this.sharedSubPromise = null;
-					this.handleSharedSubscribeResponse(ok);
-				})
-				.catch((err) => {
-					if (gen !== this.sharedSubGen) return;
-					this.sharedSubPromise = null;
-					this.emitError(
-						this.normalizeError(err, "Presence replay subscribeShared failed"),
-					);
-				});
+			void this.ensureSharedSubscription().catch(() => {});
 		}
 	}
 
-	private sendSet(data: Record<string, unknown>): void {
-		this.conn.dispatch({ type: "PresenceSet", data }).catch((err) => {
-			this.emitError(this.normalizeError(err, "Presence set failed"));
-		});
+	private sendSet(data: Record<string, unknown>, waiters: SetWaiter[]): void {
+		this.dispatchAccepted(
+			{ type: "PresenceSet", data },
+			"Presence set failed",
+		).then(
+			() => {
+				for (const waiter of waiters) waiter.resolve();
+			},
+			(error) => {
+				for (const waiter of waiters) waiter.reject(error);
+			},
+		);
+	}
+
+	private dispatchAccepted(
+		message: Record<string, unknown>,
+		fallback: string,
+	): Promise<void> {
+		const accepted = this.conn.dispatch(message).then(
+			() => {},
+			(err) => {
+				const error = this.normalizeError(err, fallback);
+				this.emitError(error);
+				throw error;
+			},
+		);
+		accepted.catch(() => {});
+		return accepted;
 	}
 
 	private handleBroadcast(msg: PresenceBroadcast | SharedStateBroadcast): void {
@@ -535,7 +667,13 @@ export class PresenceImpl implements Presence {
 	}
 
 	private handleDisconnect(): void {
-		this.invalidate();
+		this.invalidate(
+			new ZyncBaseError("Connection closed before presence was accepted", {
+				code: ErrorCodes.CONNECTION_FAILED,
+				category: "network",
+				retryable: true,
+			}),
+		);
 	}
 
 	private normalizeError(err: unknown, fallbackMessage: string): ZyncBaseError {
@@ -550,12 +688,16 @@ export class PresenceImpl implements Presence {
 		);
 	}
 
-	private clearThrottle(): void {
+	private clearThrottle(reason?: Error): void {
 		if (this.throttleTimer !== null) {
 			clearTimeout(this.throttleTimer);
 			this.throttleTimer = null;
 		}
 		this.pendingSetData = null;
+		if (reason) {
+			for (const waiter of this.pendingSetWaiters) waiter.reject(reason);
+		}
+		this.pendingSetWaiters = [];
 		this.lastSetTime = 0;
 	}
 }

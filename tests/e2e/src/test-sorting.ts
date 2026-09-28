@@ -93,7 +93,7 @@ export async function run(port: number = 3000): Promise<void> {
 			throw new Error("Final sort page unexpectedly has a cursor");
 
 		let limitedRows: JsonValue[] = [];
-		limited = client.store.subscribe(
+		limited = await client.store.subscribe(
 			"items",
 			{ ...OPTIONS, limit: 2 },
 			(rows) => {
@@ -108,11 +108,11 @@ export async function run(port: number = 3000): Promise<void> {
 		await limited.loadMore();
 		await waitUntil(() => limitedRows.length === 5, "second sorted loadMore");
 		expectIds(limitedRows, IDS);
-		limited.unsubscribe();
+		await limited.unsubscribe();
 		limited = null;
 
 		let liveRows: JsonValue[] = [];
-		live = client.store.subscribe("items", OPTIONS, (rows) => {
+		live = await client.store.subscribe("items", OPTIONS, (rows) => {
 			liveRows = rows;
 		});
 		await waitUntil(() => liveRows.length === 5, "full sorted subscription");
@@ -131,8 +131,8 @@ export async function run(port: number = 3000): Promise<void> {
 
 		console.log("E2E multi-field sorting and pagination passed.");
 	} finally {
-		limited?.unsubscribe();
-		live?.unsubscribe();
+		await limited?.unsubscribe();
+		await live?.unsubscribe();
 		client.close();
 	}
 }

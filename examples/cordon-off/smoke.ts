@@ -559,7 +559,19 @@ async function joinPlayer(
 				session_id: sessionId,
 			})) as { user_id?: string };
 			assert.equal(typeof result.user_id, "string");
-			client.presence.set({});
+			await client.presence.set({});
+			const localUserId = client.presence.localUserId;
+			if (!localUserId) throw new Error("Presence scope has no user id");
+			const unsubscribe = await client.presence.subscribe(() => {});
+			try {
+				await eventually(
+					async () => client.presence.get(localUserId),
+					"player presence join",
+					1000,
+				);
+			} finally {
+				await unsubscribe();
+			}
 			return result.user_id as string;
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
@@ -655,7 +667,7 @@ try {
 	// not the initial snapshot (the browser creates the roster subscription
 	// before its join too).
 	const subscribed = new Map<string, PlayerRow>();
-	bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
+	await bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
 		subscribed.clear();
 		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
@@ -678,7 +690,7 @@ try {
 	);
 	assert.notEqual(aliceId, bobId);
 	let visible: UserChunkRow[] = [];
-	bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
+	await bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
 		visible = rows as UserChunkRow[];
 	});
 	const dot = () =>
@@ -811,7 +823,7 @@ try {
 		if ((error as { code?: string })?.code === "PERMISSION_DENIED")
 			actionDenied = true;
 	});
-	alice.client.actions.handle("player_move", () => {});
+	void alice.client.actions.handle("player_move", () => {}).catch(() => {});
 	await eventually(
 		async () => actionDenied,
 		"player worker registration denied",

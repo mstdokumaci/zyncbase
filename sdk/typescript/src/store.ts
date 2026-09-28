@@ -150,59 +150,66 @@ export class StoreImpl {
 		await this.dispatchWrite(message, message.writeId, options, "Batch failed");
 	}
 
-	listen(path: Path, callback: (value: JsonValue) => void): () => void {
+	listen(
+		path: Path,
+		callback: (value: JsonValue) => void,
+	): Promise<() => Promise<void>> {
 		const command = buildListen(path);
-		const state = {
-			closed: false,
-			subId: null as number | null,
-		};
-
-		this.conn
+		let subId: number | null = null;
+		let unsubscribePromise: Promise<void> | null = null;
+		const request = this.conn
 			.dispatch(command.message)
 			.then((ok) => {
-				if (state.closed) {
-					if (ok.subId !== undefined) {
-						this.dispatchUnsubscribe(ok.subId);
-					}
-					return;
+				if (ok.subId === undefined) {
+					throw new ZyncBaseError("Listen response missing subId", {
+						code: ErrorCodes.INVALID_MESSAGE,
+						category: "client",
+						retryable: false,
+					});
 				}
-
-				state.subId = ok.subId ?? null;
-				if (state.subId === null) return;
-
+				subId = ok.subId;
 				this.tracker.registerListen(
-					state.subId,
+					ok.subId,
 					command.message,
 					callback,
 					command.segments,
 					(newId) => {
-						state.subId = newId;
+						subId = newId;
 					},
 				);
 				if (ok.value !== undefined) {
 					this.tracker.dispatchInitialSnapshot(
-						state.subId,
+						ok.subId,
 						command.segments,
 						ok.value as JsonValue,
 					);
 				}
+				const unlisten = () => {
+					if (unsubscribePromise) return unsubscribePromise;
+					if (subId === null) return Promise.resolve();
+					const id = subId;
+					subId = null;
+					this.tracker.unregister(id);
+					unsubscribePromise = this.dispatchUnsubscribe(id);
+					unsubscribePromise.catch(() => {});
+					return unsubscribePromise;
+				};
+				return unlisten;
 			})
-			.catch((err) => this.emitOnly(err, "Listen failed"));
-
-		return () => {
-			state.closed = true;
-			if (state.subId === null) return;
-			this.tracker.unregister(state.subId);
-			this.dispatchUnsubscribe(state.subId);
-			state.subId = null;
-		};
+			.catch((err) => {
+				const error = this.normalizeError(err, "Listen failed");
+				this.emitError(error);
+				throw error;
+			});
+		request.catch(() => {});
+		return request;
 	}
 
 	subscribe(
 		collection: string,
 		options: QueryOptions,
 		callback: (results: JsonValue[]) => void,
-	): SubscriptionHandle {
+	): Promise<SubscriptionHandle> {
 		const state: SubscribeState = {
 			subId: null,
 			nextCursor: null,
@@ -210,15 +217,23 @@ export class StoreImpl {
 			closed: false,
 			inFlight: null,
 		};
+		let unsubscribePromise: Promise<void> | null = null;
 
 		const handle: SubscriptionHandle = {
 			hasMore: false,
 			unsubscribe: () => {
+				if (unsubscribePromise) return unsubscribePromise;
 				state.closed = true;
-				if (state.subId === null) return;
-				this.tracker.unregister(state.subId);
-				this.dispatchUnsubscribe(state.subId);
-				state.subId = null;
+				unsubscribePromise = (async () => {
+					const subId = state.subId;
+					if (subId !== null) {
+						this.tracker.unregister(subId);
+						state.subId = null;
+						await this.dispatchUnsubscribe(subId);
+					}
+				})();
+				unsubscribePromise.catch(() => {});
+				return unsubscribePromise;
 			},
 			loadMore: async () => {
 				while (true) {
@@ -257,74 +272,62 @@ export class StoreImpl {
 		};
 
 		if (!this.conn.isSchemaReady()) {
-			this.emitOnly(
-				new ZyncBaseError(
-					"Schema is not ready; await client.connect() before subscribing",
-					{
-						code: ErrorCodes.SESSION_NOT_READY,
-						category: "state",
-						retryable: false,
-					},
-				),
-				"Subscribe failed",
+			const error = new ZyncBaseError(
+				"Schema is not ready; await client.connect() before subscribing",
+				{
+					code: ErrorCodes.SESSION_NOT_READY,
+					category: "state",
+					retryable: false,
+				},
 			);
-			return handle;
+			this.emitError(error);
+			const failed = Promise.reject<SubscriptionHandle>(error);
+			failed.catch(() => {});
+			return failed;
 		}
 
 		const command = buildSubscribe(collection, options);
 		const comparator = this.buildCollectionComparator(collection, options);
 
-		this.conn
+		const request = this.conn
 			.dispatch(command.message)
-			.then((ok) =>
-				this.handleSubscribeSuccess(
-					ok,
-					state,
-					handle,
+			.then((ok): SubscriptionHandle => {
+				if (ok.subId === undefined) {
+					throw new ZyncBaseError("Subscribe response missing subId", {
+						code: ErrorCodes.INVALID_MESSAGE,
+						category: "client",
+						retryable: false,
+					});
+				}
+				state.subId = ok.subId;
+				state.nextCursor = ok.nextCursor ?? null;
+				state.hasMore = ok.hasMore ?? false;
+				handle.hasMore = state.hasMore;
+				this.tracker.registerCollection(
+					state.subId,
 					command.message,
-					collection,
-					comparator,
 					callback,
-				),
-			)
-			.catch((err) => this.emitOnly(err, "Subscribe failed"));
-
-		return handle;
-	}
-
-	private handleSubscribeSuccess(
-		ok: OkResponse,
-		state: SubscribeState,
-		handle: SubscriptionHandle,
-		params: Parameters<SubscriptionTracker["registerCollection"]>[1],
-		collection: string,
-		comparator: (a: JsonValue, b: JsonValue) => number,
-		callback: (results: JsonValue[]) => void,
-	): void {
-		if (this.unsubscribeRemoteIfClosed(state.closed, ok.subId)) return;
-
-		state.subId = ok.subId ?? null;
-		state.nextCursor = ok.nextCursor ?? null;
-		state.hasMore = ok.hasMore ?? false;
-		handle.hasMore = state.hasMore;
-		if (state.subId === null) return;
-
-		this.tracker.registerCollection(
-			state.subId,
-			params,
-			callback,
-			comparator,
-			(newId) => {
-				state.subId = newId;
-			},
-		);
-		if (ok.value !== undefined) {
-			this.tracker.dispatchInitialSnapshot(
-				state.subId,
-				[collection],
-				ok.value as JsonValue,
-			);
-		}
+					comparator,
+					(newId) => {
+						state.subId = newId;
+					},
+				);
+				if (ok.value !== undefined) {
+					this.tracker.dispatchInitialSnapshot(
+						state.subId,
+						[collection],
+						ok.value as JsonValue,
+					);
+				}
+				return handle;
+			})
+			.catch((err) => {
+				const error = this.normalizeError(err, "Subscribe failed");
+				this.emitError(error);
+				throw error;
+			});
+		request.catch(() => {});
+		return request;
 	}
 
 	/**
@@ -422,16 +425,12 @@ export class StoreImpl {
 		}
 	}
 
-	private dispatchUnsubscribe(subId: number): void {
-		this.conn.dispatch(buildUnsubscribe(subId)).catch(() => {});
-	}
-
-	private unsubscribeRemoteIfClosed(closed: boolean, subId?: number): boolean {
-		if (!closed) return false;
-		if (subId !== undefined) {
-			this.dispatchUnsubscribe(subId);
+	private async dispatchUnsubscribe(subId: number): Promise<void> {
+		try {
+			await this.conn.dispatch(buildUnsubscribe(subId));
+		} catch (err) {
+			this.emitAndThrow(err, "Unsubscribe failed");
 		}
-		return true;
 	}
 
 	private rejectAllInFlight(): void {
@@ -524,10 +523,6 @@ export class StoreImpl {
 				this.inFlightWrites.delete(msg.writeId);
 			}
 		}
-	}
-
-	private emitOnly(err: unknown, fallbackMessage: string): void {
-		this.emitError(this.normalizeError(err, fallbackMessage));
 	}
 
 	private emitAndThrow(err: unknown, fallbackMessage: string): never {

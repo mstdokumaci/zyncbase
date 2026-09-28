@@ -11,20 +11,27 @@ async function waitForPresence(
 	predicate: (users: PresenceEntry[]) => boolean,
 	timeoutMs = 3000,
 ): Promise<PresenceEntry[]> {
-	return new Promise<PresenceEntry[]>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			unsub();
+	let unsubscribe: (() => Promise<void>) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let resolveWaiting!: (users: PresenceEntry[]) => void;
+	const waiting = new Promise<PresenceEntry[]>((resolve, reject) => {
+		resolveWaiting = resolve;
+		timer = setTimeout(() => {
 			reject(new Error(`Timeout waiting for presence after ${timeoutMs}ms`));
 		}, timeoutMs);
-
-		const unsub = client.presence.subscribe((users) => {
+	});
+	try {
+		unsubscribe = await client.presence.subscribe((users) => {
 			if (predicate(users)) {
-				clearTimeout(timer);
-				unsub();
-				resolve(users);
+				if (timer) clearTimeout(timer);
+				resolveWaiting(users);
 			}
 		});
-	});
+		return await waiting;
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (unsubscribe) await unsubscribe();
+	}
 }
 
 async function waitForShared(
@@ -32,22 +39,31 @@ async function waitForShared(
 	predicate: (shared: Record<string, unknown> | null) => boolean,
 	timeoutMs = 3000,
 ): Promise<Record<string, unknown> | null> {
-	return new Promise<Record<string, unknown> | null>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			unsub();
-			reject(
-				new Error(`Timeout waiting for shared state after ${timeoutMs}ms`),
-			);
-		}, timeoutMs);
-
-		const unsub = client.presence.subscribeShared((shared) => {
+	let unsubscribe: (() => Promise<void>) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let resolveWaiting!: (shared: Record<string, unknown> | null) => void;
+	const waiting = new Promise<Record<string, unknown> | null>(
+		(resolve, reject) => {
+			resolveWaiting = resolve;
+			timer = setTimeout(() => {
+				reject(
+					new Error(`Timeout waiting for shared state after ${timeoutMs}ms`),
+				);
+			}, timeoutMs);
+		},
+	);
+	try {
+		unsubscribe = await client.presence.subscribeShared((shared) => {
 			if (predicate(shared)) {
-				clearTimeout(timer);
-				unsub();
-				resolve(shared);
+				if (timer) clearTimeout(timer);
+				resolveWaiting(shared);
 			}
 		});
-	});
+		return await waiting;
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (unsubscribe) await unsubscribe();
+	}
 }
 
 function verifyIncludeSelf(clientB: ZyncBaseClient): void {
@@ -99,16 +115,16 @@ async function testUserPresence(
 	clientA: ZyncBaseClient,
 	clientB: ZyncBaseClient,
 	bChanges: PresenceChangeBatch[],
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
 	console.log("Test 1: User presence set + subscribe...");
 
 	const bUsers: PresenceEntry[][] = [];
-	const unsubB = clientB.presence.subscribe((users) => {
+	const unsubB = await clientB.presence.subscribe((users) => {
 		bUsers.push(users);
 	});
 
-	clientB.presence.set({ status: "active", name: "Bob" });
-	clientA.presence.set({ status: "active", name: "Alice" });
+	await clientB.presence.set({ status: "active", name: "Bob" });
+	await clientA.presence.set({ status: "active", name: "Alice" });
 
 	await waitForPresence(
 		clientB,
@@ -133,7 +149,7 @@ async function testUserPresence(
 	console.log("  getAll() excludes Bob; includeSelf contains Alice and Bob.");
 
 	console.log("Test 2: Merge semantics...");
-	clientA.presence.set({ cursor: { x: 100, y: 200 } });
+	await clientA.presence.set({ cursor: { x: 100, y: 200 } });
 
 	await waitForPresence(clientB, (users) => {
 		const alice = users.find((u) => u.data.name === "Alice");
@@ -169,15 +185,15 @@ async function testUserPresence(
 async function testSharedState(
 	clientA: ZyncBaseClient,
 	clientB: ZyncBaseClient,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
 	console.log("Test 4: Shared state...");
 
 	const sharedStates: (Record<string, unknown> | null)[] = [];
-	const unsubShared = clientB.presence.subscribeShared((shared) => {
+	const unsubShared = await clientB.presence.subscribeShared((shared) => {
 		sharedStates.push(shared);
 	});
 
-	clientA.presence.setShared({ slide: 5 });
+	await clientA.presence.setShared({ slide: 5 });
 
 	await waitForShared(
 		clientB,
@@ -192,7 +208,7 @@ async function testSharedState(
 	console.log("  getShared() returns correct state.");
 
 	console.log("Test 5: Shared state merge...");
-	clientA.presence.setShared({ playing: true });
+	await clientA.presence.setShared({ playing: true });
 
 	await waitForShared(
 		clientB,
@@ -221,7 +237,7 @@ async function testRemoveAndThrottle(
 	bChanges: PresenceChangeBatch[],
 ): Promise<void> {
 	console.log("Test 6: Presence remove...");
-	clientA.presence.remove();
+	await clientA.presence.remove();
 	await waitForPresence(clientB, (users) => users.length === 0);
 	const includingSelf = clientB.presence.getAll({ includeSelf: true });
 	if (includingSelf.length !== 1 || includingSelf[0].data.name !== "Bob") {
@@ -324,7 +340,7 @@ export async function run(port: number, jwtSecret: string) {
 		await clientB.setPresenceNamespace("public");
 
 		const bChanges: PresenceChangeBatch[] = [];
-		const unsubDeltaB = clientB.presence.subscribeChanges((batch) => {
+		const unsubDeltaB = await clientB.presence.subscribeChanges((batch) => {
 			bChanges.push(batch);
 		});
 
@@ -332,14 +348,14 @@ export async function run(port: number, jwtSecret: string) {
 		const unsubShared = await testSharedState(clientA, clientB);
 
 		const bUsers: PresenceEntry[][] = [];
-		clientB.presence.subscribe((users) => bUsers.push(users));
+		await clientB.presence.subscribe((users) => bUsers.push(users));
 
 		await testRemoveAndThrottle(clientA, clientB, bUsers, bChanges);
 		await testNamespaceSwitch(clientA, clientB, bChanges);
 
-		unsubB();
-		unsubDeltaB();
-		unsubShared();
+		await unsubB();
+		await unsubDeltaB();
+		await unsubShared();
 
 		console.log("All presence tests passed!");
 	} finally {

@@ -95,15 +95,19 @@ export async function run(port: number = 3000) {
 			snapshotCount: 0,
 			onChange: new Set(),
 		};
-		subscription = client.store.subscribe("tasks", {}, (tasks: JsonValue[]) => {
-			state.records.clear();
-			for (const value of tasks) {
-				const task = asBatchTask(value);
-				if (task) state.records.set(task.id, task);
-			}
-			state.snapshotCount++;
-			for (const onChange of state.onChange) onChange();
-		});
+		subscription = await client.store.subscribe(
+			"tasks",
+			{},
+			(tasks: JsonValue[]) => {
+				state.records.clear();
+				for (const value of tasks) {
+					const task = asBatchTask(value);
+					if (task) state.records.set(task.id, task);
+				}
+				state.snapshotCount++;
+				for (const onChange of state.onChange) onChange();
+			},
+		);
 
 		await waitForTaskState(
 			state,
@@ -168,7 +172,7 @@ export async function run(port: number = 3000) {
 		console.error("Test failed:", err);
 		throw err;
 	} finally {
-		subscription?.unsubscribe();
+		await subscription?.unsubscribe();
 		client.close();
 	}
 }

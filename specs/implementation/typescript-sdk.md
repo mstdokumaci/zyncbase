@@ -59,6 +59,8 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
 7. Server pushes update subscription and presence listeners independently of mutation responses.
 
+Public methods that receive an `ok` response expose it through a promise. For subscriptions, the promise resolves with the existing cleanup function or handle after server acceptance; callbacks deliver initial results and later updates independently. `Actions.handle()` resolves after the server accepts the registration.
+
 ## Liveness Implementation
 
 `ConnectionManager` implements the public contract in [Connection Management](../api-design/connection-management.md). It owns the probe timer, randomizes the first deadline within `liveness.intervalMs`, tracks a single in-flight Ping id, sends Ping through `ConnectionWireCodec` before scope readiness, resets the timer from the response-correlation path, and closes the socket on probe timeout to use the existing reconnect path.
