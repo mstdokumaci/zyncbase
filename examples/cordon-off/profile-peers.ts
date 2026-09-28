@@ -262,26 +262,35 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				userSubscriptions: new Map(),
 				input: { direction: "idle", seq: 0 },
 			};
-			peers.push(peer);
-			await client.store.subscribe(
-				"countries",
-				{ limit: 1000 },
-				() => callbacks++,
-			);
-			await client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
-			const joined = (await client.actions.call("player_join", {
-				name: peer.name,
-				country_id: peer.countryId,
-				session_id: sessionId,
-			})) as { user_id?: string };
-			peer.id = joined.user_id ?? "";
-			await client.presence.set({});
-			subscribe(peer);
-			// Spawn regions are server state, so the placeholder above is only
-			// a camera start. The committed roster row carries the admitted
-			// cell; the roster publishes on a slower cadence, so read it in
-			// the background rather than blocking admission.
-			void locate(peer);
+			try {
+				await client.store.subscribe(
+					"countries",
+					{ limit: 1000 },
+					() => callbacks++,
+				);
+				await client.store.subscribe(
+					"users",
+					{ limit: 2048 },
+					() => callbacks++,
+				);
+				const joined = (await client.actions.call("player_join", {
+					name: peer.name,
+					country_id: peer.countryId,
+					session_id: sessionId,
+				})) as { user_id?: string };
+				peer.id = joined.user_id ?? "";
+				await client.presence.set({});
+				subscribe(peer);
+				peers.push(peer);
+				// Spawn regions are server state, so the placeholder above is only
+				// a camera start. The committed roster row carries the admitted
+				// cell; the roster publishes on a slower cadence, so read it in
+				// the background rather than blocking admission.
+				void locate(peer);
+			} catch (error) {
+				client.disconnect();
+				throw error;
+			}
 		} else if (data.type === "move") {
 			moving = data.moving;
 			started = Date.now();

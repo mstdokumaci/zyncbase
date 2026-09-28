@@ -683,6 +683,7 @@ async function joinWorld() {
 	lastOwnDot = 0;
 	ownRowMisses = 0;
 	setConnection("");
+	publishDirection();
 }
 
 // A rejected join (full world, missing country, bad name) is final.
