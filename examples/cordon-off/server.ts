@@ -870,17 +870,15 @@ try {
 	const presenceSnapshot = new Promise<void>((resolve) => {
 		resolvePresenceSnapshot = resolve;
 	});
-	await client.presence.subscribeChanges((batch) => {
-		if (batch.type === "snapshot") {
-			presentUsers.clear();
-			for (const entry of batch.users) onPlayerPresenceJoin(entry.userId);
-			resolvePresenceSnapshot();
-			return;
+	await client.presence.subscribe((users) => {
+		const next = new Set(users.map((entry) => entry.userId));
+		for (const userId of [...presentUsers]) {
+			if (!next.has(userId)) onPlayerPresenceLeave(userId);
 		}
-		for (const change of batch.changes) {
-			if (change.type === "leave") onPlayerPresenceLeave(change.userId);
-			else onPlayerPresenceJoin(change.entry.userId);
+		for (const userId of next) {
+			if (!presentUsers.has(userId)) onPlayerPresenceJoin(userId);
 		}
+		resolvePresenceSnapshot();
 	});
 	await presenceSnapshot;
 	ready = true;

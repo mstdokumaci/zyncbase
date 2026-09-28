@@ -442,7 +442,7 @@ async function subscribeClient(
 		},
 	);
 
-	const userSub = state.client.presence.subscribeChanges(() => {
+	const userSub = state.client.presence.subscribe(() => {
 		state.userCallbacks++;
 		state.userReady = true;
 		context.presenceGeneration++;
