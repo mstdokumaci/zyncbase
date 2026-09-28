@@ -471,8 +471,8 @@ export interface Presence {
 	getShared(): Record<string, unknown> | null;
 	/** Scope-resolved internal users.id, or null before scope setup. */
 	readonly localUserId: string | null;
-	/** Remove your presence record. */
-	remove(): void;
+	/** Remove your presence record; resolves after the server accepts it. */
+	remove(): Promise<void>;
 }
 
 // ─── Actions interface ────────────────────────────────────────────────────────

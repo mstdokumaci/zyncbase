@@ -494,7 +494,7 @@ async function runLifecycle() {
 		async () => hasDot(revived),
 		"reconnect restores the player dot",
 	);
-	leave(revived);
+	await leave(revived);
 	revived.disconnect();
 	console.log("PASS: a short disconnect resumes the same player");
 }
@@ -573,9 +573,9 @@ function move(client: ZyncBaseClient, direction: string, seq = 1) {
 	void client.actions.call("player_move", { direction, seq }).catch(() => {});
 }
 
-/** Best-effort immediate leave on top of the input lease. */
+/** Remove presence and wait for the server response. */
 function leave(client: ZyncBaseClient) {
-	client.presence.remove();
+	return client.presence.remove();
 }
 
 async function countryChunks(client: ZyncBaseClient) {
@@ -744,7 +744,7 @@ try {
 		async () => (await (await fetch(`${origin}/health`)).json()).bots === 3,
 		"a point's second human leaves one bot",
 	);
-	leave(teammate.client);
+	await leave(teammate.client);
 	teammate.client.disconnect();
 	const botRoster = await eventually(async () => {
 		const state = await (await fetch(`${origin}/health`)).json();
@@ -821,10 +821,10 @@ try {
 		{ code: "SCHEMA_VALIDATION_FAILED" },
 	);
 	for (const timer of timers.splice(0)) clearInterval(timer);
-	leave(alice.client);
+	await leave(alice.client);
 	alice.client.disconnect();
 	await eventually(async () => !dot(), "disconnected dot removed");
-	leave(bob.client);
+	await leave(bob.client);
 	bob.client.disconnect();
 	const observer = await connect();
 	await eventually(async () => {
@@ -1019,17 +1019,21 @@ try {
 		429,
 		"a second session from one network is rejected",
 	);
-	leave(solo.client);
+	await leave(solo.client);
 	solo.client.disconnect();
 	await eventually(
 		async () => (await healthState()).players === 0,
 		"leave removes the player before its session lease expires",
-		1000,
+		2000,
+	);
+	assert.equal(
+		(await askSession()).status,
+		429,
+		"a disconnected player's slot stays reserved during the resume window",
 	);
 	await eventually(
 		async () => (await askSession()).status === 200,
-		"leave frees the network slot before its session lease expires",
-		1000,
+		"the network slot frees when the resume window expires",
 	);
 	// The eventual's successful call issued an unjoined session; it holds the
 	// slot until its lease expires.

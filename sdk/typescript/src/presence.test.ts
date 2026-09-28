@@ -133,11 +133,11 @@ describe("PresenceImpl", () => {
 		expect(slidePair?.[1]).toBe(5);
 	});
 
-	test("remove() dispatches PresenceRemove", () => {
+	test("remove() awaits PresenceRemove", async () => {
 		const conn = createMockConnection();
 		const presence = new PresenceImpl(conn);
 
-		presence.remove();
+		await presence.remove();
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceRemove");

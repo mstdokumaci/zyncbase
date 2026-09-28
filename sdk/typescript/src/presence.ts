@@ -290,10 +290,15 @@ export class PresenceImpl implements Presence {
 		return this.sharedCache;
 	}
 
-	remove(): void {
-		this.conn.dispatch({ type: "PresenceRemove" }).catch((err) => {
-			this.emitError(this.normalizeError(err, "Presence remove failed"));
-		});
+	remove(): Promise<void> {
+		return this.conn.dispatch({ type: "PresenceRemove" }).then(
+			() => {},
+			(err) => {
+				const error = this.normalizeError(err, "Presence remove failed");
+				this.emitError(error);
+				throw error;
+			},
+		);
 	}
 
 	invalidate(): void {

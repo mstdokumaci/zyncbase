@@ -692,6 +692,8 @@ async function ensureJoined() {
 	joinInFlight = true;
 	try {
 		await joinWorld();
+		clearTimeout(reconnectTimer);
+		reconnectTimer = undefined;
 		clearTimeout(joinRetryTimer);
 		joinRetryTimer = undefined;
 	} catch (error) {
@@ -704,9 +706,9 @@ async function ensureJoined() {
 
 // Remove presence immediately on an intentional exit; connection teardown
 // also removes it if this message cannot be sent.
-function leave() {
-	if (!client || !joined) return;
-	client.presence.remove();
+function leave(): Promise<void> {
+	if (!client || !joined) return Promise.resolve();
+	return client.presence.remove();
 }
 
 function publishDirection() {
@@ -851,7 +853,7 @@ document.addEventListener("visibilitychange", () => {
 });
 addEventListener("pagehide", () => {
 	release();
-	leave();
+	void leave().catch(() => {});
 	client?.disconnect();
 });
 // Touch players get a fixed nipplejs stick. Its `move` event carries the
@@ -979,6 +981,8 @@ scoreboardToggle.addEventListener("pointerdown", (event) => {
 setScoreboardOpen(!matchMedia("(pointer: coarse)").matches);
 
 function returnToLobby(message: string) {
+	const leavingClient = client;
+	const leavePromise = leave();
 	sessionGeneration++;
 	leaving = false;
 	clearTimeout(roundTimer);
@@ -989,12 +993,11 @@ function returnToLobby(message: string) {
 	joinRetryTimer = undefined;
 	clearInterval(focusWatch);
 	focusWatch = undefined;
-	leave();
 	joined = false;
 	ownRowMisses = 0;
 	sessionId = "";
 	playing = online = false;
-	client?.disconnect();
+	void leavePromise.catch(() => {}).finally(() => leavingClient?.disconnect());
 	for (const unsub of subscriptions.values()) unsub();
 	subscriptions.clear();
 	chunks.clear();
@@ -1154,7 +1157,7 @@ element("join").addEventListener("submit", async (event) => {
 			if (playing && reconnectTimer === undefined) {
 				reconnectTimer = setTimeout(() => {
 					reconnectTimer = undefined;
-					if (playing && !online)
+					if (playing && (!online || !joined))
 						returnToLobby("You were away too long — rejoin");
 				}, PLAYER_RESUME_GRACE_MS);
 			}
@@ -1164,8 +1167,6 @@ element("join").addEventListener("submit", async (event) => {
 		client.on("reconnecting", offline);
 		client.on("connected", () => {
 			if (playing) {
-				clearTimeout(reconnectTimer);
-				reconnectTimer = undefined;
 				online = true;
 				joined = false;
 				release();

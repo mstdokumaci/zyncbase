@@ -209,10 +209,10 @@ Returns `[]` if no active `subscribe()` or `subscribeChanges()` exists.
 
 ### `presence.remove()`
 
-Remove your presence record and broadcast a `leave` event to all subscribers. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting.
+Remove your presence record and broadcast a `leave` event to all subscribers. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting. Returns a promise that resolves when the server accepts the request and rejects if it fails.
 
 ```typescript
-client.presence.remove()
+await client.presence.remove()
 ```
 
 ---
