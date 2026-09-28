@@ -112,7 +112,11 @@ function syncSubscriptions(
 	}
 	for (const index of visible) {
 		if (subscriptions.has(index)) continue;
-		subscriptions.set(index, listenFor(index));
+		const unlisten = listenFor(index);
+		subscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (subscriptions.get(index) === unlisten) subscriptions.delete(index);
+		});
 	}
 }
 
@@ -271,7 +275,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				session_id: sessionId,
 			})) as { user_id?: string };
 			peer.id = joined.user_id ?? "";
-			client.presence.set({});
+			await client.presence.set({});
 			subscribe(peer);
 			// Spawn regions are server state, so the placeholder above is only
 			// a camera start. The committed roster row carries the admitted

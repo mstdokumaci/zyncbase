@@ -561,6 +561,9 @@ function updateSubscriptions() {
 			},
 		);
 		subscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (subscriptions.get(key) === unlisten) subscriptions.delete(key);
+		});
 	}
 	const visibleUser = visibleChunks(USER_GRID);
 	for (const [index, unlisten] of userSubscriptions) {
@@ -584,6 +587,10 @@ function updateSubscriptions() {
 			},
 		);
 		userSubscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (userSubscriptions.get(key) === unlisten)
+				userSubscriptions.delete(key);
+		});
 	}
 }
 
@@ -718,8 +725,26 @@ function leave(): Promise<void> {
 function publishDirection() {
 	motion?.update(motion.dot, online ? direction : "idle", performance.now());
 	if (!online || !client || !joined) return;
-	seq++;
-	void client.actions.call("player_move", { direction, seq }).catch(() => {});
+	const moveClient = client;
+	const moveDirection = direction;
+	const moveSeq = ++seq;
+	const isCurrent = () =>
+		online &&
+		joined &&
+		client === moveClient &&
+		direction === moveDirection &&
+		seq === moveSeq;
+	const send = () => {
+		void moveClient.actions
+			.call("player_move", { direction: moveDirection, seq: moveSeq })
+			.catch(() => {
+				if (!isCurrent()) return;
+				setTimeout(() => {
+					if (isCurrent()) send();
+				}, 500);
+			});
+	};
+	send();
 }
 
 function setDirection(next: Direction) {
