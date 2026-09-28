@@ -809,6 +809,7 @@ export class World {
 			position.x,
 			position.y,
 			position.point,
+			grave?.row.slot,
 		);
 	}
 

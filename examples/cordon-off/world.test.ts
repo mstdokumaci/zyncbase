@@ -1180,3 +1180,17 @@ test("player slots are unique, monotonic, and survive a grace reconnect", () => 
 	);
 	expect(world.players.get("alice")?.slot).toBe(alice?.slot);
 });
+
+test("a grace reconnect whose tombstone cell is gone keeps its slot", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const alice = joinHuman(world, "alice");
+	if (!alice) throw new Error("Player missing");
+	const [x, y] = [alice.x, alice.y];
+	world.remove("alice", 1);
+	// Blocking the tombstone cell drops the reconnect into the normal ring
+	// search; the new cell must keep the slot its roster row already has.
+	world.land[y * WIDTH + x] = 0;
+	const returned = joinHuman(world, "alice");
+	expect(returned?.slot).toBe(alice.slot);
+	expect([returned?.x, returned?.y]).not.toEqual([x, y]);
+});

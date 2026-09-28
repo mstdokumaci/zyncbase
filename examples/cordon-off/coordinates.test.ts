@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
 	COORDINATES_HEADER_BYTES,
 	encodeCoordinates,
+	MAX_PLAYERS,
 	readCoordinates,
 	USER_CHUNK_COUNT,
 	USER_CHUNK_HEIGHT,
@@ -39,6 +40,18 @@ test("empty user chunks round-trip", () => {
 	expect(readCoordinates(row)).toEqual([]);
 });
 
+test("a full live population fits one chunk's packed dots", () => {
+	// Humans cap at MAX_PLAYERS, but bots ride the same chunks, so the packer
+	// must accept more than MAX_PLAYERS entries.
+	const count = MAX_PLAYERS + 18;
+	const dots = Array.from({ length: count }, (_, index) => ({
+		slot: index + 1,
+		x: index % USER_CHUNK_WIDTH,
+		y: Math.floor(index / USER_CHUNK_WIDTH),
+	}));
+	expect(readCoordinates(encodeCoordinates(0, dots))).toEqual(dots);
+});
+
 test("packed coordinates reject malformed rows", () => {
 	expect(() => readCoordinates(new Uint8Array(0))).toThrow();
 	expect(() => readCoordinates(new Uint8Array(4))).toThrow();
@@ -54,6 +67,12 @@ test("packed coordinates reject malformed rows", () => {
 	zeroSlot[COORDINATES_HEADER_BYTES] = 0;
 	zeroSlot[COORDINATES_HEADER_BYTES + 1] = 0;
 	expect(() => readCoordinates(zeroSlot)).toThrow();
+	const outOfChunkX = good.slice();
+	outOfChunkX[COORDINATES_HEADER_BYTES + 2] = USER_CHUNK_WIDTH;
+	expect(() => readCoordinates(outOfChunkX)).toThrow();
+	const outOfChunkY = good.slice();
+	outOfChunkY[COORDINATES_HEADER_BYTES + 3] = USER_CHUNK_HEIGHT;
+	expect(() => readCoordinates(outOfChunkY)).toThrow();
 	expect(() => encodeCoordinates(USER_CHUNK_COUNT, [])).toThrow();
 	expect(() =>
 		encodeCoordinates(0, [{ slot: 1, x: USER_CHUNK_WIDTH, y: 0 }]),

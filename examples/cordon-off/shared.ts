@@ -19,11 +19,12 @@ export const USER_COLUMNS = WIDTH / USER_CHUNK_WIDTH;
 export const USER_ROWS = HEIGHT / USER_CHUNK_HEIGHT;
 export const USER_CHUNK_COUNT = USER_COLUMNS * USER_ROWS;
 // Packed coordinate rows: version, chunk index, dot count, then one 4-byte
-// entry per dot (slot u16, chunk-local x u8, chunk-local y u8). A user chunk
-// never exceeds MAX_PLAYERS entries.
+// entry per dot (slot u16, chunk-local x u8, chunk-local y u8). The count is a
+// u16, so a row holds at most COORDINATES_MAX_DOTS entries.
 export const COORDINATES_VERSION = 1;
 export const COORDINATES_HEADER_BYTES = 5;
 export const COORDINATES_DOT_BYTES = 4;
+export const COORDINATES_MAX_DOTS = 0xffff;
 export const NAMESPACE = "world-1";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
 export const MAX_PLAYERS = 1024;
@@ -264,7 +265,7 @@ export function encodeCoordinates(chunkIndex: number, dots: Dot[]): Uint8Array {
 		chunkIndex >= USER_CHUNK_COUNT
 	)
 		throw new RangeError("User chunk index is out of range");
-	if (dots.length > MAX_PLAYERS)
+	if (dots.length > COORDINATES_MAX_DOTS)
 		throw new RangeError("Too many dots for a user chunk");
 	const bytes = new Uint8Array(
 		COORDINATES_HEADER_BYTES + dots.length * COORDINATES_DOT_BYTES,
@@ -319,10 +320,14 @@ export function readCoordinates(bytes: Uint8Array): Dot[] {
 	for (let i = 0; i < count; i++) {
 		const slot = bytes[at] | ((bytes[at + 1] as number) << 8);
 		if (slot < 1) throw new Error("Invalid coordinates encoding");
+		const lx = bytes[at + 2] as number;
+		const ly = bytes[at + 3] as number;
+		if (lx >= USER_CHUNK_WIDTH || ly >= USER_CHUNK_HEIGHT)
+			throw new Error("Invalid coordinates encoding");
 		dots[i] = {
 			slot,
-			x: originX + (bytes[at + 2] as number),
-			y: originY + (bytes[at + 3] as number),
+			x: originX + lx,
+			y: originY + ly,
 		};
 		at += 4;
 	}
