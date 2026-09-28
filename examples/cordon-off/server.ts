@@ -852,7 +852,7 @@ try {
 		playerSessions.set(ctx.userId, sessionId);
 		if (presentUsers.has(ctx.userId)) activateSession(lease);
 		else scheduleSessionExpiry(sessionId, lease);
-		return { user_id: ctx.userId };
+		return { user_id: ctx.userId, slot: player.slot };
 	});
 	await client.actions.handle("player_move", (ctx, params) => {
 		if (stopping || ending) return;

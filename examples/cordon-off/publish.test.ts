@@ -8,7 +8,13 @@ import {
 	restorePublishState,
 	runPublishBatches,
 } from "./publish";
-import { HEIGHT, MAX_PLAYERS, WIDTH } from "./shared";
+import {
+	encodeCoordinates,
+	HEIGHT,
+	MAX_PLAYERS,
+	USER_CHUNK_WIDTH,
+	WIDTH,
+} from "./shared";
 import { World } from "./world";
 
 test("a user chunk's coordinates cap can hold every player", async () => {
@@ -20,16 +26,16 @@ test("a user chunk's coordinates cap can hold every player", async () => {
 		};
 	};
 	const cap = schema.store.user_chunks.fields.coordinates.maxLength;
-	// Worst case: MAX_PLAYERS dots in one 200x100 chunk, with identity at its
-	// longest plausible shape plus coordinates.
-	const dot = JSON.stringify({
-		player_id: "player:".padEnd(64, "0"),
-		x: 9999,
-		y: 9999,
-	});
+	// Worst case: MAX_PLAYERS packed dots in one 200x100 chunk.
+	const dots = Array.from({ length: MAX_PLAYERS }, (_, index) => ({
+		slot: index + 1,
+		x: index % USER_CHUNK_WIDTH,
+		y: Math.floor(index / USER_CHUNK_WIDTH),
+	}));
+	const row = encodeCoordinates(0, dots);
 	assert.ok(
-		cap >= dot.length * MAX_PLAYERS,
-		`coordinates cap ${cap} < ${dot.length * MAX_PLAYERS} needed for ${MAX_PLAYERS} players in one chunk`,
+		cap >= row.byteLength,
+		`coordinates cap ${cap} < ${row.byteLength} needed for ${MAX_PLAYERS} players in one chunk`,
 	);
 });
 

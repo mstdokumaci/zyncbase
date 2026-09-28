@@ -9,7 +9,7 @@ import {
 import { HEIGHT, RULES, WIDTH } from "./shared";
 import { World } from "./world";
 
-const dot: MotionDot = { player_id: "me", colorIndex: 1, x: 31, y: 10 };
+const dot: MotionDot = { slot: 1, colorIndex: 1, x: 31, y: 10 };
 const land = new Uint8Array(WIDTH * HEIGHT);
 
 test("diagonal mixing alternates deterministically for any stick angle", () => {

@@ -136,7 +136,7 @@ export class LocalMotion {
 		let dx = dot.x - this.dot.x;
 		dx -= WIDTH * Math.round(dx / WIDTH);
 		const distance = Math.abs(dx) + Math.abs(dot.y - this.dot.y);
-		const relocated = dot.player_id !== this.dot.player_id;
+		const relocated = dot.slot !== this.dot.slot;
 		if (!distance && !relocated && direction === this.direction) {
 			this.dot = dot;
 			if (this.duration === this.stepDuration()) return;

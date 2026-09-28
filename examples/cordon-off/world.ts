@@ -21,7 +21,7 @@ import {
 	type Direction,
 	type Dot,
 	encodeColorIndexes,
-	encoder,
+	encodeCoordinates,
 	HEIGHT,
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
@@ -50,6 +50,8 @@ type Player = {
 	seq: number;
 	direction: Direction;
 	credit: number;
+	// Round-local numeric identity carried by packed dots.
+	slot: number;
 	// Spawn point whose bots this player's crowd calls in. Every human has
 	// one; bots carry none.
 	point?: number;
@@ -137,6 +139,10 @@ export class World {
 	inputMessages = 0;
 	ticks = 0;
 	private nextCountryId = 1;
+	// Round-local player identity carried by packed dots. Monotonic so a slot
+	// is never reused while a tombstone or stale subscription may reference
+	// it; the world is rebuilt hourly, long before the u16 space is exhausted.
+	private nextSlot = 1;
 	private botsEnabled = false;
 	// Human spawn cursor: drives round-robin point selection and the golden-
 	// angle spiral inside each point.
@@ -166,6 +172,7 @@ export class World {
 				is_bot: player.is_bot,
 				last_x: player.last_x,
 				last_y: player.last_y,
+				slot: player.slot,
 			};
 			if (player.name !== undefined) row.name = player.name;
 			return row;
@@ -174,6 +181,17 @@ export class World {
 		if (!grave) return undefined;
 		const { id: _dropped, ...row } = grave.row;
 		return row;
+	}
+
+	/** Reserve `count` consecutive round-local player slots. */
+	reserveSlots(count: number): number {
+		if (!Number.isSafeInteger(count) || count < 1)
+			throw new RangeError("Slot count must be a positive integer");
+		const first = this.nextSlot;
+		if (first + count - 1 > 65535)
+			throw new Error("Player slots are exhausted; reset the world");
+		this.nextSlot = first + count;
+		return first;
 	}
 
 	/** Next unallocated country id; persisted so retired ids never repeat. */
@@ -773,7 +791,15 @@ export class World {
 				this.land[y * WIDTH + x] &&
 				![...this.players.values()].some((p) => p.x === x && p.y === y)
 			)
-				return this.makePlayer(id, countryId, bot, x, y, grave.point);
+				return this.makePlayer(
+					id,
+					countryId,
+					bot,
+					x,
+					y,
+					grave.point,
+					grave.row.slot,
+				);
 		}
 		const position = this.spawn(countryId, bot, team);
 		return this.makePlayer(
@@ -793,6 +819,7 @@ export class World {
 		x: number,
 		y: number,
 		point?: number,
+		slot?: number,
 	): Player {
 		// Every human carries a point; joiners of existing territory round-robin
 		// like fresh founders so the point's bots still spawn for them. Bots
@@ -811,6 +838,7 @@ export class World {
 			direction: "idle",
 			credit: 0,
 			point,
+			slot: slot ?? this.reserveSlots(1),
 		};
 		this.players.set(id, player);
 		this.dirtyUserChunks.add(userChunkIndex(x, y));
@@ -873,6 +901,7 @@ export class World {
 			is_bot: player.is_bot,
 			last_x: player.x,
 			last_y: player.y,
+			slot: player.slot,
 		};
 		if (player.name !== undefined) row.name = player.name;
 		this.graveyard.set(id, {
@@ -1127,12 +1156,12 @@ export class World {
 	userChunk(index: number): UserChunkRow {
 		if (!Number.isSafeInteger(index) || index < 0 || index >= USER_CHUNK_COUNT)
 			throw new RangeError("Chunk index is out of range");
-		const coordinates: Dot[] = [...this.players.values()]
+		const dots: Dot[] = [...this.players.values()]
 			.filter((player) => userChunkIndex(player.x, player.y) === index)
-			.map(({ id, x, y }) => ({ player_id: id, x, y }));
+			.map(({ slot, x, y }) => ({ slot, x, y }));
 		return {
 			id: rowId(index),
-			coordinates: encoder.encode(JSON.stringify(coordinates)),
+			coordinates: encodeCoordinates(index, dots),
 		};
 	}
 }

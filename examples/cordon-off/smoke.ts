@@ -446,7 +446,7 @@ async function runLifecycle() {
 	await stop();
 	await startWithRunway({ GAME_ROUND_MS: "120000" }, 30_000, true);
 	const blip = await connect("Blip");
-	const blipId = await joinPlayer(
+	const { id: blipId, slot: blipSlot } = await joinPlayer(
 		blip.client,
 		blip.countryId,
 		"Blipper",
@@ -455,7 +455,7 @@ async function runLifecycle() {
 	const hasDot = async (client: ZyncBaseClient) =>
 		(await userChunks(client))
 			.flatMap((row) => readCoordinates(row.coordinates))
-			.some((dot) => dot.player_id === blipId);
+			.some((dot) => dot.slot === blipSlot);
 	await eventually(async () => hasDot(blip.client), "blip player has a dot");
 	// Claim land first: a landless country is deleted when its player ages out,
 	// and then the reconnect would have nothing left to rejoin.
@@ -483,13 +483,14 @@ async function runLifecycle() {
 	});
 	clients.push(revived);
 	await revived.connect();
-	const revivedId = await joinPlayer(
+	const { id: revivedId, slot: revivedSlot } = await joinPlayer(
 		revived,
 		blip.countryId,
 		"Blipper",
 		blip.sessionId,
 	);
 	assert.equal(revivedId, blipId, "reconnect keeps the player identity");
+	assert.equal(revivedSlot, blipSlot, "reconnect keeps the player slot");
 	await eventually(
 		async () => hasDot(revived),
 		"reconnect restores the player dot",
@@ -557,8 +558,9 @@ async function joinPlayer(
 				name,
 				country_id: countryId,
 				session_id: sessionId,
-			})) as { user_id?: string };
+			})) as { user_id?: string; slot?: number };
 			assert.equal(typeof result.user_id, "string");
+			assert.equal(typeof result.slot, "number");
 			await client.presence.set({});
 			const localUserId = client.presence.localUserId;
 			if (!localUserId) throw new Error("Presence scope has no user id");
@@ -572,7 +574,7 @@ async function joinPlayer(
 			} finally {
 				await unsubscribe();
 			}
-			return result.user_id as string;
+			return { id: result.user_id as string, slot: result.slot as number };
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
 			await Bun.sleep(50);
@@ -671,7 +673,7 @@ try {
 		subscribed.clear();
 		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
-	const aliceId = await joinPlayer(
+	const { id: aliceId, slot: aliceSlot } = await joinPlayer(
 		alice.client,
 		alice.countryId,
 		"Ａlice",
@@ -682,7 +684,7 @@ try {
 	const send = () => move(alice.client, direction, seq);
 	send();
 	timers.push(setInterval(send, 500));
-	const bobId = await joinPlayer(
+	const { id: bobId, slot: bobSlot } = await joinPlayer(
 		bob.client,
 		bob.countryId,
 		"Bob",
@@ -696,7 +698,7 @@ try {
 	const dot = () =>
 		visible
 			.flatMap((row) => readCoordinates(row.coordinates))
-			.find((dot) => dot.player_id === aliceId);
+			.find((dot) => dot.slot === aliceSlot);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
 			((await client.store.query("users", { limit: 2048 })) as PlayerRow[]).map(
@@ -722,7 +724,7 @@ try {
 		async () =>
 			visible
 				.flatMap((row) => readCoordinates(row.coordinates))
-				.some((dot) => dot.player_id === bobId) &&
+				.some((dot) => dot.slot === bobSlot) &&
 			(await rosterOf(bob.client)).get(bobId)?.name === "Bob",
 		"other humans have roster-backed map dots",
 	);
@@ -737,7 +739,7 @@ try {
 		"session returns the persisted country id",
 	);
 	const teammate = await connect();
-	const teammateId = await joinPlayer(
+	const { id: teammateId, slot: teammateSlot } = await joinPlayer(
 		teammate.client,
 		north.country_id,
 		"Teammate",
@@ -747,7 +749,7 @@ try {
 		async () =>
 			visible
 				.flatMap((row) => readCoordinates(row.coordinates))
-				.some((dot) => dot.player_id === teammateId) &&
+				.some((dot) => dot.slot === teammateSlot) &&
 			(await rosterOf(bob.client)).get(teammateId)?.country_id ===
 				north.country_id,
 		"lobby selection joins an existing country by id",
@@ -799,7 +801,7 @@ try {
 		"key release stops movement",
 	);
 	const row = visible.find((row) =>
-		readCoordinates(row.coordinates).some((dot) => dot.player_id === aliceId),
+		readCoordinates(row.coordinates).some((dot) => dot.slot === aliceSlot),
 	);
 	assert.ok(row);
 	await assert.rejects(

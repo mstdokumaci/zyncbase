@@ -137,7 +137,7 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	expect(
 		readCoordinates(
 			world.userChunk(userChunkIndex(COUNTRY_CHUNK_WIDTH + 3, 10)).coordinates,
-		).some((dot) => dot.player_id === "alice"),
+		).some((dot) => dot.slot === alice.slot),
 	).toBe(false);
 });
 
@@ -687,9 +687,9 @@ test("human names are required, limited to 16 characters, and published separate
 	for (const player of [alice, bob]) {
 		const dot = readCoordinates(
 			world.userChunk(userChunkIndex(player.x, player.y)).coordinates,
-		).find((dot) => dot.player_id === player.id);
+		).find((dot) => dot.slot === player.slot);
 		expect(dot).toMatchObject({
-			player_id: player.id,
+			slot: player.slot,
 			x: player.x,
 			y: player.y,
 		});
@@ -787,7 +787,7 @@ test("leave keeps a 20s tombstone row so same-id reconnects resume in place", ()
 	expect(world.players.has("alice")).toBe(false);
 	expect(
 		readCoordinates(world.userChunk(userChunkIndex(x, y)).coordinates).some(
-			(dot) => dot.player_id === "alice",
+			(dot) => dot.slot === player.slot,
 		),
 	).toBe(false);
 	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
@@ -1156,4 +1156,27 @@ test("humans cannot join bot countries, even with a forged country id", () => {
 		0,
 	);
 	expect(world.players.get("human")?.country_id).toBe(human.country_id);
+});
+
+test("player slots are unique, monotonic, and survive a grace reconnect", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const world = new World(land);
+	const alice = joinHuman(world, "alice");
+	const bob = joinHuman(world, "bob");
+	expect(alice?.slot).toBe(1);
+	expect(bob?.slot).toBe(2);
+	expect(world.reserveSlots(2)).toBe(3);
+	expect(() => world.reserveSlots(0)).toThrow();
+	world.startBots(0);
+	const slots = [...world.players.values()].map((player) => player.slot);
+	expect(new Set(slots).size).toBe(slots.length);
+	// Tombstone reconnects reuse the slot while the grace window is open.
+	world.remove("alice", 1);
+	expect(world.players.has("alice")).toBe(false);
+	world.input(
+		"alice",
+		{ name: "alice", country_id: alice?.country_id, direction: "idle", seq: 2 },
+		2,
+	);
+	expect(world.players.get("alice")?.slot).toBe(alice?.slot);
 });

@@ -112,6 +112,7 @@ function fixture() {
 			seq: 0,
 			direction: "idle",
 			credit: 0,
+			slot: world.reserveSlots(1),
 		});
 		world.dirtyUserChunks.add(userChunkIndex(start.x, start.y));
 		world.dirtyPlayerRows.add(id);

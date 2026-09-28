@@ -18,6 +18,12 @@ export const USER_CHUNK_HEIGHT = 100;
 export const USER_COLUMNS = WIDTH / USER_CHUNK_WIDTH;
 export const USER_ROWS = HEIGHT / USER_CHUNK_HEIGHT;
 export const USER_CHUNK_COUNT = USER_COLUMNS * USER_ROWS;
+// Packed coordinate rows: version, chunk index, dot count, then one 4-byte
+// entry per dot (slot u16, chunk-local x u8, chunk-local y u8). A user chunk
+// never exceeds MAX_PLAYERS entries.
+export const COORDINATES_VERSION = 1;
+export const COORDINATES_HEADER_BYTES = 5;
+export const COORDINATES_DOT_BYTES = 4;
 export const NAMESPACE = "world-1";
 export const RULES = { tickMs: 50, own: 1, neutral: 2, enemy: 4, crossing: 6 };
 export const MAX_PLAYERS = 1024;
@@ -102,18 +108,17 @@ export const COUNTRY_COLOR_INDEX = new Map(
 // Snapshot and canvas must agree on terrain colors.
 export const LAND_RGB = [80, 87, 94] as const;
 export const WATER_RGB = [19, 37, 52] as const;
-export const encoder = new TextEncoder();
-export const decoder = new TextDecoder();
 // Packed-color words are native-endian Uint32s; byte order depends on the host.
 export const LITTLE_ENDIAN =
 	new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
-// Hot per-tick position broadcast, embedded in chunks.dots. Only x/y change
-// often; identity and country live in the users table (one cold row per
-// player, subscribed once) and are joined client-side at render.
+// Hot per-tick position broadcast, packed into user chunk rows. The numeric
+// slot is a round-local player identity: names, countries and auth ids live in
+// the users table (one cold row per player, subscribed once), joined
+// client-side at render.
 export type Dot = {
-	player_id: string;
+	slot: number;
 	x: number;
 	y: number;
 };
@@ -121,7 +126,7 @@ export type Dot = {
 // admission, refreshed on chunk crossing and on leave (tombstone with final
 // position for grace reconnects), removed on expiry. last_x/last_y always name
 // the chunk the player is (or was) in, so locate() can jump straight to it
-// with one direct read.
+// with one direct read. slot links the row to the packed dots.
 export type PlayerRow = {
 	id: string;
 	name?: string;
@@ -129,6 +134,7 @@ export type PlayerRow = {
 	is_bot: boolean;
 	last_x: number;
 	last_y: number;
+	slot: number;
 };
 // A country's numeric identity: referenced by PlayerRow.country_id. Its row key
 // in the countries table is the string form, and its palette color selects the
@@ -147,7 +153,7 @@ export type CountryChunkRow = {
 };
 export type UserChunkRow = {
 	id: string;
-	// JSON Dot[] of the live players inside this user chunk.
+	// Packed Dot[] of the live players inside this user chunk.
 	coordinates: Uint8Array;
 };
 export type RoundInfo = {
@@ -250,8 +256,77 @@ export function readColorIndexes(bytes: Uint8Array) {
 	return codes;
 }
 
+/** Pack the live dots of one user chunk into a coordinate row. */
+export function encodeCoordinates(chunkIndex: number, dots: Dot[]): Uint8Array {
+	if (
+		!Number.isSafeInteger(chunkIndex) ||
+		chunkIndex < 0 ||
+		chunkIndex >= USER_CHUNK_COUNT
+	)
+		throw new RangeError("User chunk index is out of range");
+	if (dots.length > MAX_PLAYERS)
+		throw new RangeError("Too many dots for a user chunk");
+	const bytes = new Uint8Array(
+		COORDINATES_HEADER_BYTES + dots.length * COORDINATES_DOT_BYTES,
+	);
+	bytes[0] = COORDINATES_VERSION;
+	bytes[1] = chunkIndex & 0xff;
+	bytes[2] = (chunkIndex >> 8) & 0xff;
+	bytes[3] = dots.length & 0xff;
+	bytes[4] = (dots.length >> 8) & 0xff;
+	const originX = (chunkIndex % USER_COLUMNS) * USER_CHUNK_WIDTH;
+	const originY = Math.floor(chunkIndex / USER_COLUMNS) * USER_CHUNK_HEIGHT;
+	let at = COORDINATES_HEADER_BYTES;
+	for (const dot of dots) {
+		const lx = dot.x - originX;
+		const ly = dot.y - originY;
+		if (
+			!Number.isInteger(dot.slot) ||
+			dot.slot < 1 ||
+			dot.slot > 65535 ||
+			lx < 0 ||
+			lx >= USER_CHUNK_WIDTH ||
+			ly < 0 ||
+			ly >= USER_CHUNK_HEIGHT
+		)
+			throw new RangeError("Dot is outside its user chunk");
+		bytes[at] = dot.slot & 0xff;
+		bytes[at + 1] = (dot.slot >> 8) & 0xff;
+		bytes[at + 2] = lx;
+		bytes[at + 3] = ly;
+		at += COORDINATES_DOT_BYTES;
+	}
+	return bytes;
+}
+
+/** Decode a packed coordinate row; rejects any stream that is not exact. */
 export function readCoordinates(bytes: Uint8Array): Dot[] {
-	return JSON.parse(decoder.decode(bytes));
+	if (
+		bytes.byteLength < COORDINATES_HEADER_BYTES ||
+		bytes[0] !== COORDINATES_VERSION
+	)
+		throw new Error("Invalid coordinates encoding");
+	const chunkIndex = bytes[1] | ((bytes[2] as number) << 8);
+	if (chunkIndex >= USER_CHUNK_COUNT)
+		throw new Error("Invalid coordinates encoding");
+	const count = bytes[3] | ((bytes[4] as number) << 8);
+	if (bytes.byteLength !== COORDINATES_HEADER_BYTES + count * 4)
+		throw new Error("Invalid coordinates encoding");
+	const originX = (chunkIndex % USER_COLUMNS) * USER_CHUNK_WIDTH;
+	const originY = Math.floor(chunkIndex / USER_COLUMNS) * USER_CHUNK_HEIGHT;
+	const dots: Dot[] = new Array(count);
+	let at = COORDINATES_HEADER_BYTES;
+	for (let i = 0; i < count; i++) {
+		const slot = bytes[at] | ((bytes[at + 1] as number) << 8);
+		if (slot < 1) throw new Error("Invalid coordinates encoding");
+		dots[i] = {
+			slot,
+			x: originX + (bytes[at + 2] as number),
+			y: originY + (bytes[at + 3] as number),
+		};
+		at += 4;
+	}
+	return dots;
 }
 
 export function countryName(value: unknown): string {
