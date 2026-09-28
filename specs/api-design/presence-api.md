@@ -13,7 +13,6 @@ Presence methods require a ready presence scope. `client.connect()` and `client.
 2. [User Presence Methods](#user-presence-methods)
    - [`presence.set(data)`](#presencesetdata)
    - [`presence.subscribe(callback)`](#presencesubscribecallback)
-   - [`presence.subscribeChanges(callback)`](#presencesubscribechangescallback)
    - [`presence.get(userId)`](#presencegetuserid)
    - [`presence.getAll(options?)`](#presencegetalloptions)
    - [`presence.remove()`](#presenceremove)
@@ -96,7 +95,7 @@ Calling `presence.set({})` creates an empty user presence record and broadcasts 
 
 ### `presence.subscribe(callback)`
 
-Subscribe to real-time user presence changes in the namespace. The initial response includes the current snapshot of all users in the namespace. Pushes updates as users join, update, or leave.
+Subscribe to real-time user presence changes in the namespace. The initial response includes the current snapshot of all users in the namespace. Pushes a fresh snapshot when another user joins, updates, or leaves. A server broadcast containing only your own changes does not fire the callback. Reconnects and namespace switches emit a complete replacement snapshot.
 
 ```typescript
 const unsubscribe = await client.presence.subscribe((users) => {
@@ -125,65 +124,12 @@ Each callback receives a fresh snapshot array. Presence entries are unordered; a
 
 ---
 
-### `presence.subscribeChanges(callback)`
-
-Subscribe to user presence change deltas in the namespace without materializing a full presence snapshot array for every server broadcast. Designed for high-throughput consumers, large rooms, and local state stores that apply incremental updates.
-
-```typescript
-const unsubscribe = await client.presence.subscribeChanges((batch) => {
-  if (batch.type === 'snapshot') {
-    // Initial connection, reconnect, or namespace switch: replace entire local state
-    presenceMap.clear()
-    for (const user of batch.users) {
-      presenceMap.set(user.userId, user)
-    }
-  } else {
-    // Incremental changes from server broadcast batch
-    for (const change of batch.changes) {
-      switch (change.type) {
-        case 'join':
-        case 'update':
-          presenceMap.set(change.entry.userId, change.entry)
-          break
-        case 'leave':
-          presenceMap.delete(change.userId)
-          break
-      }
-    }
-  }
-})
-```
-
-**Types**:
-```typescript
-type PresenceChange =
-  | { type: 'join'; entry: PresenceEntry }
-  | { type: 'update'; entry: PresenceEntry }
-  | { type: 'leave'; userId: string }
-
-type PresenceChangeBatch =
-  | { type: 'snapshot'; users: PresenceEntry[] }
-  | { type: 'changes'; changes: PresenceChange[] }
-```
-
-**Semantics**:
-- **Initial and replacement snapshots**: The first notification emitted is always `{ type: 'snapshot', users }`. Reconnects and presence namespace switches emit another `snapshot`; consumers must replace their materialized state upon receiving it.
-- **Ordered per-server-batch notifications**: Subsequent notifications are `{ type: 'changes', changes }`, emitted once per accepted server broadcast batch with wire-order preservation and no extra client-side batching or timer.
-- **Complete merged entries**: `join` and `update` changes carry the complete post-merge `PresenceEntry` (including unflattened nested fields and `joinedAt`), not partial wire patches.
-- **Self-exclusion**: Notifications exclude the local user by default, matching `subscribe()` behavior. A server batch containing only self-updates does not trigger delta callbacks.
-- **Shared subscription ownership**: Snapshot (`subscribe`) and delta (`subscribeChanges`) listeners share a single underlying server subscription (`PresenceSubscribe`). The server subscription is opened on the first listener of either kind and closed only when the last listener of either kind unsubscribes.
-- **Consumer responsibility**: Consumers are responsible for initializing/replacing their local data structures on `snapshot` and applying `join`, `update`, and `leave` events incrementally on `changes`.
-
-**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the subscription. The callback receives the initial snapshot and subsequent change batches. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
-
----
-
 ### `presence.get(userId)`
 
-Synchronous local lookup of a specific user's presence. Returns `undefined` if the user is not present or no active `subscribe()` or `subscribeChanges()` exists.
+Synchronous local lookup of a specific user's presence. Returns `undefined` if the user is not present or no active `subscribe()` exists.
 
 > [!NOTE]
-> Zero-latency — reads from the SDK's in-memory cache populated by `subscribe()` or `subscribeChanges()`. You must call `subscribe()` or `subscribeChanges()` before `get()` returns meaningful data.
+> Zero-latency — reads from the SDK's in-memory cache populated by `subscribe()`. You must call `subscribe()` before `get()` returns meaningful data.
 
 ```typescript
 const alice = client.presence.get('018f3a...')
@@ -203,7 +149,7 @@ const everyone = client.presence.getAll({ includeSelf: true })
 
 Each call returns a fresh array with unspecified entry order.
 
-Returns `[]` if no active `subscribe()` or `subscribeChanges()` exists.
+Returns `[]` if no active `subscribe()` exists.
 
 ---
 

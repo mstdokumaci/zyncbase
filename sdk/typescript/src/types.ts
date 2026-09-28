@@ -437,17 +437,6 @@ export interface PresenceEntry {
 	joinedAt: number; // Unix timestamp ms
 }
 
-/** Single user change delta in a PresenceChangeBatch. */
-export type PresenceChange =
-	| { type: "join"; entry: PresenceEntry }
-	| { type: "update"; entry: PresenceEntry }
-	| { type: "leave"; userId: string };
-
-/** Batch of presence changes or a full replacement snapshot. */
-export type PresenceChangeBatch =
-	| { type: "snapshot"; users: PresenceEntry[] }
-	| { type: "changes"; changes: PresenceChange[] };
-
 /** Options for presence.getAll(). */
 export interface PresenceGetAllOptions {
 	includeSelf?: boolean;
@@ -459,13 +448,13 @@ export interface Presence {
 	set(data: Record<string, unknown>): Promise<void>;
 	/** Merge fields into namespace-level shared state. Resolves when the server accepts it. */
 	setShared(data: Record<string, unknown>): Promise<void>;
-	/** Subscribe to unordered user presence snapshots; resolves with an unsubscribe function after server acknowledgement. */
+	/**
+	 * Subscribe to unordered user presence snapshots. Fires with a fresh snapshot when
+	 * another user joins, updates, or leaves; self-only broadcasts do not fire. Resolves
+	 * with an unsubscribe function after server acknowledgement.
+	 */
 	subscribe(
 		callback: (users: PresenceEntry[]) => void,
-	): Promise<() => Promise<void>>;
-	/** Subscribe to user presence change deltas; resolves with an unsubscribe function after server acknowledgement. */
-	subscribeChanges(
-		callback: (batch: PresenceChangeBatch) => void,
 	): Promise<() => Promise<void>>;
 	/** Subscribe to shared state changes; resolves with an unsubscribe function after server acknowledgement. */
 	subscribeShared(

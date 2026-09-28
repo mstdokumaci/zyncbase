@@ -233,7 +233,7 @@ async function prepareClients(
 			await Promise.all(
 				context.clients.map(async (state) => {
 					await Promise.all([
-						state.client.presence.subscribeChanges(() => {
+						state.client.presence.subscribe(() => {
 							state.userCallbacks++;
 							state.userReady = true;
 							context.generation++;

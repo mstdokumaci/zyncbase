@@ -24,8 +24,6 @@ export type {
 	LifecycleEvent,
 	Path,
 	Presence,
-	PresenceChange,
-	PresenceChangeBatch,
 	PresenceEntry,
 	PresenceGetAllOptions,
 	QueryOptions,
