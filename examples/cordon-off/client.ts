@@ -1239,18 +1239,26 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
+		const rosterGeneration = sessionGeneration;
 		if (rosterSubscription) await rosterSubscription.unsubscribe();
+		if (rosterGeneration !== sessionGeneration) return;
 		rosterSubscription = undefined;
-		rosterSubscription = await client.store.subscribe(
+		const nextRosterSubscription = await client.store.subscribe(
 			"users",
 			{ limit: 2048 },
 			(rows) => {
+				if (rosterGeneration !== sessionGeneration) return;
 				roster.clear();
 				for (const row of rows as PlayerRow[]) roster.set(row.id, row);
 				scoreboard(latestCountries);
 				dirty = true;
 			},
 		);
+		if (rosterGeneration !== sessionGeneration) {
+			await nextRosterSubscription.unsubscribe();
+			return;
+		}
+		rosterSubscription = nextRosterSubscription;
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
