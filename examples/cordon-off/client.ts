@@ -65,8 +65,10 @@ const scoreboardToggle = element<HTMLButtonElement>("scoreboard-toggle");
 const countries = new Map<number, Country>();
 // Cold roster from the users table, keyed by identity: one row per live
 // player plus reconnect-grace tombstones. Updated only on admission, chunk
-// crossing, and leave — never per tick.
+// crossing, and leave — never per tick. The by-slot view joins packed dots to
+// names/countries at render.
 const roster = new Map<string, PlayerRow>();
+const rosterBySlot = new Map<number, PlayerRow>();
 let rosterSubscription: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
@@ -98,6 +100,7 @@ let sessionId = "";
 let lobbyCountries: Country[] = [];
 let availableSlots = 0;
 let myPlayerId = "",
+	mySlot = 0,
 	name = "",
 	nickname = "",
 	seq = 0;
@@ -367,7 +370,7 @@ function toMotion(dot: Dot): MotionDot {
 }
 
 function positionChanged(a: Dot, b: Dot) {
-	return a.x !== b.x || a.y !== b.y || a.player_id !== b.player_id;
+	return a.x !== b.x || a.y !== b.y || a.slot !== b.slot;
 }
 
 function isConsistentMove(from: Dot, to: Dot, dir: Direction): boolean {
@@ -420,7 +423,7 @@ function receiveUserChunk(row: UserChunkRow) {
 	const dots = readCoordinates(row.coordinates);
 	userChunks.set(index, dots);
 	dirty = true;
-	const self = dots.find((dot) => dot.player_id === myPlayerId);
+	const self = dots.find((dot) => dot.slot === mySlot);
 	const now = performance.now();
 	const selfMotion = self ? toMotion(self) : undefined;
 	if (selfMotion) updateSelfMotion(selfMotion, now);
@@ -673,11 +676,12 @@ async function joinWorld() {
 		name: nickname,
 		country_id: selectedCountryId,
 		session_id: sessionId,
-	})) as { user_id?: unknown };
+	})) as { user_id?: unknown; slot?: unknown };
 	if (typeof result.user_id !== "string" || !result.user_id)
 		throw new Error("Join returned no player identity");
 	await client.presence.set({});
 	myPlayerId = result.user_id;
+	mySlot = Number.isSafeInteger(result.slot) ? (result.slot as number) : 0;
 	joined = true;
 	joinedAt = performance.now();
 	lastOwnDot = 0;
@@ -1039,6 +1043,7 @@ function returnToLobby(message: string) {
 	if (rosterSubscription) void rosterSubscription.unsubscribe().catch(() => {});
 	rosterSubscription = undefined;
 	roster.clear();
+	rosterBySlot.clear();
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
 	stopJoystick();
@@ -1075,6 +1080,8 @@ function noteOwnRowMissing() {
 function hasOwnRow(me: PlayerRow | undefined): me is PlayerRow {
 	return (
 		me !== undefined &&
+		Number.isSafeInteger(me.slot) &&
+		me.slot > 0 &&
 		Number.isSafeInteger(me.last_x) &&
 		Number.isSafeInteger(me.last_y) &&
 		me.last_x >= 0 &&
@@ -1085,6 +1092,9 @@ function hasOwnRow(me: PlayerRow | undefined): me is PlayerRow {
 }
 
 function applyOwnRow(me: PlayerRow) {
+	// The join reply carries the slot, but a reconnect that lands on an older
+	// roster read can arrive first; the row is authoritative either way.
+	mySlot = me.slot;
 	// The camera is the subscription focus, so this move re-targets the
 	// listening ring. Only do it before a local dot exists: the located
 	// cell is the chunk entry, up to COUNTRY_CHUNK_WIDTH-1 cells off, so
@@ -1249,7 +1259,12 @@ element("join").addEventListener("submit", async (event) => {
 			(rows) => {
 				if (rosterGeneration !== sessionGeneration) return;
 				roster.clear();
-				for (const row of rows as PlayerRow[]) roster.set(row.id, row);
+				rosterBySlot.clear();
+				for (const row of rows as PlayerRow[]) {
+					roster.set(row.id, row);
+					if (Number.isSafeInteger(row.slot) && row.slot > 0)
+						rosterBySlot.set(row.slot, row);
+				}
 				scoreboard(latestCountries);
 				dirty = true;
 			},
@@ -1280,7 +1295,7 @@ element("join").addEventListener("submit", async (event) => {
 	}
 });
 
-const visibleDots = new Map<string, Dot>();
+const visibleDots = new Map<number, Dot>();
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: draw the map layers and local-player marker in their visual order.
 function draw(now: number) {
@@ -1352,21 +1367,21 @@ function draw(now: number) {
 	// Coordinates arrive per user chunk, already bounded to the subscribed
 	// viewport; join them here so the draw loop has a single dot map.
 	for (const dots of userChunks.values())
-		for (const dot of dots) visibleDots.set(dot.player_id, dot);
+		for (const dot of dots) visibleDots.set(dot.slot, dot);
 	// Draw yourself last so nearby dots and names do not cover your marker.
-	const self = visibleDots.get(myPlayerId) ?? motion?.dot;
+	const self = visibleDots.get(mySlot) ?? motion?.dot;
 	if (self) {
-		visibleDots.delete(self.player_id);
-		visibleDots.set(self.player_id, self);
+		visibleDots.delete(self.slot);
+		visibleDots.set(self.slot, self);
 	}
 	for (const dot of visibleDots.values()) {
-		const key = dot.player_id;
+		const key = dot.slot;
 		// Simple client-side join: hot dot plus its cold roster row. Dots
 		// without a row are mid-join/leave races; draw them neutrally once.
-		const meta = roster.get(key);
+		const meta = rosterBySlot.get(key);
 		const isBot = meta?.is_bot ?? false;
 		const display =
-			key === myPlayerId && position ? { x: position.x, y: position.y } : dot;
+			key === mySlot && position ? { x: position.x, y: position.y } : dot;
 		// Draw the dot in whichever world copy is nearest the camera.
 		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
 		const x = left + (dotX + 0.5) * zoom,
@@ -1378,7 +1393,7 @@ function draw(now: number) {
 		ctx.fillStyle = (meta && countries.get(meta.country_id)?.color) ?? "white";
 		ctx.fill();
 		ctx.lineWidth = 2;
-		ctx.strokeStyle = key === myPlayerId ? "#ffe3a0" : "#0d1822";
+		ctx.strokeStyle = key === mySlot ? "#ffe3a0" : "#0d1822";
 		ctx.stroke();
 	}
 	// Names in their own pass: font and text state change twice per frame
@@ -1390,8 +1405,8 @@ function draw(now: number) {
 	ctx.font = "10px Silkscreen, monospace";
 	ctx.fillStyle = "#bccacb";
 	for (const dot of visibleDots.values()) {
-		if (dot.player_id === myPlayerId) continue;
-		const meta = roster.get(dot.player_id);
+		if (dot.slot === mySlot) continue;
+		const meta = rosterBySlot.get(dot.slot);
 		if (!meta?.name || meta.is_bot) continue;
 		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
 		const x = left + (dotX + 0.5) * zoom,
@@ -1399,7 +1414,7 @@ function draw(now: number) {
 		ctx.strokeText(meta.name, x, y - zoom - 7, 120);
 		ctx.fillText(meta.name, x, y - zoom - 7, 120);
 	}
-	const selfMeta = roster.get(myPlayerId);
+	const selfMeta = rosterBySlot.get(mySlot);
 	if (self && selfMeta?.name && !selfMeta.is_bot) {
 		const display = position ?? self;
 		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);

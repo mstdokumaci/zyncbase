@@ -19,6 +19,7 @@ import {
 type Peer = {
 	client: ZyncBaseClient;
 	id: string;
+	slot: number;
 	name: string;
 	countryId: number;
 	input: { direction: string; seq: number };
@@ -155,7 +156,7 @@ function subscribe(peer: Peer) {
 				if (!row) return;
 				const dot = readCoordinates(
 					(row as unknown as UserChunkRow).coordinates,
-				).find((dot) => dot.player_id === peer.id);
+				).find((dot) => dot.slot === peer.slot);
 				if (!dot || (peer.x === dot.x && peer.y === dot.y)) return;
 				peer.moves++;
 				peer.x = dot.x;
@@ -182,6 +183,7 @@ async function readSpawn(peer: Peer) {
 			!Number.isSafeInteger(me.last_y)
 		)
 			return undefined;
+		if (Number.isSafeInteger(me.slot) && me.slot > 0) peer.slot = me.slot;
 		return { x: me.last_x, y: me.last_y };
 	} catch {
 		return undefined;
@@ -248,6 +250,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			const peer: Peer = {
 				client,
 				id: "",
+				slot: 0,
 				name: `Player ${data.index + 1}`,
 				countryId: data.country_id,
 				index: data.index,
@@ -277,8 +280,11 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 					name: peer.name,
 					country_id: peer.countryId,
 					session_id: sessionId,
-				})) as { user_id?: string };
+				})) as { user_id?: string; slot?: number };
 				peer.id = joined.user_id ?? "";
+				peer.slot = Number.isSafeInteger(joined.slot)
+					? (joined.slot as number)
+					: 0;
 				await client.presence.set({});
 				subscribe(peer);
 				peers.push(peer);
