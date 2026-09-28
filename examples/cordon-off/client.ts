@@ -67,7 +67,7 @@ const countries = new Map<number, Country>();
 // player plus reconnect-grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
 const roster = new Map<string, PlayerRow>();
-let rosterUnsub: Promise<SubscriptionHandle> | undefined;
+let rosterSubscription: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
@@ -1036,11 +1036,8 @@ function returnToLobby(message: string) {
 		void unlisten.then((fn) => fn()).catch(() => {});
 	userSubscriptions.clear();
 	userChunks.clear();
-	if (rosterUnsub)
-		void rosterUnsub
-			.then((subscription) => subscription.unsubscribe())
-			.catch(() => {});
-	rosterUnsub = undefined;
+	if (rosterSubscription) void rosterSubscription.unsubscribe().catch(() => {});
+	rosterSubscription = undefined;
 	roster.clear();
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
@@ -1242,13 +1239,18 @@ element("join").addEventListener("submit", async (event) => {
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		if (rosterUnsub) await (await rosterUnsub).unsubscribe();
-		rosterUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
-			roster.clear();
-			for (const row of rows as PlayerRow[]) roster.set(row.id, row);
-			scoreboard(latestCountries);
-			dirty = true;
-		});
+		if (rosterSubscription) await rosterSubscription.unsubscribe();
+		rosterSubscription = undefined;
+		rosterSubscription = await client.store.subscribe(
+			"users",
+			{ limit: 2048 },
+			(rows) => {
+				roster.clear();
+				for (const row of rows as PlayerRow[]) roster.set(row.id, row);
+				scoreboard(latestCountries);
+				dirty = true;
+			},
+		);
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
