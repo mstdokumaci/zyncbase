@@ -22,8 +22,8 @@ type Peer = {
 	name: string;
 	countryId: number;
 	input: { direction: string; seq: number };
-	subscriptions: Map<number, () => void>;
-	userSubscriptions: Map<number, () => void>;
+	subscriptions: Map<number, PendingUnlisten>;
+	userSubscriptions: Map<number, PendingUnlisten>;
 	x: number;
 	y: number;
 	positioned: boolean;
@@ -33,6 +33,7 @@ type Peer = {
 	zoom: number;
 	moves: number;
 };
+type PendingUnlisten = Promise<() => Promise<void>>;
 type Command = {
 	type: "add" | "move" | "reset" | "stats" | "close";
 	index: number;
@@ -100,18 +101,22 @@ function visibleFor(
 
 // Bring one grid's subscription set in line with its viewport.
 function syncSubscriptions(
-	subscriptions: Map<number, () => void>,
+	subscriptions: Map<number, PendingUnlisten>,
 	visible: Set<number>,
-	listenFor: (index: number) => () => void,
+	listenFor: (index: number) => PendingUnlisten,
 ) {
-	for (const [index, unsub] of subscriptions) {
+	for (const [index, unlisten] of subscriptions) {
 		if (visible.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		subscriptions.delete(index);
 	}
 	for (const index of visible) {
 		if (subscriptions.has(index)) continue;
-		subscriptions.set(index, listenFor(index));
+		const unlisten = listenFor(index);
+		subscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (subscriptions.get(index) === unlisten) subscriptions.delete(index);
+		});
 	}
 }
 
@@ -257,21 +262,35 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				userSubscriptions: new Map(),
 				input: { direction: "idle", seq: 0 },
 			};
-			peers.push(peer);
-			client.store.subscribe("countries", { limit: 1000 }, () => callbacks++);
-			client.store.subscribe("users", { limit: 2048 }, () => callbacks++);
-			const joined = (await client.actions.call("player_join", {
-				name: peer.name,
-				country_id: peer.countryId,
-				session_id: sessionId,
-			})) as { user_id?: string };
-			peer.id = joined.user_id ?? "";
-			subscribe(peer);
-			// Spawn regions are server state, so the placeholder above is only
-			// a camera start. The committed roster row carries the admitted
-			// cell; the roster publishes on a slower cadence, so read it in
-			// the background rather than blocking admission.
-			void locate(peer);
+			try {
+				await client.store.subscribe(
+					"countries",
+					{ limit: 1000 },
+					() => callbacks++,
+				);
+				await client.store.subscribe(
+					"users",
+					{ limit: 2048 },
+					() => callbacks++,
+				);
+				const joined = (await client.actions.call("player_join", {
+					name: peer.name,
+					country_id: peer.countryId,
+					session_id: sessionId,
+				})) as { user_id?: string };
+				peer.id = joined.user_id ?? "";
+				await client.presence.set({});
+				subscribe(peer);
+				peers.push(peer);
+				// Spawn regions are server state, so the placeholder above is only
+				// a camera start. The committed roster row carries the admitted
+				// cell; the roster publishes on a slower cadence, so read it in
+				// the background rather than blocking admission.
+				void locate(peer);
+			} catch (error) {
+				client.disconnect();
+				throw error;
+			}
 		} else if (data.type === "move") {
 			moving = data.moving;
 			started = Date.now();

@@ -78,14 +78,16 @@ Presence fields are defined in `schema.json` under the top-level `presence` key,
 Set your user presence data. Merges with your existing record — fields not included in the call are preserved unchanged. Automatically broadcasts the changed fields to all subscribers in the namespace.
 
 ```typescript
-client.presence.set({ cursor: { x: 100, y: 200 } })
+await client.presence.set({ cursor: { x: 100, y: 200 } })
 // cursor__x and cursor__y update. status, typing, name are untouched.
 
-client.presence.set({ status: 'idle' })
+await client.presence.set({ status: 'idle' })
 // Only status changes. Cursor position is preserved.
 ```
 
-Fire-and-forget. Server validates field types at accept time.
+Returns a promise that resolves when the server accepts the update after authorization and schema validation. The accepted update is processed asynchronously; await the promise when the caller needs to observe acceptance.
+
+Calling `presence.set({})` creates an empty user presence record and broadcasts a join. This lets applications use presence for connection membership without storing user fields. The record is removed on disconnect or with `presence.remove()`.
 
 > [!NOTE]
 > The SDK automatically throttles high-frequency `presence.set()` calls to ~60fps (16ms intervals) to prevent network saturation.
@@ -97,7 +99,7 @@ Fire-and-forget. Server validates field types at accept time.
 Subscribe to real-time user presence changes in the namespace. The initial response includes the current snapshot of all users in the namespace. Pushes updates as users join, update, or leave.
 
 ```typescript
-const unsubscribe = client.presence.subscribe((users) => {
+const unsubscribe = await client.presence.subscribe((users) => {
   renderCursors(users)
 })
 ```
@@ -119,7 +121,7 @@ interface PresenceEntry {
 
 Each callback receives a fresh snapshot array. Presence entries are unordered; array order is not stable across updates.
 
-**Returns**: An unsubscribe function. Calling it sends `PresenceUnsubscribe` to the server.
+**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the subscription. The callback receives snapshots and subsequent updates. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
 
 ---
 
@@ -128,7 +130,7 @@ Each callback receives a fresh snapshot array. Presence entries are unordered; a
 Subscribe to user presence change deltas in the namespace without materializing a full presence snapshot array for every server broadcast. Designed for high-throughput consumers, large rooms, and local state stores that apply incremental updates.
 
 ```typescript
-const unsubscribe = client.presence.subscribeChanges((batch) => {
+const unsubscribe = await client.presence.subscribeChanges((batch) => {
   if (batch.type === 'snapshot') {
     // Initial connection, reconnect, or namespace switch: replace entire local state
     presenceMap.clear()
@@ -172,7 +174,7 @@ type PresenceChangeBatch =
 - **Shared subscription ownership**: Snapshot (`subscribe`) and delta (`subscribeChanges`) listeners share a single underlying server subscription (`PresenceSubscribe`). The server subscription is opened on the first listener of either kind and closed only when the last listener of either kind unsubscribes.
 - **Consumer responsibility**: Consumers are responsible for initializing/replacing their local data structures on `snapshot` and applying `join`, `update`, and `leave` events incrementally on `changes`.
 
-**Returns**: An unsubscribe function.
+**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the subscription. The callback receives the initial snapshot and subsequent change batches. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
 
 ---
 
@@ -207,10 +209,10 @@ Returns `[]` if no active `subscribe()` or `subscribeChanges()` exists.
 
 ### `presence.remove()`
 
-Remove your presence record and broadcast a `leave` event to all subscribers. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting.
+Remove your presence record and broadcast a `leave` event to all subscribers. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting. Returns a promise that resolves when the server accepts the request and rejects if it fails.
 
 ```typescript
-client.presence.remove()
+await client.presence.remove()
 ```
 
 ---
@@ -221,10 +223,10 @@ Shared state is a single merged record for the entire namespace. Any authorized 
 
 ### `presence.setShared(data)`
 
-Merge fields into the namespace-level shared state. Fire-and-forget. Fields not included in the call are preserved unchanged. Broadcasts changed fields to all `subscribeShared` subscribers in the namespace.
+Merge fields into the namespace-level shared state. The returned promise resolves when the server accepts the update after authorization and schema validation. Fields not included in the call are preserved unchanged. Broadcasts changed fields to all `subscribeShared` subscribers in the namespace.
 
 ```typescript
-client.presence.setShared({ slide: 5 })
+await client.presence.setShared({ slide: 5 })
 // Only slide changes. playing is preserved.
 ```
 
@@ -237,7 +239,7 @@ Server validates field types at accept time. Subject to `presenceSharedWrite` au
 Subscribe to changes in the namespace-level shared state. The initial response includes the current shared state (or `null` if no user has called `setShared` yet). Pushes updates whenever any authorized user calls `setShared`.
 
 ```typescript
-const unsubscribe = client.presence.subscribeShared((shared) => {
+const unsubscribe = await client.presence.subscribeShared((shared) => {
   goToSlide(shared.slide)
 })
 ```
@@ -247,7 +249,7 @@ const unsubscribe = client.presence.subscribeShared((shared) => {
 { slide?: number, playing?: boolean }
 ```
 
-**Returns**: An unsubscribe function. Calling it sends `PresenceUnsubscribeShared` to the server.
+**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the subscription. The callback receives the initial shared state and subsequent updates. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
 
 > [!NOTE]
 > `subscribe()` and `subscribeShared()` are independent calls. You can hold either or both active simultaneously. Neither is a prerequisite for the other.

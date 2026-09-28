@@ -120,7 +120,7 @@ describe("ZyncBaseClient", () => {
 		triggerSchemaSync(mockWs);
 		await connected;
 
-		const unlisten = client.store.listen(["users", userId], (value) =>
+		const pendingListen = client.store.listen(["users", userId], (value) =>
 			values.push(value),
 		);
 		await new Promise((r) => setTimeout(r, 0));
@@ -130,6 +130,7 @@ describe("ZyncBaseClient", () => {
 		mockWs.triggerMessage(
 			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
 		);
+		const unlisten = await pendingListen;
 		await new Promise((r) => setTimeout(r, 0));
 		expect(values).toEqual([]);
 
@@ -170,7 +171,13 @@ describe("ZyncBaseClient", () => {
 				updated_at: 0,
 			},
 		]);
-		unlisten();
+		const pendingUnlisten = unlisten();
+		await new Promise((r) => setTimeout(r, 0));
+		const unsubscribe = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: unsubscribe.id }));
+		await pendingUnlisten;
 		client.disconnect();
 		restoreWebSocket();
 	});

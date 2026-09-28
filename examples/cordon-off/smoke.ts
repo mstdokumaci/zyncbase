@@ -243,11 +243,7 @@ async function runLifecycle() {
 		"Rounder",
 		player.sessionId,
 	);
-	const heartbeatTimer = setInterval(
-		() => move(player.client, "right", 1),
-		500,
-	);
-	timers.push(heartbeatTimer);
+	move(player.client, "right", 1);
 	await eventually(
 		async () => claimedAnyLand(player.client),
 		"player claims land before the boundary",
@@ -256,7 +252,6 @@ async function runLifecycle() {
 		async () => processHandle?.exitCode != null,
 		"boundary restarts the process",
 	);
-	clearInterval(heartbeatTimer);
 	assert.equal(processHandle?.exitCode, 0);
 	const historyDir = join(assets, "history");
 	const saved = JSON.parse(
@@ -499,7 +494,7 @@ async function runLifecycle() {
 		async () => hasDot(revived),
 		"reconnect restores the player dot",
 	);
-	leave(revived);
+	await leave(revived);
 	revived.disconnect();
 	console.log("PASS: a short disconnect resumes the same player");
 }
@@ -564,6 +559,19 @@ async function joinPlayer(
 				session_id: sessionId,
 			})) as { user_id?: string };
 			assert.equal(typeof result.user_id, "string");
+			await client.presence.set({});
+			const localUserId = client.presence.localUserId;
+			if (!localUserId) throw new Error("Presence scope has no user id");
+			const unsubscribe = await client.presence.subscribe(() => {});
+			try {
+				await eventually(
+					async () => client.presence.get(localUserId),
+					"player presence join",
+					1000,
+				);
+			} finally {
+				await unsubscribe();
+			}
 			return result.user_id as string;
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
@@ -577,9 +585,9 @@ function move(client: ZyncBaseClient, direction: string, seq = 1) {
 	void client.actions.call("player_move", { direction, seq }).catch(() => {});
 }
 
-/** Best-effort immediate leave on top of the input lease. */
+/** Remove presence and wait for the server response. */
 function leave(client: ZyncBaseClient) {
-	void client.actions.call("player_leave", {}).catch(() => {});
+	return client.presence.remove();
 }
 
 async function countryChunks(client: ZyncBaseClient) {
@@ -659,7 +667,7 @@ try {
 	// not the initial snapshot (the browser creates the roster subscription
 	// before its join too).
 	const subscribed = new Map<string, PlayerRow>();
-	bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
+	await bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
 		subscribed.clear();
 		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
@@ -682,7 +690,7 @@ try {
 	);
 	assert.notEqual(aliceId, bobId);
 	let visible: UserChunkRow[] = [];
-	bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
+	await bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
 		visible = rows as UserChunkRow[];
 	});
 	const dot = () =>
@@ -748,7 +756,7 @@ try {
 		async () => (await (await fetch(`${origin}/health`)).json()).bots === 3,
 		"a point's second human leaves one bot",
 	);
-	leave(teammate.client);
+	await leave(teammate.client);
 	teammate.client.disconnect();
 	const botRoster = await eventually(async () => {
 		const state = await (await fetch(`${origin}/health`)).json();
@@ -815,7 +823,7 @@ try {
 		if ((error as { code?: string })?.code === "PERMISSION_DENIED")
 			actionDenied = true;
 	});
-	alice.client.actions.handle("player_move", () => {});
+	void alice.client.actions.handle("player_move", () => {}).catch(() => {});
 	await eventually(
 		async () => actionDenied,
 		"player worker registration denied",
@@ -825,10 +833,10 @@ try {
 		{ code: "SCHEMA_VALIDATION_FAILED" },
 	);
 	for (const timer of timers.splice(0)) clearInterval(timer);
-	leave(alice.client);
+	await leave(alice.client);
 	alice.client.disconnect();
 	await eventually(async () => !dot(), "disconnected dot removed");
-	leave(bob.client);
+	await leave(bob.client);
 	bob.client.disconnect();
 	const observer = await connect();
 	await eventually(async () => {
@@ -1023,17 +1031,21 @@ try {
 		429,
 		"a second session from one network is rejected",
 	);
-	leave(solo.client);
+	await leave(solo.client);
 	solo.client.disconnect();
 	await eventually(
 		async () => (await healthState()).players === 0,
 		"leave removes the player before its session lease expires",
-		1000,
+		2000,
+	);
+	assert.equal(
+		(await askSession()).status,
+		429,
+		"a disconnected player's slot stays reserved during the resume window",
 	);
 	await eventually(
 		async () => (await askSession()).status === 200,
-		"leave frees the network slot before its session lease expires",
-		1000,
+		"the network slot frees when the resume window expires",
 	);
 	// The eventual's successful call issued an unjoined session; it holds the
 	// slot until its lease expires.

@@ -138,14 +138,14 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 	};
 }
 
-function subscribeClient(state: ClientState) {
+async function subscribeClient(state: ClientState): Promise<void> {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
 	const eventsFilter =
 		state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
 
 	state.subscribeStartedAt = Date.now();
 
-	state.itemsSub = state.client.store.subscribe(
+	const itemsSub = state.client.store.subscribe(
 		"items",
 		itemsFilter,
 		(items: JsonValue[]) => {
@@ -159,7 +159,7 @@ function subscribeClient(state: ClientState) {
 		},
 	);
 
-	state.eventsSub = state.client.store.subscribe(
+	const eventsSub = state.client.store.subscribe(
 		"events",
 		eventsFilter,
 		(events: JsonValue[]) => {
@@ -172,6 +172,7 @@ function subscribeClient(state: ClientState) {
 			globalGeneration++;
 		},
 	);
+	[state.itemsSub, state.eventsSub] = await Promise.all([itemsSub, eventsSub]);
 }
 
 function clientIdSet(state: ClientState): {
@@ -426,8 +427,8 @@ function closeAllClients(clients: ClientState[]) {
 	let closeMs = 0;
 	for (const state of clients) {
 		const u0 = Date.now();
-		state.itemsSub?.unsubscribe();
-		state.eventsSub?.unsubscribe();
+		void state.itemsSub?.unsubscribe();
+		void state.eventsSub?.unsubscribe();
 		unsubMs += Date.now() - u0;
 		const c0 = Date.now();
 		state.client.close();
@@ -632,9 +633,7 @@ async function runHalf(
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
 
 	const subT0 = Date.now();
-	for (const state of clients) {
-		subscribeClient(state);
-	}
+	await Promise.all(clients.map((state) => subscribeClient(state)));
 	const subMs = Date.now() - subT0;
 	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
 	const readyPolls = await waitForSubscriptionsReady(clients);

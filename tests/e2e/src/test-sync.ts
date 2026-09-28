@@ -20,23 +20,30 @@ async function waitForListen<T>(
 	timeoutMs = 2000,
 ): Promise<T> {
 	await client.setNamespace(namespace);
-	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			unlisten();
+	let unlisten: (() => Promise<void>) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let resolveWaiting!: (value: T) => void;
+	const waiting = new Promise<T>((resolve, reject) => {
+		resolveWaiting = resolve;
+		timer = setTimeout(() => {
 			reject(
 				new Error(`Timeout waiting for ${path.join(".")} after ${timeoutMs}ms`),
 			);
 		}, timeoutMs);
-
-		const unlisten = client.store.listen(path, (val: unknown) => {
+	});
+	try {
+		unlisten = await client.store.listen(path, (val: unknown) => {
 			const result = predicate(val as MockTask);
 			if (result) {
-				clearTimeout(timer);
-				unlisten();
-				resolve(result as T);
+				if (timer) clearTimeout(timer);
+				resolveWaiting(result as T);
 			}
 		});
-	});
+		return await waiting;
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (unlisten) await unlisten();
+	}
 }
 
 export async function run(port: number = 3000) {

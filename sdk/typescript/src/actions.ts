@@ -81,11 +81,13 @@ export class ActionsImpl implements Actions {
 		}
 	}
 
-	handle(name: string, handler: ActionHandler): void {
+	handle(name: string, handler: ActionHandler): Promise<void> {
 		this.requireAction(name);
 		this.requireReady();
 		this.handlers.set(name, handler);
-		void this.register([name]);
+		const registered = this.register([name]);
+		registered.catch(() => {});
+		return registered;
 	}
 
 	/** Re-register all handlers after reconnect or a bound-scope namespace switch. */
@@ -102,7 +104,7 @@ export class ActionsImpl implements Actions {
 				this.handlers.delete(name);
 			}
 		}
-		if (names.length > 0) void this.register(names);
+		if (names.length > 0) void this.register(names).catch(() => {});
 	}
 
 	private async register(names: string[]): Promise<void> {
@@ -112,7 +114,9 @@ export class ActionsImpl implements Actions {
 				action_ids: names,
 			});
 		} catch (err) {
-			this.emitError(mapActionError(err));
+			const error = mapActionError(err);
+			this.emitError(error);
+			throw error;
 		}
 	}
 

@@ -23,10 +23,9 @@ import {
 	encodeColorIndexes,
 	encoder,
 	HEIGHT,
-	INPUT_LEASE_MS,
 	MAX_COUNTRIES,
 	MAX_PLAYERS,
-	PLAYER_GRACE_MS,
+	PLAYER_RESUME_GRACE_MS,
 	type PlayerRow,
 	playerName,
 	RULES,
@@ -51,7 +50,6 @@ type Player = {
 	seq: number;
 	direction: Direction;
 	credit: number;
-	heardAt: number;
 	// Spawn point whose bots this player's crowd calls in. Every human has
 	// one; bots carry none.
 	point?: number;
@@ -201,7 +199,7 @@ export class World {
 				this.remove(id, now);
 			else if (!this.players.has(id)) {
 				const country = this.country(botCountries[point] as string, true);
-				if (country) this.add(id, country, now, true, i);
+				if (country) this.add(id, country, true, i);
 			}
 		}
 	}
@@ -760,7 +758,6 @@ export class World {
 		countryId: number,
 		bot: boolean,
 		team: number,
-		now: number,
 		id: string,
 	): Player {
 		const grave = this.graveyard.get(id);
@@ -776,7 +773,7 @@ export class World {
 				this.land[y * WIDTH + x] &&
 				![...this.players.values()].some((p) => p.x === x && p.y === y)
 			)
-				return this.makePlayer(id, countryId, bot, x, y, now, grave.point);
+				return this.makePlayer(id, countryId, bot, x, y, grave.point);
 		}
 		const position = this.spawn(countryId, bot, team);
 		return this.makePlayer(
@@ -785,7 +782,6 @@ export class World {
 			bot,
 			position.x,
 			position.y,
-			now,
 			position.point,
 		);
 	}
@@ -796,7 +792,6 @@ export class World {
 		bot: boolean,
 		x: number,
 		y: number,
-		now: number,
 		point?: number,
 	): Player {
 		// Every human carries a point; joiners of existing territory round-robin
@@ -815,7 +810,6 @@ export class World {
 			seq: -1,
 			direction: "idle",
 			credit: 0,
-			heardAt: now,
 			point,
 		};
 		this.players.set(id, player);
@@ -824,19 +818,13 @@ export class World {
 		return player;
 	}
 
-	private add(
-		id: string,
-		country: Country,
-		now: number,
-		bot = false,
-		team = -1,
-	) {
-		return this.spawnAt(country.country_id, bot, team, now, id);
+	private add(id: string, country: Country, bot = false, team = -1) {
+		return this.spawnAt(country.country_id, bot, team, id);
 	}
 
 	/** Admit a joining player from name and country alone. Returns the live
 	 * player, or undefined when the join is rejected. */
-	join(id: string, data: Record<string, unknown>, now: number) {
+	join(id: string, data: Record<string, unknown>, _now: number) {
 		const existing = this.players.get(id);
 		if (existing) return existing;
 		if (this.humanCount >= MAX_PLAYERS) return undefined;
@@ -849,7 +837,7 @@ export class World {
 		} catch {
 			return undefined;
 		}
-		const player = this.add(id, country, now);
+		const player = this.add(id, country);
 		player.name = nickname;
 		return player;
 	}
@@ -862,7 +850,6 @@ export class World {
 		const player = this.players.get(id) ?? this.join(id, data, now);
 		if (!player) return;
 		this.inputMessages++;
-		player.heardAt = now;
 		if (Number(data.seq) < player.seq) return;
 		if (player.seq !== data.seq)
 			this.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
@@ -877,8 +864,8 @@ export class World {
 		this.players.delete(id);
 		// Tombstone: the dots vanish now, but the roster row lingers with its
 		// final position so a same-id reconnect resumes in place. Expiry runs
-		// from the removal time (not last contact), so silent-timeout removals
-		// get the full grace window too. It is purely in-memory; the row shape
+		// from disconnect time, giving every reconnect the full grace window.
+		// It is purely in-memory; the row shape
 		// never changes, so rejoin overwrites it with no field-clearing hazards.
 		const row: PlayerRow = {
 			id: player.id,
@@ -890,7 +877,7 @@ export class World {
 		if (player.name !== undefined) row.name = player.name;
 		this.graveyard.set(id, {
 			row,
-			expires: now + PLAYER_GRACE_MS,
+			expires: now + PLAYER_RESUME_GRACE_MS,
 			point: player.point,
 		});
 		this.dirtyPlayerRows.add(id);
@@ -901,11 +888,6 @@ export class World {
 		this.ticks++;
 		for (const player of this.players.values()) {
 			if (player.is_bot) continue;
-			if (now - player.heardAt > PLAYER_GRACE_MS) {
-				this.remove(player.id, now);
-				continue;
-			}
-			if (now - player.heardAt > INPUT_LEASE_MS) player.direction = "idle";
 			this.move(player);
 		}
 		// Expire grace tombstones whose players never came back. Live rejoins

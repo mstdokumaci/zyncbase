@@ -55,7 +55,7 @@ describe("Store Synchronization Integration", () => {
 
 		let callCount = 0;
 		let lastValue: unknown = null;
-		const unlisten = store.listen(["tasks", "1"], (val) => {
+		const unlisten = await store.listen(["tasks", "1"], (val) => {
 			callCount++;
 			lastValue = val;
 		});
@@ -72,7 +72,7 @@ describe("Store Synchronization Integration", () => {
 		expect(callCount).toBe(2);
 		expect((lastValue as Record<string, unknown>).title).toBe("Live Update");
 
-		unlisten();
+		await unlisten();
 	});
 
 	test("should handle deep-path field retrieval from decoded records", async () => {

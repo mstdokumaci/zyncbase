@@ -133,14 +133,36 @@ describe("PresenceImpl", () => {
 		expect(slidePair?.[1]).toBe(5);
 	});
 
-	test("remove() dispatches PresenceRemove", () => {
+	test("remove() awaits PresenceRemove", async () => {
 		const conn = createMockConnection();
 		const presence = new PresenceImpl(conn);
 
-		presence.remove();
+		await presence.remove();
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceRemove");
+	});
+
+	test("remove() cancels a queued throttled PresenceSet", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		jest.useFakeTimers();
+		try {
+			jest.advanceTimersByTime(16);
+			presence.set({ status: "active" });
+			presence.set({ status: "away" });
+			await presence.remove();
+			jest.advanceTimersByTime(16);
+
+			expect(conn.dispatched.map((message) => message.type)).toEqual([
+				"PresenceSet",
+				"PresenceRemove",
+			]);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	test("subscribe() dispatches PresenceSubscribe and populates cache from snapshot", async () => {
@@ -186,7 +208,7 @@ describe("PresenceImpl", () => {
 		});
 	});
 
-	test("subscribe() returns unsubscribe function that dispatches PresenceUnsubscribe", async () => {
+	test("subscribe() returns a handle whose unsubscribe awaits PresenceUnsubscribe", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
@@ -204,10 +226,10 @@ describe("PresenceImpl", () => {
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
 		};
 
-		const unsubscribe = presence.subscribe(() => {});
+		const unsubscribe = await presence.subscribe(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		unsubscribe();
+		await unsubscribe();
 
 		expect(conn.dispatched.some((m) => m.type === "PresenceUnsubscribe")).toBe(
 			true,
@@ -689,7 +711,7 @@ describe("PresenceImpl", () => {
 			);
 		};
 
-		const unsubscribe = presence.subscribe(() => {});
+		const unsubscribe = await presence.subscribe(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(
@@ -701,7 +723,7 @@ describe("PresenceImpl", () => {
 		presence.invalidate();
 		presence.replaySubscriptions();
 
-		unsubscribe();
+		const closing = unsubscribe();
 
 		resolveReplay({
 			type: "ok",
@@ -710,6 +732,7 @@ describe("PresenceImpl", () => {
 			users: [],
 		} as OkResponse);
 		await new Promise((resolve) => setTimeout(resolve, 10));
+		await closing;
 
 		const unsubMsgs = conn.dispatched.filter(
 			(m) => m.type === "PresenceUnsubscribe",
@@ -750,7 +773,7 @@ describe("PresenceImpl", () => {
 			);
 		};
 
-		const unsubscribe = presence.subscribeShared(() => {});
+		const unsubscribe = await presence.subscribeShared(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(
@@ -763,7 +786,7 @@ describe("PresenceImpl", () => {
 		presence.invalidate();
 		presence.replaySubscriptions();
 
-		unsubscribe();
+		const closing = unsubscribe();
 
 		resolveReplay({
 			type: "ok",
@@ -771,6 +794,7 @@ describe("PresenceImpl", () => {
 			subId: 200,
 		} as OkResponse);
 		await new Promise((resolve) => setTimeout(resolve, 10));
+		await closing;
 
 		const unsubMsgs = conn.dispatched.filter(
 			(m) => m.type === "PresenceUnsubscribeShared",
@@ -1031,8 +1055,8 @@ describe("PresenceImpl", () => {
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
 		};
 
-		const unsubSnapshot = presence.subscribe(() => {});
-		const unsubDelta = presence.subscribeChanges(() => {});
+		const unsubSnapshot = await presence.subscribe(() => {});
+		const unsubDelta = await presence.subscribeChanges(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(
@@ -1040,14 +1064,14 @@ describe("PresenceImpl", () => {
 		).toBe(1);
 
 		// Remove snapshot listener: delta listener keeps server subscription alive
-		unsubSnapshot();
+		await unsubSnapshot();
 		expect(
 			conn.dispatched.filter((m) => m.type === "PresenceUnsubscribe").length,
 		).toBe(0);
 		expect(presence.getAll().length).toBe(1);
 
 		// Remove delta listener: now no subscribers remain, so unsubscribe and clear cache
-		unsubDelta();
+		await unsubDelta();
 		expect(
 			conn.dispatched.filter((m) => m.type === "PresenceUnsubscribe").length,
 		).toBe(1);

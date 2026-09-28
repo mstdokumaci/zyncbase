@@ -61,9 +61,6 @@
 			},
 			"required": ["direction", "seq"],
 			"returns": null
-		},
-		"player_leave": {
-			"returns": null
 		}
 	}
 }

@@ -84,8 +84,8 @@ export type ClientState = {
 	sharedReady: boolean;
 	userCallbacks: number;
 	sharedCallbacks: number;
-	presenceSubChanges: (() => void) | null;
-	presenceSubShared: (() => void) | null;
+	presenceSubChanges: (() => Promise<void>) | null;
+	presenceSubShared: (() => Promise<void>) | null;
 
 	// Health tracking
 	errorCount: number;
@@ -416,7 +416,10 @@ async function connectClientBatch(batch: ClientState[]): Promise<void> {
 	);
 }
 
-function subscribeClient(context: ProcessContext, state: ClientState): void {
+async function subscribeClient(
+	context: ProcessContext,
+	state: ClientState,
+): Promise<void> {
 	const filter =
 		context.table === "items"
 			? state.filterSet === "A"
@@ -426,7 +429,7 @@ function subscribeClient(context: ProcessContext, state: ClientState): void {
 				? EVENTS_FILTER_A
 				: EVENTS_FILTER_B;
 
-	state.storeSub = state.client.store.subscribe(
+	const storeSub = state.client.store.subscribe(
 		context.table,
 		filter,
 		(items) => {
@@ -439,17 +442,18 @@ function subscribeClient(context: ProcessContext, state: ClientState): void {
 		},
 	);
 
-	state.presenceSubChanges = state.client.presence.subscribeChanges(() => {
+	const userSub = state.client.presence.subscribeChanges(() => {
 		state.userCallbacks++;
 		state.userReady = true;
 		context.presenceGeneration++;
 	});
-
-	state.presenceSubShared = state.client.presence.subscribeShared(() => {
+	const sharedSub = state.client.presence.subscribeShared(() => {
 		state.sharedCallbacks++;
 		state.sharedReady = true;
 		context.presenceGeneration++;
 	});
+	[state.storeSub, state.presenceSubChanges, state.presenceSubShared] =
+		await Promise.all([storeSub, userSub, sharedSub]);
 }
 
 async function prepareClients(
@@ -478,9 +482,9 @@ async function prepareClients(
 				await connectClientBatch(batch);
 			}
 
-			for (const state of context.clients) {
-				subscribeClient(context, state);
-			}
+			await Promise.all(
+				context.clients.map((state) => subscribeClient(context, state)),
+			);
 
 			await waitForReadiness(context);
 		})(),
@@ -807,9 +811,9 @@ async function waitForPresenceConvergence(
 async function cleanupClients(clients: ClientState[]) {
 	for (const state of clients) {
 		state.expectedDisconnect = true;
-		state.storeSub?.unsubscribe();
-		state.presenceSubChanges?.();
-		state.presenceSubShared?.();
+		void state.storeSub?.unsubscribe();
+		if (state.presenceSubChanges) void state.presenceSubChanges();
+		if (state.presenceSubShared) void state.presenceSubShared();
 		state.client.disconnect();
 	}
 	await delay(0);

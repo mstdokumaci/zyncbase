@@ -91,7 +91,8 @@ export interface BatchOperation {
 }
 
 export interface SubscriptionHandle {
-	unsubscribe: () => void;
+	/** Stop receiving updates; resolves when the server acknowledges the unsubscribe. */
+	unsubscribe: () => Promise<void>;
 	loadMore: () => Promise<void>;
 	hasMore: boolean;
 }
@@ -111,14 +112,17 @@ export interface Store {
 	): Promise<string>;
 	/** Get current value(s) in a one-off read. */
 	get(path: Path): Promise<JsonValue | null | undefined>;
-	/** Listen for changes at a path. Returns an unlisten function. */
-	listen(path: Path, callback: (value: JsonValue) => void): () => void;
-	/** Subscribe to a collection with complex queries. */
+	/** Listen for changes at a path; resolves with an unlisten function after server acknowledgement. */
+	listen(
+		path: Path,
+		callback: (value: JsonValue) => void,
+	): Promise<() => Promise<void>>;
+	/** Subscribe to a collection with complex queries; resolves with its handle after server acknowledgement. */
 	subscribe(
 		collection: string,
 		options: QueryOptions,
 		callback: (results: JsonValue[]) => void,
-	): SubscriptionHandle;
+	): Promise<SubscriptionHandle>;
 	// Batch — async
 	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
 	query(
@@ -451,18 +455,22 @@ export interface PresenceGetAllOptions {
 
 /** Public Presence API interface. */
 export interface Presence {
-	/** Set your user presence data. Fire-and-forget. Throttled to ~60fps. */
-	set(data: Record<string, unknown>): void;
-	/** Merge fields into namespace-level shared state. Fire-and-forget. */
-	setShared(data: Record<string, unknown>): void;
-	/** Subscribe to unordered user presence snapshots. Returns unsubscribe function. */
-	subscribe(callback: (users: PresenceEntry[]) => void): () => void;
-	/** Subscribe to user presence change deltas. Returns unsubscribe function. */
-	subscribeChanges(callback: (batch: PresenceChangeBatch) => void): () => void;
-	/** Subscribe to shared state changes. Returns unsubscribe function. */
+	/** Set your user presence data. Resolves when the server accepts it; throttled to ~60fps. */
+	set(data: Record<string, unknown>): Promise<void>;
+	/** Merge fields into namespace-level shared state. Resolves when the server accepts it. */
+	setShared(data: Record<string, unknown>): Promise<void>;
+	/** Subscribe to unordered user presence snapshots; resolves with an unsubscribe function after server acknowledgement. */
+	subscribe(
+		callback: (users: PresenceEntry[]) => void,
+	): Promise<() => Promise<void>>;
+	/** Subscribe to user presence change deltas; resolves with an unsubscribe function after server acknowledgement. */
+	subscribeChanges(
+		callback: (batch: PresenceChangeBatch) => void,
+	): Promise<() => Promise<void>>;
+	/** Subscribe to shared state changes; resolves with an unsubscribe function after server acknowledgement. */
 	subscribeShared(
 		callback: (shared: Record<string, unknown> | null) => void,
-	): () => void;
+	): Promise<() => Promise<void>>;
 	/** Synchronous local lookup of a specific user's presence. */
 	get(userId: string): PresenceEntry | undefined;
 	/** Synchronous local lookup of all users' presence. Result order is unspecified. */
@@ -471,8 +479,8 @@ export interface Presence {
 	getShared(): Record<string, unknown> | null;
 	/** Scope-resolved internal users.id, or null before scope setup. */
 	readonly localUserId: string | null;
-	/** Remove your presence record. */
-	remove(): void;
+	/** Remove your presence record; resolves after the server accepts it. */
+	remove(): Promise<void>;
 }
 
 // ─── Actions interface ────────────────────────────────────────────────────────
@@ -516,9 +524,10 @@ export interface Actions {
 	): Promise<unknown>;
 	/**
 	 * Register a handler for an action. Throws `SESSION_NOT_READY` when the
-	 * action's bound scope is not ready. A worker is an ordinary client.
+	 * action's bound scope is not ready. Resolves when the server accepts the
+	 * registration. A worker is an ordinary client.
 	 */
-	handle(name: string, handler: ActionHandler): void;
+	handle(name: string, handler: ActionHandler): Promise<void>;
 }
 
 /** Union of all inbound message types. */

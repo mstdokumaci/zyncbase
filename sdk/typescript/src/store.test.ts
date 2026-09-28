@@ -188,7 +188,9 @@ describe("StoreImpl", () => {
 		]);
 		const values: JsonValue[] = [];
 
-		const unlisten = store.listen("users.u1", (value) => values.push(value));
+		const unlisten = await store.listen("users.u1", (value) =>
+			values.push(value),
+		);
 		await flushPromises();
 
 		expect(messages[0]).toEqual({
@@ -198,7 +200,7 @@ describe("StoreImpl", () => {
 		});
 		expect(values).toEqual([{ id: "u1", name: "Ada" }]);
 
-		unlisten();
+		await unlisten();
 		expect(messages[1]).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
@@ -206,13 +208,13 @@ describe("StoreImpl", () => {
 		const { store, tracker, messages } = makeStore([
 			{ type: "ok", id: 1, subId: 7 },
 		]);
-		const unlisten = store.listen("users.u1", () => {});
+		const unlisten = await store.listen("users.u1", () => {});
 		await flushPromises();
 		expect(tracker.get(7)).toBeDefined();
 
 		// Reconnect replay assigns a fresh server subId and remaps the tracker.
 		tracker.reconnect(new Map([[7, 11]]));
-		unlisten();
+		await unlisten();
 
 		expect(tracker.get(11)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 11 });
@@ -223,12 +225,11 @@ describe("StoreImpl", () => {
 			[{ type: "ok", id: 1, subId: 9, value: [] }],
 			await makeReadySchema(),
 		);
-		const handle = store.subscribe("users", {}, () => {});
-		await flushPromises();
+		const handle = await store.subscribe("users", {}, () => {});
 		expect(tracker.get(9)).toBeDefined();
 
 		tracker.reconnect(new Map([[9, 12]]));
-		handle.unsubscribe();
+		await handle.unsubscribe();
 
 		expect(tracker.get(12)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
@@ -257,10 +258,9 @@ describe("StoreImpl", () => {
 		);
 		const snapshots: JsonValue[][] = [];
 
-		const handle = store.subscribe("users", {}, (value) =>
+		const handle = await store.subscribe("users", {}, (value) =>
 			snapshots.push(value),
 		);
-		await flushPromises();
 		await flushTimers();
 
 		expect(handle.hasMore).toBe(true);
@@ -282,15 +282,15 @@ describe("StoreImpl", () => {
 		]);
 	});
 
-	test("subscribe before SchemaSync emits a controlled error without dispatching", () => {
+	test("subscribe before SchemaSync rejects with a controlled error", async () => {
 		const { store, messages, errors } = makeStore();
 
-		const handle = store.subscribe("users", {}, () => {});
+		const pending = store.subscribe("users", {}, () => {});
 
 		expect(messages).toHaveLength(0);
 		expect(errors).toHaveLength(1);
 		expect((errors[0] as { code: string }).code).toBe("SESSION_NOT_READY");
-		handle.unsubscribe();
+		await expect(pending).rejects.toMatchObject({ code: "SESSION_NOT_READY" });
 	});
 
 	test("loadMore rejection does not mutate pagination state", async () => {
@@ -310,10 +310,9 @@ describe("StoreImpl", () => {
 			schema,
 		);
 		const snapshots: JsonValue[][] = [];
-		const handle = store.subscribe("users", {}, (value) =>
+		const handle = await store.subscribe("users", {}, (value) =>
 			snapshots.push(value),
 		);
-		await flushPromises();
 		await flushTimers();
 
 		await expect(handle.loadMore()).rejects.toThrow(
@@ -337,8 +336,7 @@ describe("StoreImpl", () => {
 			],
 			await makeReadySchema(),
 		);
-		const handle = store.subscribe("users", {}, () => {});
-		await flushPromises();
+		const handle = await store.subscribe("users", {}, () => {});
 		await flushTimers();
 		expect(handle.hasMore).toBe(true);
 

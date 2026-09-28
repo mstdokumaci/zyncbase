@@ -29,6 +29,7 @@ import {
 	LITTLE_ENDIAN,
 	MAX_COUNTRIES,
 	NAMESPACE,
+	PLAYER_RESUME_GRACE_MS,
 	type PlayerRow,
 	playerName,
 	readColorIndexes,
@@ -63,17 +64,18 @@ const scoreboardPanel = element("scoreboard");
 const scoreboardToggle = element<HTMLButtonElement>("scoreboard-toggle");
 const countries = new Map<number, Country>();
 // Cold roster from the users table, keyed by identity: one row per live
-// player plus 10s grace tombstones. Updated only on admission, chunk
+// player plus reconnect-grace tombstones. Updated only on admission, chunk
 // crossing, and leave — never per tick.
 const roster = new Map<string, PlayerRow>();
-let rosterUnsub: SubscriptionHandle | undefined;
+let rosterSubscription: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
 const userChunks = new Map<number, Dot[]>();
-const subscriptions = new Map<number, () => void>();
-const userSubscriptions = new Map<number, () => void>();
+type PendingUnlisten = Promise<() => Promise<void>>;
+const subscriptions = new Map<number, PendingUnlisten>();
+const userSubscriptions = new Map<number, PendingUnlisten>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -125,15 +127,15 @@ let locating = false;
 // Bumped when a session ends so in-flight locate() failures cannot write
 // status text into the lobby that started after them.
 let sessionGeneration = 0;
-// Dirty-frame rendering: the scene repaints only when something it draws
-// changes. The input heartbeat runs on its own timer, not as a frame side
-// effect, so it survives idle frames.
+// Dirty-frame rendering: the scene repaints only when something it draws changes.
 let dirty = true;
 let drawnX = Number.NaN;
 let drawnY = Number.NaN;
 let lastCountrySubKey = "";
 let lastUserSubKey = "";
-let heartbeat: ReturnType<typeof setInterval> | undefined;
+let focusWatch: ReturnType<typeof setInterval> | undefined;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let joinRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
 const FRAME_MS = 1000 / 30;
@@ -536,9 +538,9 @@ function updateSubscriptions() {
 	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
 	lastUserSubKey = subscriptionKey(USER_GRID);
 	const visibleCountry = visibleChunks(COUNTRY_GRID);
-	for (const [index, unsub] of subscriptions) {
+	for (const [index, unlisten] of subscriptions) {
 		if (visibleCountry.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		subscriptions.delete(index);
 		chunks.delete(index);
 	}
@@ -547,7 +549,7 @@ function updateSubscriptions() {
 		// Direct document listens: chunk ids are the store primary keys, so
 		// no secondary index or query-subscription group is needed per tile.
 		const key = index;
-		const unsub = client.store.listen(
+		const unlisten = client.store.listen(
 			["country_chunks", String(index)],
 			(row) => {
 				if (!subscriptions.has(key)) return;
@@ -558,27 +560,37 @@ function updateSubscriptions() {
 				}
 			},
 		);
-		subscriptions.set(index, unsub);
+		subscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (subscriptions.get(key) === unlisten) subscriptions.delete(key);
+		});
 	}
 	const visibleUser = visibleChunks(USER_GRID);
-	for (const [index, unsub] of userSubscriptions) {
+	for (const [index, unlisten] of userSubscriptions) {
 		if (visibleUser.has(index)) continue;
-		unsub();
+		void unlisten.then((fn) => fn()).catch(() => {});
 		userSubscriptions.delete(index);
 		userChunks.delete(index);
 	}
 	for (const index of visibleUser) {
 		if (userSubscriptions.has(index)) continue;
 		const key = index;
-		const unsub = client.store.listen(["user_chunks", String(index)], (row) => {
-			if (!userSubscriptions.has(key)) return;
-			if (row) receiveUserChunk(row as UserChunkRow);
-			else {
-				userChunks.delete(key);
-				dirty = true;
-			}
+		const unlisten = client.store.listen(
+			["user_chunks", String(index)],
+			(row) => {
+				if (!userSubscriptions.has(key)) return;
+				if (row) receiveUserChunk(row as UserChunkRow);
+				else {
+					userChunks.delete(key);
+					dirty = true;
+				}
+			},
+		);
+		userSubscriptions.set(index, unlisten);
+		void unlisten.catch(() => {
+			if (userSubscriptions.get(key) === unlisten)
+				userSubscriptions.delete(key);
 		});
-		userSubscriptions.set(index, unsub);
 	}
 }
 
@@ -594,7 +606,7 @@ function maybeUpdateSubscriptions() {
 }
 
 function scoreboard(rows: Country[]) {
-	// roster rows include 10s grace tombstones, so a departed player
+	// roster rows include reconnect-grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
 	const headcount = new Map<number, number>();
 	for (const player of roster.values())
@@ -664,40 +676,76 @@ async function joinWorld() {
 	})) as { user_id?: unknown };
 	if (typeof result.user_id !== "string" || !result.user_id)
 		throw new Error("Join returned no player identity");
+	await client.presence.set({});
 	myPlayerId = result.user_id;
 	joined = true;
 	joinedAt = performance.now();
+	lastOwnDot = 0;
 	ownRowMisses = 0;
 	setConnection("");
+	publishDirection();
 }
 
-// A rejected join (full world, missing country, bad name) is final; a worker
-// that is still booting is transient and the heartbeat retries it.
+// A rejected join (full world, missing country, bad name) is final.
+function retryJoinSoon() {
+	if (joinRetryTimer !== undefined) return;
+	joinRetryTimer = setTimeout(() => {
+		joinRetryTimer = undefined;
+		void ensureJoined();
+	}, 500);
+}
+
 async function ensureJoined() {
-	if (!client || !online || joined || joinInFlight) return;
+	if (!client || !online || joined) return;
+	if (joinInFlight) {
+		retryJoinSoon();
+		return;
+	}
 	joinInFlight = true;
 	try {
 		await joinWorld();
+		clearTimeout(reconnectTimer);
+		reconnectTimer = undefined;
+		clearTimeout(joinRetryTimer);
+		joinRetryTimer = undefined;
 	} catch (error) {
 		if (error instanceof ActionExecutionError) returnToLobby(error.message);
+		else retryJoinSoon();
 	} finally {
 		joinInFlight = false;
 	}
 }
 
-// Best-effort: remove the dot now instead of waiting for the input lease.
-// Crashes and dropped sockets still expire on the lease.
-function leave() {
-	if (!client || !online || !joined) return;
-	void client.actions.call("player_leave", {}).catch(() => {});
+// Remove presence immediately on an intentional exit; connection teardown
+// also removes it if this message cannot be sent.
+function leave(): Promise<void> {
+	if (!client || !joined) return Promise.resolve();
+	return client.presence.remove();
 }
 
-function publish(changed = false) {
-	if (changed)
-		motion?.update(motion.dot, online ? direction : "idle", performance.now());
+function publishDirection() {
+	motion?.update(motion.dot, online ? direction : "idle", performance.now());
 	if (!online || !client || !joined) return;
-	if (changed) seq++;
-	void client.actions.call("player_move", { direction, seq }).catch(() => {});
+	const moveClient = client;
+	const moveDirection = direction;
+	const moveSeq = ++seq;
+	const isCurrent = () =>
+		online &&
+		joined &&
+		client === moveClient &&
+		direction === moveDirection &&
+		seq === moveSeq;
+	const send = () => {
+		void moveClient.actions
+			.call("player_move", { direction: moveDirection, seq: moveSeq })
+			.catch(() => {
+				if (!isCurrent()) return;
+				setTimeout(() => {
+					if (isCurrent()) send();
+				}, 500);
+			});
+	};
+	send();
 }
 
 function setDirection(next: Direction) {
@@ -705,7 +753,7 @@ function setDirection(next: Direction) {
 	direction = next;
 	lastSentDirection = next;
 	if (next !== "idle") prefetchDirection = next;
-	publish(true);
+	publishDirection();
 	updateSubscriptions();
 }
 
@@ -835,7 +883,7 @@ document.addEventListener("visibilitychange", () => {
 });
 addEventListener("pagehide", () => {
 	release();
-	leave();
+	void leave().catch(() => {});
 	client?.disconnect();
 });
 // Touch players get a fixed nipplejs stick. Its `move` event carries the
@@ -963,27 +1011,34 @@ scoreboardToggle.addEventListener("pointerdown", (event) => {
 setScoreboardOpen(!matchMedia("(pointer: coarse)").matches);
 
 function returnToLobby(message: string) {
+	const leavingClient = client;
+	const leavePromise = leave();
 	sessionGeneration++;
 	leaving = false;
 	clearTimeout(roundTimer);
 	clearTimeout(admissionTimer);
-	clearInterval(heartbeat);
-	heartbeat = undefined;
-	leave();
+	clearTimeout(reconnectTimer);
+	reconnectTimer = undefined;
+	clearTimeout(joinRetryTimer);
+	joinRetryTimer = undefined;
+	clearInterval(focusWatch);
+	focusWatch = undefined;
 	joined = false;
 	ownRowMisses = 0;
 	sessionId = "";
-	client?.disconnect();
-	for (const unsub of subscriptions.values()) unsub();
+	playing = online = false;
+	void leavePromise.catch(() => {}).finally(() => leavingClient?.disconnect());
+	for (const unlisten of subscriptions.values())
+		void unlisten.then((fn) => fn()).catch(() => {});
 	subscriptions.clear();
 	chunks.clear();
-	for (const unsub of userSubscriptions.values()) unsub();
+	for (const unlisten of userSubscriptions.values())
+		void unlisten.then((fn) => fn()).catch(() => {});
 	userSubscriptions.clear();
 	userChunks.clear();
-	rosterUnsub?.unsubscribe();
-	rosterUnsub = undefined;
+	if (rosterSubscription) void rosterSubscription.unsubscribe().catch(() => {});
+	rosterSubscription = undefined;
 	roster.clear();
-	playing = online = false;
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
 	stopJoystick();
@@ -1131,6 +1186,13 @@ element("join").addEventListener("submit", async (event) => {
 			online = false;
 			joined = false;
 			release();
+			if (playing && reconnectTimer === undefined) {
+				reconnectTimer = setTimeout(() => {
+					reconnectTimer = undefined;
+					if (playing && (!online || !joined))
+						returnToLobby("You were away too long — rejoin");
+				}, PLAYER_RESUME_GRACE_MS);
+			}
 			setConnection("Disconnected · Reconnecting…", true);
 		};
 		client.on("disconnected", offline);
@@ -1139,10 +1201,13 @@ element("join").addEventListener("submit", async (event) => {
 			if (playing) {
 				online = true;
 				joined = false;
-				void ensureJoined();
 				release();
-				setConnection("");
-				void locate();
+				void ensureJoined().then(() => {
+					if (!playing || !online || !joined) return;
+					setConnection("");
+					updateSubscriptions();
+					void locate();
+				});
 			}
 		});
 		await client.connect();
@@ -1167,35 +1232,43 @@ element("join").addEventListener("submit", async (event) => {
 		canvas.focus({ preventScroll: true });
 		if (matchMedia("(pointer: coarse)").matches) startJoystick();
 		else flash(element("controls-hint"));
-		client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+		await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
 			const list = rows as Country[];
 			latestCountries = list;
 			scoreboard(list);
 		});
 		// Cold roster, subscribed once: identity and country per dot, joined
 		// at render. Fires only on admission, chunk crossing, and leave.
-		rosterUnsub?.unsubscribe();
-		rosterUnsub = client.store.subscribe("users", { limit: 2048 }, (rows) => {
-			roster.clear();
-			for (const row of rows as PlayerRow[]) roster.set(row.id, row);
-			scoreboard(latestCountries);
-			dirty = true;
-		});
+		const rosterGeneration = sessionGeneration;
+		if (rosterSubscription) await rosterSubscription.unsubscribe();
+		if (rosterGeneration !== sessionGeneration) return;
+		rosterSubscription = undefined;
+		const nextRosterSubscription = await client.store.subscribe(
+			"users",
+			{ limit: 2048 },
+			(rows) => {
+				if (rosterGeneration !== sessionGeneration) return;
+				roster.clear();
+				for (const row of rows as PlayerRow[]) roster.set(row.id, row);
+				scoreboard(latestCountries);
+				dirty = true;
+			},
+		);
+		if (rosterGeneration !== sessionGeneration) {
+			await nextRosterSubscription.unsubscribe();
+			return;
+		}
+		rosterSubscription = nextRosterSubscription;
 		motion = undefined;
 		camera = { x: 933, y: 276 };
 		release();
 		updateSubscriptions();
 		zoom(0);
 		dirty = true;
-		clearInterval(heartbeat);
-		heartbeat = setInterval(() => {
-			if (!playing || !online) return;
-			// The find bar and some browser modals swallow blur: clear held keys
-			// whenever the document itself lost focus.
-			if (!document.hasFocus()) release();
-			void ensureJoined();
-			publish();
-			void locate();
+		clearInterval(focusWatch);
+		focusWatch = setInterval(() => {
+			// Some browser modals swallow blur, so keep only this local safety check.
+			if (playing && online && !document.hasFocus()) release();
 		}, 500);
 		setConnection("");
 		void locate();

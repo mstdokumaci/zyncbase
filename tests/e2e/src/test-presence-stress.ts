@@ -230,18 +230,22 @@ async function prepareClients(
 				);
 			}
 
-			for (const state of context.clients) {
-				state.client.presence.subscribeChanges(() => {
-					state.userCallbacks++;
-					state.userReady = true;
-					context.generation++;
-				});
-				state.client.presence.subscribeShared(() => {
-					state.sharedCallbacks++;
-					state.sharedReady = true;
-					context.generation++;
-				});
-			}
+			await Promise.all(
+				context.clients.map(async (state) => {
+					await Promise.all([
+						state.client.presence.subscribeChanges(() => {
+							state.userCallbacks++;
+							state.userReady = true;
+							context.generation++;
+						}),
+						state.client.presence.subscribeShared(() => {
+							state.sharedCallbacks++;
+							state.sharedReady = true;
+							context.generation++;
+						}),
+					]);
+				}),
+			);
 
 			await waitForReadiness(context);
 		})(),
