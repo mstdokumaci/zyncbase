@@ -1,6 +1,7 @@
 import {
 	ActionExecutionError,
 	createClient,
+	type JsonValue,
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
@@ -52,16 +53,28 @@ function element<T extends HTMLElement>(id: string): T {
 	return result as T;
 }
 const canvas = element<HTMLCanvasElement>("map");
-const context = canvas.getContext("2d", { alpha: false });
-if (!context) throw new Error("Your browser needs Canvas support");
-const ctx = context;
+const ctx = canvas.getContext("2d", { alpha: false });
+if (!ctx) throw new Error("Your browser needs Canvas support");
 const connection = element("connection");
-const roundChip = element("round");
+const controlsHint = element("controls-hint");
+const countriesList = element("countries");
+const countryCount = element("country-count");
+const countryDetail = element("country-detail");
+const countryPreview = element("country-preview");
+const countrySlots = element("country-slots");
+const countrySwatch = element("country-swatch");
+const errorLabel = element("error");
+const joinForm = element("join");
+const joinButton = element<HTMLButtonElement>("join-button");
+const joystickZone = element("joystick");
 const lobby = element("lobby");
-const countryChoice = element<HTMLSelectElement>("country-choice");
-const countryInput = element<HTMLInputElement>("country");
+const newCountry = element("new-country");
+const playerInput = element<HTMLInputElement>("player-name");
+const roundChip = element("round");
 const scoreboardPanel = element("scoreboard");
 const scoreboardToggle = element<HTMLButtonElement>("scoreboard-toggle");
+const countryChoice = element<HTMLSelectElement>("country-choice");
+const countryInput = element<HTMLInputElement>("country");
 const countries = new Map<number, Country>();
 // Cold roster from the users table, keyed by identity: one row per live
 // player plus reconnect-grace tombstones. Updated only on admission, chunk
@@ -70,6 +83,7 @@ const countries = new Map<number, Country>();
 const roster = new Map<string, PlayerRow>();
 const rosterBySlot = new Map<number, PlayerRow>();
 let rosterSubscription: SubscriptionHandle | undefined;
+let countriesSubscription: SubscriptionHandle | undefined;
 const chunks = new Map<
 	number,
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
@@ -81,8 +95,10 @@ const userSubscriptions = new Map<number, PendingUnlisten>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
-let playing = false;
-let joining = false;
+// Session phase. "lobby" (no session), "joining" (submit in flight), or
+// "playing"; transport (`online`) and admission (`joined`) stay independent.
+type Phase = "lobby" | "joining" | "playing";
+let phase: Phase = "lobby";
 // Admission lives in an action: joined means the worker admitted this player,
 // and identity came back in the join reply.
 let joined = false;
@@ -94,14 +110,12 @@ let roundNumber = 0;
 let roundEndsAt = 0;
 let serverSkew = 0;
 let roundTimer: ReturnType<typeof setTimeout> | undefined;
-let leaving = false;
 let selectedCountryId: number | undefined;
 let sessionId = "";
 let lobbyCountries: Country[] = [];
 let availableSlots = 0;
 let myPlayerId = "",
 	mySlot = 0,
-	name = "",
 	nickname = "",
 	seq = 0;
 let direction: Direction = "idle";
@@ -151,6 +165,27 @@ const COUNTRY_PREFETCH_CHUNKS = 1;
 const USER_PREFETCH_CHUNKS = 0;
 let lastFrame = 0;
 const OFFLINE = "The world is offline";
+// Placeholder camera until locate() reads our roster row; applyOwnRow recenters.
+const INITIAL_CAMERA = { x: 933, y: 276 };
+// Join boot: retry while the worker starts, then give up.
+const JOIN_ATTEMPTS = 30;
+const JOIN_ATTEMPT_MS = 100;
+// A rejected or in-flight join re-checks on this cadence.
+const JOIN_RETRY_MS = 500;
+const MOVE_RETRY_MS = 500;
+const FOCUS_WATCH_MS = 500;
+// Consecutive self-locate misses tolerated before returning to the lobby.
+const MAX_OWN_ROW_MISSES = 3;
+const LOCATE_THROTTLE_MS = 1500;
+const HEALTH_TIMEOUT_MS = 3000;
+const HEALTH_POLL_MS = 5000;
+const ADMISSION_CHECK_MS = 3000;
+// Navigate just after the server's round boundary so the deploy is in place.
+const ROUND_NAV_BUFFER_MS = 1200;
+const ROUND_URGENT_MS = 30_000;
+const WHEEL_STEP_PX = 80;
+const MIN_SCALE = 2;
+const MAX_SCALE = 16;
 
 // Only warn states render (CSS hides .connection otherwise): only trouble
 // should pull attention away from the map.
@@ -176,7 +211,7 @@ function updateRoundLabel() {
 	}
 	const remaining = roundEndsAt - (Date.now() + serverSkew);
 	roundChip.hidden = false;
-	roundChip.classList.toggle("urgent", remaining <= 30_000);
+	roundChip.classList.toggle("urgent", remaining <= ROUND_URGENT_MS);
 	roundChip.textContent =
 		remaining > 0
 			? `Round ${roundNumber} · ${formatDuration(remaining)} left`
@@ -188,11 +223,11 @@ function updateRoundLabel() {
 function scheduleRoundEnd() {
 	clearTimeout(roundTimer);
 	if (!roundNumber || !roundEndsAt) return;
-	const remaining = roundEndsAt - (Date.now() + serverSkew) + 1200;
+	const remaining =
+		roundEndsAt - (Date.now() + serverSkew) + ROUND_NAV_BUFFER_MS;
 	roundTimer = setTimeout(
 		() => {
-			if (!playing || leaving) return;
-			leaving = true;
+			if (phase !== "playing") return;
 			location.href = `/history.html?round=${roundNumber}`;
 		},
 		Math.max(0, remaining),
@@ -206,97 +241,119 @@ function updateCountryChoice() {
 	const country = lobbyCountries.find(
 		(country) => String(country.country_id) === countryChoice.value,
 	);
-	element("new-country").hidden = !creating;
+	newCountry.hidden = !creating;
 	countryInput.disabled = !creating;
 	countryInput.required = creating;
-	element("country-preview").hidden = !country;
+	countryPreview.hidden = !country;
 	if (country) {
-		element("country-swatch").style.background = country.color;
-		element("country-detail").textContent =
-			`${country.name} · ${country.count.toLocaleString()} land pixels`;
+		countrySwatch.style.background = country.color;
+		countryDetail.textContent = `${country.name} · ${country.count.toLocaleString()} land pixels`;
 	}
-	element<HTMLButtonElement>("join-button").disabled =
-		joining || !worldReady || (!creating && !country);
+	joinButton.disabled =
+		phase !== "lobby" || !worldReady || (!creating && !country);
 }
 countryChoice.addEventListener("change", updateCountryChoice);
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one reconciliation pass must sync slots, rows, and the native picker.
-function showLobbyCountries(all: Country[]) {
-	const rows = all.filter((country) => !country.is_bot);
-	rows.sort((a, b) => a.name.localeCompare(b.name));
-	const slots = MAX_COUNTRIES - all.length;
-	availableSlots = slots;
-	// Keep the native picker intact during polling unless its options change.
-	if (
+// Keep the native picker intact during polling unless its options change.
+function pickerNeedsRebuild(rows: Country[]) {
+	return (
 		countryChoice.options.length === 1 ||
 		rows.length !== lobbyCountries.length ||
 		rows.some(
 			(country, i) => country.country_id !== lobbyCountries[i]?.country_id,
 		)
-	) {
-		const selected = countryChoice.value;
-		const create = new Option("＋ Create a country", "new");
-		create.disabled = slots === 0;
-		countryChoice.replaceChildren(
-			new Option("Choose a country…", ""),
-			...rows.map(
-				(country) => new Option(country.name, String(country.country_id)),
-			),
-			create,
-		);
-		countryChoice.value = selected;
-		if (!rows.length && slots > 0) countryChoice.value = "new";
-	}
-	// Slots can change without the option list changing (bots come and go),
-	// so keep the create option and its selection in sync on every poll.
+	);
+}
+
+function rebuildPicker(rows: Country[], slots: number) {
+	const selected = countryChoice.value;
+	const create = new Option("＋ Create a country", "new");
+	create.disabled = slots === 0;
+	countryChoice.replaceChildren(
+		new Option("Choose a country…", ""),
+		...rows.map(
+			(country) => new Option(country.name, String(country.country_id)),
+		),
+		create,
+	);
+	countryChoice.value = selected;
+	if (!rows.length && slots > 0) countryChoice.value = "new";
+}
+
+// Slots can change without the option list changing (bots come and go),
+// so keep the create option and its selection in sync on every poll.
+function syncCreateOption(slots: number) {
 	const createOption = countryChoice.options.item(
 		countryChoice.options.length - 1,
 	);
-	if (createOption?.value === "new") {
-		createOption.disabled = slots === 0;
-		if (createOption.disabled && countryChoice.value === "new")
-			countryChoice.value = "";
-	}
+	if (createOption?.value !== "new") return;
+	createOption.disabled = slots === 0;
+	if (createOption.disabled && countryChoice.value === "new")
+		countryChoice.value = "";
+}
+
+// One reconciliation pass must sync slots, rows, and the native picker.
+function showLobbyCountries(all: Country[]) {
+	const rows = all.filter((country) => !country.is_bot);
+	rows.sort((a, b) => a.name.localeCompare(b.name));
+	const slots = MAX_COUNTRIES - all.length;
+	availableSlots = slots;
+	if (pickerNeedsRebuild(rows)) rebuildPicker(rows, slots);
+	syncCreateOption(slots);
 	lobbyCountries = rows;
 	countryChoice.disabled = false;
-	element("country-slots").textContent = slots
+	countrySlots.textContent = slots
 		? `${all.length} / ${MAX_COUNTRIES} countries · ${slots} ${slots === 1 ? "slot" : "slots"} available`
 		: `All ${MAX_COUNTRIES} slots are taken. Join an existing country.`;
 	updateCountryChoice();
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: in-flight health polls must not alter the UI after joining starts.
+type Health = {
+	now?: number;
+	round?: { number: number; endsAt: number };
+	ready?: boolean;
+	countries: Country[];
+};
+
+function applyHealth(response: Response, health: Health) {
+	if (typeof health.now === "number") serverSkew = health.now - Date.now();
+	if (health.round) {
+		roundNumber = health.round.number;
+		roundEndsAt = health.round.endsAt;
+		updateRoundLabel();
+	}
+	if (!response.ok || health.ready !== true) throw new Error();
+	worldReady = true;
+	showLobbyCountries(health.countries);
+	if (errorLabel.textContent === OFFLINE) errorLabel.textContent = "";
+	if (connection.textContent.startsWith(OFFLINE)) setConnection("");
+}
+
+function markWorldOffline() {
+	worldReady = false;
+	countryChoice.disabled = true;
+	updateCountryChoice();
+	errorLabel.textContent = OFFLINE;
+	setConnection(`${OFFLINE} · Retrying…`, true);
+}
+
+// In-flight health polls must not alter the UI after joining starts.
 async function checkHealth() {
-	if (playing || joining) return;
+	if (phase !== "lobby") return;
 	try {
 		const response = await fetch("/health", {
-			signal: AbortSignal.timeout(3000),
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 		});
-		const health = await response.json();
-		if (playing || joining) return;
-		if (typeof health.now === "number") serverSkew = health.now - Date.now();
-		if (health.round) {
-			roundNumber = health.round.number;
-			roundEndsAt = health.round.endsAt;
-			updateRoundLabel();
-		}
-		if (!response.ok || health.ready !== true) throw new Error();
-		worldReady = true;
-		showLobbyCountries(health.countries);
-		if (element("error").textContent === OFFLINE)
-			element("error").textContent = "";
-		if (connection.textContent.startsWith(OFFLINE)) setConnection("");
+		const health = (await response.json()) as Health;
+		if (phase !== "lobby") return;
+		applyHealth(response, health);
 	} catch {
-		if (playing || joining) return;
-		worldReady = false;
-		countryChoice.disabled = true;
-		updateCountryChoice();
-		element("error").textContent = OFFLINE;
-		setConnection(`${OFFLINE} · Retrying…`, true);
+		if (phase !== "lobby") return;
+		markWorldOffline();
 	}
 }
 void checkHealth();
-setInterval(() => void checkHealth(), 5000);
+setInterval(() => void checkHealth(), HEALTH_POLL_MS);
 
 const land = terrain();
 const base = document.createElement("canvas");
@@ -320,7 +377,7 @@ function resize() {
 	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 	ctx.imageSmoothingEnabled = false;
 	dirty = true;
-	if (playing) updateSubscriptions();
+	if (phase === "playing") updateSubscriptions();
 }
 addEventListener("resize", resize);
 resize();
@@ -341,9 +398,9 @@ for (let code = 1; code <= MAX_COUNTRIES; code++) {
 		: ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
 }
 
-function chunkImage(colorIndexes: Uint8Array, canvas?: HTMLCanvasElement) {
-	const image = canvas ?? document.createElement("canvas");
-	if (!canvas) {
+function chunkImage(colorIndexes: Uint8Array, target?: HTMLCanvasElement) {
+	const image = target ?? document.createElement("canvas");
+	if (!target) {
 		image.width = COUNTRY_CHUNK_WIDTH;
 		image.height = COUNTRY_CHUNK_HEIGHT;
 	}
@@ -504,7 +561,23 @@ function subscriptionBounds(grid: ChunkGrid) {
 	};
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one walk covers seam copies, rows, and the water filter for either grid.
+// Water-only country chunks can never change: never subscribe.
+function addVisibleColumns(
+	grid: ChunkGrid,
+	visible: Set<number>,
+	first: number,
+	last: number,
+	top: number,
+	bottom: number,
+) {
+	for (let col = first; col <= last; col++)
+		for (let y = top; y <= bottom; y++) {
+			const index = y * grid.columns + col;
+			if (!grid.water?.[index]) visible.add(index);
+		}
+}
+
+// One walk covers seam copies, row bounds, and the water filter for either grid.
 function visibleChunks(grid: ChunkGrid) {
 	const visible = new Set<number>();
 	const { xMin, xMax, yMin, yMax } = subscriptionBounds(grid);
@@ -516,12 +589,7 @@ function visibleChunks(grid: ChunkGrid) {
 		if (start >= end) continue;
 		const first = Math.floor(start / grid.width);
 		const last = Math.min(grid.columns - 1, Math.ceil(end / grid.width) - 1);
-		for (let col = first; col <= last; col++)
-			for (let y = top; y <= bottom; y++) {
-				const index = y * grid.columns + col;
-				// Water-only country chunks can never change: never subscribe.
-				if (!grid.water?.[index]) visible.add(index);
-			}
+		addVisibleColumns(grid, visible, first, last, top, bottom);
 	}
 	return visible;
 }
@@ -531,70 +599,79 @@ function subscriptionKey(grid: ChunkGrid) {
 	return `${Math.floor(xMin / grid.width)},${Math.floor(xMax / grid.width)},${Math.floor(yMin / grid.height)},${Math.floor(yMax / grid.height)}`;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: both grids need the same serve/unserve bookkeeping in one pass.
-function updateSubscriptions() {
-	// The SDK does not retry a listen issued while the transport is down, and a
-	// failed handle would pin its chunk index forever. Record the served bounds
-	// only when a set is served, or an offline key would suppress the first
-	// refresh after reconnect.
-	if (!client || !playing || !online) return;
-	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
-	lastUserSubKey = subscriptionKey(USER_GRID);
-	const visibleCountry = visibleChunks(COUNTRY_GRID);
-	for (const [index, unlisten] of subscriptions) {
-		if (visibleCountry.has(index)) continue;
+// Serve exactly the currently visible chunks of one grid: unlisten and drop
+// tiles that left the ring, listen for tiles that entered it. The SDK does not
+// retry a listen issued while the transport is down, and a failed handle would
+// pin its chunk index forever — so callers only invoke this when online, and a
+// failed handle removes itself below.
+function syncChunks<R>(
+	store: ZyncBaseClient["store"],
+	table: string,
+	subs: Map<number, PendingUnlisten>,
+	cache: Map<number, R>,
+	receive: (row: JsonValue) => void,
+	visible: Set<number>,
+) {
+	for (const [index, unlisten] of subs) {
+		if (visible.has(index)) continue;
 		void unlisten.then((fn) => fn()).catch(() => {});
-		subscriptions.delete(index);
-		chunks.delete(index);
+		subs.delete(index);
+		cache.delete(index);
 	}
-	for (const index of visibleCountry) {
-		if (subscriptions.has(index)) continue;
+	for (const index of visible) {
+		if (subs.has(index)) continue;
 		// Direct document listens: chunk ids are the store primary keys, so
 		// no secondary index or query-subscription group is needed per tile.
 		const key = index;
-		const unlisten = client.store.listen(
-			["country_chunks", String(index)],
-			(row) => {
-				if (!subscriptions.has(key)) return;
-				if (row) receiveCountryChunk(row as CountryChunkRow);
-				else {
-					chunks.delete(key);
-					dirty = true;
-				}
-			},
-		);
-		subscriptions.set(index, unlisten);
+		const unlisten = store.listen([table, String(index)], (row) => {
+			if (!subs.has(key)) return;
+			if (row) receive(row);
+			else {
+				cache.delete(key);
+				dirty = true;
+			}
+		});
+		subs.set(index, unlisten);
 		void unlisten.catch(() => {
-			if (subscriptions.get(key) === unlisten) subscriptions.delete(key);
+			if (subs.get(key) === unlisten) subs.delete(key);
 		});
 	}
-	const visibleUser = visibleChunks(USER_GRID);
-	for (const [index, unlisten] of userSubscriptions) {
-		if (visibleUser.has(index)) continue;
+}
+
+// Drop every served chunk of one grid (session end).
+function clearChunks<R>(
+	subs: Map<number, PendingUnlisten>,
+	cache: Map<number, R>,
+) {
+	for (const unlisten of subs.values())
 		void unlisten.then((fn) => fn()).catch(() => {});
-		userSubscriptions.delete(index);
-		userChunks.delete(index);
-	}
-	for (const index of visibleUser) {
-		if (userSubscriptions.has(index)) continue;
-		const key = index;
-		const unlisten = client.store.listen(
-			["user_chunks", String(index)],
-			(row) => {
-				if (!userSubscriptions.has(key)) return;
-				if (row) receiveUserChunk(row as UserChunkRow);
-				else {
-					userChunks.delete(key);
-					dirty = true;
-				}
-			},
-		);
-		userSubscriptions.set(index, unlisten);
-		void unlisten.catch(() => {
-			if (userSubscriptions.get(key) === unlisten)
-				userSubscriptions.delete(key);
-		});
-	}
+	subs.clear();
+	cache.clear();
+}
+
+// Both grids need the same serve/unserve bookkeeping in one pass; record the
+// served bounds only when a set is served, or an offline key would suppress
+// the first refresh after reconnect.
+function updateSubscriptions() {
+	if (!client || phase !== "playing" || !online) return;
+	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
+	lastUserSubKey = subscriptionKey(USER_GRID);
+	syncChunks(
+		client.store,
+		"country_chunks",
+		subscriptions,
+		chunks,
+		(row) => receiveCountryChunk(row as CountryChunkRow),
+		visibleChunks(COUNTRY_GRID),
+	);
+	syncChunks(
+		client.store,
+		"user_chunks",
+		userSubscriptions,
+		userChunks,
+		(row) => receiveUserChunk(row as UserChunkRow),
+		visibleChunks(USER_GRID),
+	);
 }
 
 // Recompute tiles only when the prefetched bounds cross a chunk edge: chunk
@@ -622,16 +699,14 @@ function scoreboard(rows: Country[]) {
 		rows.some((row) => countries.get(row.country_id)?.color !== row.color);
 	countries.clear();
 	for (const row of rows) countries.set(row.country_id, row);
-	element("country-count").textContent = String(rows.length);
-	element("countries").replaceChildren(
-		...rows
+	countryCount.textContent = String(rows.length);
+	const mine = myCountryId();
+	countriesList.replaceChildren(
+		...[...rows]
 			.sort((a, b) => b.count - a.count)
 			.map((country) => {
 				const li = document.createElement("li");
-				li.classList.toggle(
-					"local",
-					country.name.toLowerCase() === name.toLowerCase(),
-				);
+				li.classList.toggle("local", country.country_id === mine);
 				const swatch = document.createElement("span");
 				swatch.className = "swatch";
 				swatch.style.background = country.color;
@@ -696,7 +771,7 @@ function retryJoinSoon() {
 	joinRetryTimer = setTimeout(() => {
 		joinRetryTimer = undefined;
 		void ensureJoined();
-	}, 500);
+	}, JOIN_RETRY_MS);
 }
 
 async function ensureJoined() {
@@ -746,7 +821,7 @@ function publishDirection() {
 				if (!isCurrent()) return;
 				setTimeout(() => {
 					if (isCurrent()) send();
-				}, 500);
+				}, MOVE_RETRY_MS);
 			});
 	};
 	send();
@@ -850,7 +925,7 @@ const zoomKeys: Record<string, number> = {
 	NumpadSubtract: -1,
 };
 window.addEventListener("keydown", (event) => {
-	if (!playing || !online) return;
+	if (phase !== "playing" || !online) return;
 	// Browser shortcuts (zoom, select all, save) must keep working.
 	if (event.ctrlKey || event.metaKey) return;
 	const zoomStep = zoomKeys[event.code];
@@ -875,7 +950,7 @@ window.addEventListener("keyup", (event) => {
 // tabs can steal focus, so reclaim it whenever the page gets it back and
 // clear stale keys whenever it is lost.
 function focusMap() {
-	if (playing) canvas.focus({ preventScroll: true });
+	if (phase === "playing") canvas.focus({ preventScroll: true });
 }
 addEventListener("blur", release);
 addEventListener("focus", focusMap);
@@ -907,7 +982,7 @@ function flash(target: HTMLElement) {
 }
 
 function startJoystick() {
-	const zone = element("joystick");
+	const zone = joystickZone;
 	zone.hidden = false;
 	flash(zone);
 	const stick = nipplejs.create({
@@ -937,12 +1012,12 @@ function startJoystick() {
 function stopJoystick() {
 	joystick?.destroy();
 	joystick = undefined;
-	element("joystick").hidden = true;
+	joystickZone.hidden = true;
 }
 
 function setScale(next: number) {
-	if (!playing) return;
-	const clamped = Math.min(16, Math.max(2, Math.round(next)));
+	if (phase !== "playing") return;
+	const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(next)));
 	if (clamped === scale) return;
 	scale = clamped;
 	dirty = true;
@@ -958,12 +1033,12 @@ let wheelAccum = 0;
 canvas.addEventListener(
 	"wheel",
 	(event) => {
-		if (!playing || event.ctrlKey) return;
+		if (phase !== "playing" || event.ctrlKey) return;
 		event.preventDefault();
 		const unit =
 			event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
 		wheelAccum += event.deltaY * unit;
-		if (Math.abs(wheelAccum) >= 80) {
+		if (Math.abs(wheelAccum) >= WHEEL_STEP_PX) {
 			zoom(wheelAccum > 0 ? -1 : 1);
 			wheelAccum = 0;
 		}
@@ -1018,7 +1093,6 @@ function returnToLobby(message: string) {
 	const leavingClient = client;
 	const leavePromise = leave();
 	sessionGeneration++;
-	leaving = false;
 	clearTimeout(roundTimer);
 	clearTimeout(admissionTimer);
 	clearTimeout(reconnectTimer);
@@ -1030,16 +1104,14 @@ function returnToLobby(message: string) {
 	joined = false;
 	ownRowMisses = 0;
 	sessionId = "";
-	playing = online = false;
+	phase = "lobby";
+	online = false;
 	void leavePromise.catch(() => {}).finally(() => leavingClient?.disconnect());
-	for (const unlisten of subscriptions.values())
-		void unlisten.then((fn) => fn()).catch(() => {});
-	subscriptions.clear();
-	chunks.clear();
-	for (const unlisten of userSubscriptions.values())
-		void unlisten.then((fn) => fn()).catch(() => {});
-	userSubscriptions.clear();
-	userChunks.clear();
+	clearChunks(subscriptions, chunks);
+	clearChunks(userSubscriptions, userChunks);
+	if (countriesSubscription)
+		void countriesSubscription.unsubscribe().catch(() => {});
+	countriesSubscription = undefined;
 	if (rosterSubscription) void rosterSubscription.unsubscribe().catch(() => {});
 	rosterSubscription = undefined;
 	roster.clear();
@@ -1047,7 +1119,7 @@ function returnToLobby(message: string) {
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
 	stopJoystick();
-	element("error").textContent = message;
+	errorLabel.textContent = message;
 	setConnection("");
 	dirty = true;
 	updateCountryChoice();
@@ -1056,7 +1128,7 @@ function returnToLobby(message: string) {
 
 // The roster can change between the lobby poll and the join action.
 function checkAdmission() {
-	if (!playing || lastOwnDot !== 0) return;
+	if (phase !== "playing" || lastOwnDot !== 0) return;
 	if (
 		selectedCountryId !== undefined &&
 		!latestCountries.some((country) => country.country_id === selectedCountryId)
@@ -1069,10 +1141,10 @@ function checkAdmission() {
 // A live player always has a roster row; consecutive locate() misses mean the
 // world dropped us. Returns true when the lobby has been requested.
 function noteOwnRowMissing() {
-	if (!playing || !joined || joinInFlight) return false;
+	if (phase !== "playing" || !joined || joinInFlight) return false;
 	if (performance.now() - joinedAt < ADMISSION_GRACE_MS) return false;
 	ownRowMisses++;
-	if (ownRowMisses < 3) return false;
+	if (ownRowMisses < MAX_OWN_ROW_MISSES) return false;
 	returnToLobby("You were away too long — rejoin");
 	return true;
 }
@@ -1108,7 +1180,12 @@ function applyOwnRow(me: PlayerRow) {
 }
 
 async function locate() {
-	if (!client || !online || locating || performance.now() - lastOwnDot < 1500)
+	if (
+		!client ||
+		!online ||
+		locating ||
+		performance.now() - lastOwnDot < LOCATE_THROTTLE_MS
+	)
 		return;
 	const generation = sessionGeneration;
 	locating = true;
@@ -1129,175 +1206,360 @@ async function locate() {
 	}
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep selection validation and connection cleanup together during admission.
-element("join").addEventListener("submit", async (event) => {
+type SessionInfo = {
+	session_id: string;
+	token: string;
+	now?: number;
+	round?: { number: number; endsAt: number };
+	country_id?: number;
+	error?: string;
+};
+
+// Resolves what to join before any network I/O: nickname, target country,
+// and create-vs-pick validation. Throws with the lobby error message.
+function resolveJoinSelection() {
+	nickname = playerName(playerInput.value);
+	const selected = lobbyCountries.find(
+		(country) => String(country.country_id) === countryChoice.value,
+	);
+	selectedCountryId = selected?.country_id;
+	let countryNameToJoin: string;
+	if (countryChoice.value === "new") {
+		if (availableSlots === 0)
+			throw new Error("All country slots are taken. Join an existing country.");
+		countryNameToJoin = countryName(countryInput.value);
+		if (
+			lobbyCountries.some(
+				(country) =>
+					country.name.toLowerCase() === countryNameToJoin.toLowerCase(),
+			)
+		)
+			throw new Error(
+				"That country already exists. Choose it from the list to join.",
+			);
+	} else {
+		if (!selected) throw new Error("Choose a country to join.");
+		countryNameToJoin = selected.name;
+	}
+	return { selected, countryNameToJoin };
+}
+
+// POST /session: fetches the lease and applies round/skew/identity state.
+async function requestSession(
+	selected: Country | undefined,
+	countryNameToJoin: string,
+): Promise<SessionInfo> {
+	const response = await fetch("/session", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(selected ? {} : { countryName: countryNameToJoin }),
+	});
+	const session = (await response.json()) as SessionInfo;
+	if (!response.ok) throw new Error(session.error);
+	if (typeof session.session_id !== "string")
+		throw new Error("Session response is missing its player lease");
+	sessionId = session.session_id;
+	if (typeof session.now === "number") serverSkew = session.now - Date.now();
+	if (session.round) {
+		roundNumber = session.round.number;
+		roundEndsAt = session.round.endsAt;
+		updateRoundLabel();
+	}
+	selectedCountryId = selected?.country_id ?? session.country_id;
+	return session;
+}
+
+// A transient drop only emits "reconnecting" (the SDK resumes on its
+// own), but input and subscription setup must stop until "connected":
+// a listen issued while down is dropped, not queued. A reconnect must
+// also re-join, because the worker may have restarted meanwhile.
+function wireLifecycle(next: ZyncBaseClient) {
+	next.on("error", (error) => {
+		setConnection(`Connection issue: ${String(error)}`, true);
+	});
+	const offline = () => {
+		online = false;
+		joined = false;
+		release();
+		if (phase === "playing" && reconnectTimer === undefined) {
+			reconnectTimer = setTimeout(() => {
+				reconnectTimer = undefined;
+				if (phase === "playing" && (!online || !joined))
+					returnToLobby("You were away too long — rejoin");
+			}, PLAYER_RESUME_GRACE_MS);
+		}
+		setConnection("Disconnected · Reconnecting…", true);
+	};
+	next.on("disconnected", offline);
+	next.on("reconnecting", offline);
+	next.on("connected", () => {
+		if (phase === "playing") {
+			online = true;
+			joined = false;
+			release();
+			void ensureJoined().then(() => {
+				if (phase !== "playing" || !online || !joined) return;
+				setConnection("");
+				updateSubscriptions();
+				void locate();
+			});
+		}
+	});
+}
+
+// Creates and connects the session client, then retries the join action
+// while the worker may still be booting.
+async function startSessionClient(session: SessionInfo) {
+	const next = createClient({
+		url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
+		auth: { token: session.token },
+		storeNamespace: NAMESPACE,
+	});
+	client = next;
+	wireLifecycle(next);
+	await next.connect();
+	// The join action admits the player and returns the internal user id
+	// the roster and dots are keyed by.
+	for (let i = 0; i < JOIN_ATTEMPTS && !joined; i++) {
+		try {
+			await joinWorld();
+		} catch (error) {
+			if (error instanceof ActionExecutionError) throw error;
+			await new Promise((resolve) => setTimeout(resolve, JOIN_ATTEMPT_MS));
+		}
+	}
+	if (!joined) throw new Error("Could not join the world");
+	return next;
+}
+
+function rebuildRoster(rows: PlayerRow[], generation: number) {
+	if (generation !== sessionGeneration) return;
+	roster.clear();
+	rosterBySlot.clear();
+	for (const row of rows) {
+		roster.set(row.id, row);
+		if (Number.isSafeInteger(row.slot) && row.slot > 0)
+			rosterBySlot.set(row.slot, row);
+	}
+	scoreboard(latestCountries);
+	dirty = true;
+}
+
+// Country palette + counts for the scoreboard, plus the cold roster:
+// identity and country per dot, joined at render. Returns false when a
+// returnToLobby superseded the swap, so the caller must stop.
+async function subscribeColdStores(next: ZyncBaseClient): Promise<boolean> {
+	const countriesGeneration = sessionGeneration;
+	if (countriesSubscription) await countriesSubscription.unsubscribe();
+	if (countriesGeneration !== sessionGeneration) return false;
+	countriesSubscription = undefined;
+	const nextCountriesSubscription = await next.store.subscribe(
+		"countries",
+		{ limit: 1000 },
+		(rows) => {
+			if (countriesGeneration !== sessionGeneration) return;
+			const list = rows as Country[];
+			latestCountries = list;
+			scoreboard(list);
+		},
+	);
+	if (countriesGeneration !== sessionGeneration) {
+		await nextCountriesSubscription.unsubscribe();
+		return false;
+	}
+	countriesSubscription = nextCountriesSubscription;
+	const rosterGeneration = sessionGeneration;
+	if (rosterSubscription) await rosterSubscription.unsubscribe();
+	if (rosterGeneration !== sessionGeneration) return false;
+	rosterSubscription = undefined;
+	const nextRosterSubscription = await next.store.subscribe(
+		"users",
+		{ limit: 2048 },
+		(rows) => rebuildRoster(rows as PlayerRow[], rosterGeneration),
+	);
+	if (rosterGeneration !== sessionGeneration) {
+		await nextRosterSubscription.unsubscribe();
+		return false;
+	}
+	rosterSubscription = nextRosterSubscription;
+	return true;
+}
+
+// From lease to live world: admission state, lobby teardown, cold stores.
+async function enterGame(next: ZyncBaseClient) {
+	phase = "playing";
+	online = true;
+	clearTimeout(admissionTimer);
+	admissionTimer = setTimeout(checkAdmission, ADMISSION_CHECK_MS);
+	scheduleRoundEnd();
+	lobby.hidden = true;
+	scoreboardPanel.hidden = false;
+	canvas.focus({ preventScroll: true });
+	if (matchMedia("(pointer: coarse)").matches) startJoystick();
+	else flash(controlsHint);
+	if (!(await subscribeColdStores(next))) return;
+	motion = undefined;
+	camera = { ...INITIAL_CAMERA };
+	release();
+	updateSubscriptions();
+	dirty = true;
+	clearInterval(focusWatch);
+	focusWatch = setInterval(() => {
+		// Some browser modals swallow blur, so keep only this local safety check.
+		if (phase === "playing" && online && !document.hasFocus()) release();
+	}, FOCUS_WATCH_MS);
+	setConnection("");
+	void locate();
+}
+
+joinForm.addEventListener("submit", async (event) => {
 	event.preventDefault();
-	if (joining || playing || !worldReady) return;
-	joining = true;
+	if (phase !== "lobby" || !worldReady) return;
+	phase = "joining";
 	updateCountryChoice();
-	element("error").textContent = "";
+	errorLabel.textContent = "";
 	lastOwnDot = 0;
 	latestCountries = [];
 	clearTimeout(admissionTimer);
 	try {
-		nickname = playerName(element<HTMLInputElement>("player-name").value);
-		const selected = lobbyCountries.find(
-			(country) => String(country.country_id) === countryChoice.value,
-		);
-		selectedCountryId = selected?.country_id;
-		if (countryChoice.value === "new") {
-			if (availableSlots === 0)
-				throw new Error(
-					"All country slots are taken. Join an existing country.",
-				);
-			name = countryName(countryInput.value);
-			if (
-				lobbyCountries.some(
-					(country) => country.name.toLowerCase() === name.toLowerCase(),
-				)
-			)
-				throw new Error(
-					"That country already exists. Choose it from the list to join.",
-				);
-		} else {
-			if (!selected) throw new Error("Choose a country to join.");
-			name = selected.name;
-		}
-		const response = await fetch("/session", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(selected ? {} : { countryName: name }),
-		});
-		const session = await response.json();
-		if (!response.ok) throw new Error(session.error);
-		if (typeof session.session_id !== "string")
-			throw new Error("Session response is missing its player lease");
-		sessionId = session.session_id;
-		if (typeof session.now === "number") serverSkew = session.now - Date.now();
-		if (session.round) {
-			roundNumber = session.round.number;
-			roundEndsAt = session.round.endsAt;
-			updateRoundLabel();
-		}
-		selectedCountryId = selected?.country_id ?? session.country_id;
-		client = createClient({
-			url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
-			auth: { token: session.token },
-			storeNamespace: NAMESPACE,
-		});
-		client.on("error", (error) => {
-			setConnection(`Connection issue: ${String(error)}`, true);
-		});
-		// A transient drop only emits "reconnecting" (the SDK resumes on its
-		// own), but input and subscription setup must stop until "connected":
-		// a listen issued while down is dropped, not queued. A reconnect must
-		// also re-join, because the worker may have restarted meanwhile.
-		const offline = () => {
-			online = false;
-			joined = false;
-			release();
-			if (playing && reconnectTimer === undefined) {
-				reconnectTimer = setTimeout(() => {
-					reconnectTimer = undefined;
-					if (playing && (!online || !joined))
-						returnToLobby("You were away too long — rejoin");
-				}, PLAYER_RESUME_GRACE_MS);
-			}
-			setConnection("Disconnected · Reconnecting…", true);
-		};
-		client.on("disconnected", offline);
-		client.on("reconnecting", offline);
-		client.on("connected", () => {
-			if (playing) {
-				online = true;
-				joined = false;
-				release();
-				void ensureJoined().then(() => {
-					if (!playing || !online || !joined) return;
-					setConnection("");
-					updateSubscriptions();
-					void locate();
-				});
-			}
-		});
-		await client.connect();
-		// The join action admits the player and returns the internal user id
-		// the roster and dots are keyed by. The worker may still be booting,
-		// so retry briefly before treating the world as unavailable.
-		for (let i = 0; i < 30 && !joined; i++) {
-			try {
-				await joinWorld();
-			} catch (error) {
-				if (error instanceof ActionExecutionError) throw error;
-				await new Promise((resolve) => setTimeout(resolve, 100));
-			}
-		}
-		if (!joined) throw new Error("Could not join the world");
-		playing = online = true;
-		clearTimeout(admissionTimer);
-		admissionTimer = setTimeout(checkAdmission, 3000);
-		scheduleRoundEnd();
-		lobby.hidden = true;
-		scoreboardPanel.hidden = false;
-		canvas.focus({ preventScroll: true });
-		if (matchMedia("(pointer: coarse)").matches) startJoystick();
-		else flash(element("controls-hint"));
-		await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
-			const list = rows as Country[];
-			latestCountries = list;
-			scoreboard(list);
-		});
-		// Cold roster, subscribed once: identity and country per dot, joined
-		// at render. Fires only on admission, chunk crossing, and leave.
-		const rosterGeneration = sessionGeneration;
-		if (rosterSubscription) await rosterSubscription.unsubscribe();
-		if (rosterGeneration !== sessionGeneration) return;
-		rosterSubscription = undefined;
-		const nextRosterSubscription = await client.store.subscribe(
-			"users",
-			{ limit: 2048 },
-			(rows) => {
-				if (rosterGeneration !== sessionGeneration) return;
-				roster.clear();
-				rosterBySlot.clear();
-				for (const row of rows as PlayerRow[]) {
-					roster.set(row.id, row);
-					if (Number.isSafeInteger(row.slot) && row.slot > 0)
-						rosterBySlot.set(row.slot, row);
-				}
-				scoreboard(latestCountries);
-				dirty = true;
-			},
-		);
-		if (rosterGeneration !== sessionGeneration) {
-			await nextRosterSubscription.unsubscribe();
-			return;
-		}
-		rosterSubscription = nextRosterSubscription;
-		motion = undefined;
-		camera = { x: 933, y: 276 };
-		release();
-		updateSubscriptions();
-		zoom(0);
-		dirty = true;
-		clearInterval(focusWatch);
-		focusWatch = setInterval(() => {
-			// Some browser modals swallow blur, so keep only this local safety check.
-			if (playing && online && !document.hasFocus()) release();
-		}, 500);
-		setConnection("");
-		void locate();
+		const { selected, countryNameToJoin } = resolveJoinSelection();
+		const session = await requestSession(selected, countryNameToJoin);
+		const next = await startSessionClient(session);
+		await enterGame(next);
 	} catch (error) {
 		returnToLobby(error instanceof Error ? error.message : String(error));
 	} finally {
-		joining = false;
 		updateCountryChoice();
 	}
 });
 
 const visibleDots = new Map<number, Dot>();
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: draw the map layers and local-player marker in their visual order.
+// The visible world slice in screen space, shared by every draw layer.
+type View = {
+	left: number;
+	top: number;
+	xMin: number;
+	xMax: number;
+	zoom: number;
+};
+
+// Background plus one full world copy per seam-crossing segment (the world
+// repeats every WIDTH, so the map pans forever), then every visible
+// country-chunk copy.
+function drawWorld(view: View) {
+	ctx.fillStyle = "#0d1822";
+	ctx.fillRect(0, 0, width, height);
+	const firstCopy = Math.floor(view.xMin / WIDTH),
+		lastCopy = Math.floor(view.xMax / WIDTH);
+	for (let k = firstCopy; k <= lastCopy; k++)
+		ctx.drawImage(
+			base,
+			view.left + k * WIDTH * view.zoom,
+			view.top,
+			WIDTH * view.zoom,
+			HEIGHT * view.zoom,
+		);
+	for (const [index, chunk] of chunks) {
+		const chunkX = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH,
+			chunkY = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
+		for (
+			let k = Math.floor((view.xMin - chunkX) / WIDTH);
+			k <= Math.floor((view.xMax - chunkX) / WIDTH);
+			k++
+		)
+			ctx.drawImage(
+				chunk.image,
+				view.left + (chunkX + k * WIDTH) * view.zoom,
+				view.top + chunkY * view.zoom,
+				COUNTRY_CHUNK_WIDTH * view.zoom,
+				COUNTRY_CHUNK_HEIGHT * view.zoom,
+			);
+	}
+}
+
+// Coordinates arrive per user chunk, already bounded to the subscribed
+// viewport; join them here so the draw loop has a single dot map. Yourself
+// goes last so nearby dots and names do not cover your marker.
+function collectVisibleDots(): Dot | undefined {
+	visibleDots.clear();
+	for (const dots of userChunks.values())
+		for (const dot of dots) visibleDots.set(dot.slot, dot);
+	const self = visibleDots.get(mySlot) ?? motion?.dot;
+	if (self) {
+		visibleDots.delete(self.slot);
+		visibleDots.set(self.slot, self);
+	}
+	return self;
+}
+
+function paintDot(
+	dot: Dot,
+	view: View,
+	position: { x: number; y: number } | undefined,
+) {
+	const key = dot.slot;
+	// Simple client-side join: hot dot plus its cold roster row. Dots
+	// without a row are mid-join/leave races; draw them neutrally once.
+	const meta = rosterBySlot.get(key);
+	const isBot = meta?.is_bot ?? false;
+	const display =
+		key === mySlot && position ? { x: position.x, y: position.y } : dot;
+	// Draw the dot in whichever world copy is nearest the camera.
+	const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+	const x = view.left + (dotX + 0.5) * view.zoom,
+		y = view.top + (display.y + 0.5) * view.zoom;
+	ctx.beginPath();
+	const radius = Math.max(3, view.zoom * 0.48);
+	if (isBot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+	else ctx.arc(x, y, radius, 0, Math.PI * 2);
+	ctx.fillStyle = (meta && countries.get(meta.country_id)?.color) ?? "white";
+	ctx.fill();
+	ctx.lineWidth = 2;
+	ctx.strokeStyle = key === mySlot ? "#ffe3a0" : "#0d1822";
+	ctx.stroke();
+}
+
+function drawDots(view: View, position: { x: number; y: number } | undefined) {
+	for (const dot of visibleDots.values()) paintDot(dot, view, position);
+}
+
+// Names in their own pass: font and text state change twice per frame
+// instead of once per visible player.
+function drawNames(
+	view: View,
+	position: { x: number; y: number } | undefined,
+	self: Dot | undefined,
+) {
+	ctx.textAlign = "center";
+	ctx.lineJoin = "round";
+	ctx.strokeStyle = "#0d1822";
+	ctx.lineWidth = 3;
+	ctx.font = "10px Silkscreen, monospace";
+	ctx.fillStyle = "#bccacb";
+	for (const dot of visibleDots.values()) {
+		if (dot.slot === mySlot) continue;
+		const meta = rosterBySlot.get(dot.slot);
+		if (!meta?.name || meta.is_bot) continue;
+		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
+		const x = view.left + (dotX + 0.5) * view.zoom,
+			y = view.top + (dot.y + 0.5) * view.zoom;
+		ctx.strokeText(meta.name, x, y - view.zoom - 7, 120);
+		ctx.fillText(meta.name, x, y - view.zoom - 7, 120);
+	}
+	const selfMeta = rosterBySlot.get(mySlot);
+	if (self && selfMeta?.name && !selfMeta.is_bot) {
+		const display = position ?? self;
+		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+		const x = view.left + (dotX + 0.5) * view.zoom,
+			y = view.top + (display.y + 0.5) * view.zoom;
+		ctx.font = "bold 11px Silkscreen, monospace";
+		ctx.fillStyle = "#ffe3a0";
+		ctx.strokeText(selfMeta.name, x, y - view.zoom - 7, 120);
+		ctx.fillText(selfMeta.name, x, y - view.zoom - 7, 120);
+	}
+}
+
 function draw(now: number) {
 	requestAnimationFrame(draw);
 	const elapsed = now - lastFrame;
@@ -1328,103 +1590,19 @@ function draw(now: number) {
 		camera.y = approach(camera.y, position.y + 0.5, elapsed, CAMERA_TAU);
 	}
 	maybeUpdateSubscriptions();
-	const zoom = playing ? scale : Math.max(width / WIDTH, height / HEIGHT);
-	const left = width / 2 - camera.x * zoom;
-	const top = height / 2 - camera.y * zoom;
-	const xMin = camera.x - width / zoom / 2,
-		xMax = camera.x + width / zoom / 2;
-	ctx.fillStyle = "#0d1822";
-	ctx.fillRect(0, 0, width, height);
-	// The world repeats every WIDTH: draw each visible copy so the map pans
-	// forever and the seam stays seamless.
-	const firstCopy = Math.floor(xMin / WIDTH),
-		lastCopy = Math.floor(xMax / WIDTH);
-	for (let k = firstCopy; k <= lastCopy; k++)
-		ctx.drawImage(
-			base,
-			left + k * WIDTH * zoom,
-			top,
-			WIDTH * zoom,
-			HEIGHT * zoom,
-		);
-	visibleDots.clear();
-	for (const [index, chunk] of chunks) {
-		const chunkX = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH,
-			chunkY = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
-		for (
-			let k = Math.floor((xMin - chunkX) / WIDTH);
-			k <= Math.floor((xMax - chunkX) / WIDTH);
-			k++
-		)
-			ctx.drawImage(
-				chunk.image,
-				left + (chunkX + k * WIDTH) * zoom,
-				top + chunkY * zoom,
-				COUNTRY_CHUNK_WIDTH * zoom,
-				COUNTRY_CHUNK_HEIGHT * zoom,
-			);
-	}
-	// Coordinates arrive per user chunk, already bounded to the subscribed
-	// viewport; join them here so the draw loop has a single dot map.
-	for (const dots of userChunks.values())
-		for (const dot of dots) visibleDots.set(dot.slot, dot);
-	// Draw yourself last so nearby dots and names do not cover your marker.
-	const self = visibleDots.get(mySlot) ?? motion?.dot;
-	if (self) {
-		visibleDots.delete(self.slot);
-		visibleDots.set(self.slot, self);
-	}
-	for (const dot of visibleDots.values()) {
-		const key = dot.slot;
-		// Simple client-side join: hot dot plus its cold roster row. Dots
-		// without a row are mid-join/leave races; draw them neutrally once.
-		const meta = rosterBySlot.get(key);
-		const isBot = meta?.is_bot ?? false;
-		const display =
-			key === mySlot && position ? { x: position.x, y: position.y } : dot;
-		// Draw the dot in whichever world copy is nearest the camera.
-		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
-		const x = left + (dotX + 0.5) * zoom,
-			y = top + (display.y + 0.5) * zoom;
-		ctx.beginPath();
-		const radius = Math.max(3, zoom * 0.48);
-		if (isBot) ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
-		else ctx.arc(x, y, radius, 0, Math.PI * 2);
-		ctx.fillStyle = (meta && countries.get(meta.country_id)?.color) ?? "white";
-		ctx.fill();
-		ctx.lineWidth = 2;
-		ctx.strokeStyle = key === mySlot ? "#ffe3a0" : "#0d1822";
-		ctx.stroke();
-	}
-	// Names in their own pass: font and text state change twice per frame
-	// instead of once per visible player.
-	ctx.textAlign = "center";
-	ctx.lineJoin = "round";
-	ctx.strokeStyle = "#0d1822";
-	ctx.lineWidth = 3;
-	ctx.font = "10px Silkscreen, monospace";
-	ctx.fillStyle = "#bccacb";
-	for (const dot of visibleDots.values()) {
-		if (dot.slot === mySlot) continue;
-		const meta = rosterBySlot.get(dot.slot);
-		if (!meta?.name || meta.is_bot) continue;
-		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
-		const x = left + (dotX + 0.5) * zoom,
-			y = top + (dot.y + 0.5) * zoom;
-		ctx.strokeText(meta.name, x, y - zoom - 7, 120);
-		ctx.fillText(meta.name, x, y - zoom - 7, 120);
-	}
-	const selfMeta = rosterBySlot.get(mySlot);
-	if (self && selfMeta?.name && !selfMeta.is_bot) {
-		const display = position ?? self;
-		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
-		const x = left + (dotX + 0.5) * zoom,
-			y = top + (display.y + 0.5) * zoom;
-		ctx.font = "bold 11px Silkscreen, monospace";
-		ctx.fillStyle = "#ffe3a0";
-		ctx.strokeText(selfMeta.name, x, y - zoom - 7, 120);
-		ctx.fillText(selfMeta.name, x, y - zoom - 7, 120);
-	}
+	const viewZoom =
+		phase === "playing" ? scale : Math.max(width / WIDTH, height / HEIGHT);
+	const view = {
+		left: width / 2 - camera.x * viewZoom,
+		top: height / 2 - camera.y * viewZoom,
+		xMin: camera.x - width / viewZoom / 2,
+		xMax: camera.x + width / viewZoom / 2,
+		zoom: viewZoom,
+	};
+	drawWorld(view);
+	const self = collectVisibleDots();
+	drawDots(view, position);
+	drawNames(view, position, self);
 }
 requestAnimationFrame(draw);
 

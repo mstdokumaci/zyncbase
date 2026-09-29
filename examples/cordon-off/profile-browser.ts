@@ -332,8 +332,9 @@ try {
 		navigationToLiveMs: performance.now() - navigationStart,
 		joinToLiveMs: performance.now() - joinStart,
 	};
-	for (let current = 8; current !== zoom; current += zoom > 8 ? 2 : -2)
-		await page.locator(zoom > 8 ? "#zoom-in" : "#zoom-out").click();
+	// Zoom is keyboard-only now (= / -, one step per press from the default 8).
+	for (let i = 0; i < Math.abs(zoom - 8); i++)
+		await page.keyboard.press(zoom > 8 ? "=" : "-");
 	await until(
 		async () => (await health()).players >= 1,
 		"observer admitted to the world",
