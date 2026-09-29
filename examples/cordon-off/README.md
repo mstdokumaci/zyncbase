@@ -6,7 +6,7 @@ A small multiplayer territory game using ZyncBase's real actions → store path.
 
 Rounds end on absolute one-hour boundaries at the top of each UTC hour. A round is archived when it produced claimed land: the winner, final standings, and a full-map PNG are written to `dist/history/`, then the whole stack (simulation and ZyncBase) restarts. A human disconnect does not immediately remove claimed territory; if the scheduled boundary occurs before an idle reset, the round is archived, while a quiet-world reset fires first and discards the round without history. Boot wipes the world and starts the next round, so process memory is recycled every round. A boundary on a never-played (empty) world writes nothing either. Round numbers advance only when a round is archived, and the last **36** rounds are kept.
 
-During play the header shows a countdown. At the deadline each client navigates to `/history.html?round=N`; the viewer polls until the round's data has been deployed. Results are Cloudflare Worker static assets, so they load while the simulation restarts. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, boot publishes the assets through the Cloudflare Workers API only when their content hash changed; the game never waits on a publish and a failed publish retries in the background. Wrangler and Node are not needed on the VM (wrangler's `workerd` has no FreeBSD build); the Worker name and compatibility date are read from `wrangler.jsonc`.
+During play the header shows a countdown. At the deadline each client navigates to `/history.html?round=N`; the viewer polls until the round's data has been deployed. Results are Cloudflare Worker static assets, so they load while the simulation restarts. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, boot publishes the assets through the Cloudflare Workers API only when their content hash changed; the game never waits on a publish and a failed publish retries in the background. Wrangler and Node are not needed on the VM; the Worker name and compatibility date are read from `wrangler.jsonc`.
 
 ## Run locally
 
@@ -31,7 +31,7 @@ Stop with Ctrl+C. Territory is stored in `data/cordon-off/`; generated history a
 
 ## Cloudflare and VPS
 
-Follow [the FreeBSD + Cloudflare setup](./DEPLOYMENT.md). One public origin serves browser assets from Cloudflare, sends `/session` and `/health` to Bun, and sends `/auth/ticket` and `/ws` directly to ZyncBase over IPv6/TLS. The production Bun process runs the simulation and token issuer; it does not relay database connections or serve browser files.
+Follow [the Debian + Cloudflare setup](./DEPLOYMENT.md). One public origin serves browser assets from Cloudflare, sends `/session` and `/health` to Bun, and sends `/auth/ticket` and `/ws` directly to ZyncBase over IPv6/TLS. The production Bun process runs the simulation and token issuer; it does not relay database connections or serve browser files.
 
 Build an uploadable browser directory with `bun run demo:game:build`. Its output is `examples/cordon-off/dist/`. Start the VM processes with `bun run demo:game:start`. The development command `demo:game:dev` supplies local routing on port 8080 and is not used on the VM.
 
