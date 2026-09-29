@@ -197,14 +197,17 @@ if (!Number.isSafeInteger(sessionLeaseMs) || sessionLeaseMs < 0)
 	throw new Error("GAME_SESSION_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
-// Per-network player cap. 0 disables it. Active slots expire after presence
-// reports a disconnect and the reconnect window passes.
+// Per-network, per-country player cap. 0 disables it. Pools are keyed by the
+// network key plus the declared country, so one network holds five slots in
+// each country; sessions that declare no country share one pool and cannot
+// join. Active slots expire after presence reports a disconnect and the
+// reconnect window passes.
 const playersPerIp = Number(process.env.GAME_PLAYERS_PER_IP ?? 5);
 if (!Number.isSafeInteger(playersPerIp) || playersPerIp < 0)
 	throw new Error("GAME_PLAYERS_PER_IP must be a non-negative integer");
 const ipSessions = new Map<string, Set<string>>();
 type SessionLease = {
-	key: string;
+	pool: string;
 	userId?: string;
 	name?: string;
 	countryId?: number;
@@ -261,14 +264,18 @@ function activateSession(lease: SessionLease) {
 	lease.expiryTimer = undefined;
 }
 
-function holdSession(key: string, sessionId: string) {
-	let subs = ipSessions.get(key);
+function holdSession(
+	pool: string,
+	countryId: number | undefined,
+	sessionId: string,
+) {
+	let subs = ipSessions.get(pool);
 	if (!subs) {
 		subs = new Set();
-		ipSessions.set(key, subs);
+		ipSessions.set(pool, subs);
 	}
 	subs.add(sessionId);
-	const lease = { key };
+	const lease: SessionLease = { pool, countryId };
 	sessionLeases.set(sessionId, lease);
 	scheduleSessionExpiry(sessionId, lease);
 }
@@ -280,9 +287,9 @@ function releaseSession(sessionId: string) {
 	if (lease.userId && playerSessions.get(lease.userId) === sessionId)
 		playerSessions.delete(lease.userId);
 	sessionLeases.delete(sessionId);
-	const subs = ipSessions.get(lease.key);
+	const subs = ipSessions.get(lease.pool);
 	subs?.delete(sessionId);
-	if (!subs?.size) ipSessions.delete(lease.key);
+	if (!subs?.size) ipSessions.delete(lease.pool);
 }
 
 /** `world.join` throws only when no land is available; callers treat that as a
@@ -351,12 +358,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					error: "The world is full. Try again after someone leaves.",
 				});
 			const key = clientKey(req);
-			if (playersPerIp && (ipSessions.get(key)?.size ?? 0) >= playersPerIp)
-				return reply(res, 429, {
-					error: `Only ${playersPerIp} players can join from one network.`,
-				});
 			roundActive = true;
 			let country: Country | undefined;
+			let declaredCountryId: number | undefined;
 			if (Object.hasOwn(input, "countryName")) {
 				// Bot countries are created lazily, so the name check must run
 				// before creation, not just against existing rows.
@@ -382,15 +386,35 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 					countryLeases.delete(countryId);
 					world.maybeDeleteCountry(countryId);
 				}, countryLeaseMs).unref();
+			} else if (Object.hasOwn(input, "countryId")) {
+				const declared = input.countryId;
+				if (!Number.isSafeInteger(declared) || declared < 0)
+					throw new Error("countryId must be a non-negative integer");
+				const target = world.countries.get(declared);
+				if (!target)
+					return reply(res, 409, {
+						error: "That country is no longer available.",
+					});
+				if (target.is_bot)
+					return reply(res, 409, {
+						error: "That country is reserved for bots.",
+					});
+				declaredCountryId = declared;
 			}
+			const countryId = country?.country_id ?? declaredCountryId;
+			const pool = `${key}|${countryId ?? ""}`;
+			if (playersPerIp && (ipSessions.get(pool)?.size ?? 0) >= playersPerIp)
+				return reply(res, 429, {
+					error: `Only ${playersPerIp} players from one network can join the same country.`,
+				});
 			// Held only on success: rejected country requests must not burn a slot.
 			const sub = `player:${randomUUID()}`;
 			const sessionId = randomUUID();
-			holdSession(key, sessionId);
+			holdSession(pool, countryId, sessionId);
 			return reply(res, 200, {
 				token: token("player", sub),
 				session_id: sessionId,
-				country_id: country?.country_id,
+				country_id: countryId,
 				round: roundInfo(),
 				now: Date.now(),
 			});
@@ -840,6 +864,11 @@ try {
 		const countryId = params.country_id;
 		if (typeof name !== "string" || typeof countryId !== "number")
 			throw new ActionError("JOIN_REJECTED", "Invalid join request");
+		if (lease.countryId !== countryId)
+			throw new ActionError(
+				"JOIN_REJECTED",
+				"Your session is for a different country; please rejoin",
+			);
 		const player = tryJoin(ctx.userId, params, performance.now());
 		if (!player)
 			throw new ActionError("JOIN_REJECTED", "Could not join this country");
@@ -848,7 +877,6 @@ try {
 			releaseSession(previousSessionId);
 		lease.userId = ctx.userId;
 		lease.name = name;
-		lease.countryId = countryId;
 		playerSessions.set(ctx.userId, sessionId);
 		if (presentUsers.has(ctx.userId)) activateSession(lease);
 		else scheduleSessionExpiry(sessionId, lease);

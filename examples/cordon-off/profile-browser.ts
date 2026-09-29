@@ -175,11 +175,16 @@ async function addPeer(codes: number[]) {
 	// external --url keeps the real 120 sessions/minute budget.
 	await Bun.sleep(values.url ? 550 : 20);
 	const creating = codes.length < countryCount;
+	const declaredCountryId = creating
+		? undefined
+		: codes[admitted % codes.length];
 	const response = await fetch(new URL("/session", url), {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(
-			creating ? { countryName: `Profile ${codes.length + 1}` } : {},
+			creating
+				? { countryName: `Profile ${codes.length + 1}` }
+				: { countryId: declaredCountryId },
 		),
 	});
 	assert(response.ok, `Session ${admitted + 1} failed: ${response.status}`);
@@ -194,7 +199,7 @@ async function addPeer(codes: number[]) {
 	}
 	const countryId = creating
 		? (codes.at(-1) as number)
-		: codes[admitted % codes.length];
+		: (declaredCountryId as number);
 	const shard = Math.floor((admitted - 1) / 64);
 	if (!workers[shard])
 		workers.push(

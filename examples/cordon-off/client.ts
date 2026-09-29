@@ -1252,7 +1252,11 @@ async function requestSession(
 	const response = await fetch("/session", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(selected ? {} : { countryName: countryNameToJoin }),
+		body: JSON.stringify(
+			selected
+				? { countryId: selected.country_id }
+				: { countryName: countryNameToJoin },
+		),
 	});
 	const session = (await response.json()) as SessionInfo;
 	if (!response.ok) throw new Error(session.error);
