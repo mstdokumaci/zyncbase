@@ -500,11 +500,23 @@ async function runLifecycle() {
 	console.log("PASS: a short disconnect resumes the same player");
 }
 
-async function connect(countryName?: string) {
+async function connect(
+	countryName?: string,
+	opts: { countryId?: number; ip?: string } = {},
+) {
 	const response = await fetch(`${origin}/session`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(countryName === undefined ? {} : { countryName }),
+		headers: {
+			"Content-Type": "application/json",
+			...(opts.ip ? { "X-Forwarded-For": opts.ip } : {}),
+		},
+		body: JSON.stringify(
+			countryName !== undefined
+				? { countryName }
+				: opts.countryId !== undefined
+					? { countryId: opts.countryId }
+					: {},
+		),
 	});
 	assert.equal(response.status, 200);
 	const {
@@ -513,6 +525,7 @@ async function connect(countryName?: string) {
 		session_id: sessionId,
 	} = await response.json();
 	if (countryName !== undefined) assert.equal(typeof countryId, "number");
+	if (opts.countryId !== undefined) assert.equal(countryId, opts.countryId);
 	const ticketResponse = await fetch(`${origin}/auth/ticket`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${token}` },
@@ -738,7 +751,7 @@ try {
 		alice.countryId,
 		"session returns the persisted country id",
 	);
-	const teammate = await connect();
+	const teammate = await connect(undefined, { countryId: north.country_id });
 	const { id: teammateId, slot: teammateSlot } = await joinPlayer(
 		teammate.client,
 		north.country_id,
@@ -1011,27 +1024,97 @@ try {
 			fresh.length,
 		"unused country reservations expire",
 	);
+	// A declared country renews the creator's reservation: with the lease at
+	// 500ms, the sleeps below bracket the creator's timer (300ms in, check at
+	// ~600ms, renewed timer due ~800ms), so the check lands after the creator's
+	// timer must have fired and before the renewed one may.
+	const created = await (
+		await fetch(`${origin}/session`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ countryName: "Renewers" }),
+		})
+	).json();
+	assert.equal(typeof created.country_id, "number");
+	await Bun.sleep(300);
+	const declared = await fetch(`${origin}/session`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ countryId: created.country_id }),
+	});
+	assert.equal(declared.status, 200, "the declared country admits a session");
+	await Bun.sleep(300);
+	assert.ok(
+		(await (await fetch(`${origin}/health`)).json()).countries.some(
+			(row: Country) => row.country_id === created.country_id,
+		),
+		"the declaring session renews the creator's reservation",
+	);
+	await eventually(
+		async () =>
+			!(await (await fetch(`${origin}/health`)).json()).countries.some(
+				(row: Country) => row.country_id === created.country_id,
+			),
+		"the renewed reservation still expires",
+	);
 	console.log(
-		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
+		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup, declared-country lease renewal",
 	);
 	await stop();
-	// Per-network admission: a joined player holds its slot, a leave frees it,
-	// and an issued-but-unjoined session expires on its lease.
+	// Per-network, per-country admission: a joined player holds its pool slot,
+	// a leave frees it, and an issued-but-unjoined session expires on its
+	// lease. Pools key on network plus country, so the same network still gets
+	// a session for another country, and a session only joins the country it
+	// declared.
 	await start(true, {
 		GAME_PLAYERS_PER_IP: "1",
 		GAME_SESSION_LEASE_MS: "5000",
 	});
-	const askSession = (ip?: string) =>
-		fetch(`${origin}/session`, {
+	const askSession = (ip?: string, countryId?: number) => {
+		const headers: Record<string, string> = {};
+		if (ip) headers["X-Forwarded-For"] = ip;
+		const payload =
+			countryId === undefined ? undefined : JSON.stringify({ countryId });
+		if (payload) headers["Content-Type"] = "application/json";
+		return fetch(`${origin}/session`, {
 			method: "POST",
-			...(ip ? { headers: { "X-Forwarded-For": ip } } : {}),
+			headers,
+			...(payload ? { body: payload } : {}),
 		});
+	};
 	const solo = await connect("Soloers");
 	await joinPlayer(solo.client, solo.countryId, "Solo", solo.sessionId);
+	// Land keeps the country alive after the leave below, so its pool stays
+	// declarable for the resume-window assertions.
+	move(solo.client, "right", 1);
+	await eventually(async () => claimedAnyLand(solo.client), "solo claims land");
 	assert.equal(
-		(await askSession()).status,
+		(await askSession(undefined, solo.countryId)).status,
 		429,
-		"a second session from one network is rejected",
+		"a second session for the same country from one network is rejected",
+	);
+	const other = await connect("Neighbors", { ip: "10.0.0.9" });
+	assert.equal(
+		(await askSession(undefined, other.countryId)).status,
+		200,
+		"the same network is admitted for a different country",
+	);
+	assert.equal(
+		(await askSession("10.0.0.9", other.countryId)).status,
+		429,
+		"the creating network's own pool for that country is capped too",
+	);
+	const impostor = await connect(undefined, {
+		countryId: solo.countryId,
+		ip: "10.0.0.7",
+	});
+	await assert.rejects(
+		impostor.client.actions.call("player_join", {
+			name: "Impostor",
+			country_id: other.countryId,
+			session_id: impostor.sessionId,
+		}),
+		{ code: "JOIN_REJECTED" },
 	);
 	await leave(solo.client);
 	solo.client.disconnect();
@@ -1041,23 +1124,23 @@ try {
 		2000,
 	);
 	assert.equal(
-		(await askSession()).status,
+		(await askSession(undefined, solo.countryId)).status,
 		429,
 		"a disconnected player's slot stays reserved during the resume window",
 	);
 	await eventually(
-		async () => (await askSession()).status === 200,
+		async () => (await askSession(undefined, solo.countryId)).status === 200,
 		"the network slot frees when the resume window expires",
 	);
 	// The eventual's successful call issued an unjoined session; it holds the
 	// slot until its lease expires.
 	assert.equal(
-		(await askSession()).status,
+		(await askSession(undefined, solo.countryId)).status,
 		429,
 		"an unjoined session holds its slot",
 	);
 	await eventually(
-		async () => (await askSession()).status === 200,
+		async () => (await askSession(undefined, solo.countryId)).status === 200,
 		"abandoned sessions expire",
 	);
 	await stop();
@@ -1091,7 +1174,7 @@ try {
 		"abandoned sessions expire",
 	);
 	console.log(
-		"PASS: per-network player limit, IPv6 /64 grouping, lease and leave release",
+		"PASS: per-network, per-country player limit, IPv6 /64 grouping, lease and leave release",
 	);
 	if (!useTls) await runLifecycle();
 } catch (error) {
