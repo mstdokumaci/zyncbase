@@ -197,6 +197,17 @@ if (!Number.isSafeInteger(sessionLeaseMs) || sessionLeaseMs < 0)
 	throw new Error("GAME_SESSION_LEASE_MS must be a non-negative integer");
 // Latest reservation generation per country id; stale timers no-op.
 const countryLeases = new Map<number, number>();
+// Bump the generation so earlier reservation timers no-op; the fresh timer
+// reaps the country if it still has no land and no players when it fires.
+function reserveCountry(countryId: number) {
+	const lease = (countryLeases.get(countryId) ?? 0) + 1;
+	countryLeases.set(countryId, lease);
+	setTimeout(() => {
+		if (countryLeases.get(countryId) !== lease) return;
+		countryLeases.delete(countryId);
+		world.maybeDeleteCountry(countryId);
+	}, countryLeaseMs).unref();
+}
 // Per-network, per-country player cap. 0 disables it. Pools are keyed by the
 // network key plus the declared country, so one network holds five slots in
 // each country; sessions that declare no country share one pool and cannot
@@ -378,14 +389,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 						error: "That country is reserved for bots.",
 					});
 				// Release an unused slot if the browser never completes admission.
-				const countryId = country.country_id;
-				const lease = (countryLeases.get(countryId) ?? 0) + 1;
-				countryLeases.set(countryId, lease);
-				setTimeout(() => {
-					if (countryLeases.get(countryId) !== lease) return;
-					countryLeases.delete(countryId);
-					world.maybeDeleteCountry(countryId);
-				}, countryLeaseMs).unref();
+				reserveCountry(country.country_id);
 			} else if (Object.hasOwn(input, "countryId")) {
 				const declared = input.countryId;
 				if (!Number.isSafeInteger(declared) || declared < 0)
@@ -407,6 +411,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 				return reply(res, 429, {
 					error: `Only ${playersPerIp} players from one network can join the same country.`,
 				});
+			// A declared country can be reaped by an earlier reservation timer
+			// before this session completes admission; re-anchor it on success
+			// so the browser still has a full lease window to reach player_join.
+			if (declaredCountryId !== undefined) reserveCountry(declaredCountryId);
 			// Held only on success: rejected country requests must not burn a slot.
 			const sub = `player:${randomUUID()}`;
 			const sessionId = randomUUID();

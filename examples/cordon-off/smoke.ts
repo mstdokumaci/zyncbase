@@ -1024,8 +1024,41 @@ try {
 			fresh.length,
 		"unused country reservations expire",
 	);
+	// A declared country renews the creator's reservation: with the lease at
+	// 500ms, the sleeps below bracket the creator's timer (300ms in, check at
+	// ~600ms, renewed timer due ~800ms), so the check lands after the creator's
+	// timer must have fired and before the renewed one may.
+	const created = await (
+		await fetch(`${origin}/session`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ countryName: "Renewers" }),
+		})
+	).json();
+	assert.equal(typeof created.country_id, "number");
+	await Bun.sleep(300);
+	const declared = await fetch(`${origin}/session`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ countryId: created.country_id }),
+	});
+	assert.equal(declared.status, 200, "the declared country admits a session");
+	await Bun.sleep(300);
+	assert.ok(
+		(await (await fetch(`${origin}/health`)).json()).countries.some(
+			(row: Country) => row.country_id === created.country_id,
+		),
+		"the declaring session renews the creator's reservation",
+	);
+	await eventually(
+		async () =>
+			!(await (await fetch(`${origin}/health`)).json()).countries.some(
+				(row: Country) => row.country_id === created.country_id,
+			),
+		"the renewed reservation still expires",
+	);
 	console.log(
-		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup",
+		"PASS: session country creation, request validation, concurrent country cap, abandoned-slot cleanup, declared-country lease renewal",
 	);
 	await stop();
 	// Per-network, per-country admission: a joined player holds its pool slot,
