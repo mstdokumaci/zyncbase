@@ -32,14 +32,16 @@ fn makePermissiveConfig(allocator: std.mem.Allocator, schema: *const schema_type
     return auth_helpers.initTestConfig(allocator, json);
 }
 
-fn makePermissiveSession(claims: *const std.StringHashMapUnmanaged(typed.Value), arena: std.mem.Allocator) PresenceService.Session {
+fn makePermissiveSession(claims: *const std.StringHashMapUnmanaged(typed.Value), arena: std.mem.Allocator) PresenceService.Context {
     return .{
-        .namespace_id = 1,
-        .user_doc_id = 1,
-        .conn_id = 100,
-        .external_user_id = "external-test-user",
-        .session_claims = claims,
-        .presence_namespace = "room:lobby",
+        .request = .{
+            .conn_id = 100,
+            .user_doc_id = 1,
+            .external_user_id = "external-test-user",
+            .session_claims = claims,
+            .presence_namespace = "room:lobby",
+            .presence_namespace_id = 1,
+        },
         .arena = arena,
     };
 }
@@ -56,9 +58,9 @@ fn makeTestSharedPatch(allocator: std.mem.Allocator) !msgpack.Payload {
     });
 }
 
-fn denyWriteSession(claims: *const std.StringHashMapUnmanaged(typed.Value), arena: std.mem.Allocator) PresenceService.Session {
+fn denyWriteSession(claims: *const std.StringHashMapUnmanaged(typed.Value), arena: std.mem.Allocator) PresenceService.Context {
     var s = makePermissiveSession(claims, arena);
-    s.presence_namespace = "unknown:xyz";
+    s.request.presence_namespace = "unknown:xyz";
     return s;
 }
 

@@ -3,22 +3,16 @@ const std = @import("std");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const uws = @import("../uwebsockets_wrapper.zig");
+const request_context = @import("request_context.zig");
 const Session = @import("../authentication/session.zig").Session;
 
 const Allocator = std.mem.Allocator;
 const WebSocket = uws.WebSocket;
+pub const unset_namespace_id: i64 = request_context.unset_namespace_id;
 
 const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 
-pub const unset_namespace_id: i64 = -1;
-
 pub const Connection = struct {
-    pub const StoreSession = struct {
-        namespace_id: i64,
-        user_doc_id: typed_doc_id.DocId,
-        ready: bool,
-    };
-
     allocator: Allocator,
     id: u64,
     session: ?Session,
@@ -208,14 +202,6 @@ pub const Connection = struct {
             const namespace = self.pending_store_namespace orelse return null;
             return @as(?[]const u8, try allocator.dupe(u8, namespace));
         }
-    }
-
-    pub fn getStoreSession(self: *Connection) StoreSession {
-        return .{
-            .namespace_id = self.namespace_id,
-            .user_doc_id = self.user_doc_id,
-            .ready = self.store_ready,
-        };
     }
 
     pub fn getPresenceNamespace(self: *Connection) ?[]const u8 {

@@ -5,10 +5,10 @@ const helpers = @import("../app_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const wire_encode = @import("../wire/encode.zig");
 const service_mod = @import("service.zig");
+const RequestContext = @import("../connection/request_context.zig").RequestContext;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
-const SessionContext = service_mod.SessionContext;
 
 const schema_json =
     \\{"version":"1.0.0","store":{},"actions":{
@@ -20,7 +20,7 @@ const schema_json =
     \\}}
 ;
 
-fn connectionContext(conn: anytype) SessionContext {
+fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
         .user_doc_id = conn.user_doc_id,

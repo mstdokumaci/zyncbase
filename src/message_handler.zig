@@ -7,13 +7,13 @@ const connection_mod = @import("connection/state.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_types = @import("schema/types.zig");
 const subscription_mod = @import("subscription/engine.zig");
-const typed_doc_id = @import("typed/doc_id.zig");
 const wire_decode = @import("wire/decode.zig");
 const wire_encode = @import("wire/encode.zig");
 const wire_errors = @import("wire/errors.zig");
 const wire_message_type = @import("wire/message_type.zig");
 const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const SecurityConfig = @import("config/state.zig").Config.SecurityConfig;
+const RequestContext = @import("connection/request_context.zig").RequestContext;
 const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const PresenceService = @import("presence/service.zig").PresenceService;
@@ -312,10 +312,41 @@ pub const MessageHandler = struct {
         };
     }
 
-    fn requireStoreSession(conn: *Connection) !Connection.StoreSession {
-        const session = conn.getStoreSession();
-        if (!session.ready or session.namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
-        return session;
+    /// Snapshot the connection's identity and scope facts for one request.
+    fn baseCtx(conn: *Connection) RequestContext {
+        return .{
+            .conn_id = conn.id,
+            .user_doc_id = conn.user_doc_id,
+            .external_user_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .store_namespace = conn.store_namespace,
+            .store_namespace_id = conn.namespace_id,
+            .presence_namespace = conn.presence_namespace,
+            .presence_namespace_id = conn.presence_namespace_id,
+        };
+    }
+
+    fn requireStoreCtx(conn: *Connection) !RequestContext {
+        if (!conn.store_ready) return error.SessionNotReady;
+        const ctx = baseCtx(conn);
+        if (ctx.store_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
+        _ = ctx.store_namespace orelse return error.SessionNotReady;
+        return ctx;
+    }
+
+    fn requirePresenceCtx(conn: *Connection) !RequestContext {
+        if (!conn.presence_ready) return error.SessionNotReady;
+        const ctx = baseCtx(conn);
+        if (ctx.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
+        _ = ctx.presence_namespace orelse return error.SessionNotReady;
+        _ = ctx.external_user_id orelse return error.SessionNotReady;
+        return ctx;
+    }
+
+    fn requireActionCtx(conn: *Connection) !RequestContext {
+        const ctx = baseCtx(conn);
+        _ = ctx.external_user_id orelse return error.SessionNotReady;
+        return ctx;
     }
 
     fn extractTableIndex(parsed: msgpack.Payload) !u64 {
@@ -325,24 +356,6 @@ pub const MessageHandler = struct {
                 else => return error.InvalidMessageFormat,
             } else return error.MissingRequiredFields,
             else => return error.InvalidMessageFormat,
-        };
-    }
-
-    fn buildWriteContext(
-        session: Connection.StoreSession,
-        conn: *Connection,
-        namespace: []const u8,
-        write_id: ?[16]u8,
-    ) StoreService.WriteContext {
-        return .{
-            .namespace_id = session.namespace_id,
-            .namespace = namespace,
-            .owner_doc_id = session.user_doc_id,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .conn_id = if (write_id != null) conn.id else null,
-            .write_id = write_id,
         };
     }
 
@@ -423,17 +436,11 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const session = try requireStoreSession(conn);
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         try self.store_service.loadMore(.{
-            .conn_id = conn.id,
+            .request = ctx,
             .msg_id = msg_id,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .namespace = namespace,
-            .namespace_id = session.namespace_id,
             .allocator = self.allocator,
         }, sub_query.table_index, sub_query.namespace_id, sub_query.filter, req.subId, req.nextCursor);
         return null;
@@ -450,12 +457,10 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
         const value = payloads.value orelse return error.MissingRequiredFields;
-        const session = try requireStoreSession(conn);
-
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         try self.store_service.setPath(
-            buildWriteContext(session, conn, namespace, payloads.write_id),
+            .{ .request = ctx, .write_id = payloads.write_id },
             payloads.path,
             value,
         );
@@ -471,12 +476,10 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) ![]const u8 {
         const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
-        const session = try requireStoreSession(conn);
-
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         try self.store_service.removePath(
-            buildWriteContext(session, conn, namespace, payloads.write_id),
+            .{ .request = ctx, .write_id = payloads.write_id },
             payloads.path,
         );
 
@@ -491,11 +494,10 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) ![]const u8 {
         const payloads = try wire_decode.extractStoreBatchPayloads(message, arena_allocator);
-        const session = try requireStoreSession(conn);
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         try self.store_service.batchWrite(
-            buildWriteContext(session, conn, namespace, payloads.write_id),
+            .{ .request = ctx, .write_id = payloads.write_id },
             payloads.ops,
         );
 
@@ -518,24 +520,18 @@ pub const MessageHandler = struct {
         const table_index = try extractTableIndex(parsed);
 
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
-        const session = try requireStoreSession(conn);
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         var read_req = try self.store_service.prepareQueryRead(.{
-            .conn_id = conn.id,
+            .request = ctx,
             .msg_id = msg_id,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .namespace = namespace,
-            .namespace_id = session.namespace_id,
             .allocator = self.allocator,
         }, table_index, parsed, sub_id);
         errdefer read_req.deinit(self.allocator);
 
         // Register subscription synchronously before async read so notifications are not missed.
         // subscribe() clones the filter internally; read_req retains ownership.
-        _ = try self.subscription_engine.subscribe(session.namespace_id, table_index, read_req.filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(ctx.store_namespace_id, table_index, read_req.filter, conn.id, sub_id);
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
         errdefer conn.removeSubscription(sub_id);
@@ -559,17 +555,11 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndex(parsed);
 
-        const session = try requireStoreSession(conn);
-        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+        const ctx = try requireStoreCtx(conn);
 
         try self.store_service.query(.{
-            .conn_id = conn.id,
+            .request = ctx,
             .msg_id = msg_id,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .namespace = namespace,
-            .namespace_id = session.namespace_id,
             .allocator = self.allocator,
         }, table_index, parsed);
         return null;
@@ -614,7 +604,7 @@ pub const MessageHandler = struct {
         validated.claims = .{};
         validated.deinit(conn.allocator);
         conn.updateSessionClaims(claims, expires_at);
-        self.actions_service.reauthorizeRegistrations(try buildActionSessionContext(conn));
+        self.actions_service.reauthorizeRegistrations(try requireActionCtx(conn));
 
         return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }
@@ -669,10 +659,10 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
 
         try self.presence_service.setUser(
-            try buildPresenceSession(arena_allocator, session, conn),
+            .{ .request = ctx, .arena = arena_allocator },
             req.data,
         );
 
@@ -690,10 +680,10 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
 
         try self.presence_service.setShared(
-            try buildPresenceSession(arena_allocator, session, conn),
+            .{ .request = ctx, .arena = arena_allocator },
             req.data,
         );
 
@@ -711,11 +701,11 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
         self.presence_service.subscribeUser(
-            try buildPresenceSession(self.allocator, session, conn),
+            .{ .request = ctx, .arena = self.allocator },
             sub_id,
             msg_id,
         );
@@ -733,11 +723,11 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
         _ = req;
 
         self.presence_service.unsubscribeUser(
-            try buildPresenceSession(arena_allocator, session, conn),
+            .{ .request = ctx, .arena = arena_allocator },
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
@@ -753,11 +743,11 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
         self.presence_service.subscribeShared(
-            try buildPresenceSession(self.allocator, session, conn),
+            .{ .request = ctx, .arena = self.allocator },
             sub_id,
             msg_id,
         );
@@ -775,11 +765,11 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
         _ = req;
 
         self.presence_service.unsubscribeShared(
-            try buildPresenceSession(arena_allocator, session, conn),
+            .{ .request = ctx, .arena = arena_allocator },
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
@@ -795,42 +785,12 @@ pub const MessageHandler = struct {
             return error.InvalidMessageFormat;
         };
 
-        const session = try requirePresenceSession(conn);
+        const ctx = try requirePresenceCtx(conn);
 
         self.presence_service.removeUser(
-            try buildPresenceSession(arena_allocator, session, conn),
+            .{ .request = ctx, .arena = arena_allocator },
         );
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
-    }
-
-    fn requirePresenceSession(conn: *Connection) !PresenceSession {
-        if (!conn.presence_ready) return error.SessionNotReady;
-        if (conn.presence_namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
-        return .{
-            .namespace_id = conn.presence_namespace_id,
-            .user_doc_id = conn.user_doc_id,
-        };
-    }
-
-    const PresenceSession = struct {
-        namespace_id: i64,
-        user_doc_id: typed_doc_id.DocId,
-    };
-
-    fn buildPresenceSession(
-        arena: Allocator,
-        session: PresenceSession,
-        conn: *Connection,
-    ) !PresenceService.Session {
-        return .{
-            .namespace_id = session.namespace_id,
-            .user_doc_id = session.user_doc_id,
-            .conn_id = conn.id,
-            .external_user_id = conn.getExternalUserId() orelse return error.SessionNotReady,
-            .session_claims = conn.getSessionClaimsPtr(),
-            .presence_namespace = conn.presence_namespace orelse return error.SessionNotReady,
-            .arena = arena,
-        };
     }
 
     fn resetPresenceScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
@@ -865,7 +825,7 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !?[]const u8 {
         const req = try wire_decode.extractActionCallFast(message, arena_allocator);
-        const ctx = try buildActionSessionContext(conn);
+        const ctx = try requireActionCtx(conn);
 
         const outcome = try self.actions_service.call(ctx, msg_id, req.action_id, &req.params, req.timeoutMs);
         return switch (outcome) {
@@ -889,7 +849,7 @@ pub const MessageHandler = struct {
             action_ids[i] = msgpack.extractPayloadUsize(item) orelse return error.InvalidPayload;
         }
 
-        try self.actions_service.register(try buildActionSessionContext(conn), action_ids);
+        try self.actions_service.register(try requireActionCtx(conn), action_ids);
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
 
@@ -904,19 +864,6 @@ pub const MessageHandler = struct {
         const req = try wire_decode.extractActionReplyFast(message, arena_allocator);
         self.actions_service.resolveReply(conn.id, req.execId, req.ok, &req.payload);
         return null;
-    }
-
-    fn buildActionSessionContext(conn: *Connection) !actions_service_mod.SessionContext {
-        return .{
-            .conn_id = conn.id,
-            .user_doc_id = conn.user_doc_id,
-            .external_user_id = conn.getExternalUserId() orelse return error.SessionNotReady,
-            .session_claims = conn.getSessionClaimsPtr(),
-            .store_namespace = conn.getStoreNamespace(),
-            .store_namespace_id = conn.namespace_id,
-            .presence_namespace = conn.getPresenceNamespace(),
-            .presence_namespace_id = conn.presence_namespace_id,
-        };
     }
 
     pub fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8, close_code: u16) void {

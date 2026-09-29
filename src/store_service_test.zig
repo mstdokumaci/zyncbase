@@ -19,22 +19,24 @@ const StorageError = storage_mod.StorageError;
 
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
-        .namespace_id = namespace_id,
-        .namespace = "public",
-        .owner_doc_id = typed_doc_id.zero,
-        .session_user_id = typed_doc_id.zero,
+        .request = .{
+            .conn_id = 1,
+            .user_doc_id = typed_doc_id.zero,
+            .store_namespace = "public",
+            .store_namespace_id = namespace_id,
+        },
     };
 }
 
 fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
     return .{
-        .conn_id = 1,
+        .request = .{
+            .conn_id = 1,
+            .user_doc_id = typed_doc_id.zero,
+            .store_namespace = "public",
+            .store_namespace_id = namespace_id,
+        },
         .msg_id = 1,
-        .session_user_id = typed_doc_id.zero,
-        .session_external_id = null,
-        .session_claims = null,
-        .namespace = "public",
-        .namespace_id = namespace_id,
         .allocator = std.heap.smp_allocator,
     };
 }

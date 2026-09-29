@@ -12,6 +12,7 @@
 | `src/wire/decode.zig` | Zero/low-allocation envelope and payload extractors for supported message types. |
 | `src/wire/encode.zig` | Success, query, schema sync, write acknowledgement, presence, and error encoders. |
 | `src/connection/state.zig` | Per-connection state, direct uWS send behavior, scoped session fields, and subscription ownership. |
+| `src/connection/request_context.zig` | `RequestContext` (per-request snapshot of connection identity/scope), shared `Scope`, and the unset-namespace sentinel. |
 | `src/authorization/session_resolver.zig` | Background namespace/user resolution completion and stale-result protection. |
 | `src/store_service.zig` | Store mutations, queries, pagination, and scope lookup. |
 | `src/presence/service.zig` | Event-loop facade for enqueueing presence operations and disconnect cleanup. |
@@ -24,6 +25,7 @@
 |------|--------------|----------------|
 | `MessageHandler` | `MemoryStrategy`, `Connection`, `StoreService`, `PresenceService`, `SubscriptionEngine`, `AuthConfig`, `Schema`, `JwtValidator` | Owns request handling and all domain dispatch from a decoded wire envelope. |
 | `Connection` | `Session`, `WebSocket`, allocator | Holds mutable per-client state, scoped namespace/user ids, pending namespace resolution, and connection subscriptions. |
+| `RequestContext` | `Connection` state, `DocId`, session claims | Connection identity, claims, and resolved namespace facts snapshotted per request; consumed by store, presence, actions, and authorization. |
 | `ConnectionViolationTracker` | Security config | Counts malformed/security-sensitive messages and closes abusive connections. |
 | `wire.Envelope` | MessagePack extractor | Carries `type` and `id`, the only fields needed before routing. |
 | `StoreService` | `StorageEngine`, `Schema`, `Authorization` | Executes store reads/writes and resolves namespace/user scope. |
@@ -68,7 +70,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 ## Scoped Session Rules
 
 - Transport open is not the same as store/presence readiness.
-- Store operations require `Connection.getStoreSession()` to be ready and to hold a resolved namespace id.
+- Store operations require the connection's store scope to be ready with a resolved namespace id; the handler snapshots it into a `RequestContext` before dispatch.
 - Presence operations require the presence namespace/user scope to be ready.
 - Namespace setup messages start a new resolution sequence and detach stale store subscriptions.
 - `users.namespaced = true` forbids switching to a different namespace on the same connection; clients must reconnect for a different namespace.

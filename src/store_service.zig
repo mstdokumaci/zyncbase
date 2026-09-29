@@ -2,6 +2,7 @@ const std = @import("std");
 
 const authorization_store = @import("authorization/store.zig");
 const authorization_types = @import("authorization/types.zig");
+const request_context = @import("connection/request_context.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_ast = @import("query/ast.zig");
 const query_hasher = @import("query/hasher.zig");
@@ -13,7 +14,6 @@ const schema_types = @import("schema/types.zig");
 const storage_mod = @import("storage_engine.zig");
 const typed_codec = @import("typed/codec.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
-const typed = @import("typed/types.zig");
 
 const Allocator = std.mem.Allocator;
 const ReadRequest = storage_mod.ReadRequest;
@@ -136,30 +136,14 @@ pub const StoreService = struct {
     pub fn deinit(_: *StoreService) void {}
 
     pub const WriteContext = struct {
-        namespace_id: i64,
-        namespace: []const u8,
-        owner_doc_id: DocId,
-        session_user_id: DocId,
-        session_external_id: ?[]const u8 = null,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
-        conn_id: ?u64 = null,
+        request: request_context.RequestContext,
         write_id: ?[16]u8 = null,
     };
 
     pub const ReadContext = struct {
-        conn_id: u64,
+        request: request_context.RequestContext,
         msg_id: u64,
-        session_user_id: DocId,
-        session_external_id: ?[]const u8,
-        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
-        namespace: []const u8,
-        namespace_id: i64,
         allocator: Allocator,
-    };
-
-    pub const ScopedSession = struct {
-        namespace_id: i64,
-        user_doc_id: DocId,
     };
 
     const StorePath = struct {
@@ -176,7 +160,7 @@ pub const StoreService = struct {
     const BatchDocState = enum { exists, deleted };
     const BatchDocStates = std.AutoHashMap(DocKey, BatchDocState);
 
-    pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?ScopedSession {
+    pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?request_context.Scope {
         if (namespace.len == 0) return error.InvalidMessageFormat;
         if (external_user_id.len == 0) return error.InvalidMessageFormat;
 
@@ -250,10 +234,10 @@ pub const StoreService = struct {
         var store_read = try authorization_store.authorizeStoreRead(ctx.allocator, .{
             .config = self.auth_config,
             .table = table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
         });
         errdefer if (store_read) |*p| p.deinit(ctx.allocator);
 
@@ -270,10 +254,10 @@ pub const StoreService = struct {
         filter.structural_hash = query_hasher.computeStructuralHash(table_index, &filter);
 
         return ReadRequest{
-            .conn_id = ctx.conn_id,
+            .conn_id = ctx.request.conn_id,
             .msg_id = ctx.msg_id,
             .table_index = table_index,
-            .namespace_id = ctx.namespace_id,
+            .namespace_id = ctx.request.store_namespace_id,
             .filter = filter,
             .sub_id = sub_id,
         };
@@ -313,7 +297,7 @@ pub const StoreService = struct {
         filter_clone.structural_hash = query_hasher.computeStructuralHash(table_index, &filter_clone);
 
         return ReadRequest{
-            .conn_id = ctx.conn_id,
+            .conn_id = ctx.request.conn_id,
             .msg_id = ctx.msg_id,
             .table_index = table_index,
             .namespace_id = namespace_id,
@@ -342,10 +326,10 @@ pub const StoreService = struct {
         const store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = parsed.table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
             .doc_id = parsed.doc_id,
             .value = null,
             .is_create = false,
@@ -355,9 +339,9 @@ pub const StoreService = struct {
             .delete = .{
                 .table_index = parsed.table_index,
                 .id = parsed.doc_id,
-                .namespace_id = ctx.namespace_id,
+                .namespace_id = ctx.request.store_namespace_id,
                 .guard_predicate = store_write,
-                .conn_id = ctx.conn_id,
+                .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         };
@@ -403,7 +387,7 @@ pub const StoreService = struct {
         const op = storage_mod.WriteOp{
             .batch = .{
                 .entries = entries,
-                .conn_id = ctx.conn_id,
+                .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         };
@@ -477,10 +461,10 @@ pub const StoreService = struct {
         var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
             .doc_id = path.doc_id,
             .value = &value,
             .is_create = is_create,
@@ -495,23 +479,23 @@ pub const StoreService = struct {
             .upsert = .{
                 .table_index = path.table_index,
                 .id = path.doc_id,
-                .namespace_id = ctx.namespace_id,
-                .owner_doc_id = ctx.owner_doc_id,
+                .namespace_id = ctx.request.store_namespace_id,
+                .owner_doc_id = ctx.request.user_doc_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
-                .conn_id = ctx.conn_id,
+                .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         } else storage_mod.WriteOp{
             .update = .{
                 .table_index = path.table_index,
                 .id = path.doc_id,
-                .namespace_id = ctx.namespace_id,
+                .namespace_id = ctx.request.store_namespace_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
-                .conn_id = ctx.conn_id,
+                .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         };
@@ -550,10 +534,10 @@ pub const StoreService = struct {
         var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
             .doc_id = path.doc_id,
             .value = &value,
             .is_create = is_create,
@@ -568,8 +552,8 @@ pub const StoreService = struct {
             return storage_mod.WriteOp{ .upsert = .{
                 .table_index = path.table_index,
                 .id = path.doc_id,
-                .namespace_id = ctx.namespace_id,
-                .owner_doc_id = ctx.owner_doc_id,
+                .namespace_id = ctx.request.store_namespace_id,
+                .owner_doc_id = ctx.request.user_doc_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .timestamp = timestamp,
@@ -578,7 +562,7 @@ pub const StoreService = struct {
             return storage_mod.WriteOp{ .update = .{
                 .table_index = path.table_index,
                 .id = path.doc_id,
-                .namespace_id = ctx.namespace_id,
+                .namespace_id = ctx.request.store_namespace_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .timestamp = timestamp,
@@ -599,10 +583,10 @@ pub const StoreService = struct {
         var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = path.table,
-            .session_user_id = ctx.session_user_id,
-            .session_external_id = ctx.session_external_id,
-            .session_claims = ctx.session_claims,
-            .namespace = ctx.namespace,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
             .doc_id = path.doc_id,
             .value = null,
             .is_create = false,
@@ -615,7 +599,7 @@ pub const StoreService = struct {
         return storage_mod.WriteOp{ .delete = .{
             .table_index = path.table_index,
             .id = path.doc_id,
-            .namespace_id = ctx.namespace_id,
+            .namespace_id = ctx.request.store_namespace_id,
             .guard_predicate = store_write,
         } };
     }

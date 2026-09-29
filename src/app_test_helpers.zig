@@ -5,6 +5,7 @@ const session_resolver = @import("authorization/session_resolver.zig");
 const authorization_test_helpers = @import("authorization/test_helpers.zig");
 const authorization_types = @import("authorization/types.zig");
 const connection_manager = @import("connection/manager.zig");
+const request_context = @import("connection/request_context.zig");
 const send_queue_mod = @import("connection/send_queue.zig");
 const connection_state = @import("connection/state.zig");
 const connection_violations = @import("connection/violations.zig");
@@ -377,7 +378,7 @@ pub const AppTestContext = struct {
         self: *AppTestContext,
         namespace: []const u8,
         external_user_id: []const u8,
-    ) !StoreService.ScopedSession {
+    ) !request_context.Scope {
         self.test_resolution_mutex.lockUncancelable(std.testing.io);
         defer self.test_resolution_mutex.unlock(std.testing.io);
 
@@ -443,10 +444,9 @@ pub const AppTestContext = struct {
         defer if (matched_entry) |entry| entry.deinit();
 
         if (mock_conn.store_ready) {
-            const session = mock_conn.getStoreSession();
             return .{
-                .namespace_id = session.namespace_id,
-                .user_doc_id = session.user_doc_id,
+                .namespace_id = mock_conn.namespace_id,
+                .user_doc_id = mock_conn.user_doc_id,
             };
         }
 

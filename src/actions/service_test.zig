@@ -8,15 +8,15 @@ const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const service_mod = @import("service.zig");
+const RequestContext = @import("../connection/request_context.zig").RequestContext;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
 const ActionsService = service_mod.ActionsService;
 const RegistryKey = service_mod.RegistryKey;
-const SessionContext = service_mod.SessionContext;
 
-fn connectionContext(conn: anytype) SessionContext {
+fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
         .user_doc_id = conn.user_doc_id,
@@ -74,7 +74,7 @@ fn makeClaims(allocator: std.mem.Allocator, role: []const u8) !std.StringHashMap
     return claims;
 }
 
-fn workerCtx(conn_id: u64, user_id: typed_doc_id.DocId, claims: ?*const std.StringHashMapUnmanaged(typed.Value)) SessionContext {
+fn workerCtx(conn_id: u64, user_id: typed_doc_id.DocId, claims: ?*const std.StringHashMapUnmanaged(typed.Value)) RequestContext {
     return .{
         .conn_id = conn_id,
         .user_doc_id = user_id,
@@ -87,7 +87,7 @@ fn workerCtx(conn_id: u64, user_id: typed_doc_id.DocId, claims: ?*const std.Stri
     };
 }
 
-fn callerCtx(conn_id: u64, user_id: typed_doc_id.DocId) SessionContext {
+fn callerCtx(conn_id: u64, user_id: typed_doc_id.DocId) RequestContext {
     return .{
         .conn_id = conn_id,
         .user_doc_id = user_id,
