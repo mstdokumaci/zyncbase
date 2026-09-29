@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     _ = ThreadBudget.init(cpu_count) catch {
-        std.log.err("ZyncBase requires at least 4 CPU cores, found {}", .{cpu_count});
+        std.log.err("ZyncBase requires at least 2 CPU cores, found {}", .{cpu_count});
         return error.InsufficientCpuCores;
     };
 

@@ -13,7 +13,7 @@ pub const ThreadBudget = struct {
     subscription: usize,
 
     pub fn init(cpu_count: usize) ThreadBudgetError!ThreadBudget {
-        if (cpu_count < 3) {
+        if (cpu_count < 2) {
             return error.InsufficientCpuCores;
         }
 

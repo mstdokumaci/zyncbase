@@ -2,6 +2,13 @@ const std = @import("std");
 
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 
+test "ThreadBudget with 2 cores" {
+    const budget = try ThreadBudget.init(2);
+    try std.testing.expectEqual(@as(usize, 1), budget.readers);
+    try std.testing.expectEqual(@as(usize, 1), budget.subscription);
+    try std.testing.expectEqual(@as(usize, 6), budget.total());
+}
+
 test "ThreadBudget with 3 cores" {
     const budget = try ThreadBudget.init(3);
     try std.testing.expectEqual(@as(usize, 1), budget.readers);
@@ -37,8 +44,7 @@ test "ThreadBudget with 32 cores" {
     try std.testing.expectEqual(@as(usize, 32), budget.total());
 }
 
-test "ThreadBudget rejects less than 3 cores" {
-    try std.testing.expectError(error.InsufficientCpuCores, ThreadBudget.init(2));
+test "ThreadBudget rejects less than 2 cores" {
     try std.testing.expectError(error.InsufficientCpuCores, ThreadBudget.init(1));
     try std.testing.expectError(error.InsufficientCpuCores, ThreadBudget.init(0));
 }

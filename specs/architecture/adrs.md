@@ -125,16 +125,16 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 A single-threaded core cannot use SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
 
-**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 3 CPU cores. There are no configuration overrides for thread counts. Background worker domains may encode outbound messages, but uWebSockets sends are event-loop-only and cross-thread delivery goes through `SendQueue`.
+**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 2 CPU cores. There are no configuration overrides for thread counts. Background worker domains may encode outbound messages, but uWebSockets sends are event-loop-only and cross-thread delivery goes through `SendQueue`.
 
 ### Minimum Hardware Requirement
 
-The server requires at least 3 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 3 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one subscription worker.
+The server requires at least 2 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 2 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one subscription worker.
 
 ### Thread Budget Formula
 
 ```
-if cpu_count < 3 → server refuses to start
+if cpu_count < 2 → server refuses to start
 
 fixed:
   event_loop   = 1
@@ -152,6 +152,7 @@ variable:
 
 | CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
 |-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 2         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
@@ -185,7 +186,7 @@ Collection query results and subscription state are managed exclusively by the S
 
 **Consequences**:
 - Deterministic resource usage — no configuration-induced performance cliffs.
-- Fail-fast on machines with fewer than 3 CPU cores — clear error at startup while still supporting constrained CI runners.
+- Fail-fast on machines with fewer than 2 CPU cores — clear error at startup while still supporting constrained CI runners.
 - Full CPU core utilization — benchmarks show ~Nx throughput improvement on a cpu with N cores, moving from a single-threaded to a multi-threaded core.
 - uWS reactor thread remains non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
 - Background workers never call uWS send APIs directly; they enqueue owned encoded bytes and wake the event loop after successful enqueue.

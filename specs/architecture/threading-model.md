@@ -4,7 +4,7 @@
 
 ## Overview
 
-ZyncBase uses a **deterministic thread budget architecture** with six fixed thread domains. Thread counts are computed from CPU core count using a hardcoded formula — there are no configuration overrides. The server refuses to start on machines with fewer than 3 CPU cores.
+ZyncBase uses a **deterministic thread budget architecture** with six fixed thread domains. Thread counts are computed from CPU core count using a hardcoded formula — there are no configuration overrides. The server refuses to start on machines with fewer than 2 CPU cores.
 
 **Key Innovation**: Deterministic thread allocation ensures predictable resource usage and eliminates configuration-induced performance cliffs.
 
@@ -56,7 +56,7 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 The thread budget is computed at startup from the detected CPU core count:
 
 ```
-if cpu_count < 3 → server refuses to start
+if cpu_count < 2 → server refuses to start
 
 fixed:
   event_loop   = 1
@@ -74,6 +74,7 @@ variable:
 
 | CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
 |-----------|------------|--------|------------|----------|---------|--------------|-------|
+| 2         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
 | 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
@@ -231,7 +232,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 
 ### Cons
 
-- **Minimum 3 cores required** — Cannot run on small instances
+- **Minimum 2 cores required** — Cannot run on small instances
 - **Writes are serialized** — SQLite single-writer limitation
 - **Need atomic operations** — For lock-free cache
 - **Cold queries hit SQLite** — First subscribe to a collection incurs a read
@@ -240,7 +241,7 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 ### Mitigation
 
 **For minimum core requirement:**
-- Modern servers have 3+ cores
+- Modern servers have 2+ cores
 - Small instances are not the target deployment environment
 - Clear error message at startup
 
