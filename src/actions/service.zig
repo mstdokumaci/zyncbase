@@ -7,11 +7,10 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_constraints = @import("../schema/constraints.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_codec = @import("../typed/codec.zig");
-const typed_doc_id = @import("../typed/doc_id.zig");
-const typed = @import("../typed/types.zig");
 const uws_timer = @import("../uws_timer.zig");
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
+const RequestContext = @import("../connection/request_context.zig").RequestContext;
 const c = @import("../uwebsockets_wrapper.zig").c;
 
 const Allocator = std.mem.Allocator;
@@ -35,19 +34,6 @@ pub const CallOutcome = enum {
     accepted,
     /// Sync action forwarded; caller response is deferred to `resolveReply`.
     pending,
-};
-
-/// Verified per-connection session facts needed to route and authorize actions.
-/// The caller (message handler) resolves these from `Connection` state.
-pub const SessionContext = struct {
-    conn_id: u64,
-    user_doc_id: typed_doc_id.DocId,
-    external_user_id: []const u8,
-    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
-    store_namespace: ?[]const u8 = null,
-    store_namespace_id: i64 = -1,
-    presence_namespace: ?[]const u8 = null,
-    presence_namespace_id: i64 = -1,
 };
 
 pub const RegistryKey = struct {
@@ -152,7 +138,7 @@ pub const ActionsService = struct {
 
     /// Validate and register every action id atomically: authorization and
     /// readiness gate the whole message before any bucket is mutated.
-    pub fn register(self: *ActionsService, ctx: SessionContext, action_ids: []const u64) !void {
+    pub fn register(self: *ActionsService, ctx: RequestContext, action_ids: []const u64) !void {
         var keys = std.ArrayListUnmanaged(RegistryKey).empty;
         defer keys.deinit(self.allocator);
 
@@ -222,7 +208,7 @@ pub const ActionsService = struct {
     /// `params` is the decoded pair-array payload from the caller frame.
     pub fn call(
         self: *ActionsService,
-        ctx: SessionContext,
+        ctx: RequestContext,
         req_id: u64,
         action_id: u64,
         params: *const Payload,
@@ -456,7 +442,7 @@ pub const ActionsService = struct {
 
     /// Re-evaluate every registration of a refreshed session. Registrations
     /// that no longer pass are removed and their in-flight calls fail.
-    pub fn reauthorizeRegistrations(self: *ActionsService, ctx: SessionContext) void {
+    pub fn reauthorizeRegistrations(self: *ActionsService, ctx: RequestContext) void {
         var revoked = std.ArrayListUnmanaged(RegistryKey).empty;
         defer revoked.deinit(self.allocator);
 
@@ -568,7 +554,7 @@ fn nowNs(io: std.Io) i96 {
     return std.Io.Clock.awake.now(io).toNanoseconds();
 }
 
-fn scopeInfo(ctx: SessionContext, scope: ActionScope) ?ScopeInfo {
+fn scopeInfo(ctx: RequestContext, scope: ActionScope) ?ScopeInfo {
     return switch (scope) {
         .store => if (ctx.store_namespace) |namespace|
             .{ .namespace = namespace, .namespace_id = ctx.store_namespace_id }

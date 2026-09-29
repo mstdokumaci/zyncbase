@@ -15,7 +15,7 @@ pub fn authorizePresenceWrite(
     config: *const types.AuthConfig,
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
-    session_external_id: []const u8,
+    session_external_id: ?[]const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
     presence_fields: []const schema_types.PresenceField,
     data_payload: *const msgpack.Payload,

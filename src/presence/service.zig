@@ -5,7 +5,7 @@ const authorization_types = @import("../authorization/types.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const typed = @import("../typed/types.zig");
+const RequestContext = @import("../connection/request_context.zig").RequestContext;
 const PresenceRecord = @import("record.zig").PresenceRecord;
 const PresenceOp = @import("worker.zig").PresenceOp;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
@@ -26,13 +26,8 @@ pub const PresenceService = struct {
 
     /// Presence context built by the handler from Connection state.
     /// Matches the pattern of StoreService.WriteContext / ReadContext.
-    pub const Session = struct {
-        namespace_id: i64,
-        user_doc_id: DocId,
-        conn_id: u64,
-        external_user_id: []const u8,
-        session_claims: *const std.StringHashMapUnmanaged(typed.Value),
-        presence_namespace: []const u8,
+    pub const Context = struct {
+        request: RequestContext,
         /// Arena allocator for auth temporaries (pattern-matching captures).
         arena: Allocator,
     };
@@ -54,70 +49,70 @@ pub const PresenceService = struct {
     // === Public API — each method owns its full policy chain ===
 
     /// Authorize user presence write, clone patch onto service allocator, enqueue set_user.
-    pub fn setUser(self: *PresenceService, session: Session, patch: msgpack.Payload) !void {
-        try self.authorizeWrite(session, &patch);
-        try validatePatch(self.schema.presence_user_fields, patch, session.arena);
+    pub fn setUser(self: *PresenceService, ctx: Context, patch: msgpack.Payload) !void {
+        try self.authorizeWrite(ctx, &patch);
+        try validatePatch(self.schema.presence_user_fields, patch, ctx.arena);
         const cloned_patch = try patch.deepClone(self.allocator);
         self.enqueue(.{ .set_user = .{
-            .namespace_id = session.namespace_id,
-            .user_id = session.user_doc_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .user_id = ctx.request.user_doc_id,
             .patch = cloned_patch,
         } });
     }
 
     /// Authorize shared presence write, clone patch onto service allocator, enqueue set_shared.
-    pub fn setShared(self: *PresenceService, session: Session, patch: msgpack.Payload) !void {
-        try self.authorizeSharedWrite(session, &patch);
-        try validatePatch(self.schema.presence_shared_fields, patch, session.arena);
+    pub fn setShared(self: *PresenceService, ctx: Context, patch: msgpack.Payload) !void {
+        try self.authorizeSharedWrite(ctx, &patch);
+        try validatePatch(self.schema.presence_shared_fields, patch, ctx.arena);
         const cloned_patch = try patch.deepClone(self.allocator);
         self.enqueue(.{ .set_shared = .{
-            .namespace_id = session.namespace_id,
+            .namespace_id = ctx.request.presence_namespace_id,
             .patch = cloned_patch,
-            .source_conn = session.conn_id,
+            .source_conn = ctx.request.conn_id,
         } });
     }
 
     /// Enqueue remove_user. No per-op auth — namespace admission already gatekept presenceRead.
-    pub fn removeUser(self: *PresenceService, session: Session) void {
+    pub fn removeUser(self: *PresenceService, ctx: Context) void {
         self.enqueue(.{ .remove_user = .{
-            .namespace_id = session.namespace_id,
-            .user_id = session.user_doc_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .user_id = ctx.request.user_doc_id,
         } });
     }
 
     /// Enqueue subscribe_user with client-provided sub_id and msg_id.
-    pub fn subscribeUser(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) void {
+    pub fn subscribeUser(self: *PresenceService, ctx: Context, sub_id: u64, msg_id: u64) void {
         self.enqueue(.{ .subscribe_user = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = session.conn_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .conn_id = ctx.request.conn_id,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } });
     }
 
     /// Enqueue subscribe_shared with client-provided sub_id and msg_id.
-    pub fn subscribeShared(self: *PresenceService, session: Session, sub_id: u64, msg_id: u64) void {
+    pub fn subscribeShared(self: *PresenceService, ctx: Context, sub_id: u64, msg_id: u64) void {
         self.enqueue(.{ .subscribe_shared = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = session.conn_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .conn_id = ctx.request.conn_id,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } });
     }
 
     /// Enqueue unsubscribe_user.
-    pub fn unsubscribeUser(self: *PresenceService, session: Session) void {
+    pub fn unsubscribeUser(self: *PresenceService, ctx: Context) void {
         self.enqueue(.{ .unsubscribe_user = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = session.conn_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .conn_id = ctx.request.conn_id,
         } });
     }
 
     /// Enqueue unsubscribe_shared.
-    pub fn unsubscribeShared(self: *PresenceService, session: Session) void {
+    pub fn unsubscribeShared(self: *PresenceService, ctx: Context) void {
         self.enqueue(.{ .unsubscribe_shared = .{
-            .namespace_id = session.namespace_id,
-            .conn_id = session.conn_id,
+            .namespace_id = ctx.request.presence_namespace_id,
+            .conn_id = ctx.request.conn_id,
         } });
     }
 
@@ -133,28 +128,28 @@ pub const PresenceService = struct {
 
     // === Private policies — not accessible from outside ===
 
-    fn authorizeWrite(self: *PresenceService, session: Session, patch: *const msgpack.Payload) !void {
+    fn authorizeWrite(self: *PresenceService, ctx: Context, patch: *const msgpack.Payload) !void {
         try authorization_presence.authorizePresenceWrite(
-            session.arena,
+            ctx.arena,
             self.auth_config,
-            session.presence_namespace,
-            session.user_doc_id,
-            session.external_user_id,
-            session.session_claims,
+            ctx.request.presence_namespace orelse return error.SessionNotReady,
+            ctx.request.user_doc_id,
+            ctx.request.external_user_id,
+            ctx.request.session_claims,
             self.schema.presence_user_fields,
             patch,
             false,
         );
     }
 
-    fn authorizeSharedWrite(self: *PresenceService, session: Session, patch: *const msgpack.Payload) !void {
+    fn authorizeSharedWrite(self: *PresenceService, ctx: Context, patch: *const msgpack.Payload) !void {
         try authorization_presence.authorizePresenceWrite(
-            session.arena,
+            ctx.arena,
             self.auth_config,
-            session.presence_namespace,
-            session.user_doc_id,
-            session.external_user_id,
-            session.session_claims,
+            ctx.request.presence_namespace orelse return error.SessionNotReady,
+            ctx.request.user_doc_id,
+            ctx.request.external_user_id,
+            ctx.request.session_claims,
             self.schema.presence_shared_fields,
             patch,
             true,

@@ -18,7 +18,7 @@ pub fn authorizeActionInvoke(
     action: *const schema_types.Action,
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
-    session_external_id: []const u8,
+    session_external_id: ?[]const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
     params_payload: *const msgpack.Payload,
 ) !void {
@@ -47,7 +47,7 @@ pub fn authorizeActionRegister(
     action: *const schema_types.Action,
     namespace: []const u8,
     session_user_id: typed_doc_id.DocId,
-    session_external_id: []const u8,
+    session_external_id: ?[]const u8,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
