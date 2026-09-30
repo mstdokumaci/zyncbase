@@ -145,9 +145,7 @@ client.on('synced', () => {
 })
 ```
 
-Anything issued before `synced` — from a `connected` handler, or after a drop while the SDK is still replaying — reaches a connection whose subscriptions are not yet restored. Applications that must survive a gap do their writes and action registrations in `synced` and treat a connection failure as retryable from the last confirmed point.
-
-**Subscription registrations are the exception** — see [Store API → Subscription Lifecycle](./store-api.md#subscription-lifecycle).
+Subscription registrations issued before `synced` queue and dispatch when recovery completes — the exact queueing rules live under [Store API → Readiness queue](./store-api.md#readiness-queue). Writes and one-shot reads never queue: they fail fast while the store scope is unresolved, and once it is resolved — from a `connected` handler, or during replay after a drop — they are sent and answered, though against a connection whose subscriptions are not yet restored. Applications that must survive a gap do their writes and action registrations in `synced` and treat a connection failure as retryable from the last confirmed point.
 
 `reconnected` exists for where the two must differ: an application resuming an interrupted workflow resets state there, while one wanting a clean slate resets on `connected`. Without it, every application guesses with its own flag.
 
