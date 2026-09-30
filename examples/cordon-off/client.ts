@@ -2,6 +2,7 @@ import {
 	ActionExecutionError,
 	createClient,
 	type JsonValue,
+	type ListenHandle,
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
@@ -89,7 +90,7 @@ const chunks = new Map<
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
 const userChunks = new Map<number, Dot[]>();
-type PendingUnlisten = Promise<() => Promise<void>>;
+type PendingUnlisten = Promise<ListenHandle>;
 const subscriptions = new Map<number, PendingUnlisten>();
 const userSubscriptions = new Map<number, PendingUnlisten>();
 const held = new Map<string, Direction>();
@@ -600,10 +601,10 @@ function subscriptionKey(grid: ChunkGrid) {
 }
 
 // Serve exactly the currently visible chunks of one grid: unlisten and drop
-// tiles that left the ring, listen for tiles that entered it. The SDK does not
-// retry a listen issued while the transport is down, and a failed handle would
-// pin its chunk index forever — so callers only invoke this when online, and a
-// failed handle removes itself below.
+// tiles that left the ring, listen for tiles that entered it. A listen issued
+// while the transport is down queues until the session is ready, so ring
+// changes during an outage are safe; a rejected handle would pin its chunk
+// index forever, so it removes itself below.
 function syncChunks<R>(
 	store: ZyncBaseClient["store"],
 	table: string,
@@ -614,7 +615,7 @@ function syncChunks<R>(
 ) {
 	for (const [index, unlisten] of subs) {
 		if (visible.has(index)) continue;
-		void unlisten.then((fn) => fn()).catch(() => {});
+		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
 		subs.delete(index);
 		cache.delete(index);
 	}
@@ -644,16 +645,16 @@ function clearChunks<R>(
 	cache: Map<number, R>,
 ) {
 	for (const unlisten of subs.values())
-		void unlisten.then((fn) => fn()).catch(() => {});
+		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
 	subs.clear();
 	cache.clear();
 }
 
-// Both grids need the same serve/unserve bookkeeping in one pass; record the
-// served bounds only when a set is served, or an offline key would suppress
-// the first refresh after reconnect.
+// Both grids need the same serve/unserve bookkeeping in one pass; bounds are
+// recorded whenever they are served — offline ring changes queue on the wire
+// and flush when the session comes back.
 function updateSubscriptions() {
-	if (!client || phase !== "playing" || !online) return;
+	if (!client || phase !== "playing") return;
 	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
 	lastUserSubKey = subscriptionKey(USER_GRID);
 	syncChunks(
@@ -1274,9 +1275,9 @@ async function requestSession(
 }
 
 // A transient drop only emits "reconnecting" (the SDK resumes on its
-// own), but input and subscription setup must stop until "connected":
-// a listen issued while down is dropped, not queued. A reconnect must
-// also re-join, because the worker may have restarted meanwhile.
+// own and replays subscriptions), but input must stop until "connected",
+// and a reconnect must also re-join: the worker may have restarted
+// meanwhile.
 function wireLifecycle(next: ZyncBaseClient) {
 	next.on("error", (error) => {
 		setConnection(`Connection issue: ${String(error)}`, true);
@@ -1304,7 +1305,6 @@ function wireLifecycle(next: ZyncBaseClient) {
 			void ensureJoined().then(() => {
 				if (phase !== "playing" || !online || !joined) return;
 				setConnection("");
-				updateSubscriptions();
 				void locate();
 			});
 		}

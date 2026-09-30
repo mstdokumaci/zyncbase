@@ -20,6 +20,8 @@ export const ErrorCodes = {
 	RATE_LIMITED: "RATE_LIMITED",
 	MESSAGE_TOO_LARGE: "MESSAGE_TOO_LARGE",
 	CONNECTION_FAILED: "CONNECTION_FAILED",
+	CLIENT_DISCONNECT: "CLIENT_DISCONNECT",
+	RETRIES_EXHAUSTED: "RETRIES_EXHAUSTED",
 	TIMEOUT: "TIMEOUT",
 	INTERNAL_ERROR: "INTERNAL_ERROR",
 	ENGINE_UNHEALTHY: "ENGINE_UNHEALTHY",
@@ -104,6 +106,10 @@ function deriveCategory(code: string): {
 		case ErrorCodes.CONNECTION_FAILED:
 		case ErrorCodes.TIMEOUT:
 			return { category: "network", retryable: true };
+
+		case ErrorCodes.CLIENT_DISCONNECT:
+		case ErrorCodes.RETRIES_EXHAUSTED:
+			return { category: "network", retryable: false };
 
 		case ErrorCodes.INVALID_PATH:
 		case ErrorCodes.BATCH_TOO_LARGE:

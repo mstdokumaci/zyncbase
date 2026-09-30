@@ -8,7 +8,9 @@ import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
 import type {
 	Actions,
+	ClientEvents,
 	ClientOptions,
+	ConnectionStatus,
 	JsonValue,
 	LifecycleEvent,
 	Presence,
@@ -27,8 +29,18 @@ export class ZyncBaseClient {
 	private readonly tracker: SubscriptionTracker;
 	private readonly presenceImpl: PresenceImpl;
 	private readonly actionsImpl: ActionsImpl;
+	private readonly storeImpl: StoreImpl;
 	/** Error callbacks registered via client.on('error', cb). */
 	private readonly errorCallbacks: Array<(err: ZyncBaseError) => void> = [];
+	/** Locally emitted events (`synced`, `reconnected`) — no connection-layer source. */
+	private readonly localListeners = new Map<
+		string,
+		Array<(...args: unknown[]) => void>
+	>();
+	/** Whether a connection existed earlier in this process. */
+	private hasConnectedOnce = false;
+	/** Replay + queue flush for the current connection cycle. */
+	private replayPromise: Promise<void> = Promise.resolve();
 
 	constructor(options: ClientOptions) {
 		this.conn = new ConnectionManager(options);
@@ -48,7 +60,8 @@ export class ZyncBaseClient {
 			}
 		};
 
-		this.store = new StoreImpl(this.conn, this.tracker, emitError);
+		this.storeImpl = new StoreImpl(this.conn, this.tracker, emitError);
+		this.store = this.storeImpl;
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
 		this.actionsImpl = new ActionsImpl(this.conn, emitError);
@@ -61,19 +74,34 @@ export class ZyncBaseClient {
 
 		this.utils = { id: generateUUIDv7 };
 
-		// On reconnect: replay subscriptions
+		// On connect/reconnect: restore everything, then emit `synced`.
 		this.conn.on("connected", () => {
-			this._handleReconnect();
+			if (this.hasConnectedOnce) {
+				queueMicrotask(() => this.emitLocal("reconnected"));
+			}
+			this.hasConnectedOnce = true;
+			this.replayPromise = this._restore()
+				.then(() => this.emitLocal("synced"))
+				.catch(() => {});
 		});
+	}
+
+	/** Current connection status, readable synchronously at any time. */
+	get status(): ConnectionStatus {
+		return this.conn.status;
 	}
 
 	/** Connect to the server. Returns a Promise that resolves when connected and SchemaSync is received. */
 	connect(): Promise<void> {
-		return this.conn.connect().then(() => this.conn.awaitSchemaSync());
+		return this.conn
+			.connect()
+			.then(() => this.conn.awaitSchemaSync())
+			.then(() => this.replayPromise);
 	}
 
 	/** Disconnect from the server and cancel all pending timers. */
 	disconnect(): void {
+		this.storeImpl.rejectPending();
 		this.tracker.setDisconnected();
 		this.conn.disconnect();
 	}
@@ -87,11 +115,12 @@ export class ZyncBaseClient {
 		const oldNs = this.conn.getStoreNamespace();
 		if (oldNs === namespace) return;
 
+		this.storeImpl.markNotReady();
 		await this.conn.setStoreNamespace(namespace);
 
 		// Spec: "Active store subscriptions are invalidated — the client must re-subscribe."
 		// We replay all active subscriptions with the new namespace context.
-		await this._handleReconnect();
+		await this._restore();
 	}
 
 	/** Switch the active presence namespace. */
@@ -116,56 +145,89 @@ export class ZyncBaseClient {
 	/**
 	 * Register a lifecycle event listener.
 	 * 'error' events from fire-and-forget store operations are also routed here.
+	 * `synced` and `reconnected` are emitted locally by the client.
 	 */
-	on(event: LifecycleEvent, callback: (...args: unknown[]) => void): void {
+	on<E extends LifecycleEvent>(event: E, callback: ClientEvents[E]): void {
+		if (event === "synced" || event === "reconnected") {
+			let handlers = this.localListeners.get(event);
+			if (!handlers) {
+				handlers = [];
+				this.localListeners.set(event, handlers);
+			}
+			handlers.push(callback as (...args: unknown[]) => void);
+			return;
+		}
 		if (event === "error") {
 			this.errorCallbacks.push(callback as (err: ZyncBaseError) => void);
 		}
 		// Always delegate to ConnectionManager so connection-level errors are covered too
-		this.conn.on(event, callback);
+		this.conn.on(event, callback as unknown as (...args: unknown[]) => void);
 	}
 
 	/**
 	 * Remove a lifecycle event listener.
 	 */
-	off(event: LifecycleEvent, callback: (...args: unknown[]) => void): void {
+	off<E extends LifecycleEvent>(event: E, callback: ClientEvents[E]): void {
+		if (event === "synced" || event === "reconnected") {
+			const handlers = this.localListeners.get(event);
+			if (handlers) {
+				const idx = handlers.indexOf(callback as (...args: unknown[]) => void);
+				if (idx !== -1) handlers.splice(idx, 1);
+			}
+			return;
+		}
 		if (event === "error") {
 			const idx = this.errorCallbacks.indexOf(
 				callback as (err: ZyncBaseError) => void,
 			);
 			if (idx !== -1) this.errorCallbacks.splice(idx, 1);
 		}
-		this.conn.off(event, callback);
+		this.conn.off(event, callback as unknown as (...args: unknown[]) => void);
 	}
 
 	// ─── Private ───────────────────────────────────────────────────────────────
 
+	private emitLocal(event: "synced" | "reconnected"): void {
+		const handlers = this.localListeners.get(event);
+		if (!handlers) return;
+		for (const handler of [...handlers]) handler();
+	}
+
 	/**
-	 * Called each time the ConnectionManager emits "connected" or after a namespace switch.
+	 * Replay everything after a connect or namespace switch, then release the
+	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
-	private async _handleReconnect(): Promise<void> {
+	private async _restore(): Promise<void> {
 		this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
 
 		const subIds = this.tracker.allSubIds();
-		if (subIds.length === 0) return;
+		if (subIds.length > 0) {
+			const oldToNew = new Map<number, number>();
+			const replaySnapshots = new Map<
+				number,
+				{ collection: string; value: JsonValue[] }
+			>();
 
-		const oldToNew = new Map<number, number>();
-		const replaySnapshots = new Map<
-			number,
-			{ collection: string; value: JsonValue[] }
-		>();
+			// Replay all subscriptions and map old subIds to new ones.
+			await this.tracker.replayAll(async (params, oldId) => {
+				await this._replaySubscription(
+					params,
+					oldId,
+					oldToNew,
+					replaySnapshots,
+				);
+			});
 
-		// Replay all subscriptions and map old subIds to new ones.
-		await this.tracker.replayAll(async (params, oldId) => {
-			await this._replaySubscription(params, oldId, oldToNew, replaySnapshots);
-		});
+			this.tracker.reconnect(oldToNew, () => {
+				for (const [newSubId, snapshot] of replaySnapshots) {
+					this._repopulateSubscription(newSubId, snapshot);
+				}
+			});
+		}
 
-		this.tracker.reconnect(oldToNew, () => {
-			for (const [newSubId, snapshot] of replaySnapshots) {
-				this._repopulateSubscription(newSubId, snapshot);
-			}
-		});
+		await this.conn.awaitSchemaSync();
+		await this.storeImpl.markSessionReady();
 	}
 
 	private async _replaySubscription(

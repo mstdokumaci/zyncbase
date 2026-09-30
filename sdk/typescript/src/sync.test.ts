@@ -51,11 +51,12 @@ describe("Store Synchronization Integration", () => {
 		);
 
 		const store = new StoreImpl(mockConn, tracker);
+		void store.markSessionReady();
 		mockConn.onDelta((delta) => tracker.dispatch(delta));
 
 		let callCount = 0;
 		let lastValue: unknown = null;
-		const unlisten = await store.listen(["tasks", "1"], (val) => {
+		const handle = await store.listen(["tasks", "1"], (val) => {
 			callCount++;
 			lastValue = val;
 		});
@@ -72,7 +73,7 @@ describe("Store Synchronization Integration", () => {
 		expect(callCount).toBe(2);
 		expect((lastValue as Record<string, unknown>).title).toBe("Live Update");
 
-		await unlisten();
+		await handle.unlisten();
 	});
 
 	test("should handle deep-path field retrieval from decoded records", async () => {
@@ -176,6 +177,7 @@ describe("Store Listen Reconstruction", () => {
 		});
 
 		const store = new StoreImpl(mockConn, tracker);
+		void store.markSessionReady();
 		let captured: unknown = null;
 		store.listen(["tasks", "2"], (val) => {
 			captured = val;

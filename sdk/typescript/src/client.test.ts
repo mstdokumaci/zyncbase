@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
+import { WireMessageType } from "./connection_wire";
 import { packDocId, unpackDocId } from "./doc_id";
 import {
 	encodeToBuffer,
@@ -108,6 +109,121 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	/** Poll until `cond` holds — inbound processing is a chained async pipeline. */
+	async function waitFor(cond: () => boolean, timeoutMs = 500): Promise<void> {
+		const start = Date.now();
+		while (!cond()) {
+			if (Date.now() - start > timeoutMs) {
+				throw new Error("waitFor: condition not met in time");
+			}
+			await new Promise((r) => setTimeout(r, 5));
+		}
+	}
+
+	/**
+	 * Reply to a namespace handshake with whatever ids the connection actually
+	 * used (reconnects continue the id sequence, so ids are not always 1/2).
+	 */
+	async function handshakeNamespaces(ws: MockWebSocket): Promise<void> {
+		const first = decode(ws.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		ws.triggerMessage(encodeToBuffer({ type: "ok", id: first.id }));
+		await new Promise((r) => setTimeout(r, 0));
+		const second = decode(ws.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		if (second.id !== first.id) {
+			ws.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: second.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+		}
+	}
+
+	test("lifecycle: first connect emits connected + synced, a reconnect adds reconnected", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			reconnect: true,
+			reconnectDelay: 10,
+		});
+		const events: string[] = [];
+		client.on("connected", () => events.push("connected"));
+		client.on("reconnected", () => events.push("reconnected"));
+		client.on("synced", () => events.push("synced"));
+
+		expect(client.status).toBe("disconnected");
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(client.status).toBe("connecting");
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await p;
+		expect(client.status).toBe("connected");
+		expect(events).toEqual(["connected", "synced"]);
+
+		// Drop the socket — the SDK reconnects on the configured backoff.
+		mockWs.triggerClose(1006, "Abnormal closure");
+		expect(client.status).not.toBe("connected");
+		// Wait for the reconnect to acquire its ticket and wire up the socket.
+		await waitFor(() => client.status === "connecting");
+		await new Promise((r) => setTimeout(r, 10));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await waitFor(() => events.length === 5);
+
+		expect(client.status).toBe("connected");
+		expect(events).toEqual([
+			"connected",
+			"synced",
+			"connected",
+			"reconnected",
+			"synced",
+		]);
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a registration issued before the session is ready queues until synced", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const subscribes = () =>
+			mockWs.sentMessages.filter((message) => {
+				const msg = decode(message) as { type: number };
+				return msg.type === WireMessageType.StoreSubscribe;
+			});
+
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+
+		// Schema not yet delivered — the registration must not dispatch.
+		const pending = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(subscribes()).toHaveLength(0);
+
+		triggerSchemaSync(mockWs);
+		await waitFor(() => subscribes().length === 1);
+		const sub = decode(subscribes()[0]) as { id: number };
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: sub.id, subId: 7, value: [] }),
+		);
+
+		await p;
+		const handle = await pending;
+		await handle.unlisten();
+		client.disconnect();
+		restoreWebSocket();
+	});
+
 	test("subscription replay re-delivers document listen snapshots", async () => {
 		const userId = "019c1e50-7d11-7000-8000-000000000001";
 		installMockWebSocket();
@@ -130,7 +246,7 @@ describe("ZyncBaseClient", () => {
 		mockWs.triggerMessage(
 			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
 		);
-		const unlisten = await pendingListen;
+		const handle = await pendingListen;
 		await new Promise((r) => setTimeout(r, 0));
 		expect(values).toEqual([]);
 
@@ -171,8 +287,8 @@ describe("ZyncBaseClient", () => {
 				updated_at: 0,
 			},
 		]);
-		const pendingUnlisten = unlisten();
-		await new Promise((r) => setTimeout(r, 0));
+		const pendingUnlisten = handle.unlisten();
+		await new Promise((r) => setTimeout(r, 150));
 		const unsubscribe = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};

@@ -33,6 +33,8 @@ export interface SubscriptionEntry {
 	materializedView?: MaterializedView;
 	/** Updates the caller's handle when a reconnect remaps the server subId. */
 	onRemap?: (newSubId: number) => void;
+	/** Last value delivered to callbacks — what `getSnapshot()` returns. */
+	lastValue?: JsonValue;
 }
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
@@ -193,6 +195,7 @@ export class SubscriptionTracker {
 			this._applyOpsToView(entry.materializedView, delta.ops);
 		}
 		const value = this._snapshotView(entry.materializedView);
+		entry.lastValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -314,6 +317,7 @@ export class SubscriptionTracker {
 			);
 		}
 
+		entry.lastValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);

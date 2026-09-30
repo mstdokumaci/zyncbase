@@ -247,8 +247,7 @@ await client.store.batch([
 
 A registration issued before the session is ready — before `connect()` settles, while reconnecting, or during a namespace switch — is queued and dispatched automatically when the session becomes ready. On recovery that is the `synced` point described in [Recovery Complete](./connection-management.md#recovery-complete); on a namespace switch the switch itself flushes the queue before its promise resolves. Registrations never fail with `SESSION_NOT_READY`.
 
-- Detaching a queued registration before it dispatches sends nothing.
-- `client.disconnect()` rejects queued registrations with `CONNECTION_FAILED`.
+- `client.disconnect()` discards queued registrations: nothing is dispatched and their promises reject with `CONNECTION_FAILED`.
 - Writes and one-shot reads are **not** queued. They fail fast on purpose: a `set` landing minutes later against stale state is worse than an error.
 
 ### Keyed sharing

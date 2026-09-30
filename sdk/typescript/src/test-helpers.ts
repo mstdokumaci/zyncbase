@@ -78,6 +78,7 @@ export class MockWebSocket {
 	}
 
 	triggerOpen() {
+		this.readyState = MockWebSocket.OPEN;
 		this.onopen?.({});
 	}
 

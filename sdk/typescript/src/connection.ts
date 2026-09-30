@@ -12,6 +12,8 @@ import { RetryPolicy } from "./retry_policy.js";
 import type {
 	ActionForward,
 	ClientOptions,
+	ConnectionStatus,
+	DisconnectDetail,
 	ErrorResponse,
 	InboundMessage,
 	LifecycleEvent,
@@ -29,12 +31,6 @@ type PresenceBroadcastHandler = (
 		| import("./types.js").PresenceBroadcast
 		| import("./types.js").SharedStateBroadcast,
 ) => void;
-
-type ConnectionStatus =
-	| "connecting"
-	| "connected"
-	| "reconnecting"
-	| "disconnected";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const SERVER_DISCONNECT_CODES: Readonly<Record<string, string>> = {
@@ -121,7 +117,7 @@ export class ConnectionManager {
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private intentionalDisconnect = false;
-	private status: ConnectionStatus = "disconnected";
+	private currentStatus: ConnectionStatus = "disconnected";
 
 	private storeNamespace: string;
 	private presenceNamespace: string;
@@ -153,6 +149,11 @@ export class ConnectionManager {
 
 	getStoreNamespace(): string {
 		return this.storeNamespace;
+	}
+
+	/** Current connection status. */
+	get status(): ConnectionStatus {
+		return this.currentStatus;
 	}
 
 	async setStoreNamespace(ns: string): Promise<void> {
@@ -269,7 +270,7 @@ export class ConnectionManager {
 
 	isSchemaReady(): boolean {
 		return (
-			this.status === "connected" &&
+			this.currentStatus === "connected" &&
 			this.schemaSyncResolve === null &&
 			this.schemaDictionary.isReady()
 		);
@@ -492,7 +493,13 @@ export class ConnectionManager {
 		this.rejectSchemaSync(err);
 		this.pending.rejectAll(err);
 		this.setStatus("disconnected");
-		this.emit("disconnected");
+		this.emit("disconnected", {
+			code: ErrorCodes.CLIENT_DISCONNECT,
+			reason: err.message,
+			category: err.category,
+			retryable: false,
+			attempt: this.reconnectAttempt,
+		} satisfies DisconnectDetail);
 	}
 
 	on(event: LifecycleEvent, handler: EventHandler): void {
@@ -542,25 +549,57 @@ export class ConnectionManager {
 		this.rejectSchemaSync(err);
 		this.pending.rejectAll(err);
 
-		if (
-			!this.intentionalDisconnect &&
-			err.retryable &&
-			(this.options.reconnect ?? true)
-		) {
+		const willRetry = this.willRetryAfter(err);
+		// Established connections and terminal closes surface a `disconnected`
+		// event; a failed reconnect attempt that will simply be retried does not.
+		if (this.currentStatus === "connected" || !willRetry) {
+			this.setStatus("disconnected", { error: err });
+			this.emit("disconnected", this.disconnectDetail(err, willRetry));
+		}
+		if (willRetry) {
 			this.scheduleReconnect(err);
 			return;
 		}
-
-		this.setStatus("disconnected", { error: err });
 		this.emit("error", err);
-		this.emit("disconnected", code, reason, err);
+	}
+
+	private willRetryAfter(err: ZyncBaseError): boolean {
+		return (
+			!this.intentionalDisconnect &&
+			err.retryable &&
+			(this.options.reconnect ?? true) &&
+			this.reconnectAttempt < (this.options.maxReconnectAttempts ?? Infinity)
+		);
+	}
+
+	private disconnectDetail(
+		err: ZyncBaseError,
+		willRetry: boolean,
+	): DisconnectDetail {
+		const attemptsExhausted =
+			err.retryable &&
+			(this.options.reconnect ?? true) &&
+			this.reconnectAttempt >= (this.options.maxReconnectAttempts ?? Infinity);
+		return {
+			code: attemptsExhausted ? ErrorCodes.RETRIES_EXHAUSTED : err.code,
+			reason: err.message,
+			category: err.category,
+			retryable: willRetry,
+			attempt: this.reconnectAttempt,
+		};
 	}
 
 	private scheduleReconnect(error?: ZyncBaseError): void {
 		const maxAttempts = this.options.maxReconnectAttempts ?? Infinity;
 		if (this.reconnectAttempt >= maxAttempts) {
 			this.setStatus("disconnected", { error });
-			this.emit("disconnected");
+			this.emit("disconnected", {
+				code: ErrorCodes.RETRIES_EXHAUSTED,
+				reason: error?.message ?? "Retries exhausted",
+				category: error?.category ?? "network",
+				retryable: false,
+				attempt: this.reconnectAttempt,
+			} satisfies DisconnectDetail);
 			return;
 		}
 
@@ -592,14 +631,11 @@ export class ConnectionManager {
 		status: ConnectionStatus,
 		detail?: Partial<StatusDetail>,
 	): void {
-		const previousStatus = this.status as LifecycleEvent;
-		this.status = status;
+		const previousStatus = this.currentStatus;
+		this.currentStatus = status;
 
 		const fullDetail: StatusDetail = {
-			previousStatus:
-				previousStatus === "disconnected" && status === "connecting"
-					? null
-					: previousStatus,
+			previousStatus,
 			retryCount: detail?.retryCount ?? this.reconnectAttempt,
 			retryIn: detail?.retryIn ?? null,
 			error: detail?.error,

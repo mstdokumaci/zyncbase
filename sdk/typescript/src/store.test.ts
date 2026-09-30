@@ -45,6 +45,7 @@ function makeCommittedDispatch(
 function makeStore(
 	responses: Array<OkResponse | Error> = [],
 	schemaDictionary?: SchemaDictionary,
+	options: { ready?: boolean } = {},
 ) {
 	const messages: OutboundRequest[] = [];
 	const responseTableIndexes: Array<number | undefined> = [];
@@ -79,6 +80,7 @@ function makeStore(
 
 	const tracker = new SubscriptionTracker();
 	const store = new StoreImpl(conn, tracker, (err) => errors.push(err));
+	if (options.ready !== false) void store.markSessionReady();
 
 	/** Simulate a server push arriving on the WebSocket. */
 	const push = (msg: InboundMessage) => messageHandler?.(msg);
@@ -188,7 +190,7 @@ describe("StoreImpl", () => {
 		]);
 		const values: JsonValue[] = [];
 
-		const unlisten = await store.listen("users.u1", (value) =>
+		const handle = await store.listen("users.u1", (value) =>
 			values.push(value),
 		);
 		await flushPromises();
@@ -200,7 +202,11 @@ describe("StoreImpl", () => {
 		});
 		expect(values).toEqual([{ id: "u1", name: "Ada" }]);
 
-		await unlisten();
+		await handle.unlisten();
+		// Local detach resolves immediately; the server unsubscribe lands
+		// after the grace window.
+		expect(messages).toHaveLength(1);
+		await new Promise((resolve) => setTimeout(resolve, 150));
 		expect(messages[1]).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
@@ -208,13 +214,14 @@ describe("StoreImpl", () => {
 		const { store, tracker, messages } = makeStore([
 			{ type: "ok", id: 1, subId: 7 },
 		]);
-		const unlisten = await store.listen("users.u1", () => {});
+		const handle = await store.listen("users.u1", () => {});
 		await flushPromises();
 		expect(tracker.get(7)).toBeDefined();
 
 		// Reconnect replay assigns a fresh server subId and remaps the tracker.
 		tracker.reconnect(new Map([[7, 11]]));
-		await unlisten();
+		await handle.unlisten();
+		await new Promise((resolve) => setTimeout(resolve, 150));
 
 		expect(tracker.get(11)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 11 });
@@ -230,6 +237,7 @@ describe("StoreImpl", () => {
 
 		tracker.reconnect(new Map([[9, 12]]));
 		await handle.unsubscribe();
+		await new Promise((resolve) => setTimeout(resolve, 150));
 
 		expect(tracker.get(12)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
@@ -282,15 +290,128 @@ describe("StoreImpl", () => {
 		]);
 	});
 
-	test("subscribe before SchemaSync rejects with a controlled error", async () => {
-		const { store, messages, errors } = makeStore();
+	test("subscribe before the session is ready queues and dispatches on readiness", async () => {
+		const { store, messages, errors } = makeStore(
+			[{ type: "ok", id: 1, subId: 9, value: [] }],
+			await makeReadySchema(),
+			{ ready: false },
+		);
 
 		const pending = store.subscribe("users", {}, () => {});
-
 		expect(messages).toHaveLength(0);
-		expect(errors).toHaveLength(1);
-		expect((errors[0] as { code: string }).code).toBe("SESSION_NOT_READY");
-		await expect(pending).rejects.toMatchObject({ code: "SESSION_NOT_READY" });
+		expect(errors).toHaveLength(0);
+
+		await store.markSessionReady();
+		await pending;
+		expect(messages[0]).toMatchObject({
+			type: "StoreSubscribe",
+			table_index: "users",
+		});
+	});
+
+	test("rejectPending rejects queued registrations with CONNECTION_FAILED", async () => {
+		const { store, messages, errors } = makeStore([], undefined, {
+			ready: false,
+		});
+
+		const pending = store.subscribe("users", {}, () => {});
+		store.rejectPending();
+
+		await expect(pending).rejects.toMatchObject({
+			code: "CONNECTION_FAILED",
+		});
+		expect(messages).toHaveLength(0);
+		expect(errors).toHaveLength(0);
+	});
+
+	test("two consumers of the same path share one server subscription", async () => {
+		const { store, messages, tracker } = makeStore([
+			{
+				type: "ok",
+				id: 1,
+				subId: 7,
+				value: [{ id: "u1", name: "Ada" }],
+			},
+		]);
+		const first: JsonValue[] = [];
+		const second: JsonValue[] = [];
+
+		const h1 = await store.listen("users.u1", (value) => first.push(value));
+		const h2 = await store.listen("users.u1", (value) => second.push(value));
+		await flushPromises();
+
+		expect(
+			messages.filter((message) => message.type === "StoreSubscribe"),
+		).toHaveLength(1);
+		// The second consumer attaches locally and receives the retained snapshot.
+		expect(second).toEqual([{ id: "u1", name: "Ada" }]);
+		expect(tracker.get(7)?.callbacks).toHaveLength(2);
+
+		await h1.unlisten();
+		expect(tracker.get(7)).toBeDefined();
+
+		await h2.unlisten();
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 7 });
+	});
+
+	test("reattaching within the grace window cancels the unsubscribe", async () => {
+		const { store, messages } = makeStore([
+			{
+				type: "ok",
+				id: 1,
+				subId: 7,
+				value: [{ id: "u1", name: "Ada" }],
+			},
+		]);
+		const values: JsonValue[] = [];
+
+		const h1 = await store.listen("users.u1", () => {});
+		await h1.unlisten();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const h2 = await store.listen("users.u1", (value) => values.push(value));
+		// Past the original deadline the unsubscribe must never fire.
+		await new Promise((resolve) => setTimeout(resolve, 150));
+
+		expect(
+			messages.filter((message) => message.type === "StoreUnsubscribe"),
+		).toHaveLength(0);
+		expect(values).toEqual([{ id: "u1", name: "Ada" }]);
+		await h2.unlisten();
+	});
+
+	test("getSnapshot reads the retained value without a round trip", async () => {
+		const { store, messages } = makeStore(
+			[
+				{
+					type: "ok",
+					id: 1,
+					subId: 7,
+					value: [{ id: "u1", name: "Ada" }],
+				},
+				{
+					type: "ok",
+					id: 2,
+					subId: 9,
+					value: [{ id: "u2", name: "Grace" }],
+					hasMore: false,
+					nextCursor: null,
+				},
+			],
+			await makeReadySchema(),
+		);
+
+		const listenHandle = await store.listen("users.u1", () => {});
+		const subscribeHandle = await store.subscribe("users", {}, () => {});
+		await flushTimers();
+
+		// A document listen snapshots the record itself; a collection
+		// subscribe snapshots the materialized row array.
+		expect(listenHandle.getSnapshot()).toEqual({ id: "u1", name: "Ada" });
+		expect(subscribeHandle.getSnapshot()).toEqual([
+			{ id: "u2", name: "Grace" },
+		]);
+		expect(messages).toHaveLength(2);
 	});
 
 	test("loadMore rejection does not mutate pagination state", async () => {

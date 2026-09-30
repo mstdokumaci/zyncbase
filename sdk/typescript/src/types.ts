@@ -16,15 +16,42 @@ export type JsonValue =
 /** A data address: dot-notation string or string array. */
 export type Path = string | string[];
 
-/** Lifecycle events emitted by the Connection Manager. */
-export type LifecycleEvent =
+/** Connection lifecycle status as exposed by `client.status` and `statusChange`. */
+export type ConnectionStatus =
+	| "connecting"
 	| "connected"
-	| "disconnected"
 	| "reconnecting"
-	| "error"
-	| "statusChange"
-	| "schemaChange"
-	| "tokenExpired";
+	| "disconnected";
+
+/** Payload of the `disconnected` event — why the connection ended and what comes next. */
+export interface DisconnectDetail {
+	/** Machine-readable cause; always set. */
+	code: string;
+	/** Human-readable text from the server, when it sent one. */
+	reason: string;
+	/** ZyncBaseError category, for existing retry logic. */
+	category: string;
+	/** Whether the SDK reconnects on normal backoff. */
+	retryable: boolean;
+	/** Reconnect attempts made before giving up. */
+	attempt: number;
+}
+
+/** Typed event map — `client.on` and `client.off` are keyed by this. */
+export interface ClientEvents {
+	connected: () => void;
+	reconnected: () => void;
+	synced: () => void;
+	disconnected: (detail: DisconnectDetail) => void;
+	reconnecting: (attempt: number, delayMs: number) => void;
+	schemaChange: () => void;
+	error: (error: ZyncBaseError) => void;
+	tokenExpired: () => void;
+	statusChange: (status: ConnectionStatus, detail: StatusDetail) => void;
+}
+
+/** Lifecycle events emitted by the Connection Manager. */
+export type LifecycleEvent = keyof ClientEvents;
 
 export interface WriteOptions {
 	confirm?: "accepted" | "committed";
@@ -64,7 +91,7 @@ export interface ClientOptions {
 }
 
 export interface StatusDetail {
-	previousStatus: LifecycleEvent | null;
+	previousStatus: ConnectionStatus;
 	retryCount: number;
 	retryIn: number | null;
 	error?: ZyncBaseError;
@@ -91,10 +118,20 @@ export interface BatchOperation {
 }
 
 export interface SubscriptionHandle {
-	/** Stop receiving updates; resolves when the server acknowledges the unsubscribe. */
+	/** Detach this consumer; its callback stops firing immediately. */
 	unsubscribe: () => Promise<void>;
 	loadMore: () => Promise<void>;
 	hasMore: boolean;
+	/** Current sorted results; empty before the first delivery. */
+	getSnapshot: () => JsonValue[];
+}
+
+/** Handle returned by `store.listen`. */
+export interface ListenHandle {
+	/** Detach this consumer; its callback stops firing immediately. */
+	unlisten: () => Promise<void>;
+	/** Last value delivered to callbacks for this path; `undefined` before the first. */
+	getSnapshot: () => JsonValue | undefined;
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -112,11 +149,11 @@ export interface Store {
 	): Promise<string>;
 	/** Get current value(s) in a one-off read. */
 	get(path: Path): Promise<JsonValue | null | undefined>;
-	/** Listen for changes at a path; resolves with an unlisten function after server acknowledgement. */
+	/** Listen for changes at a path; resolves with a handle once the registration settles. */
 	listen(
 		path: Path,
 		callback: (value: JsonValue) => void,
-	): Promise<() => Promise<void>>;
+	): Promise<ListenHandle>;
 	/** Subscribe to a collection with complex queries; resolves with its handle after server acknowledgement. */
 	subscribe(
 		collection: string,

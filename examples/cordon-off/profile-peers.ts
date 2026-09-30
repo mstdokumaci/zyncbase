@@ -1,5 +1,9 @@
 // One native Worker per 64 SDK peers keeps load generation off a single JS loop.
-import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import {
+	createClient,
+	type ListenHandle,
+	type ZyncBaseClient,
+} from "@zyncbase/client";
 import {
 	COUNTRY_CHUNK_HEIGHT,
 	COUNTRY_CHUNK_WIDTH,
@@ -34,7 +38,7 @@ type Peer = {
 	zoom: number;
 	moves: number;
 };
-type PendingUnlisten = Promise<() => Promise<void>>;
+type PendingUnlisten = Promise<ListenHandle>;
 type Command = {
 	type: "add" | "move" | "reset" | "stats" | "close";
 	index: number;
@@ -108,7 +112,7 @@ function syncSubscriptions(
 ) {
 	for (const [index, unlisten] of subscriptions) {
 		if (visible.has(index)) continue;
-		void unlisten.then((fn) => fn()).catch(() => {});
+		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
 		subscriptions.delete(index);
 	}
 	for (const index of visible) {
