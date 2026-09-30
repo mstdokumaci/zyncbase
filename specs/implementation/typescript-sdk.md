@@ -8,11 +8,11 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 
 | File | Responsibility |
 |------|----------------|
-| `sdk/typescript/src/client.ts` | Public `ZyncBaseClient` composition and `createClient`. |
+| `sdk/typescript/src/client.ts` | Public `ZyncBaseClient` composition, recovery orchestration (`connect()` resolves at `synced`, after replay), and `createClient`. |
 | `sdk/typescript/src/connection.ts` | WebSocket lifecycle, auth ticket acquisition, reconnect, namespace coordination, and outbound dispatch. |
 | `sdk/typescript/src/connection_wire.ts` | MessagePack wire encoding/decoding, request ids, response demux, and server push handling. |
 | `sdk/typescript/src/pending_requests.ts` | Pending request registry, timeout handling, and write-outcome correlation. |
-| `sdk/typescript/src/store.ts` | Public store API and namespace-aware store connection wrapper. |
+| `sdk/typescript/src/store.ts` | Public store API, subscription registry (keyed sharing, readiness queue, grace teardown), and namespace-aware store connection wrapper. |
 | `sdk/typescript/src/store_wire.ts` | Store command construction for set/remove/create/get/query/batch/listen/subscribe/loadMore. |
 | `sdk/typescript/src/subscriptions.ts` | Local materialized views, listen projections, sorting, pagination, and delta application. |
 | `sdk/typescript/src/presence.ts` | Public presence API, user/shared subscriptions, and presence event delivery. |
@@ -35,6 +35,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 | `ConnectionWireCodec` | MessagePack, schema dictionary, errors | Converts SDK commands to wire messages and server messages back to SDK events/errors. |
 | `PendingRequests` | timers, request ids, write ids | Resolves/rejects request promises and committed write waits. |
 | `StoreImpl` | `StoreCommand`, subscriptions, connection | Implements store reads, writes, batches, listens, and load-more behavior. |
+| `SubscriptionRegistry` | key index, refcounts, grace timers, readiness queue | Shares one server subscription per key across consumers; sits above `SubscriptionTracker` (which remains the subId→entry layer). |
 | `PresenceImpl` | connection, schema dictionary | Implements user and shared presence APIs. |
 | `SubscriptionTracker` | materialized view, comparator, cursor state | Tracks local subscription state and applies `StoreDelta` pushes. |
 | `SchemaDictionary` | `SchemaSync` payload | Maps names to integer table/field ids and decodes server records. |
@@ -59,7 +60,9 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
 7. Server pushes update subscription and presence listeners independently of mutation responses.
 
-Public methods that receive an `ok` response expose it through a promise. For subscriptions, the promise resolves with the existing cleanup function or handle after server acceptance; callbacks deliver initial results and later updates independently. `Actions.handle()` resolves after the server accepts the registration.
+Public methods that receive an `ok` response expose it through a promise. For subscriptions, the promise resolves once *this consumer* is registered — settlement rules live in [Store API → Subscription Lifecycle](../api-design/store-api.md#subscription-lifecycle). Callbacks deliver initial results and later updates independently. `Actions.handle()` resolves after the server accepts the registration.
+
+Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/`reconnected`) and `connection.ts` (attach `DisconnectDetail` to every `disconnected`). Event contract: [Connection Management → Recovery Complete](../api-design/connection-management.md#recovery-complete).
 
 ## Liveness Implementation
 
@@ -77,6 +80,15 @@ Public methods that receive an `ok` response expose it through a promise. For su
 - `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load).
 - `store.listen` callbacks are synchronous per emitted committed delta within the message handling task (single-record projection, O(1) per delta). A delta represents one record's transaction endpoints, not one accepted write: repeated writes to a record in one writer transaction may yield one callback, and create-then-delete may yield none.
 - Both preserve per-subscription arrival order; there is no cross-subscription ordering contract.
+- Delivery is per server subscription, not per consumer: all consumers of a shared key observe the same snapshots at the same times — no per-consumer buffering or divergence.
+
+## Subscription Registration Lifecycle
+
+- **Readiness queue.** `listen`/`subscribe` issued before session readiness are held in a pending queue and dispatched when readiness is reached. Readiness must be awaited by re-checking after each connection cycle: `awaitSchemaSync()` rejects on mid-session drops, so a bare single await is wrong — the flush loop catches rejection and waits for the next cycle. Contract (flush points, disconnect rejection, writes excluded): [Store API → Readiness queue](../api-design/store-api.md#readiness-queue).
+- **Keyed sharing.** One server subscription per key (key definition: [Store API → Keyed sharing](../api-design/store-api.md#keyed-sharing)). `SubscriptionRegistry` owns key→subId, refcounts, per-key pagination state (`nextCursor`, `hasMore`), and grace timers. Establishment races use the presence generation-guard pattern (`presence.ts` establish loop): detach-during-establishment re-checks the refcount when the wire response lands and unsubscribes immediately if it is zero.
+- **Grace teardown.** Last-consumer detach schedules the wire unsubscribe after the contract's grace window via a single `setTimeout` per key, cancelled on re-attach. `// ponytail: fixed grace window (Store API); if server-side sub counts show churn pressure, upgrade to immediate unsubscribe + retained local snapshot for instant re-attach paint, not a config knob.`
+- **Snapshots.** Collection entries read the sorted `materializedView.records`; listen entries retain a `lastValue` field (projection dispatch stores what it delivers — new field on `SubscriptionEntry`), which `getSnapshot()` returns.
+- **Namespace switch.** `setStoreNamespace` flushes every live store key against the new namespace through the registry before resolving; registry refcounts are preserved across re-dispatch. Presence and action replay is scoped to `setPresenceNamespace`.
 
 ## Error And Retry Rules
 

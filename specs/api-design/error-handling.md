@@ -3,7 +3,7 @@
 How the SDK surfaces errors to developers: the `ZyncBaseError` interface, propagation model, write failure reporting, and auto-retry behavior.
 
 > [!NOTE]
-> This document defines the SDK consumer contract. For the full internal error catalog and server-side retry implementation, see [Error Taxonomy](../implementation/error-taxonomy.md).
+> This document defines the SDK consumer contract.
 
 ---
 
@@ -208,5 +208,3 @@ Action calls are never auto-retried, regardless of category: a retried call may 
 
 - [Connection Management](./connection-management.md) — Client lifecycle and events
 - [Store API](./store-api.md) — Accepted/committed mutation methods
-- [Error Taxonomy](../implementation/error-taxonomy.md) — Full internal error catalog and retry implementations
-- [Wire Protocol](../implementation/wire-protocol.md#error-format) — Error envelope wire format
