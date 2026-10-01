@@ -409,6 +409,23 @@ export class ConnectionManager {
 		}
 
 		const result = this.pending.register(id, encoded.context);
+		const isNamespaceSetup =
+			msg.type === "StoreSetNamespace" || msg.type === "PresenceSetNamespace";
+		if (!isNamespaceSetup && this.currentStatus !== "connected") {
+			// The server session does not exist yet (socket opening, namespace
+			// handshake running, or reconnect pending). Sending now makes the
+			// server answer SESSION_NOT_READY; surface a retryable network error
+			// instead so callers retry once the session is live.
+			this.pending.reject(
+				id,
+				new ZyncBaseError("Connection is not ready", {
+					code: ErrorCodes.CONNECTION_FAILED,
+					category: "network",
+					retryable: true,
+				}),
+			);
+			return { id, result, debugType: encoded.debugMessage.type };
+		}
 		try {
 			this.send(encoded.bytes);
 		} catch (err) {

@@ -505,6 +505,45 @@ describe("ConnectionManager", () => {
 			manager.disconnect();
 		});
 
+		test("rejects user dispatches while the namespace handshake is in flight", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// StoreSetNamespace has been sent; its ack has not arrived yet.
+			expect(mockWs.sentMessages).toHaveLength(1);
+
+			// A user dispatch must not hit the wire before the server session
+			// exists — otherwise the server answers SESSION_NOT_READY.
+			const user = manager.dispatch({
+				type: "StoreSet",
+				path: ["a"],
+				value: 1,
+			});
+			await expect(user).rejects.toMatchObject({
+				code: "CONNECTION_FAILED",
+				retryable: true,
+			});
+			expect(mockWs.sentMessages).toHaveLength(1);
+
+			// Complete the handshake: the rejected StoreSet consumed id=2, so
+			// PresenceSetNamespace goes out as id=3.
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: 3,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
+				}),
+			);
+			await connected;
+			manager.disconnect();
+		});
+
 		test("keeps the reconnect loop alive when the namespace handshake fails", async () => {
 			const { manager, mockWs } = makeManager({
 				reconnect: true,
