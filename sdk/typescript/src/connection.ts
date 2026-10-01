@@ -250,7 +250,10 @@ export class ConnectionManager {
 		// namespace messages were in flight) must keep the
 		// reconnect loop alive — only an intentional disconnect
 		// may end it.
-		if (this.shouldReconnectAfterHandshake(err)) {
+		if (
+			this.reconnectTimer === null &&
+			this.shouldReconnectAfterHandshake(err)
+		) {
 			this.scheduleReconnect(err as ZyncBaseError);
 		}
 		reject(err);

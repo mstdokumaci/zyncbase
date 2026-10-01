@@ -349,15 +349,15 @@ export class ZyncBaseClient {
 				}
 				return;
 			} catch (err) {
-				console.error(
-					`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
-					err,
-				);
 				const transient =
 					typeof err === "object" &&
 					err !== null &&
 					(err as { retryable?: unknown }).retryable === true;
 				if (!transient || this.conn.status !== "connected") throw err;
+				console.error(
+					`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
+					err,
+				);
 				await new Promise((resolve) => setTimeout(resolve, 100));
 			}
 		}
