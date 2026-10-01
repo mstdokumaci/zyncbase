@@ -267,7 +267,7 @@ The first consumer establishes the server subscription; later consumers of the s
 
 `unlisten()` / `unsubscribe()` remove **this consumer**: its callback stops firing synchronously, and the returned promise resolves once local detachment completes. It is not a server acknowledgement — with sharing, the server subscription usually stays open for other consumers anyway.
 
-When the last consumer of a key detaches, the SDK schedules the server-side unsubscribe after a fixed **100 ms grace window**. A consumer re-attaching inside the window cancels it and reuses the live subscription — the callback fires immediately from the retained snapshot, with no round trip.
+When the last consumer of a key detaches, the SDK schedules the server-side unsubscribe after a fixed **300 ms grace window**. A consumer re-attaching inside the window cancels it and reuses the live subscription — the callback fires immediately from the retained snapshot, with no round trip.
 
 - Rapid mount/unmount churn at the same key (virtualized lists, viewport panning, effect re-runs) costs zero wire traffic inside the window.
 - The window is fixed SDK behavior, not a configuration knob. If server-side subscription counts ever show pressure from churn, the upgrade path is immediate unsubscribe plus a retained local snapshot for instant re-attach paint — not a knob.
