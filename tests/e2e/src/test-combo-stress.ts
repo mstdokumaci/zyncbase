@@ -348,8 +348,6 @@ function makeClientState(
 		},
 		presenceNamespace: `${PRESENCE_NAMESPACE_PREFIX}-${context.roomIndex}`,
 		retryRateLimits: false,
-		// Keepalive is out of scope here: no client pings or self-closes, and
-		// the server idle timeout is pinned at 600s for this test.
 		liveness: { enabled: false },
 	});
 

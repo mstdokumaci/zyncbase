@@ -217,6 +217,45 @@ export class ConnectionManager {
 		}
 	}
 
+	private teardownSocket(): void {
+		if (this.ws) {
+			const ws = this.ws;
+			this.ws = null;
+			ws.onclose = null;
+			ws.onerror = null;
+			ws.onmessage = null;
+			ws.close();
+		}
+	}
+
+	private shouldReconnectAfterHandshake(err: unknown): boolean {
+		return (
+			!this.intentionalDisconnect &&
+			(this.options.reconnect ?? true) &&
+			(err instanceof ZyncBaseError ? err.retryable : true)
+		);
+	}
+
+	private handleHandshakeFailure(
+		err: unknown,
+		reject: (reason?: unknown) => void,
+	): void {
+		this.stopLiveness();
+		this.teardownSocket();
+		this.pending.rejectAll(err);
+		this.rejectSchemaSync(err);
+		this.setStatus("disconnected", { error: err as ZyncBaseError });
+		this.emit("error", err);
+		// A failed handshake (e.g. the socket dropped while the
+		// namespace messages were in flight) must keep the
+		// reconnect loop alive — only an intentional disconnect
+		// may end it.
+		if (this.shouldReconnectAfterHandshake(err)) {
+			this.scheduleReconnect(err as ZyncBaseError);
+		}
+		reject(err);
+	}
+
 	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
@@ -244,33 +283,7 @@ export class ConnectionManager {
 						this.emit("connected");
 						resolve();
 					})
-					.catch((err) => {
-						this.stopLiveness();
-						if (this.ws) {
-							const ws = this.ws;
-							this.ws = null;
-							ws.onclose = null;
-							ws.onerror = null;
-							ws.onmessage = null;
-							ws.close();
-						}
-						this.pending.rejectAll(err);
-						this.rejectSchemaSync(err);
-						this.setStatus("disconnected", { error: err });
-						this.emit("error", err);
-						// A failed handshake (e.g. the socket dropped while the
-						// namespace messages were in flight) must keep the
-						// reconnect loop alive — only an intentional disconnect
-						// may end it.
-						if (
-							!this.intentionalDisconnect &&
-							(this.options.reconnect ?? true) &&
-							(err instanceof ZyncBaseError ? err.retryable : true)
-						) {
-							this.scheduleReconnect(err);
-						}
-						reject(err);
-					});
+					.catch((err) => this.handleHandshakeFailure(err, reject));
 			};
 
 			ws.onerror = () => this.handleSocketError(reject);

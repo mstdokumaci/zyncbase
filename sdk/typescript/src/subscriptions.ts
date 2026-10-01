@@ -320,16 +320,25 @@ export class SubscriptionTracker {
 		return field !== undefined ? field : null;
 	}
 
+	private _applyRecordOp(
+		flat: Record<string, JsonValue>,
+		op: StoreDelta["ops"][number],
+	): { returned: boolean; value?: JsonValue } {
+		const relativePath = op.path.slice(2);
+		if (relativePath.length === 0) {
+			if (op.op === "remove") return { returned: true, value: null };
+			if (op.op === "set") return { returned: true, value: op.value };
+			return { returned: false };
+		}
+		flat[joinFieldPath(...relativePath)] = op.op === "set" ? op.value : null;
+		return { returned: false };
+	}
+
 	private _reconstructRecord(ops: StoreDelta["ops"]): JsonValue {
 		const flat: Record<string, JsonValue> = {};
 		for (const op of ops) {
-			const relativePath = op.path.slice(2);
-			if (relativePath.length === 0) {
-				if (op.op === "remove") return null;
-				if (op.op === "set") return op.value;
-				continue;
-			}
-			flat[joinFieldPath(...relativePath)] = op.op === "set" ? op.value : null;
+			const result = this._applyRecordOp(flat, op);
+			if (result.returned) return result.value as JsonValue;
 		}
 		return unflatten(flat);
 	}

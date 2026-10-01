@@ -105,6 +105,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runPresence(port, PRESENCE_E2E_JWT_SECRET);
@@ -123,6 +124,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
@@ -158,9 +160,6 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-combo-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
-					// Pin the idle timeout so the test does not depend on
-					// the production default (15s is too tight for 10k
-					// clients on slow socket stacks).
 					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
