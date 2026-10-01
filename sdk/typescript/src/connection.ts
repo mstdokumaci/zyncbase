@@ -197,7 +197,11 @@ export class ConnectionManager {
 		this.rejectSchemaSync(error);
 		this.setStatus("disconnected", { error });
 		this.emit("error", error);
-		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
+		if (
+			!this.intentionalDisconnect &&
+			(this.options.reconnect ?? true) &&
+			error.retryable
+		) {
 			this.scheduleReconnect();
 		}
 		throw error;
@@ -260,7 +264,8 @@ export class ConnectionManager {
 						// may end it.
 						if (
 							!this.intentionalDisconnect &&
-							(this.options.reconnect ?? true)
+							(this.options.reconnect ?? true) &&
+							(err instanceof ZyncBaseError ? err.retryable : true)
 						) {
 							this.scheduleReconnect(err);
 						}

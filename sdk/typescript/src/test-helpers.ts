@@ -171,7 +171,7 @@ export interface FetchTicketOptions {
 	ticket?: string;
 	expiresAt?: number;
 	status?: number;
-	body?: Record<string, unknown>;
+	body?: Record<string, unknown> | string;
 }
 
 /** Install a mock fetch that responds to POST /auth/ticket. */

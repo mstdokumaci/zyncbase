@@ -555,8 +555,38 @@ describe("ConnectionManager", () => {
 			const connected = manager.connect();
 			await new Promise((r) => setTimeout(r, 0));
 			mockWs.triggerOpen();
-			// StoreSetNamespace (id=1) is rejected — a failed handshake must
-			// not terminate the reconnect loop.
+			// StoreSetNamespace (id=1) is rejected with a retryable error — a
+			// failed handshake must not terminate the reconnect loop.
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 1,
+					code: "SERVER_SHUTDOWN",
+					message: "namespace setup failed",
+				}),
+			);
+
+			await expect(connected).rejects.toThrow("namespace setup failed");
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
+		test("does NOT reconnect when the handshake fails with a non-retryable error", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// PERMISSION_DENIED derives authorization/retryable: false — the
+			// client must stop instead of retrying a permanently denied
+			// namespace forever.
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
@@ -568,7 +598,36 @@ describe("ConnectionManager", () => {
 
 			await expect(connected).rejects.toThrow("namespace denied");
 			await new Promise((r) => setTimeout(r, 20));
-			expect(events).toContain("reconnecting");
+			expect(events).not.toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
+		test("does NOT reconnect when ticket acquisition fails non-retryably", async () => {
+			installMockFetchTicket({
+				status: 401,
+				body: JSON.stringify({
+					code: "AUTH_FAILED",
+					message: "bad credentials",
+				}),
+			});
+
+			const manager = new ConnectionManager({
+				url: "ws://localhost:3000",
+				auth: { anonymous: true },
+				reconnect: true,
+				reconnectDelay: 10,
+				liveness: { enabled: false },
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			await expect(manager.connect()).rejects.toMatchObject({
+				code: "AUTH_FAILED",
+				retryable: false,
+			});
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).not.toContain("reconnecting");
 
 			manager.disconnect();
 		});
