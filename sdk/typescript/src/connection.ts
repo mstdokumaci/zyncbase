@@ -254,6 +254,16 @@ export class ConnectionManager {
 						this.rejectSchemaSync(err);
 						this.setStatus("disconnected", { error: err });
 						this.emit("error", err);
+						// A failed handshake (e.g. the socket dropped while the
+						// namespace messages were in flight) must keep the
+						// reconnect loop alive — only an intentional disconnect
+						// may end it.
+						if (
+							!this.intentionalDisconnect &&
+							(this.options.reconnect ?? true)
+						) {
+							this.scheduleReconnect(err);
+						}
 						reject(err);
 					});
 			};
@@ -605,6 +615,9 @@ export class ConnectionManager {
 
 		const delay = this._computeBackoffDelay(this.reconnectAttempt);
 		this.reconnectAttempt++;
+
+		// Overlapping failure paths can both request a reconnect; keep one timer.
+		if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
 
 		this.setStatus("reconnecting", {
 			retryCount: this.reconnectAttempt,

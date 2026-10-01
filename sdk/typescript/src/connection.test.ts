@@ -505,6 +505,35 @@ describe("ConnectionManager", () => {
 			manager.disconnect();
 		});
 
+		test("keeps the reconnect loop alive when the namespace handshake fails", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// StoreSetNamespace (id=1) is rejected — a failed handshake must
+			// not terminate the reconnect loop.
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 1,
+					code: "PERMISSION_DENIED",
+					message: "namespace denied",
+				}),
+			);
+
+			await expect(connected).rejects.toThrow("namespace denied");
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
 		test("classifies close codes and stops retrying non-retryable auth failures", async () => {
 			const { manager, mockWs } = makeManager({ reconnect: true });
 			await connectManager(manager, mockWs);
