@@ -44,6 +44,7 @@ function makeStore(schema: SchemaDictionary) {
 	// Deltas reach the tracker exactly as client.ts wires them.
 	const tracker = new SubscriptionTracker();
 	const store = new StoreImpl(conn, tracker);
+	void store.markSessionReady();
 	const push = (msg: InboundMessage) =>
 		tracker.dispatch(msg as Parameters<SubscriptionTracker["dispatch"]>[0]);
 

@@ -422,15 +422,15 @@ export class PresenceImpl implements Presence {
 		this.clearThrottle(reason);
 	}
 
-	replaySubscriptions(): void {
-		if (this.hasUserSubscribers() && !this.userSubPromise) {
-			this.userSubId = null;
-			void this.ensureUserSubscription().catch(() => {});
+	async replaySubscriptions(): Promise<void> {
+		// Only replays what the current connection is missing: a retry after a
+		// partial restore must not re-subscribe an already-established scope.
+		if (this.hasUserSubscribers() && this.userSubId === null) {
+			await this.ensureUserSubscription();
 		}
 
-		if (this.sharedCallbacks.size > 0 && !this.sharedSubPromise) {
-			this.sharedSubId = null;
-			void this.ensureSharedSubscription().catch(() => {});
+		if (this.sharedCallbacks.size > 0 && this.sharedSubId === null) {
+			await this.ensureSharedSubscription();
 		}
 	}
 

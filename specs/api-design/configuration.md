@@ -1245,7 +1245,7 @@ For detailed migration guides, see the ZyncBase documentation (MIGRATIONS.md was
 
 ## authorization.json
 
-Define authorization rules using the declarative JSON condition grammar documented in [Auth Grammar](../implementation/auth-grammar.md). If `authorization.json` is omitted or missing, the server boots with the implicit safe public playground rules from that grammar.
+Define authorization rules using the declarative JSON condition grammar. If `authorization.json` is omitted or missing, the server boots with the implicit safe public playground rules from that grammar.
 
 ### Simple Rules
 

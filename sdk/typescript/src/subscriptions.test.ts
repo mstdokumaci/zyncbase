@@ -1,10 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import {
+	createCreatedAtComparator,
 	createInitialSnapshotDelta,
 	SubscriptionTracker,
 } from "./subscriptions";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types";
+
+/** Registers a collection-level (materialized view) subscription. */
+function registerView(
+	tracker: SubscriptionTracker,
+	subId: number,
+	params: Omit<StoreSubscribe, "id">,
+	callback: (results: JsonValue[]) => void,
+): void {
+	tracker.register(subId, {
+		params,
+		callbacks: [callback],
+		projection: null,
+		materializedView: {
+			records: new Map(),
+			comparator: createCreatedAtComparator(),
+		},
+	});
+}
 
 /**
  * Property 9: StoreDelta routing to subscriptions
@@ -96,7 +115,8 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
 
-		tracker.registerCollection(
+		registerView(
+			tracker,
 			201,
 			{ type: "StoreSubscribe", table_index: "items" },
 			(value) => snapshots.push(value),
@@ -123,7 +143,8 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		const snapshots: JsonValue[][] = [];
 		const inputValue = { id: "doc-1", name: "item", priority: 5 };
 
-		tracker.registerCollection(
+		registerView(
+			tracker,
 			203,
 			{ type: "StoreSubscribe", table_index: "items" },
 			(value) => snapshots.push(value),
@@ -150,7 +171,8 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
 
-		tracker.registerCollection(
+		registerView(
+			tracker,
 			202,
 			{ type: "StoreSubscribe", table_index: "users" },
 			(value) => snapshots.push(value),

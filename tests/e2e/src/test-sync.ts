@@ -1,3 +1,4 @@
+import type { ListenHandle } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
 /** Mock Task for testing */
@@ -20,7 +21,7 @@ async function waitForListen<T>(
 	timeoutMs = 2000,
 ): Promise<T> {
 	await client.setNamespace(namespace);
-	let unlisten: (() => Promise<void>) | undefined;
+	let handle: ListenHandle | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let resolveWaiting!: (value: T) => void;
 	const waiting = new Promise<T>((resolve, reject) => {
@@ -32,7 +33,7 @@ async function waitForListen<T>(
 		}, timeoutMs);
 	});
 	try {
-		unlisten = await client.store.listen(path, (val: unknown) => {
+		handle = await client.store.listen(path, (val: unknown) => {
 			const result = predicate(val as MockTask);
 			if (result) {
 				if (timer) clearTimeout(timer);
@@ -42,7 +43,7 @@ async function waitForListen<T>(
 		return await waiting;
 	} finally {
 		if (timer) clearTimeout(timer);
-		if (unlisten) await unlisten();
+		if (handle) await handle.unlisten();
 	}
 }
 
@@ -51,9 +52,32 @@ export async function run(port: number = 3000) {
 	const clientB = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
 
 	try {
+		// Readiness queue: a registration issued before connect() dispatches
+		// once the session is ready — no pre-connect error to handle.
+		if (clientA.status !== "disconnected")
+			throw new Error(
+				`Expected disconnected before connect(), got ${clientA.status}`,
+			);
+		const lifecycle: string[] = [];
+		clientA.on("synced", () => lifecycle.push("synced"));
+		clientA.on("reconnected", () => lifecycle.push("reconnected"));
+		const queued = clientA.store.listen(["tasks", "1"], () => {});
+
 		console.log("Connecting clients...");
 		await Promise.all([clientA.connect(), clientB.connect()]);
 		console.log("Clients connected.");
+
+		if (clientA.status !== "connected")
+			throw new Error(
+				`Expected connected after connect(), got ${clientA.status}`,
+			);
+		if (lifecycle.join(",") !== "synced")
+			throw new Error(
+				`First connect must emit only "synced", got [${lifecycle.join(", ")}]`,
+			);
+		const queuedHandle = await queued;
+		await queuedHandle.unlisten();
+		console.log("Queued listen dispatched after connect; synced fired once.");
 
 		const namespace = "public";
 

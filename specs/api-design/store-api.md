@@ -2,7 +2,7 @@
 
 The Store API handles durable, synchronized data. Everything in this namespace is validated against your [Schema](./configuration.md#schemajson), persisted to SQLite, and synchronized across all connected clients.
 
-Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`; calling store methods before that point fails with `SESSION_NOT_READY`.
+Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`. Data operations (`get`, `set`, `remove`, `create`, `query`, `batch`) issued before that point fail with `SESSION_NOT_READY`. Subscription registrations (`listen`, `subscribe`) are the exception: they are queued and dispatched when the session becomes ready — see [Subscription Lifecycle](#subscription-lifecycle).
 
 Mutating methods use subscription-first eventual state propagation (ADR-018). By default, `store.set`, `store.remove`, and `store.batch` resolve when the server accepts the mutation into the write pipeline. They do not optimistically update local subscription state, and they do not wait for writer commit unless `confirm: "committed"` is requested. Subscription callbacks are the authoritative source of committed observable state.
 
@@ -11,7 +11,8 @@ Mutating methods use subscription-first eventual state propagation (ADR-018). By
 1.  [Direct Path Access](#direct-path-access-crud)
 2.  [Query API (Path Filtering)](#query-api-path-filtering)
 3.  [Batch Operations](#batch-operations)
-4.  [Path Syntax](#path-syntax-strings-vs-arrays)
+4.  [Subscription Lifecycle](#subscription-lifecycle)
+5.  [Path Syntax](#path-syntax-strings-vs-arrays)
 
 ---
 
@@ -113,9 +114,12 @@ await client.store.remove('elements.rect-1')
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
 ```typescript
-const unlisten = await client.store.listen('elements.rect-1', (element) => {
+const { unlisten, getSnapshot } = await client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
+
+// Synchronous read of the current value — no round trip
+const current = getSnapshot()
 ```
 
 **Callback receives** (same shape as `store.get()` return values):
@@ -123,7 +127,12 @@ const unlisten = await client.store.listen('elements.rect-1', (element) => {
 - **Object** when listening to a document
 - **Scalar** when listening to a field
 
-**Returns**: `Promise<() => Promise<void>>`. The promise resolves when the server accepts the listen request. The callback delivers the initial value and subsequent updates. Calling the returned function unsubscribes; await it to wait for the server's acknowledgement.
+**Returns**: `Promise<ListenHandle>`:
+
+- `unlisten(): Promise<void>` — detaches this consumer; its callback stops firing immediately ([teardown contract](#teardown-and-the-grace-window)).
+- `getSnapshot(): JsonValue | undefined` — last value delivered to callbacks for this path ([snapshot contract](#snapshots)).
+
+The callback delivers the initial value and subsequent updates.
 
 ---
 
@@ -187,7 +196,14 @@ if (hasMore) await loadMore()
 - `options` (object) - Query options (same as `query()`)
 - `callback` (function) - Called when results change
 
-**Returns**: `Promise<{ unsubscribe: () => Promise<void>, loadMore: () => Promise<void>, hasMore: boolean }>`. The promise resolves when the server accepts the subscription. Initial and subsequent results are delivered through the callback.
+**Returns**: `Promise<SubscriptionHandle>`:
+
+- `unsubscribe(): Promise<void>` — detaches this consumer; its callback stops firing immediately ([teardown contract](#teardown-and-the-grace-window)).
+- `loadMore(): Promise<void>` — appends the next page ([shared per key](#keyed-sharing)).
+- `hasMore: boolean` — whether more pages exist ([shared per key](#keyed-sharing)).
+- `getSnapshot(): JsonValue[]` — current sorted results ([snapshot contract](#snapshots)).
+
+Initial and subsequent results are delivered through the callback.
 
 **Full Syntax**: See [Query Language Reference](./query-language.md) for all operators (`eq`, `gte`, `contains`, `in`, etc.).
 
@@ -220,6 +236,50 @@ await client.store.batch([
 - Only `set` and `remove` allowed.
 
 **Error Details**: Confirmed batch failures include `details.batchIndex` when the failing operation can be identified.
+
+---
+
+## Subscription Lifecycle
+
+`store.listen` and `store.subscribe` share one registration lifecycle: readiness queueing, keyed sharing, reference-counted teardown, and synchronous snapshots.
+
+### Readiness queue
+
+A registration issued before the session is ready — before `connect()` settles, while reconnecting, or during a namespace switch — is queued and dispatched automatically when the session becomes ready. On recovery that is the `synced` point described in [Recovery Complete](./connection-management.md#recovery-complete); on a namespace switch the switch itself flushes the queue before its promise resolves. Registrations never fail with `SESSION_NOT_READY`.
+
+- `client.disconnect()` discards queued registrations: nothing is dispatched and their promises reject with `CONNECTION_FAILED`.
+- Writes and one-shot reads are **not** queued. They fail fast on purpose: a `set` landing minutes later against stale state is worse than an error.
+
+### Keyed sharing
+
+Consumers of the same subscription share one server subscription:
+
+| API | Key |
+|-----|-----|
+| `listen` | normalized path |
+| `subscribe` | collection + `where`/`orderBy`/`limit`/`after` in canonical serialization |
+
+The first consumer establishes the server subscription; later consumers of the same key attach locally. A consumer attaching while establishment is in flight shares its outcome — both promises settle together. Attaching to an established subscription fires the callback immediately with the retained snapshot.
+
+`hasMore` and `loadMore()` belong to the key, not the handle: every consumer observes and advances one shared cursor. Consumers wanting different pages of the same collection use different `after` values — and therefore different keys and different server subscriptions.
+
+### Teardown and the grace window
+
+`unlisten()` / `unsubscribe()` remove **this consumer**: its callback stops firing synchronously, and the returned promise resolves once local detachment completes. It is not a server acknowledgement — with sharing, the server subscription usually stays open for other consumers anyway.
+
+When the last consumer of a key detaches, the SDK schedules the server-side unsubscribe after a fixed **300 ms grace window**. A consumer re-attaching inside the window cancels it and reuses the live subscription — the callback fires immediately from the retained snapshot, with no round trip.
+
+- Rapid mount/unmount churn at the same key (virtualized lists, viewport panning, effect re-runs) costs zero wire traffic inside the window.
+- The window is fixed SDK behavior, not a configuration knob. If server-side subscription counts ever show pressure from churn, the upgrade path is immediate unsubscribe plus a retained local snapshot for instant re-attach paint — not a knob.
+
+### Snapshots
+
+Each handle exposes `getSnapshot()`: a synchronous read of current state, shared across all consumers of the key.
+
+- `listen`: the last delivered value (array/object/scalar by path depth), `undefined` before the first.
+- `subscribe`: the current sorted result array.
+
+Snapshots are read-only. Between deltas, repeated reads return the same state; `getSnapshot` never performs I/O and never rejects.
 
 ---
 

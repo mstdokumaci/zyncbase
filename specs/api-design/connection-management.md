@@ -111,9 +111,6 @@ Gracefully closes the connection. Automatically clears presence in the active na
 client.disconnect()
 ```
 
-> [!NOTE]
-> For full wire-level details of the connection lifecycle (ticket format, scope acknowledgements, liveness probing, close codes, graceful close), see the [Wire Protocol](../implementation/wire-protocol.md#liveness-probing).
-
 ---
 
 ## Liveness Detection
@@ -140,7 +137,7 @@ The SDK therefore emits three ordered events:
 | `reconnected` | The same, but a connection existed earlier in this process. Does not fire on a first connect. |
 | `synced` | Store subscriptions, presence subscriptions, and action registrations have all been replayed. The client is fully restored. |
 
-**`synced` is the only point at which it is safe to issue requests.** It fires on every successful recovery, including a first connect, so an application writes one handler rather than branching on cold versus warm:
+**`synced` is the only point at which it is safe to issue data requests.** It fires on every successful recovery, including a first connect, so an application writes one handler rather than branching on cold versus warm:
 
 ```typescript
 client.on('synced', () => {
@@ -148,7 +145,7 @@ client.on('synced', () => {
 })
 ```
 
-Anything issued before `synced` — from a `connected` handler, or after a drop while the SDK is still replaying — reaches a connection whose subscriptions are not yet restored, and is dropped rather than queued. Applications that must survive a gap do their setup in `synced` and treat a connection failure as retryable from the last confirmed point.
+Subscription registrations issued before `synced` queue and dispatch when recovery completes — the exact queueing rules live under [Store API → Readiness queue](./store-api.md#readiness-queue). Writes and one-shot reads never queue: they fail fast while the store scope is unresolved, and once it is resolved — from a `connected` handler, or during replay after a drop — they are sent and answered, though against a connection whose subscriptions are not yet restored. Applications that must survive a gap do their writes and action registrations in `synced` and treat a connection failure as retryable from the last confirmed point.
 
 `reconnected` exists for where the two must differ: an application resuming an interrupted workflow resets state there, while one wanting a clean slate resets on `connected`. Without it, every application guesses with its own flag.
 
@@ -158,7 +155,7 @@ Anything issued before `synced` — from a `connected` handler, or after a drop 
 
 ### `client.setStoreNamespace(namespace)`
 
-Switch the active store namespace at runtime. The returned promise resolves after the server resolves both the namespace ID and store-scoped internal user ID. Active store subscriptions are invalidated — the client must re-subscribe.
+Switch the active store namespace at runtime. The returned promise resolves after the server resolves both the namespace ID and store-scoped internal user ID, and after the client has automatically re-established active store subscriptions against the new namespace — consumers keep their callbacks and snapshots resume from the new namespace with no application code. Presence subscriptions and action registrations are unaffected by a store switch.
 
 ```typescript
 await client.setStoreNamespace('tenant:acme:workspace:ws-2')
@@ -223,9 +220,12 @@ client.on('tokenExpired', async () => {
 | `synced` | `() => void` | Subscriptions and action registrations fully replayed; the client is safe to use |
 | `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
 | `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
+| `schemaChange` | `() => void` | The server pushed a schema whose hash differs from the active dictionary; the SDK re-applied `SchemaSync` in place. Subscriptions and requests continue against the new dictionary without interruption |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
 | `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place. Rejects no pending request |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
+
+These signatures are the exported `ClientEvents` type. `client.on` and `client.off` are typed against it, so every event's callback is fully typed — no casts, no `unknown[]` payloads.
 
 ### `disconnected` Detail
 
@@ -243,7 +243,7 @@ client.on('disconnected', (detail) => {
 })
 ```
 
-`code` is always set. Server-originated codes and their close-code equivalents are defined in [Error Taxonomy → Disconnect Codes](../implementation/error-taxonomy.md#disconnect-codes).
+`code` is always set.
 
 `retryable` states whether the SDK reconnects on the normal backoff. It does not promise the condition is resolved: a retryable close can recur if its cause is unchanged, and reconnecting after `BACKPRESSURE_LIMIT` in particular replays the same subscriptions that produced it.
 
@@ -258,13 +258,25 @@ Two behaviors follow:
 
 ```typescript
 client.on('statusChange', (status, detail) => {
-  // status: 'connecting' | 'scoping' | 'connected' | 'reconnecting' | 'disconnected'
+  // status: current ConnectionStatus — see `client.status` below
   // detail.previousStatus: the state before this transition
   // detail.retryCount: current attempt number (0 when first connecting)
   // detail.retryIn: ms until next attempt (null if not reconnecting)
   // detail.error: last error, if any
 })
 ```
+
+### `client.status`
+
+The current connection status, readable synchronously at any time:
+
+```typescript
+client.status // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+```
+
+`status` is the value; `statusChange` is the transition. Reading `client.status` on first render produces an accurate connection indicator before any event has fired — no invented initial state — and `statusChange` keeps it current from there.
+
+**Type:** `ConnectionStatus` (exported), also used by `StatusDetail.previousStatus`.
 
 ---
 
@@ -314,7 +326,7 @@ client.on('tokenExpired', async () => {
 **Parameters:** `token` (string) — new external JWT  
 **Returns:** `Promise<void>`
 
-Under the hood, this sends an `AuthRefresh` wire message. See [Wire Protocol → Client Messages](../implementation/wire-protocol.md#client-messages) for details.
+Under the hood, this sends an `AuthRefresh` wire message.
 
 ---
 
@@ -323,4 +335,3 @@ Under the hood, this sends an `AuthRefresh` wire message. See [Wire Protocol →
 - [Store API](./store-api.md) — Persistent state operations
 - [Presence API](./presence-api.md) — Ephemeral user awareness
 - [Error Handling](./error-handling.md) — Error types and retry behavior
-- [Wire Protocol](../implementation/wire-protocol.md) — Full wire-level connection lifecycle

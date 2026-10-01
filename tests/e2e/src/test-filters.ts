@@ -363,27 +363,6 @@ async function waitForFired(
 	return polls;
 }
 
-async function waitForSubscriptionsReady(
-	clients: ClientState[],
-	timeoutMs = 15_000,
-): Promise<number> {
-	const deadline = Date.now() + timeoutMs;
-	let polls = 0;
-	while (!clients.every((c) => c.client.registeredSubscriptionCount() === 2)) {
-		if (Date.now() > deadline) {
-			const pending = clients
-				.filter((c) => c.client.registeredSubscriptionCount() !== 2)
-				.map((c) => `${c.debugId}:${c.client.registeredSubscriptionCount()}`);
-			throw new Error(
-				`Timeout: ${pending.length} clients have pending subscriptions: ${pending.join(",")}`,
-			);
-		}
-		await new Promise((resolve) => setTimeout(resolve, 25));
-		polls++;
-	}
-	return polls;
-}
-
 async function waitForAllFiredAndConverged(
 	clients: ClientState[],
 	timeoutMs = 15000,
@@ -635,9 +614,8 @@ async function runHalf(
 	const subT0 = Date.now();
 	await Promise.all(clients.map((state) => subscribeClient(state)));
 	const subMs = Date.now() - subT0;
+	// subscribe() resolves at the server ack, so all registrations are live.
 	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
-	const readyPolls = await waitForSubscriptionsReady(clients);
-	phase(`All subscriptions ready (${readyPolls} polls).`);
 	await readyForWrites();
 
 	console.log("Creating initial data...");

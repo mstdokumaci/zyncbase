@@ -505,6 +505,133 @@ describe("ConnectionManager", () => {
 			manager.disconnect();
 		});
 
+		test("rejects user dispatches while the namespace handshake is in flight", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// StoreSetNamespace has been sent; its ack has not arrived yet.
+			expect(mockWs.sentMessages).toHaveLength(1);
+
+			// A user dispatch must not hit the wire before the server session
+			// exists — otherwise the server answers SESSION_NOT_READY.
+			const user = manager.dispatch({
+				type: "StoreSet",
+				path: ["a"],
+				value: 1,
+			});
+			await expect(user).rejects.toMatchObject({
+				code: "CONNECTION_FAILED",
+				retryable: true,
+			});
+			expect(mockWs.sentMessages).toHaveLength(1);
+
+			// Complete the handshake: the rejected StoreSet consumed id=2, so
+			// PresenceSetNamespace goes out as id=3.
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: 3,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
+				}),
+			);
+			await connected;
+			manager.disconnect();
+		});
+
+		test("keeps the reconnect loop alive when the namespace handshake fails", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// StoreSetNamespace (id=1) is rejected with a retryable error — a
+			// failed handshake must not terminate the reconnect loop.
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 1,
+					code: "SERVER_SHUTDOWN",
+					message: "namespace setup failed",
+				}),
+			);
+
+			await expect(connected).rejects.toThrow("namespace setup failed");
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
+		test("does NOT reconnect when the handshake fails with a non-retryable error", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: true,
+				reconnectDelay: 10,
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			const connected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			// PERMISSION_DENIED derives authorization/retryable: false — the
+			// client must stop instead of retrying a permanently denied
+			// namespace forever.
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 1,
+					code: "PERMISSION_DENIED",
+					message: "namespace denied",
+				}),
+			);
+
+			await expect(connected).rejects.toThrow("namespace denied");
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).not.toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
+		test("does NOT reconnect when ticket acquisition fails non-retryably", async () => {
+			installMockFetchTicket({
+				status: 401,
+				body: JSON.stringify({
+					code: "AUTH_FAILED",
+					message: "bad credentials",
+				}),
+			});
+
+			const manager = new ConnectionManager({
+				url: "ws://localhost:3000",
+				auth: { anonymous: true },
+				reconnect: true,
+				reconnectDelay: 10,
+				liveness: { enabled: false },
+			});
+			const events: string[] = [];
+			manager.on("reconnecting", () => events.push("reconnecting"));
+
+			await expect(manager.connect()).rejects.toMatchObject({
+				code: "AUTH_FAILED",
+				retryable: false,
+			});
+			await new Promise((r) => setTimeout(r, 20));
+			expect(events).not.toContain("reconnecting");
+
+			manager.disconnect();
+		});
+
 		test("classifies close codes and stops retrying non-retryable auth failures", async () => {
 			const { manager, mockWs } = makeManager({ reconnect: true });
 			await connectManager(manager, mockWs);

@@ -60,6 +60,8 @@ export type ServerOptions = {
 	configName?: string;
 	authPath?: string;
 	jwtSecret?: string;
+	/** Override `server.idleTimeoutSeconds` (2-600). */
+	idleTimeoutSeconds?: number;
 };
 
 export type ServerHandle = {
@@ -457,7 +459,12 @@ export async function withServer<T>(
 	);
 
 	const config: Record<string, unknown> = {
-		server: { port: ctx.port },
+		server: {
+			port: ctx.port,
+			...(options.idleTimeoutSeconds !== undefined
+				? { idleTimeoutSeconds: options.idleTimeoutSeconds }
+				: {}),
+		},
 		dataDir: options.dataDir,
 		schema: options.schemaPath,
 		authentication: options.jwtSecret

@@ -1,6 +1,4 @@
-// Subscription Tracker
-
-import { joinFieldPath, unflatten } from "./path.js";
+import { getDeepProperty, joinFieldPath, unflatten } from "./path.js";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -9,8 +7,6 @@ import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 export interface ListenProjection {
 	/** The specific field to project from the record-level delta (e.g. "name" for "users.u1.name"). */
 	field: string | null;
-	/** Path depth of the original listen call (1 = collection, 2 = document, 3+ = field). */
-	depth: number;
 }
 
 /** Client-side materialized view for store.subscribe() registrations. */
@@ -33,6 +29,8 @@ export interface SubscriptionEntry {
 	materializedView?: MaterializedView;
 	/** Updates the caller's handle when a reconnect remaps the server subId. */
 	onRemap?: (newSubId: number) => void;
+	/** Last value delivered to callbacks — what `getSnapshot()` returns. */
+	lastValue?: JsonValue;
 }
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
@@ -56,40 +54,6 @@ export class SubscriptionTracker {
 		this.subscriptions.set(subId, entry);
 	}
 
-	registerListen(
-		subId: number,
-		params: Omit<StoreSubscribe, "id">,
-		callback: (value: JsonValue) => void,
-		segments: string[],
-		onRemap?: (newSubId: number) => void,
-	): void {
-		this.register(subId, {
-			params,
-			callbacks: [callback],
-			projection: createListenProjection(segments),
-			onRemap,
-		});
-	}
-
-	registerCollection(
-		subId: number,
-		params: Omit<StoreSubscribe, "id">,
-		callback: (results: JsonValue[]) => void,
-		comparator?: (a: JsonValue, b: JsonValue) => number,
-		onRemap?: (newSubId: number) => void,
-	): void {
-		this.register(subId, {
-			params,
-			callbacks: [callback as (value: JsonValue) => void],
-			projection: null,
-			materializedView: {
-				records: new Map(),
-				comparator: comparator ?? createCreatedAtComparator(),
-			},
-			onRemap,
-		});
-	}
-
 	/**
 	 * Remove a subscription entry by subId.
 	 */
@@ -102,6 +66,13 @@ export class SubscriptionTracker {
 	 */
 	get(subId: number): SubscriptionEntry | undefined {
 		return this.subscriptions.get(subId);
+	}
+
+	/**
+	 * Whether there are any active subscriptions.
+	 */
+	hasSubscriptions(): boolean {
+		return this.subscriptions.size > 0;
 	}
 
 	/**
@@ -193,6 +164,7 @@ export class SubscriptionTracker {
 			this._applyOpsToView(entry.materializedView, delta.ops);
 		}
 		const value = this._snapshotView(entry.materializedView);
+		entry.lastValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -281,7 +253,7 @@ export class SubscriptionTracker {
 	 * Clear all materialized view records.
 	 * Called before reconnect to prevent stale data.
 	 */
-	clearMaterializedViews(): void {
+	private clearMaterializedViews(): void {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
@@ -314,6 +286,7 @@ export class SubscriptionTracker {
 			);
 		}
 
+		entry.lastValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -337,57 +310,37 @@ export class SubscriptionTracker {
 
 		const record = this._reconstructRecord(delta.ops);
 
-		if (projection.depth === 2 || projection.field === null) {
+		if (projection.field === null) {
 			// Document-level listen — return the unflattened record
 			return record;
 		}
 
-		// depth 3+ — extract the specific nested field
-		const field = this._getField(record, projection.field);
+		// Depth 3+ — extract the specific nested field
+		const field = getDeepProperty(record, projection.field.split("."));
 		return field !== undefined ? field : null;
+	}
+
+	private _applyRecordOp(
+		flat: Record<string, JsonValue>,
+		op: StoreDelta["ops"][number],
+	): { returned: boolean; value?: JsonValue } {
+		const relativePath = op.path.slice(2);
+		if (relativePath.length === 0) {
+			if (op.op === "remove") return { returned: true, value: null };
+			if (op.op === "set") return { returned: true, value: op.value };
+			return { returned: false };
+		}
+		flat[joinFieldPath(...relativePath)] = op.op === "set" ? op.value : null;
+		return { returned: false };
 	}
 
 	private _reconstructRecord(ops: StoreDelta["ops"]): JsonValue {
 		const flat: Record<string, JsonValue> = {};
 		for (const op of ops) {
-			const relativePath = op.path.slice(2);
-			if (relativePath.length === 0) {
-				const rootResult = this._handleRootOp(op);
-				if (rootResult !== undefined) return rootResult;
-				continue;
-			}
-			this._processRecordOp(op, flat, relativePath);
+			const result = this._applyRecordOp(flat, op);
+			if (result.returned) return result.value as JsonValue;
 		}
 		return unflatten(flat);
-	}
-
-	private _processRecordOp(
-		op: StoreDelta["ops"][number],
-		flat: Record<string, JsonValue>,
-		relativePath: string[],
-	): void {
-		const key = joinFieldPath(...relativePath);
-		flat[key] = op.op === "set" ? op.value : null;
-	}
-
-	private _handleRootOp(op: StoreDelta["ops"][number]): JsonValue | undefined {
-		if (op.op === "remove") return null;
-		if (op.op === "set") return op.value;
-		return undefined;
-	}
-
-	private _getField(
-		record: JsonValue,
-		fieldPath: string,
-	): JsonValue | undefined {
-		const parts = fieldPath.split(".");
-		let value: JsonValue | undefined = record;
-		for (const part of parts) {
-			if (value == null || typeof value !== "object" || Array.isArray(value))
-				return undefined;
-			value = (value as Record<string, JsonValue>)[part];
-		}
-		return value;
 	}
 
 	/**
@@ -399,35 +352,13 @@ export class SubscriptionTracker {
 		ops: StoreDelta["ops"],
 	): void {
 		for (const op of ops) {
-			this._applyOpToView(view, op);
+			const id = op.path[1] as string;
+			if (op.op === "set") {
+				view.records.set(id, op.value);
+			} else if (op.op === "remove") {
+				view.records.delete(id);
+			}
 		}
-	}
-
-	private _applyOpToView(
-		view: MaterializedView,
-		op: StoreDelta["ops"][number],
-	): void {
-		const id = op.path[1] as string;
-
-		if (op.op === "set") {
-			this._handleSetOp(view, id, op);
-		} else if (op.op === "remove") {
-			this._handleRemoveOp(view, id);
-		}
-	}
-
-	private _handleSetOp(
-		view: MaterializedView,
-		id: string,
-		op: Extract<StoreDelta["ops"][number], { op: "set" }>,
-	): void {
-		// Map.set keeps insertion position for existing keys; ordered
-		// queries sort at snapshot.
-		view.records.set(id, op.value);
-	}
-
-	private _handleRemoveOp(view: MaterializedView, id: string): void {
-		view.records.delete(id);
 	}
 
 	/**
@@ -460,7 +391,6 @@ export function createCreatedAtComparator(): (
 export function createListenProjection(segments: string[]): ListenProjection {
 	return {
 		field: segments.length === 2 ? null : segments.slice(2).join("."),
-		depth: segments.length,
 	};
 }
 

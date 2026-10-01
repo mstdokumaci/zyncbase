@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
+import { WireMessageType } from "./connection_wire";
 import { packDocId, unpackDocId } from "./doc_id";
 import {
 	encodeToBuffer,
@@ -108,6 +109,204 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	/** Poll until `cond` holds — inbound processing is a chained async pipeline. */
+	async function waitFor(cond: () => boolean, timeoutMs = 500): Promise<void> {
+		const start = Date.now();
+		while (!cond()) {
+			if (Date.now() - start > timeoutMs) {
+				throw new Error("waitFor: condition not met in time");
+			}
+			await new Promise((r) => setTimeout(r, 5));
+		}
+	}
+
+	/**
+	 * Reply to a namespace handshake with whatever ids the connection actually
+	 * used (reconnects continue the id sequence, so ids are not always 1/2).
+	 */
+	async function handshakeNamespaces(ws: MockWebSocket): Promise<void> {
+		const first = decode(ws.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		ws.triggerMessage(encodeToBuffer({ type: "ok", id: first.id }));
+		await new Promise((r) => setTimeout(r, 0));
+		const second = decode(ws.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		if (second.id !== first.id) {
+			ws.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: second.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+		}
+	}
+
+	test("lifecycle: first connect emits connected + synced, a reconnect adds reconnected", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			reconnect: true,
+			reconnectDelay: 10,
+		});
+		const events: string[] = [];
+		client.on("connected", () => events.push("connected"));
+		client.on("reconnected", () => events.push("reconnected"));
+		client.on("synced", () => events.push("synced"));
+
+		expect(client.status).toBe("disconnected");
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(client.status).toBe("connecting");
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await p;
+		expect(client.status).toBe("connected");
+		expect(events).toEqual(["connected", "synced"]);
+
+		// Drop the socket — the SDK reconnects on the configured backoff.
+		mockWs.triggerClose(1006, "Abnormal closure");
+		expect(client.status).not.toBe("connected");
+		// Wait for the reconnect to acquire its ticket and wire up the socket.
+		await waitFor(() => client.status === "connecting");
+		await new Promise((r) => setTimeout(r, 10));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await waitFor(() => events.length === 5);
+
+		expect(client.status).toBe("connected");
+		expect(events).toEqual([
+			"connected",
+			"synced",
+			"connected",
+			"reconnected",
+			"synced",
+		]);
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a non-retryable replay failure surfaces as an error and is not retried", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const errors: Array<{ code: string; retryable: boolean }> = [];
+		client.on("error", (err) => errors.push(err));
+
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const pendingListen = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const initial = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
+		);
+		await pendingListen;
+		client.disconnect();
+
+		const reconnecting = client.connect();
+		reconnecting.catch(() => {});
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await waitFor(() => {
+			const last = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				type?: number;
+			};
+			return last.type === WireMessageType.StoreSubscribe;
+		});
+
+		// The replay fails non-retryably: the failure is surfaced to the
+		// application and no backoff retry follows.
+		const failed = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "error",
+				id: failed.id,
+				code: "PERMISSION_DENIED",
+				message: "replay denied",
+			}),
+		);
+		await waitFor(() => errors.length === 1);
+		expect(errors[0]).toMatchObject({
+			code: "PERMISSION_DENIED",
+			retryable: false,
+		});
+
+		// No retry within (nor after) the first backoff window: the session
+		// stays unrecovered and connect() stays pending.
+		const sentAfterError = mockWs.sentMessages.length;
+		await new Promise((r) => setTimeout(r, 350));
+		expect(mockWs.sentMessages.length).toBe(sentAfterError);
+
+		client.disconnect();
+		await expect(reconnecting).rejects.toMatchObject({
+			code: "CLIENT_DISCONNECT",
+		});
+		restoreWebSocket();
+	});
+
+	test("connect() rejects when a terminal disconnect precedes synced", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+
+		// Tear the connection down before SchemaSync: recovery cannot complete.
+		client.disconnect();
+		await expect(p).rejects.toMatchObject({ code: "CLIENT_DISCONNECT" });
+		restoreWebSocket();
+	});
+
+	test("a registration issued before the session is ready queues until synced", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const subscribes = () =>
+			mockWs.sentMessages.filter((message) => {
+				const msg = decode(message) as { type: number };
+				return msg.type === WireMessageType.StoreSubscribe;
+			});
+
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+
+		// Schema not yet delivered — the registration must not dispatch.
+		const pending = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(subscribes()).toHaveLength(0);
+
+		triggerSchemaSync(mockWs);
+		await waitFor(() => subscribes().length === 1);
+		const sub = decode(subscribes()[0]) as { id: number };
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: sub.id, subId: 7, value: [] }),
+		);
+
+		await p;
+		const handle = await pending;
+		await handle.unlisten();
+		client.disconnect();
+		restoreWebSocket();
+	});
+
 	test("subscription replay re-delivers document listen snapshots", async () => {
 		const userId = "019c1e50-7d11-7000-8000-000000000001";
 		installMockWebSocket();
@@ -130,7 +329,7 @@ describe("ZyncBaseClient", () => {
 		mockWs.triggerMessage(
 			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
 		);
-		const unlisten = await pendingListen;
+		const handle = await pendingListen;
 		await new Promise((r) => setTimeout(r, 0));
 		expect(values).toEqual([]);
 
@@ -171,13 +370,198 @@ describe("ZyncBaseClient", () => {
 				updated_at: 0,
 			},
 		]);
-		const pendingUnlisten = unlisten();
-		await new Promise((r) => setTimeout(r, 0));
+		const pendingUnlisten = handle.unlisten();
+		await new Promise((r) => setTimeout(r, 350));
 		const unsubscribe = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};
 		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: unsubscribe.id }));
 		await pendingUnlisten;
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a reconnect without store subscriptions re-enables delta delivery", async () => {
+		const userId = "019c1e50-7d11-7000-8000-000000000001";
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const values: JsonValue[] = [];
+
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+		client.disconnect();
+
+		// No store subscriptions exist at reconnect time: the restore must
+		// still leave the tracker connected so later deltas are delivered.
+		const reconnected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await reconnected;
+
+		const pendingListen = client.store.listen(["users", userId], (value) =>
+			values.push(value),
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		const initial = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
+		);
+		await pendingListen;
+
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "StoreDelta",
+				subId: 7,
+				ops: [
+					{
+						op: "set",
+						path: [0, userId],
+						value: [packDocId(userId), 1, "Ada", 0, 0],
+					},
+				],
+			}),
+		);
+		await waitFor(() => values.length === 1);
+		expect(values[0]).toMatchObject({ name: "Ada" });
+
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("setStoreNamespace replays store subscriptions without touching presence", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const pendingPresence = client.presence.subscribe(() => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const presenceSubscribe = decode(
+			mockWs.sentMessages.at(-1) as Uint8Array,
+		) as { id: number; type: number };
+		expect(presenceSubscribe.type).toBe(WireMessageType.PresenceSubscribe);
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: presenceSubscribe.id,
+				subId: 30,
+				users: [],
+			}),
+		);
+		const unsubscribe = await pendingPresence;
+
+		const switching = client.setStoreNamespace("other");
+		await new Promise((r) => setTimeout(r, 0));
+		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: namespace.id }));
+		await switching;
+
+		// The switch restored the store scope without re-subscribing presence.
+		const presenceSubscribes = mockWs.sentMessages.filter((message) => {
+			const msg = decode(message) as { type: number };
+			return msg.type === WireMessageType.PresenceSubscribe;
+		});
+		expect(presenceSubscribes).toHaveLength(1);
+
+		const removing = unsubscribe();
+		await new Promise((r) => setTimeout(r, 0));
+		const remove = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: remove.id }));
+		await removing;
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a rejected namespace switch restores session readiness", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		// A listen whose ack crosses the switch must still register: until the
+		// outcome is known its scope cannot be invalidated.
+		const crossing = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const crossingSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(crossingSub.type).toBe(WireMessageType.StoreSubscribe);
+
+		// The switch gates new establishments while its outcome is unknown.
+		const switching = client.setStoreNamespace("another-world");
+		await new Promise((r) => setTimeout(r, 0));
+		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(namespace.type).toBe(WireMessageType.StoreSetNamespace);
+		const gated = mockWs.sentMessages.length;
+		const queued = client.store.listen(["users", "u2"], () => {});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockWs.sentMessages.length).toBe(gated);
+
+		// A rejection releases the gate without invalidating the old scope.
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "error",
+				id: namespace.id,
+				code: "NAMESPACE_SWITCH_REJECTED",
+				message: "rejected",
+			}),
+		);
+		await expect(switching).rejects.toMatchObject({
+			code: "NAMESPACE_SWITCH_REJECTED",
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		// Exactly the gated listen goes out — no stale re-subscribe, no
+		// cleanup unsubscribe.
+		expect(mockWs.sentMessages.length).toBe(gated + 1);
+		const queuedMsg = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(queuedMsg.type).toBe(WireMessageType.StoreSubscribe);
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: queuedMsg.id, subId: 8, value: [] }),
+		);
+		const queuedHandle = await queued;
+
+		// The pre-switch acknowledgement registers as-is.
+		const beforeCrossing = mockWs.sentMessages.length;
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: crossingSub.id,
+				subId: 7,
+				value: [],
+			}),
+		);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockWs.sentMessages.length).toBe(beforeCrossing);
+		const crossingHandle = await crossing;
+		await crossingHandle.unlisten();
+		await queuedHandle.unlisten();
 		client.disconnect();
 		restoreWebSocket();
 	});

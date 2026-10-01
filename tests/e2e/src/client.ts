@@ -2,7 +2,10 @@ import type {
 	Actions,
 	AuthConfig,
 	BatchOperation,
+	ClientEvents,
+	ConnectionStatus,
 	JsonValue,
+	LifecycleEvent,
 	Presence,
 	ZyncBaseClient as SDKClient,
 	Store,
@@ -82,14 +85,14 @@ export class ZyncBaseClient {
 		return await this.client.store.get(path);
 	}
 
-	/** Test-only readiness check; subscribe handles do not expose registration. */
-	registeredSubscriptionCount(): number {
-		const tracker = (
-			this.client as unknown as {
-				tracker: { subscriptions: Map<number, unknown> };
-			}
-		).tracker;
-		return tracker.subscriptions.size;
+	/** Current connection status. */
+	get status(): ConnectionStatus {
+		return this.client.status;
+	}
+
+	/** Subscribe to a lifecycle event (`connected`, `synced`, `reconnected`, …). */
+	on<E extends LifecycleEvent>(event: E, callback: ClientEvents[E]): void {
+		this.client.on(event, callback);
 	}
 
 	close(): void {

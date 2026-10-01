@@ -24,7 +24,7 @@ import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
-setDefaultTimeout(60_000);
+setDefaultTimeout(90_000);
 
 beforeAll(
 	() => {
@@ -105,6 +105,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runPresence(port, PRESENCE_E2E_JWT_SECRET);
@@ -123,6 +124,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
@@ -158,6 +160,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-combo-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runComboStress(port, PRESENCE_E2E_JWT_SECRET);

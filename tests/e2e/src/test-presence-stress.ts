@@ -144,6 +144,7 @@ function makeClientState(
 		},
 		presenceNamespace: `${PRESENCE_NAMESPACE_PREFIX}-${context.roomIndex}`,
 		retryRateLimits: false,
+		liveness: { enabled: false },
 	});
 	const state: ClientState = {
 		client,

@@ -592,6 +592,34 @@ describe("PresenceImpl", () => {
 		expect(callbackFired).toBe(true);
 	});
 
+	test("replaySubscriptions skips an already-established subscription", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let subscribeCount = 0;
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				subscribeCount++;
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribe(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// A retry on the same connection must not create a second server
+		// subscription for a scope that is already live.
+		await presence.replaySubscriptions();
+		expect(subscribeCount).toBe(1);
+	});
+
 	test("stale subscribe promise does not overwrite cache after invalidate()", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
