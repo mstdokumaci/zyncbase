@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ErrorCodes, ZyncBaseError } from "./errors";
-import { RetryPolicy } from "./retry_policy";
+import { backoffDelay, RetryPolicy } from "./retry_policy";
 
 function makeError(code: string, retryAfter?: number): ZyncBaseError {
 	return new ZyncBaseError("test error", {
@@ -175,5 +175,28 @@ describe("RetryPolicy", () => {
 			const delay = policy.getDelay(err, 10);
 			expect(delay).toBeLessThanOrEqual(5500); // 5000 + 10% jitter
 		});
+	});
+});
+
+describe("backoffDelay", () => {
+	test("defaults to base 1000 with ±10% jitter", () => {
+		const delay0 = backoffDelay(0);
+		const delay1 = backoffDelay(1);
+		expect(delay0).toBeGreaterThanOrEqual(900);
+		expect(delay0).toBeLessThanOrEqual(1100);
+		expect(delay1).toBeGreaterThanOrEqual(1800);
+		expect(delay1).toBeLessThanOrEqual(2200);
+	});
+
+	test("jitter:false yields the exact uncapped exponential delay", () => {
+		expect(backoffDelay(2, { base: 250, max: 5_000, jitter: false })).toBe(
+			1000,
+		);
+		expect(backoffDelay(10, { max: 5_000, jitter: false })).toBe(5000);
+	});
+
+	test("caps the attempt at 30 so the delay stays finite", () => {
+		expect(backoffDelay(40, { jitter: false })).toBe(30_000);
+		expect(Number.isFinite(backoffDelay(10_000))).toBe(true);
 	});
 });

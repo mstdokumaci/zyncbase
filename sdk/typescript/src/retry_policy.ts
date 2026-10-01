@@ -1,6 +1,22 @@
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import type { ClientOptions } from "./types.js";
 
+/**
+ * Exponential backoff with ±10% jitter, capped at `max`.
+ * `attempt` is capped at 30 so `2 ** attempt` can never overflow to Infinity.
+ */
+export function backoffDelay(
+	attempt: number,
+	opts?: { base?: number; max?: number; jitter?: boolean },
+): number {
+	const base = opts?.base ?? 1000;
+	const max = opts?.max ?? 30_000;
+	const preCap = base * 2 ** Math.min(attempt, 30);
+	const jitter =
+		(opts?.jitter ?? true) ? preCap * 0.1 * (Math.random() * 2 - 1) : 0;
+	return Math.min(preCap + jitter, max);
+}
+
 export class RetryPolicy {
 	private options: ClientOptions;
 
@@ -30,11 +46,10 @@ export class RetryPolicy {
 			return err.retryAfter;
 		}
 
-		const base = this.options.reconnectDelay ?? 1000;
-		const maxDelay = this.options.maxReconnectDelay ?? 30_000;
-		const cappedAttempt = Math.min(attempt, 30);
-		const preCap = base * 2 ** cappedAttempt;
-		const jitter = preCap * 0.1 * (Math.random() * 2 - 1);
-		return Math.min(preCap + jitter, maxDelay);
+		return backoffDelay(attempt, {
+			base: this.options.reconnectDelay,
+			max: this.options.maxReconnectDelay,
+			jitter: this.options.reconnectJitter,
+		});
 	}
 }

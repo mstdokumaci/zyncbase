@@ -1,4 +1,4 @@
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	LifecycleEvent,
@@ -125,7 +125,7 @@ export class PresenceImpl implements Presence {
 		if (this.userSubPromise !== null) return this.userSubPromise;
 		const gen = this.userSubGen;
 		const pending = this.establishUserSubscription(gen).catch((err) => {
-			const error = this.normalizeError(err, "Presence subscribe failed");
+			const error = toZyncError(err, "Presence subscribe failed");
 			if (gen === this.userSubGen) this.emitError(error);
 			throw error;
 		});
@@ -197,7 +197,7 @@ export class PresenceImpl implements Presence {
 		if (this.sharedSubPromise !== null) return this.sharedSubPromise;
 		const gen = this.sharedSubGen;
 		const pending = this.establishSharedSubscription(gen).catch((err) => {
-			const error = this.normalizeError(err, "Presence subscribeShared failed");
+			const error = toZyncError(err, "Presence subscribeShared failed");
 			if (gen === this.sharedSubGen) this.emitError(error);
 			throw error;
 		});
@@ -455,7 +455,7 @@ export class PresenceImpl implements Presence {
 		const accepted = this.conn.dispatch(message).then(
 			() => {},
 			(err) => {
-				const error = this.normalizeError(err, fallback);
+				const error = toZyncError(err, fallback);
 				this.emitError(error);
 				throw error;
 			},
@@ -615,18 +615,6 @@ export class PresenceImpl implements Presence {
 				category: "network",
 				retryable: true,
 			}),
-		);
-	}
-
-	private normalizeError(err: unknown, fallbackMessage: string): ZyncBaseError {
-		if (err instanceof ZyncBaseError) return err;
-		return new ZyncBaseError(
-			err instanceof Error ? err.message : fallbackMessage,
-			{
-				code: ErrorCodes.INTERNAL_ERROR,
-				category: "server",
-				retryable: true,
-			},
 		);
 	}
 

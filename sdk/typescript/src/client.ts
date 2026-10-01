@@ -2,8 +2,9 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { toZyncError, ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
+import { backoffDelay } from "./retry_policy.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
 import type {
@@ -167,24 +168,17 @@ export class ZyncBaseClient {
 				// A non-retryable replay failure is surfaced instead of retried
 				// forever: a restore that can never succeed must not hold
 				// readiness hostage silently.
-				this.emitError(
-					err instanceof ZyncBaseError
-						? err
-						: new ZyncBaseError(
-								err instanceof Error ? err.message : "Restore failed",
-								{
-									code: ErrorCodes.INTERNAL_ERROR,
-									category: "server",
-									retryable: false,
-								},
-							),
-				);
+				this.emitError(toZyncError(err, "Restore failed", false));
 			});
 	}
 
 	private retryRestoreLater(): void {
 		if (this.restoreTimer !== null || this.conn.status !== "connected") return;
-		const delay = Math.min(250 * 2 ** this.restoreAttempt, 5_000);
+		const delay = backoffDelay(this.restoreAttempt, {
+			base: 250,
+			max: 5_000,
+			jitter: false,
+		});
 		this.restoreAttempt++;
 		this.restoreTimer = setTimeout(() => {
 			this.restoreTimer = null;
