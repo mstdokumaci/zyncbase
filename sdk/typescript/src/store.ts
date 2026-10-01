@@ -118,6 +118,8 @@ export class StoreImpl {
 	private sessionReady = false;
 	/** Bumped on every drop/switch so in-flight establishment acks go stale. */
 	private scopeGen = 0;
+	/** >0 while a namespace switch is in flight; gates new establishments. */
+	private switchPending = 0;
 
 	constructor(
 		private readonly conn: StoreConnection,
@@ -387,7 +389,7 @@ export class StoreImpl {
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: readiness wait, dispatch, and failure handling are one retry story — splitting them obscures the retry conditions.
 	private async establishLoop(state: RegistrationKey): Promise<void> {
 		while (!state.closed) {
-			if (!this.sessionReady) {
+			if (!this.sessionReady || this.switchPending > 0) {
 				await this.readySignal();
 				continue;
 			}
@@ -401,7 +403,13 @@ export class StoreImpl {
 					this.dropKey(state);
 					return;
 				}
-				if (gen !== this.scopeGen || !this.sessionReady) continue;
+				if (
+					gen !== this.scopeGen ||
+					!this.sessionReady ||
+					this.switchPending > 0
+				) {
+					continue;
+				}
 				this.dropKey(state);
 				throw err;
 			}
@@ -436,8 +444,9 @@ export class StoreImpl {
 			return false;
 		}
 		if (gen !== this.scopeGen) {
-			// The scope changed under us (namespace switch); the server
-			// invalidates subscriptions from the old scope, so the ack is stale.
+			// The scope was committed away (accepted switch) or the connection
+			// dropped under us — the server has invalidated these
+			// subscriptions, so the ack is stale.
 			return true;
 		}
 		if (state.callbacks.length === 0) {
@@ -580,8 +589,7 @@ export class StoreImpl {
 	 */
 	markSessionReady(): Promise<void> {
 		this.sessionReady = true;
-		const waiters = this.readyWaiters.splice(0);
-		for (const wake of waiters) wake();
+		this.wakeReady();
 		const inFlight: Array<Promise<void>> = [];
 		for (const state of this.keys.values()) {
 			if (state.establishing) inFlight.push(state.establishing.catch(() => {}));
@@ -593,6 +601,23 @@ export class StoreImpl {
 	markNotReady(): void {
 		this.sessionReady = false;
 		this.scopeGen++;
+	}
+
+	/** Internal: a namespace switch is in flight — pause new establishments. */
+	beginNamespaceSwitch(): void {
+		this.switchPending++;
+	}
+
+	/** Internal: the switch was rejected — the old scope is still valid. */
+	rollbackNamespaceSwitch(): void {
+		this.switchPending--;
+		this.wakeReady();
+	}
+
+	/** Internal: the switch landed — invalidate anything from the old scope. */
+	commitNamespaceSwitch(): void {
+		this.switchPending--;
+		this.markNotReady();
 	}
 
 	/** Internal: `client.disconnect()` — discard queued registrations. */
@@ -620,8 +645,15 @@ export class StoreImpl {
 		for (const state of empties) this.teardown(state);
 	}
 
+	private wakeReady(): void {
+		const waiters = this.readyWaiters.splice(0);
+		for (const wake of waiters) wake();
+	}
+
 	private readySignal(): Promise<void> {
-		if (this.sessionReady) return Promise.resolve();
+		if (this.sessionReady && this.switchPending === 0) {
+			return Promise.resolve();
+		}
 		return new Promise<void>((resolve) => this.readyWaiters.push(resolve));
 	}
 

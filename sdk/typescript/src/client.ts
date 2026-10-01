@@ -115,19 +115,21 @@ export class ZyncBaseClient {
 		const oldNs = this.conn.getStoreNamespace();
 		if (oldNs === namespace) return;
 
-		this.storeImpl.markNotReady();
+		// Gate establishments without invalidating scope: until the outcome is
+		// known, in-flight acknowledgements still belong to the current scope.
+		this.storeImpl.beginNamespaceSwitch();
 		try {
 			await this.conn.setStoreNamespace(namespace);
 		} catch (err) {
-			// The switch never happened — subscriptions were not invalidated;
-			// wake anything queued on readiness so a rejected switch cannot
-			// pin sessionReady=false forever.
-			void this.storeImpl.markSessionReady();
+			// The switch never happened — subscriptions were not invalidated,
+			// so just release the gate; readiness itself was never touched.
+			this.storeImpl.rollbackNamespaceSwitch();
 			throw err;
 		}
 
 		// Spec: "Active store subscriptions are invalidated — the client must re-subscribe."
 		// We replay all active subscriptions with the new namespace context.
+		this.storeImpl.commitNamespaceSwitch();
 		await this._restore();
 	}
 

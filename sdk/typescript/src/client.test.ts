@@ -308,13 +308,30 @@ describe("ZyncBaseClient", () => {
 		triggerSchemaSync(mockWs);
 		await connected;
 
-		// The switch clears readiness first; a rejection must put it back or
-		// every later registration queues forever.
+		// A listen whose ack crosses the switch must still register: until the
+		// outcome is known its scope cannot be invalidated.
+		const crossing = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const crossingSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(crossingSub.type).toBe(WireMessageType.StoreSubscribe);
+
+		// The switch gates new establishments while its outcome is unknown.
 		const switching = client.setStoreNamespace("another-world");
 		await new Promise((r) => setTimeout(r, 0));
 		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
+			type: number;
 		};
+		expect(namespace.type).toBe(WireMessageType.StoreSetNamespace);
+		const gated = mockWs.sentMessages.length;
+		const queued = client.store.listen(["users", "u2"], () => {});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockWs.sentMessages.length).toBe(gated);
+
+		// A rejection releases the gate without invalidating the old scope.
 		mockWs.triggerMessage(
 			encodeToBuffer({
 				type: "error",
@@ -326,19 +343,35 @@ describe("ZyncBaseClient", () => {
 		await expect(switching).rejects.toMatchObject({
 			code: "NAMESPACE_SWITCH_REJECTED",
 		});
-
-		const pending = client.store.listen(["users", "u1"], () => {});
 		await new Promise((r) => setTimeout(r, 10));
-		const dispatched = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+		// Exactly the gated listen goes out — no stale re-subscribe, no
+		// cleanup unsubscribe.
+		expect(mockWs.sentMessages.length).toBe(gated + 1);
+		const queuedMsg = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 			type: number;
 		};
-		expect(dispatched.type).toBe(WireMessageType.StoreSubscribe);
+		expect(queuedMsg.type).toBe(WireMessageType.StoreSubscribe);
 		mockWs.triggerMessage(
-			encodeToBuffer({ type: "ok", id: dispatched.id, subId: 7, value: [] }),
+			encodeToBuffer({ type: "ok", id: queuedMsg.id, subId: 8, value: [] }),
 		);
-		const handle = await pending;
-		await handle.unlisten();
+		const queuedHandle = await queued;
+
+		// The pre-switch acknowledgement registers as-is.
+		const beforeCrossing = mockWs.sentMessages.length;
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: crossingSub.id,
+				subId: 7,
+				value: [],
+			}),
+		);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockWs.sentMessages.length).toBe(beforeCrossing);
+		const crossingHandle = await crossing;
+		await crossingHandle.unlisten();
+		await queuedHandle.unlisten();
 		client.disconnect();
 		restoreWebSocket();
 	});
