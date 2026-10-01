@@ -1,5 +1,5 @@
 import { getOrCreateAnonymousSubject } from "./anonymous.js";
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toConnectionError, ZyncBaseError } from "./errors.js";
 import type { AuthConfig, TicketResponse } from "./types.js";
 
 const httpBaseCache = new Map<string, string>();
@@ -106,17 +106,7 @@ export async function acquireTicket(
 	try {
 		response = await buildFetchRequest(endpoint, auth);
 	} catch (err) {
-		if (err instanceof ZyncBaseError) {
-			throw err;
-		}
-		throw new ZyncBaseError(
-			err instanceof Error ? err.message : "Ticket request failed",
-			{
-				code: ErrorCodes.CONNECTION_FAILED,
-				category: "network",
-				retryable: true,
-			},
-		);
+		throw toConnectionError(err, "Ticket request failed");
 	}
 
 	return parseTicketResponse(response);

@@ -9,6 +9,7 @@ import {
 	ErrorCodes,
 	NoActionWorkerError,
 	SchemaError,
+	toZyncError,
 	WorkerDisconnectedError,
 	ZyncBaseError,
 } from "./errors.js";
@@ -155,7 +156,7 @@ export class ActionsImpl implements Actions {
 				msg.params,
 			);
 		} catch (err) {
-			this.emitError(toZyncError(err, "Invalid action params"));
+			this.emitError(toZyncError(err, "Invalid action params", false));
 			return;
 		}
 
@@ -201,7 +202,7 @@ export class ActionsImpl implements Actions {
 		try {
 			await handler(ctx, params);
 		} catch (err) {
-			this.emitError(toZyncError(err, "Async action handler failed"));
+			this.emitError(toZyncError(err, "Async action handler failed", false));
 		}
 	}
 
@@ -223,7 +224,7 @@ export class ActionsImpl implements Actions {
 		} catch (err) {
 			// Keep internal failure details worker-local; callers get a generic error.
 			if (!(err instanceof ActionError)) {
-				this.emitError(toZyncError(err, "Sync action failed"));
+				this.emitError(toZyncError(err, "Sync action failed", false));
 			}
 			return { ok: false, payload: actionErrorPayload(err) };
 		}
@@ -239,7 +240,7 @@ export class ActionsImpl implements Actions {
 			});
 			this.conn.send(bytes);
 		} catch (err) {
-			this.emitError(toZyncError(err, "Failed to send action reply"));
+			this.emitError(toZyncError(err, "Failed to send action reply", false));
 		}
 	}
 }
@@ -250,7 +251,7 @@ export class ActionsImpl implements Actions {
  */
 export function mapActionError(err: unknown): ZyncBaseError {
 	if (!(err instanceof ZyncBaseError)) {
-		return toZyncError(err, "Action failed");
+		return toZyncError(err, "Action failed", false);
 	}
 
 	switch (err.code) {
@@ -276,15 +277,6 @@ export function mapActionError(err: unknown): ZyncBaseError {
 			}
 			return err;
 	}
-}
-
-function toZyncError(err: unknown, fallback: string): ZyncBaseError {
-	if (err instanceof ZyncBaseError) return err;
-	return new ZyncBaseError(err instanceof Error ? err.message : fallback, {
-		code: ErrorCodes.INTERNAL_ERROR,
-		category: "server",
-		retryable: false,
-	});
 }
 
 function actionErrorPayload(err: unknown): unknown {

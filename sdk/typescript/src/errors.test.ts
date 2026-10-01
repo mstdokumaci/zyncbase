@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
-import { ErrorCodes, ZyncBaseError } from "./errors";
+import {
+	ErrorCodes,
+	toConnectionError,
+	toZyncError,
+	ZyncBaseError,
+} from "./errors";
 
 /**
  * Property 11: ZyncBaseError construction from server response
@@ -30,5 +35,60 @@ describe("ZyncBaseError", () => {
 		expect(error.code).toBe("UNIQUE_CONSTRAINT_VIOLATED");
 		expect(error.category).toBe("validation");
 		expect(error.retryable).toBe(false);
+	});
+});
+
+describe("toZyncError", () => {
+	test("passes a ZyncBaseError through unchanged", () => {
+		const original = new ZyncBaseError("already normalized", {
+			code: ErrorCodes.RATE_LIMITED,
+			category: "rate_limit",
+			retryable: true,
+		});
+		expect(toZyncError(original, "fallback")).toBe(original);
+	});
+
+	test("wraps an Error as a retryable INTERNAL_ERROR", () => {
+		const error = toZyncError(new Error("boom"), "fallback");
+		expect(error).toMatchObject({
+			code: ErrorCodes.INTERNAL_ERROR,
+			category: "server",
+			retryable: true,
+			message: "boom",
+		});
+	});
+
+	test("uses the fallback message for non-Error values and honors retryable=false", () => {
+		expect(toZyncError("nope", "fallback")).toMatchObject({
+			message: "fallback",
+			retryable: true,
+		});
+		expect(toZyncError(null, "fallback", false)).toMatchObject({
+			code: ErrorCodes.INTERNAL_ERROR,
+			retryable: false,
+		});
+	});
+});
+
+describe("toConnectionError", () => {
+	test("passes a ZyncBaseError through unchanged", () => {
+		const original = new ZyncBaseError("already normalized", {
+			code: ErrorCodes.AUTH_FAILED,
+			category: "authentication",
+			retryable: false,
+		});
+		expect(toConnectionError(original, "fallback")).toBe(original);
+	});
+
+	test("wraps an Error as a retryable CONNECTION_FAILED", () => {
+		expect(
+			toConnectionError(new Error("socket died"), "fallback"),
+		).toMatchObject({
+			code: ErrorCodes.CONNECTION_FAILED,
+			category: "network",
+			retryable: true,
+			message: "socket died",
+		});
+		expect(toConnectionError(undefined, "fallback").message).toBe("fallback");
 	});
 });

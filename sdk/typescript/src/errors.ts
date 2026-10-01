@@ -166,6 +166,33 @@ export class ZyncBaseError extends Error {
 	}
 }
 
+/** Wrap an unknown thrown value as an INTERNAL_ERROR ZyncBaseError. */
+export function toZyncError(
+	err: unknown,
+	fallback: string,
+	retryable = true,
+): ZyncBaseError {
+	if (err instanceof ZyncBaseError) return err;
+	return new ZyncBaseError(err instanceof Error ? err.message : fallback, {
+		code: ErrorCodes.INTERNAL_ERROR,
+		category: "server",
+		retryable,
+	});
+}
+
+/** Wrap an unknown thrown value as a CONNECTION_FAILED ZyncBaseError. */
+export function toConnectionError(
+	err: unknown,
+	fallback: string,
+): ZyncBaseError {
+	if (err instanceof ZyncBaseError) return err;
+	return new ZyncBaseError(err instanceof Error ? err.message : fallback, {
+		code: ErrorCodes.CONNECTION_FAILED,
+		category: "network",
+		retryable: true,
+	});
+}
+
 /** Error thrown by SchemaDictionary when a lookup fails. */
 export class SchemaError extends Error {
 	constructor(

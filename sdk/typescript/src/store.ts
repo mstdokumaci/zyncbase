@@ -2,7 +2,7 @@
 
 import type { OutboundRequest } from "./connection_wire.js";
 import { compareDocIds } from "./doc_id.js";
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
 import { flatten, getDeepProperty, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
 import {
@@ -360,7 +360,7 @@ export class StoreImpl {
 				() => settle(() => resolve(makeHandle())),
 				(err) =>
 					settle(() => {
-						const error = this.normalizeError(
+						const error = toZyncError(
 							err,
 							state.kind === "listen" ? "Listen failed" : "Subscribe failed",
 						);
@@ -855,21 +855,9 @@ export class StoreImpl {
 	}
 
 	private emitAndThrow(err: unknown, fallbackMessage: string): never {
-		const error = this.normalizeError(err, fallbackMessage);
+		const error = toZyncError(err, fallbackMessage);
 		this.emitError(error);
 		throw error;
-	}
-
-	private normalizeError(err: unknown, fallbackMessage: string): ZyncBaseError {
-		if (err instanceof ZyncBaseError) return err;
-		return new ZyncBaseError(
-			err instanceof Error ? err.message : fallbackMessage,
-			{
-				code: ErrorCodes.INTERNAL_ERROR,
-				category: "server",
-				retryable: true,
-			},
-		);
 	}
 }
 

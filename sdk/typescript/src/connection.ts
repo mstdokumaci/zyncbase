@@ -6,9 +6,9 @@ import {
 	errorResponseToError,
 	type OutboundRequest,
 } from "./connection_wire.js";
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toConnectionError, ZyncBaseError } from "./errors.js";
 import { PendingRequests } from "./pending_requests.js";
-import { RetryPolicy } from "./retry_policy.js";
+import { backoffDelay, RetryPolicy } from "./retry_policy.js";
 import type {
 	ActionForward,
 	ClientOptions,
@@ -183,17 +183,7 @@ export class ConnectionManager {
 	}
 
 	private handleTicketError(err: unknown): never {
-		const error =
-			err instanceof ZyncBaseError
-				? err
-				: new ZyncBaseError(
-						err instanceof Error ? err.message : "Ticket acquisition failed",
-						{
-							code: ErrorCodes.CONNECTION_FAILED,
-							category: "network",
-							retryable: true,
-						},
-					);
+		const error = toConnectionError(err, "Ticket acquisition failed");
 		this.rejectSchemaSync(error);
 		this.setStatus("disconnected", { error });
 		this.emit("error", error);
@@ -308,14 +298,11 @@ export class ConnectionManager {
 	}
 
 	_computeBackoffDelay(attempt: number): number {
-		const base = this.options.reconnectDelay ?? 1000;
-		const maxDelay = this.options.maxReconnectDelay ?? 30_000;
-		const preCap = base * 2 ** attempt;
-		const jitter =
-			(this.options.reconnectJitter ?? true)
-				? preCap * (Math.random() * 0.2 - 0.1)
-				: 0;
-		return Math.min(preCap + jitter, maxDelay);
+		return backoffDelay(attempt, {
+			base: this.options.reconnectDelay,
+			max: this.options.maxReconnectDelay,
+			jitter: this.options.reconnectJitter,
+		});
 	}
 
 	send(data: Uint8Array): void {
