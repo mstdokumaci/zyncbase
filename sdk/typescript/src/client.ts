@@ -41,6 +41,9 @@ export class ZyncBaseClient {
 	private hasConnectedOnce = false;
 	/** Replay + queue flush for the current connection cycle. */
 	private replayPromise: Promise<void> = Promise.resolve();
+	/** Backoff state for retrying a failed restore. */
+	private restoreAttempt = 0;
+	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(options: ClientOptions) {
 		this.conn = new ConnectionManager(options);
@@ -80,9 +83,7 @@ export class ZyncBaseClient {
 				queueMicrotask(() => this.emitLocal("reconnected"));
 			}
 			this.hasConnectedOnce = true;
-			this.replayPromise = this._restore()
-				.then(() => this.emitLocal("synced"))
-				.catch(() => {});
+			this.scheduleRestore();
 		});
 	}
 
@@ -103,7 +104,36 @@ export class ZyncBaseClient {
 	disconnect(): void {
 		this.storeImpl.rejectPending();
 		this.tracker.setDisconnected();
+		if (this.restoreTimer !== null) {
+			clearTimeout(this.restoreTimer);
+			this.restoreTimer = null;
+		}
 		this.conn.disconnect();
+	}
+
+	/**
+	 * Restores subscriptions for the current connection. A failed restore
+	 * (transient replay error) is retried with backoff while the connection
+	 * stays up, so one failed replay cannot leave the client silently
+	 * desynced until some future reconnect.
+	 */
+	private scheduleRestore(): void {
+		this.replayPromise = this._restore()
+			.then(() => {
+				this.restoreAttempt = 0;
+				this.emitLocal("synced");
+			})
+			.catch(() => this.retryRestoreLater());
+	}
+
+	private retryRestoreLater(): void {
+		if (this.restoreTimer !== null || this.conn.status !== "connected") return;
+		const delay = Math.min(250 * 2 ** this.restoreAttempt, 5_000);
+		this.restoreAttempt++;
+		this.restoreTimer = setTimeout(() => {
+			this.restoreTimer = null;
+			if (this.conn.status === "connected") this.scheduleRestore();
+		}, delay);
 	}
 
 	/**
@@ -140,7 +170,7 @@ export class ZyncBaseClient {
 
 		this.presenceImpl.invalidate();
 		await this.conn.setPresenceNamespace(namespace);
-		this.presenceImpl.replaySubscriptions();
+		await this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
 	}
 
@@ -208,7 +238,7 @@ export class ZyncBaseClient {
 	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
 	private async _restore(): Promise<void> {
-		this.presenceImpl.replaySubscriptions();
+		await this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
 
 		const subIds = this.tracker.allSubIds();
@@ -240,32 +270,42 @@ export class ZyncBaseClient {
 		await this.storeImpl.markSessionReady();
 	}
 
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: retry loop, response shaping, and transient classification are one replay story; splitting them scatters the retry conditions.
 	private async _replaySubscription(
 		params: Omit<StoreSubscribe, "id">,
 		oldId: number,
 		oldToNew: Map<number, number>,
 		replaySnapshots: Map<number, { collection: string; value: JsonValue[] }>,
 	): Promise<void> {
-		try {
-			const ok = await this.conn.dispatch({ ...params });
-			if (ok.subId !== undefined) {
-				oldToNew.set(oldId, ok.subId);
-				if (Array.isArray(ok.value)) {
-					const collection =
-						typeof params.table_index === "string"
-							? (params.table_index as string)
-							: String(params.table_index);
-					replaySnapshots.set(ok.subId, {
-						collection,
-						value: ok.value as JsonValue[],
-					});
+		for (;;) {
+			try {
+				const ok = await this.conn.dispatch({ ...params });
+				if (ok.subId !== undefined) {
+					oldToNew.set(oldId, ok.subId);
+					if (Array.isArray(ok.value)) {
+						const collection =
+							typeof params.table_index === "string"
+								? (params.table_index as string)
+								: String(params.table_index);
+						replaySnapshots.set(ok.subId, {
+							collection,
+							value: ok.value as JsonValue[],
+						});
+					}
 				}
+				return;
+			} catch (err) {
+				console.error(
+					`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
+					err,
+				);
+				const transient =
+					typeof err === "object" &&
+					err !== null &&
+					(err as { retryable?: unknown }).retryable === true;
+				if (!transient || this.conn.status !== "connected") throw err;
+				await new Promise((resolve) => setTimeout(resolve, 100));
 			}
-		} catch (err) {
-			console.error(
-				`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
-				err,
-			);
 		}
 	}
 

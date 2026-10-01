@@ -422,15 +422,15 @@ export class PresenceImpl implements Presence {
 		this.clearThrottle(reason);
 	}
 
-	replaySubscriptions(): void {
-		if (this.hasUserSubscribers() && !this.userSubPromise) {
+	async replaySubscriptions(): Promise<void> {
+		if (this.hasUserSubscribers()) {
 			this.userSubId = null;
-			void this.ensureUserSubscription().catch(() => {});
+			await this.ensureUserSubscription();
 		}
 
-		if (this.sharedCallbacks.size > 0 && !this.sharedSubPromise) {
+		if (this.sharedCallbacks.size > 0) {
 			this.sharedSubId = null;
-			void this.ensureSharedSubscription().catch(() => {});
+			await this.ensureSharedSubscription();
 		}
 	}
 

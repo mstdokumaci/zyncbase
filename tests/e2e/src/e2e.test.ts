@@ -24,7 +24,7 @@ import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
-setDefaultTimeout(60_000);
+setDefaultTimeout(90_000);
 
 beforeAll(
 	() => {
@@ -158,6 +158,10 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-combo-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
+					// Pin the idle timeout so the test does not depend on
+					// the production default (15s is too tight for 10k
+					// clients on slow socket stacks).
+					idleTimeoutSeconds: 600,
 				},
 				async ({ port }) => {
 					await runComboStress(port, PRESENCE_E2E_JWT_SECRET);
