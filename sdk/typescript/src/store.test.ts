@@ -207,7 +207,7 @@ describe("StoreImpl", () => {
 		// Local detach resolves immediately; the server unsubscribe lands
 		// after the grace window.
 		expect(messages).toHaveLength(1);
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await new Promise((resolve) => setTimeout(resolve, 350));
 		expect(messages[1]).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
@@ -222,7 +222,7 @@ describe("StoreImpl", () => {
 		// Reconnect replay assigns a fresh server subId and remaps the tracker.
 		tracker.reconnect(new Map([[7, 11]]));
 		await handle.unlisten();
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await new Promise((resolve) => setTimeout(resolve, 350));
 
 		expect(tracker.get(11)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 11 });
@@ -238,7 +238,7 @@ describe("StoreImpl", () => {
 
 		tracker.reconnect(new Map([[9, 12]]));
 		await handle.unsubscribe();
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await new Promise((resolve) => setTimeout(resolve, 350));
 
 		expect(tracker.get(12)).toBeUndefined();
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
@@ -352,7 +352,7 @@ describe("StoreImpl", () => {
 		expect(tracker.get(7)).toBeDefined();
 
 		await h2.unlisten();
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await new Promise((resolve) => setTimeout(resolve, 350));
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
@@ -383,7 +383,7 @@ describe("StoreImpl", () => {
 		subs.set(key, h2);
 
 		// Past the original deadline the unsubscribe must never fire.
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await new Promise((resolve) => setTimeout(resolve, 350));
 
 		expect(
 			messages.filter((message) => message.type === "StoreUnsubscribe"),

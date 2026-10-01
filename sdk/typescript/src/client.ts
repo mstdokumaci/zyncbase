@@ -116,7 +116,15 @@ export class ZyncBaseClient {
 		if (oldNs === namespace) return;
 
 		this.storeImpl.markNotReady();
-		await this.conn.setStoreNamespace(namespace);
+		try {
+			await this.conn.setStoreNamespace(namespace);
+		} catch (err) {
+			// The switch never happened — subscriptions were not invalidated;
+			// wake anything queued on readiness so a rejected switch cannot
+			// pin sessionReady=false forever.
+			void this.storeImpl.markSessionReady();
+			throw err;
+		}
 
 		// Spec: "Active store subscriptions are invalidated — the client must re-subscribe."
 		// We replay all active subscriptions with the new namespace context.

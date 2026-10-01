@@ -288,12 +288,57 @@ describe("ZyncBaseClient", () => {
 			},
 		]);
 		const pendingUnlisten = handle.unlisten();
-		await new Promise((r) => setTimeout(r, 150));
+		await new Promise((r) => setTimeout(r, 350));
 		const unsubscribe = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};
 		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: unsubscribe.id }));
 		await pendingUnlisten;
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a rejected namespace switch restores session readiness", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		// The switch clears readiness first; a rejection must put it back or
+		// every later registration queues forever.
+		const switching = client.setStoreNamespace("another-world");
+		await new Promise((r) => setTimeout(r, 0));
+		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "error",
+				id: namespace.id,
+				code: "NAMESPACE_SWITCH_REJECTED",
+				message: "rejected",
+			}),
+		);
+		await expect(switching).rejects.toMatchObject({
+			code: "NAMESPACE_SWITCH_REJECTED",
+		});
+
+		const pending = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 10));
+		const dispatched = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(dispatched.type).toBe(WireMessageType.StoreSubscribe);
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: dispatched.id, subId: 7, value: [] }),
+		);
+		const handle = await pending;
+		await handle.unlisten();
 		client.disconnect();
 		restoreWebSocket();
 	});

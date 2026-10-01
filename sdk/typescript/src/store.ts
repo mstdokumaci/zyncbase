@@ -516,7 +516,7 @@ export class StoreImpl {
 		state.graceTimer = setTimeout(() => {
 			state.graceTimer = null;
 			this.teardown(state);
-		}, 100);
+		}, 300);
 		return Promise.resolve();
 	}
 
