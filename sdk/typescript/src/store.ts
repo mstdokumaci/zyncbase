@@ -3,7 +3,7 @@
 import type { OutboundRequest } from "./connection_wire.js";
 import { compareDocIds } from "./doc_id.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
-import { flatten, splitFieldPath } from "./path.js";
+import { flatten, getDeepProperty, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
 import {
 	buildBatch,
@@ -51,7 +51,6 @@ export interface StoreConnection {
 	): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
-	isSchemaReady(): boolean;
 	readonly schemaDictionary: SchemaDictionary;
 }
 
@@ -681,10 +680,10 @@ export class StoreImpl {
 		const tableIndex = schema.getTableIndex(collection);
 
 		const entries: SortEntry[] = [];
-		for (const clause of options.orderBy ?? []) {
+		for (const clause of options.orderBy) {
 			const field = Object.keys(clause)[0];
 			if (field === undefined) continue;
-			const encodedField = field.split(".").join("__");
+			const encodedField = field.replace(/\./g, "__");
 			const parts = splitFieldPath(encodedField);
 			const fieldIndex = schema.getFieldIndex(tableIndex, encodedField);
 			entries.push({
@@ -760,11 +759,7 @@ export class StoreImpl {
 	}
 
 	private async dispatchUnsubscribe(subId: number): Promise<void> {
-		try {
-			await this.conn.dispatch(buildUnsubscribe(subId));
-		} catch (err) {
-			this.emitAndThrow(err, "Unsubscribe failed");
-		}
+		await this.dispatchVoid(buildUnsubscribe(subId), "Unsubscribe failed");
 	}
 
 	private rejectAllInFlight(): void {
@@ -878,23 +873,6 @@ export class StoreImpl {
 	}
 }
 
-function getNestedValue(
-	obj: JsonValue,
-	parts: string[],
-): JsonValue | undefined {
-	let current: JsonValue | undefined = obj;
-	for (const part of parts) {
-		if (
-			current == null ||
-			typeof current !== "object" ||
-			Array.isArray(current)
-		)
-			return undefined;
-		current = (current as Record<string, JsonValue>)[part];
-	}
-	return current;
-}
-
 function compareRecords(
 	entries: SortEntry[],
 	a: JsonValue,
@@ -912,8 +890,8 @@ function compareSortEntry(
 	a: JsonValue,
 	b: JsonValue,
 ): number {
-	const va = getNestedValue(a, entry.parts);
-	const vb = getNestedValue(b, entry.parts);
+	const va = getDeepProperty(a, entry.parts);
+	const vb = getDeepProperty(b, entry.parts);
 
 	// Missing and null sort identically and are always last.
 	if (va == null) return vb == null ? 0 : 1;
@@ -930,7 +908,7 @@ function compareNonNullValues(a: JsonValue, b: JsonValue): number {
 	if (typeof a !== typeof b) return 0;
 	switch (typeof a) {
 		case "number":
-			return compareNumbers(a, b as number);
+			return compareAsc(a, b as number);
 		case "boolean":
 			return compareBooleans(a, b as boolean);
 		case "string":
@@ -940,7 +918,7 @@ function compareNonNullValues(a: JsonValue, b: JsonValue): number {
 	}
 }
 
-function compareNumbers(a: number, b: number): number {
+function compareAsc<T extends number | string>(a: T, b: T): number {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -953,7 +931,7 @@ const textEncoder = new TextEncoder();
 /** Compares strings by the exact UTF-8 bytes used by SQLite BINARY ordering. */
 function compareUtf8(a: string, b: string): number {
 	if (isUtf8LexicalFastPath(a) && isUtf8LexicalFastPath(b)) {
-		return compareLexically(a, b);
+		return compareAsc(a, b);
 	}
 	return compareUtf8Bytes(a, b);
 }
@@ -966,10 +944,6 @@ function compareUtf8Bytes(a: string, b: string): number {
 		if (ba[i] !== bb[i]) return ba[i] < bb[i] ? -1 : 1;
 	}
 	return ba.length < bb.length ? -1 : ba.length > bb.length ? 1 : 0;
-}
-
-function compareLexically(a: string, b: string): number {
-	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function isUtf8LexicalFastPath(value: string): boolean {

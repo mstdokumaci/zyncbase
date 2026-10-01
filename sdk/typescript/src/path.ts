@@ -118,3 +118,24 @@ export function setDeepProperty(
 	}
 	current[parts[last]] = value;
 }
+
+/**
+ * Retrieve a nested value from an object using path segments.
+ * Returns undefined if any intermediate property is nullish, non-object, or an array.
+ */
+export function getDeepProperty(
+	obj: JsonValue,
+	parts: string[],
+): JsonValue | undefined {
+	let current: JsonValue | undefined = obj;
+	for (const part of parts) {
+		if (
+			current == null ||
+			typeof current !== "object" ||
+			Array.isArray(current)
+		)
+			return undefined;
+		current = (current as Record<string, JsonValue>)[part];
+	}
+	return current;
+}

@@ -241,8 +241,7 @@ export class ZyncBaseClient {
 		await this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
 
-		const subIds = this.tracker.allSubIds();
-		if (subIds.length > 0) {
+		if (this.tracker.hasSubscriptions()) {
 			const oldToNew = new Map<number, number>();
 			const replaySnapshots = new Map<
 				number,
@@ -279,14 +278,11 @@ export class ZyncBaseClient {
 	): Promise<void> {
 		for (;;) {
 			try {
-				const ok = await this.conn.dispatch({ ...params });
+				const ok = await this.conn.dispatch(params);
 				if (ok.subId !== undefined) {
 					oldToNew.set(oldId, ok.subId);
 					if (Array.isArray(ok.value)) {
-						const collection =
-							typeof params.table_index === "string"
-								? (params.table_index as string)
-								: String(params.table_index);
+						const collection = String(params.table_index);
 						replaySnapshots.set(ok.subId, {
 							collection,
 							value: ok.value as JsonValue[],
