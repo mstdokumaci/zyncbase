@@ -670,7 +670,8 @@ export class ConnectionManager {
 	private emit(event: LifecycleEvent, ...args: unknown[]): void {
 		const handlers = this.eventListeners.get(event);
 		if (!handlers) return;
-		for (const handler of handlers) {
+		// Snapshot: a handler may unsubscribe itself (or others) mid-emission.
+		for (const handler of [...handlers]) {
 			handler(...args);
 		}
 	}

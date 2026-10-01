@@ -191,6 +191,100 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	test("connect() stays pending across a failed restore and resolves at the later synced", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const pendingListen = client.store.listen(["users", "u1"], () => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const initial = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: initial.id, subId: 7, value: [] }),
+		);
+		await pendingListen;
+		client.disconnect();
+
+		const reconnecting = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		await handshakeNamespaces(mockWs);
+		triggerSchemaSync(mockWs);
+		await waitFor(() => {
+			const last = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				type?: number;
+			};
+			return last.type === WireMessageType.StoreSubscribe;
+		});
+
+		// The replay fails non-retryably: a backoff retry is scheduled, so the
+		// connect promise must not resolve on an unrecovered client.
+		const failed = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "error",
+				id: failed.id,
+				code: "PERMISSION_DENIED",
+				message: "replay denied",
+			}),
+		);
+		let settled = false;
+		reconnecting.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(settled).toBe(false);
+
+		// The retry replays the subscription; a successful ack emits synced and
+		// only then does connect() resolve.
+		await waitFor(() => {
+			const last = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				type?: number;
+				id?: number;
+			};
+			return (
+				last.type === WireMessageType.StoreSubscribe && last.id !== failed.id
+			);
+		}, 2_000);
+		const retried = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({ type: "ok", id: retried.id, subId: 11, value: [] }),
+		);
+		await reconnecting;
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("connect() rejects when a terminal disconnect precedes synced", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+
+		// Tear the connection down before SchemaSync: recovery cannot complete.
+		client.disconnect();
+		await expect(p).rejects.toMatchObject({ code: "CLIENT_DISCONNECT" });
+		restoreWebSocket();
+	});
+
 	test("a registration issued before the session is ready queues until synced", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);

@@ -2,7 +2,7 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import type { ZyncBaseError } from "./errors.js";
+import { ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
@@ -11,6 +11,7 @@ import type {
 	ClientEvents,
 	ClientOptions,
 	ConnectionStatus,
+	DisconnectDetail,
 	JsonValue,
 	LifecycleEvent,
 	Presence,
@@ -39,8 +40,6 @@ export class ZyncBaseClient {
 	>();
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
-	/** Replay + queue flush for the current connection cycle. */
-	private replayPromise: Promise<void> = Promise.resolve();
 	/** Backoff state for retrying a failed restore. */
 	private restoreAttempt = 0;
 	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,12 +91,47 @@ export class ZyncBaseClient {
 		return this.conn.status;
 	}
 
-	/** Connect to the server. Returns a Promise that resolves when connected and SchemaSync is received. */
+	/**
+	 * Connect to the server. The promise resolves at `synced`, once replay has
+	 * restored subscriptions and registrations. It rejects when recovery can no
+	 * longer complete: a non-retryable handshake failure or a terminal
+	 * disconnect (non-retryable) before the first `synced`.
+	 */
 	connect(): Promise<void> {
-		return this.conn
-			.connect()
-			.then(() => this.conn.awaitSchemaSync())
-			.then(() => this.replayPromise);
+		return new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const onSynced = (): void => {
+				if (settled) return;
+				settled = true;
+				this.off("synced", onSynced);
+				this.off("disconnected", onDisconnected);
+				resolve();
+			};
+			const onDisconnected = (detail: DisconnectDetail): void => {
+				if (settled || detail.retryable) return;
+				settled = true;
+				this.off("synced", onSynced);
+				this.off("disconnected", onDisconnected);
+				reject(
+					ZyncBaseError.fromServerResponse({
+						code: detail.code,
+						message: detail.reason,
+					}),
+				);
+			};
+			this.on("synced", onSynced);
+			this.on("disconnected", onDisconnected);
+			this.conn.connect().catch((err: unknown) => {
+				if (settled) return;
+				// A scheduled retry may still reach `synced`; only a state with
+				// no recovery left settles the promise.
+				if (this.conn.status === "reconnecting") return;
+				settled = true;
+				this.off("synced", onSynced);
+				this.off("disconnected", onDisconnected);
+				reject(err);
+			});
+		});
 	}
 
 	/** Disconnect from the server and cancel all pending timers. */
@@ -118,7 +152,7 @@ export class ZyncBaseClient {
 	 * desynced until some future reconnect.
 	 */
 	private scheduleRestore(): void {
-		this.replayPromise = this._restore()
+		this._restore()
 			.then(() => {
 				this.restoreAttempt = 0;
 				this.emitLocal("synced");
