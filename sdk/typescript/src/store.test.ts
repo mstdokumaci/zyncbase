@@ -7,6 +7,7 @@ import type {
 	InboundMessage,
 	JsonValue,
 	LifecycleEvent,
+	ListenHandle,
 	OkResponse,
 } from "./types.js";
 
@@ -365,11 +366,22 @@ describe("StoreImpl", () => {
 			},
 		]);
 		const values: JsonValue[] = [];
+		const subs = new Map<number, Promise<ListenHandle>>();
 
 		const h1 = await store.listen("users.u1", () => {});
 		await h1.unlisten();
 		await new Promise((resolve) => setTimeout(resolve, 50));
-		const h2 = await store.listen("users.u1", (value) => values.push(value));
+
+		// The game's syncChunks guards with `if (!subs.has(key)) return`
+		// before it stores the entry — the retained value must not fire
+		// before store.listen() returns, or the guard eats it.
+		const key = 1;
+		const h2 = store.listen("users.u1", (value) => {
+			if (!subs.has(key)) return;
+			values.push(value);
+		});
+		subs.set(key, h2);
+
 		// Past the original deadline the unsubscribe must never fire.
 		await new Promise((resolve) => setTimeout(resolve, 150));
 
@@ -377,7 +389,7 @@ describe("StoreImpl", () => {
 			messages.filter((message) => message.type === "StoreUnsubscribe"),
 		).toHaveLength(0);
 		expect(values).toEqual([{ id: "u1", name: "Ada" }]);
-		await h2.unlisten();
+		await (await h2).unlisten();
 	});
 
 	test("getSnapshot reads the retained value without a round trip", async () => {

@@ -332,13 +332,19 @@ export class StoreImpl {
 			if (entry) {
 				settle(() => {
 					resolve(makeHandle());
-					if (entry.lastValue !== undefined) {
+					if (entry.lastValue === undefined) return;
+					const value = entry.lastValue;
+					// Fire on a microtask: a caller's synchronous tail
+					// (storing the handle) must run first, or a delivery
+					// guard keyed on that store drops the snapshot.
+					queueMicrotask(() => {
+						if (!state.callbacks.includes(callback)) return;
 						try {
-							callback(entry.lastValue);
+							callback(value);
 						} catch (err) {
 							console.error("[SDK] Subscription callback threw:", err);
 						}
-					}
+					});
 				});
 				return;
 			}
