@@ -2,7 +2,7 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import { ZyncBaseError } from "./errors.js";
+import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
@@ -33,6 +33,8 @@ export class ZyncBaseClient {
 	private readonly storeImpl: StoreImpl;
 	/** Error callbacks registered via client.on('error', cb). */
 	private readonly errorCallbacks: Array<(err: ZyncBaseError) => void> = [];
+	/** Forwards restore failures to the error callbacks. */
+	private readonly emitError: (err: ZyncBaseError) => void;
 	/** Locally emitted events (`synced`, `reconnected`) — no connection-layer source. */
 	private readonly localListeners = new Map<
 		string,
@@ -61,6 +63,7 @@ export class ZyncBaseClient {
 				cb(err);
 			}
 		};
+		this.emitError = emitError;
 
 		this.storeImpl = new StoreImpl(this.conn, this.tracker, emitError);
 		this.store = this.storeImpl;
@@ -146,10 +149,9 @@ export class ZyncBaseClient {
 	}
 
 	/**
-	 * Restores subscriptions for the current connection. A failed restore
-	 * (transient replay error) is retried with backoff while the connection
-	 * stays up, so one failed replay cannot leave the client silently
-	 * desynced until some future reconnect.
+	 * Restores subscriptions for the current connection. A retryable failure
+	 * is retried with backoff while the connection stays up; a non-retryable
+	 * one is surfaced to the error callbacks instead of retrying forever.
 	 */
 	private scheduleRestore(): void {
 		this._restore()
@@ -157,7 +159,27 @@ export class ZyncBaseClient {
 				this.restoreAttempt = 0;
 				this.emitLocal("synced");
 			})
-			.catch(() => this.retryRestoreLater());
+			.catch((err: unknown) => {
+				if (err instanceof ZyncBaseError && err.retryable) {
+					this.retryRestoreLater();
+					return;
+				}
+				// A non-retryable replay failure is surfaced instead of retried
+				// forever: a restore that can never succeed must not hold
+				// readiness hostage silently.
+				this.emitError(
+					err instanceof ZyncBaseError
+						? err
+						: new ZyncBaseError(
+								err instanceof Error ? err.message : "Restore failed",
+								{
+									code: ErrorCodes.INTERNAL_ERROR,
+									category: "server",
+									retryable: false,
+								},
+							),
+				);
+			});
 	}
 
 	private retryRestoreLater(): void {
@@ -194,7 +216,7 @@ export class ZyncBaseClient {
 		// Spec: "Active store subscriptions are invalidated — the client must re-subscribe."
 		// We replay all active subscriptions with the new namespace context.
 		this.storeImpl.commitNamespaceSwitch();
-		await this._restore();
+		await this._restoreStore();
 	}
 
 	/** Switch the active presence namespace. */
@@ -268,36 +290,38 @@ export class ZyncBaseClient {
 	}
 
 	/**
-	 * Replay everything after a connect or namespace switch, then release the
+	 * Replay everything after a connect or reconnect, then release the
 	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
 	private async _restore(): Promise<void> {
 		await this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
+		await this._restoreStore();
+	}
 
-		if (this.tracker.hasSubscriptions()) {
-			const oldToNew = new Map<number, number>();
-			const replaySnapshots = new Map<
-				number,
-				{ collection: string; value: JsonValue[] }
-			>();
+	/**
+	 * Replay store subscriptions against the current connection, then release
+	 * the readiness queue. Runs on connect/reconnect and on a store namespace
+	 * switch — the flows that invalidate store subscriptions.
+	 */
+	private async _restoreStore(): Promise<void> {
+		const oldToNew = new Map<number, number>();
+		const replaySnapshots = new Map<
+			number,
+			{ collection: string; value: JsonValue[] }
+		>();
 
-			// Replay all subscriptions and map old subIds to new ones.
-			await this.tracker.replayAll(async (params, oldId) => {
-				await this._replaySubscription(
-					params,
-					oldId,
-					oldToNew,
-					replaySnapshots,
-				);
-			});
+		await this.tracker.replayAll(async (params, oldId) => {
+			await this._replaySubscription(params, oldId, oldToNew, replaySnapshots);
+		});
 
-			this.tracker.reconnect(oldToNew, () => {
-				for (const [newSubId, snapshot] of replaySnapshots) {
-					this._repopulateSubscription(newSubId, snapshot);
-				}
-			});
-		}
+		// Always reconnect: with no subscriptions this still re-enables delta
+		// delivery after an explicit disconnect().
+		this.tracker.reconnect(oldToNew, () => {
+			for (const [newSubId, snapshot] of replaySnapshots) {
+				this._repopulateSubscription(newSubId, snapshot);
+			}
+		});
 
 		await this.conn.awaitSchemaSync();
 		await this.storeImpl.markSessionReady();

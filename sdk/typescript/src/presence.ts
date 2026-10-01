@@ -423,13 +423,13 @@ export class PresenceImpl implements Presence {
 	}
 
 	async replaySubscriptions(): Promise<void> {
-		if (this.hasUserSubscribers()) {
-			this.userSubId = null;
+		// Only replays what the current connection is missing: a retry after a
+		// partial restore must not re-subscribe an already-established scope.
+		if (this.hasUserSubscribers() && this.userSubId === null) {
 			await this.ensureUserSubscription();
 		}
 
-		if (this.sharedCallbacks.size > 0) {
-			this.sharedSubId = null;
+		if (this.sharedCallbacks.size > 0 && this.sharedSubId === null) {
 			await this.ensureSharedSubscription();
 		}
 	}

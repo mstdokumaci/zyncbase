@@ -872,8 +872,9 @@ async function executeStoreCreates(
 			const data = isItems
 				? createItemData(recordIndex)
 				: createEventData(recordIndex);
-			const id = await withConnectionRetry(() =>
-				state.client.store.create(context.table, data),
+			const id = state.client.utils.id();
+			await withConnectionRetry(() =>
+				state.client.store.set([context.table, id], data),
 			);
 			createdDocIds[idx] = id;
 		}),
