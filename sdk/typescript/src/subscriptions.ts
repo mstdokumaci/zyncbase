@@ -58,40 +58,6 @@ export class SubscriptionTracker {
 		this.subscriptions.set(subId, entry);
 	}
 
-	registerListen(
-		subId: number,
-		params: Omit<StoreSubscribe, "id">,
-		callback: (value: JsonValue) => void,
-		segments: string[],
-		onRemap?: (newSubId: number) => void,
-	): void {
-		this.register(subId, {
-			params,
-			callbacks: [callback],
-			projection: createListenProjection(segments),
-			onRemap,
-		});
-	}
-
-	registerCollection(
-		subId: number,
-		params: Omit<StoreSubscribe, "id">,
-		callback: (results: JsonValue[]) => void,
-		comparator?: (a: JsonValue, b: JsonValue) => number,
-		onRemap?: (newSubId: number) => void,
-	): void {
-		this.register(subId, {
-			params,
-			callbacks: [callback as (value: JsonValue) => void],
-			projection: null,
-			materializedView: {
-				records: new Map(),
-				comparator: comparator ?? createCreatedAtComparator(),
-			},
-			onRemap,
-		});
-	}
-
 	/**
 	 * Remove a subscription entry by subId.
 	 */

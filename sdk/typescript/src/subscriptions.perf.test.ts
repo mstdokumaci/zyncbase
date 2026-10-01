@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { SubscriptionTracker } from "./subscriptions";
+import {
+	createCreatedAtComparator,
+	SubscriptionTracker,
+} from "./subscriptions";
 import type { StoreDelta, StoreSubscribe } from "./types";
 
 /**
@@ -18,9 +21,19 @@ describe("SubscriptionTracker delta fan-in performance", () => {
 			type: "StoreSubscribe",
 			table_index: "items",
 		};
-		tracker.registerCollection(101, params, (value) => {
-			callbackCount++;
-			lastSnapshot = value;
+		tracker.register(101, {
+			params,
+			callbacks: [
+				(value) => {
+					callbackCount++;
+					lastSnapshot = value;
+				},
+			],
+			projection: null,
+			materializedView: {
+				records: new Map(),
+				comparator: createCreatedAtComparator(),
+			},
 		});
 
 		const seedOps: StoreDelta["ops"] = Array.from({ length: 2000 }, (_, i) => ({

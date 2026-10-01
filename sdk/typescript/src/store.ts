@@ -40,6 +40,9 @@ import type {
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
+/** How long a keyed subscription outlives its last consumer before teardown. */
+const GRACE_TEARDOWN_MS = 300;
+
 /** The subset of ConnectionManager that StoreImpl depends on. */
 export interface StoreConnection {
 	dispatch(
@@ -243,8 +246,9 @@ export class StoreImpl {
 			segments: null,
 			collection,
 			// The wire message froze the options at call time — the comparator
-			// must match it even if the caller mutates `options` later.
-			options: structuredClone(options),
+			// reads only `orderBy`, so copy just that and never `structuredClone`
+			// (which throws `DataCloneError` on non-cloneable user values).
+			options: { orderBy: options.orderBy?.map((clause) => ({ ...clause })) },
 		});
 		return this.attach(state, callback as (value: JsonValue) => void, () => {
 			let released = false;
@@ -525,7 +529,7 @@ export class StoreImpl {
 		state.graceTimer = setTimeout(() => {
 			state.graceTimer = null;
 			this.teardown(state);
-		}, 300);
+		}, GRACE_TEARDOWN_MS);
 		return Promise.resolve();
 	}
 
@@ -643,6 +647,9 @@ export class StoreImpl {
 			if (state.callbacks.length === 0) empties.push(state);
 		}
 		for (const state of empties) this.teardown(state);
+		// Wake establishments stuck on readySignal() so they observe `closed`
+		// and exit instead of parking until the next readiness cycle.
+		this.wakeReady();
 	}
 
 	private wakeReady(): void {

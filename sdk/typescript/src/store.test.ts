@@ -323,6 +323,11 @@ describe("StoreImpl", () => {
 		});
 		expect(messages).toHaveLength(0);
 		expect(errors).toHaveLength(0);
+		// The establishment loop must be woken so it can observe `closed`
+		// and exit, not parked on readySignal() forever.
+		expect(
+			(store as unknown as { readyWaiters: unknown[] }).readyWaiters,
+		).toHaveLength(0);
 	});
 
 	test("two consumers of the same path share one server subscription", async () => {
