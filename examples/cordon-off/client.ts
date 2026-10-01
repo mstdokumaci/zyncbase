@@ -151,6 +151,9 @@ let drawnX = Number.NaN;
 let drawnY = Number.NaN;
 let lastCountrySubKey = "";
 let lastUserSubKey = "";
+// A rejected listen removes itself from its map, but the key-gated check
+// below would never notice — this flag forces the next frame to re-sync.
+let subResyncNeeded = false;
 let focusWatch: ReturnType<typeof setInterval> | undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let joinRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -634,7 +637,9 @@ function syncChunks<R>(
 		});
 		subs.set(index, unlisten);
 		void unlisten.catch(() => {
-			if (subs.get(key) === unlisten) subs.delete(key);
+			if (subs.get(key) !== unlisten) return;
+			subs.delete(key);
+			subResyncNeeded = true;
 		});
 	}
 }
@@ -655,6 +660,7 @@ function clearChunks<R>(
 // and flush when the session comes back.
 function updateSubscriptions() {
 	if (!client || phase !== "playing") return;
+	subResyncNeeded = false;
 	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
 	lastUserSubKey = subscriptionKey(USER_GRID);
 	syncChunks(
@@ -675,10 +681,12 @@ function updateSubscriptions() {
 	);
 }
 
-// Recompute tiles only when the prefetched bounds cross a chunk edge: chunk
-// updates arrive at tick rate and must not rescan subscriptions each time.
+// Recompute tiles only when the prefetched bounds cross a chunk edge or a
+// listen was rejected: chunk updates arrive at tick rate and must not
+// rescan subscriptions each time.
 function maybeUpdateSubscriptions() {
 	if (
+		!subResyncNeeded &&
 		subscriptionKey(COUNTRY_GRID) === lastCountrySubKey &&
 		subscriptionKey(USER_GRID) === lastUserSubKey
 	)
