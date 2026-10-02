@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { resetAnonymousSubject } from "./anonymous";
+import { resetInMemorySubject } from "./anonymous";
 import { acquireTicket, deriveHttpBase } from "./auth";
 import { ZyncBaseError } from "./errors";
 
@@ -32,7 +32,10 @@ describe("acquireTicket", () => {
 
 	beforeEach(() => {
 		fetchCalls = [];
-		resetAnonymousSubject();
+		resetInMemorySubject();
+		if (typeof localStorage !== "undefined") {
+			localStorage.clear();
+		}
 		(globalThis as Record<string, unknown>).fetch = async (
 			input: RequestInfo | URL,
 			init?: RequestInit,

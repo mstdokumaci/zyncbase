@@ -1,4 +1,4 @@
-import { decode, decodeMulti, encode } from "@msgpack/msgpack";
+import { decodeMulti, encode } from "@msgpack/msgpack";
 import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
@@ -254,17 +254,6 @@ export class ConnectionWireCodec {
 			context: { type: debugMessage.type, responseTableIndex, actionName },
 			debugMessage,
 		};
-	}
-
-	decode(data: ArrayBuffer | Uint8Array): InboundMessage | null {
-		const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-		let raw: unknown;
-		try {
-			raw = decode(arr);
-		} catch {
-			return null;
-		}
-		return this.decodeMessage(raw);
 	}
 
 	/**

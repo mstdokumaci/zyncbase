@@ -1,23 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-	getOrCreateAnonymousSubject,
-	resetAnonymousSubject,
-	resetInMemorySubject,
-} from "./anonymous";
+import { getOrCreateAnonymousSubject, resetInMemorySubject } from "./anonymous";
 
 const ANON_PREFIX = "anon:";
 const HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 describe("Anonymous Subject", () => {
 	beforeEach(() => {
-		resetAnonymousSubject();
+		resetInMemorySubject();
 		if (typeof localStorage !== "undefined") {
 			localStorage.clear();
 		}
 	});
 
 	afterEach(() => {
-		resetAnonymousSubject();
+		resetInMemorySubject();
+		if (typeof localStorage !== "undefined") {
+			localStorage.clear();
+		}
 	});
 
 	test("generates subject with correct prefix", () => {
@@ -47,9 +46,9 @@ describe("Anonymous Subject", () => {
 		expect(first).toBe(second);
 	});
 
-	test("resetAnonymousSubject generates a new subject", () => {
+	test("reset generates a new subject", () => {
 		const first = getOrCreateAnonymousSubject();
-		resetAnonymousSubject();
+		resetInMemorySubject();
 		if (typeof localStorage !== "undefined") {
 			localStorage.clear();
 		}
@@ -60,7 +59,7 @@ describe("Anonymous Subject", () => {
 	test("generated subjects are unique across resets", () => {
 		const subjects = new Set<string>();
 		for (let i = 0; i < 10; i++) {
-			resetAnonymousSubject();
+			resetInMemorySubject();
 			if (typeof localStorage !== "undefined") {
 				localStorage.clear();
 			}

@@ -51,15 +51,8 @@ export function getOrCreateAnonymousSubject(): string {
 	return subject;
 }
 
-export function resetAnonymousSubject(): void {
-	inMemorySubject = null;
-	if (typeof localStorage !== "undefined") {
-		try {
-			localStorage.removeItem(ANON_SUBJECT_STORAGE_KEY);
-		} catch {}
-	}
-}
-
+// Test seam: resets module-private state between tests. Not public API
+// (absent from src/index.ts); tree-shaken from dist/index.js.
 export function resetInMemorySubject(): void {
 	inMemorySubject = null;
 }
