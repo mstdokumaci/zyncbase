@@ -21,7 +21,6 @@ Detailed technical specifications and implementation strategies for core system 
 
 - **[Threading Model](./threading-model.md)**: Separation of read/write concerns and use of multi-core hardware.
 - **[Storage Layer](./storage-layer.md)**: Optimizing SQLite for high-concurrency real-time workloads using WAL mode.
-- **[Lock-Free Cache](./lock-free-cache.md)**: Implementation details of the atomic reference-counted in-memory cache.
 
 ---
 

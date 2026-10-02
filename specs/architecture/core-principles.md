@@ -48,9 +48,9 @@ ZyncBase is built on thirteen core principles that guide every architectural dec
 
 Detailed technical rationales for our stack are documented in our Architecture Decision Records:
 
-- **Zig**: Chosen for predictable latency and manual memory control. See [ADR-001](./adrs.md#adr-001-zig-as-the-implementation-language).
-- **uWebSockets**: Chosen for microsecond-scale latency and high concurrency. See [ADR-007](./adrs.md#adr-007-uwebsockets-as-the-network-layer).
-- **SQLite**: Chosen for zero-config ACID reliability and WAL-mode performance. See [ADR-005](./adrs.md#adr-005-sqlite-as-the-storage-engine).
+- **Zig**: Chosen for predictable latency and manual memory control.
+- **uWebSockets**: Chosen for microsecond-scale latency and high concurrency.
+- **SQLite**: Chosen for zero-config ACID reliability and WAL-mode performance.
 
 ---
 
@@ -64,13 +64,10 @@ ZyncBase follows a "configuration-first" approach inspired by infrastructure too
 - **schema.json**: Data validation and presence fields.
 - **authorization.json**: Declarative authorization.
 
-For authorization, external identity providers own permission truth and ZyncBase enforces trusted claims through JSON rules. See [ADR-003](./adrs.md#adr-003-configuration-first-design-zero-zig) and [ADR-016](./adrs.md#adr-016-authentication-authorization-and-the-trust-boundary).
 
 ---
 
 ## Performance Targets
-
-We maintain a strict performance budget to ensure ZyncBase remains competitive and reliable. Detailed metrics and rationale are found in [ADR-004](./adrs.md#adr-004-performance-targets).
 
 | Metric | Target | Measurement |
 | :--- | :--- | :--- |
@@ -82,27 +79,7 @@ We maintain a strict performance budget to ensure ZyncBase remains competitive a
 | Binary size | < 15MB | Stripped |
 | Cold start time | < 100ms | To ready state |
 
----
-
-## Design Principles in Practice
-
-### Example: Performance First + Correctness
-We use specialized allocators (Arena, Pool) to prevent memory leaks while maintaining predictable sub-millisecond latency. This is applied in our [Lock-Free Cache](./lock-free-cache.md).
-
-### Example: Simplicity + Scalability
-Our threading model separates reads and writes, allowing linear vertical scaling across all CPU cores while keeping the record-level logic simple. See [ADR-006](./adrs.md#adr-006-multi-threaded-core-engine).
-
-### Example: Primitives over Magic
-The `users` collection is a standard table with standard columns. `owner_id` is a regular column on every table. There is no hidden configuration or magical identity plumbing — the schema is the contract. See [ADR-011](./adrs.md#adr-011-data-ownership-and-namespace-tenancy).
-
-### Example: Subscriptions as Authority
-Writes return immediately on acceptance. Committed state arrives through subscription callbacks. The SDK never speculatively mutates local data — subscriptions are the authoritative channel for what the server has committed. See [ADR-018](./adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics).
-
----
-
 ## Related Specifications
 
 - [ADRs](./adrs.md) - All architectural decision records
 - [Threading Model](./threading-model.md) - Detailed threading implementation
-- [Storage Layer](./storage-layer.md) - SQLite optimization details
-- [Lock-Free Cache](./lock-free-cache.md) - High-concurrency metadata access

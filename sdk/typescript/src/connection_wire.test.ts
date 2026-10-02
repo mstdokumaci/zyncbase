@@ -3,7 +3,7 @@ import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { packDocId } from "./doc_id.js";
 import { encodeToBuffer } from "./test-helpers.js";
-import type { StoreDelta } from "./types.js";
+import type { InboundMessage, StoreDelta } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
 async function makeCodec(): Promise<ConnectionWireCodec> {
@@ -22,6 +22,12 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 	});
 	return codec;
 }
+
+/** First message in a frame, or null when the frame decodes to nothing. */
+const decodeOne = (
+	codec: ConnectionWireCodec,
+	data: ArrayBuffer | Uint8Array,
+): InboundMessage | null => codec.decodeMulti(data)[0] ?? null;
 
 describe("ConnectionWireCodec", () => {
 	test("preserves Unix-microsecond timestamps as exact numbers", () => {
@@ -86,7 +92,8 @@ describe("ConnectionWireCodec", () => {
 
 	test("decodes schema-aware deltas", async () => {
 		const codec = await makeCodec();
-		const msg = codec.decode(
+		const msg = decodeOne(
+			codec,
 			encodeToBuffer({
 				type: "StoreDelta",
 				subId: 1,
@@ -116,23 +123,26 @@ describe("ConnectionWireCodec", () => {
 	test("decodes numeric remove ids and rejects old or malformed deltas", async () => {
 		const codec = await makeCodec();
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 1, 0, 42])),
+			decodeOne(codec, encode([WireMessageType.StoreDelta, 1, 1, 0, 42])),
 		).toEqual({
 			type: "StoreDelta",
 			subId: 1,
 			ops: [{ op: "remove", path: ["users", "42"] }],
 		});
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, ["u1"]])),
+			decodeOne(codec, encode([WireMessageType.StoreDelta, 1, 0, 0, ["u1"]])),
 		).toBeNull();
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, "u1", null])),
+			decodeOne(
+				codec,
+				encode([WireMessageType.StoreDelta, 1, 0, 0, "u1", null]),
+			),
 		).toBeNull();
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 1, 0, null])),
+			decodeOne(codec, encode([WireMessageType.StoreDelta, 1, 1, 0, null])),
 		).toBeNull();
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 99, []])),
+			decodeOne(codec, encode([WireMessageType.StoreDelta, 1, 0, 99, []])),
 		).toBeNull();
 	});
 
@@ -143,7 +153,8 @@ describe("ConnectionWireCodec", () => {
 		const leaveId = new Uint8Array(16).fill(3);
 
 		expect(
-			codec.decode(
+			decodeOne(
+				codec,
 				encode([
 					WireMessageType.PresenceBroadcast,
 					7,
@@ -183,7 +194,8 @@ describe("ConnectionWireCodec", () => {
 		});
 
 		expect(
-			codec.decode(
+			decodeOne(
+				codec,
 				encode([
 					WireMessageType.SharedStateBroadcast,
 					8,
@@ -238,13 +250,13 @@ describe("ConnectionWireCodec", () => {
 		];
 
 		for (const [name, raw] of malformed) {
-			expect(codec.decode(encode(raw)), name).toBeNull();
+			expect(decodeOne(codec, encode(raw)), name).toBeNull();
 		}
 		expect(
-			codec.decode(encode({ type: presence, subId: 1, users: [] })),
+			decodeOne(codec, encode({ type: presence, subId: 1, users: [] })),
 		).toBeNull();
 		expect(
-			codec.decode(encode({ type: shared, subId: 1, data: [] })),
+			decodeOne(codec, encode({ type: shared, subId: 1, data: [] })),
 		).toBeNull();
 	});
 
@@ -328,7 +340,7 @@ describe("ConnectionWireCodec", () => {
 		expect(codec.decodeMulti(new ArrayBuffer(0))).toEqual([]);
 		expect(codec.decodeMulti(new Uint8Array([0xc1]))).toEqual([]);
 		expect(
-			codec.decode(encode([WireMessageType.StoreDelta, 1, 0, 0, null])),
+			decodeOne(codec, encode([WireMessageType.StoreDelta, 1, 0, 0, null])),
 		).toBeNull();
 	});
 

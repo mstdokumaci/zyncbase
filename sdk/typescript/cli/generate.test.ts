@@ -9,9 +9,9 @@ import * as path from "node:path";
 import * as fc from "fast-check";
 
 import {
-	collectFieldPathsForTest,
-	emitValidPathsForTest,
-	generateTypesForTest,
+	collectFieldPaths,
+	emitValidPaths,
+	generateTypes,
 	type SchemaField,
 } from "./generate";
 
@@ -85,7 +85,7 @@ describe("CLI ValidPaths completeness", () => {
 	test("Property 13: ValidPaths contains a tuple for every derivable path", () => {
 		fc.assert(
 			fc.property(schemaFileArb, (schemaFile) => {
-				const validPathsOutput = emitValidPathsForTest(schemaFile.store);
+				const validPathsOutput = emitValidPaths(schemaFile.store);
 
 				for (const [collectionName, collection] of Object.entries(
 					schemaFile.store,
@@ -94,7 +94,7 @@ describe("CLI ValidPaths completeness", () => {
 					expect(validPathsOutput).toContain(`["${collectionName}", string]`);
 
 					// Every field path must appear
-					const fieldPaths = collectFieldPathsForTest(collection.fields, 1, 3);
+					const fieldPaths = collectFieldPaths(collection.fields, 1, 3);
 					for (const fieldPath of fieldPaths) {
 						const segments = [
 							`"${collectionName}"`,
@@ -131,14 +131,14 @@ describe("CLI unique constraint schema typing", () => {
 			},
 		};
 
-		const typesOutput = generateTypesForTest(store);
+		const typesOutput = generateTypes(store);
 
 		// Generated record types are unaffected by constraint metadata.
 		expect(typesOutput).toContain("slug");
 		expect(typesOutput).not.toContain("unique");
 
 		// ValidPaths still contains the constrained nested path.
-		const validPaths = emitValidPathsForTest(store);
+		const validPaths = emitValidPaths(store);
 		expect(validPaths).toContain('["projects", string, "profile", "handle"]');
 	});
 });
@@ -157,7 +157,7 @@ describe("CLI schema-to-types round-trip compile", () => {
 		fc.assert(
 			fc.property(schemaFileArb, (schemaFile) => {
 				// Generate the types content
-				const typesContent = generateTypesForTest(schemaFile.store);
+				const typesContent = generateTypes(schemaFile.store);
 
 				// Write to a temp file
 				const tmpDir = os.tmpdir();
