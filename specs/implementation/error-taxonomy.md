@@ -121,7 +121,9 @@ Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable,
 | `validation` | No | Fix request shape/schema/query. |
 | `client` | No | Fix SDK call site or reduce payload/batch size. |
 
-Action call results are never auto-retried by the SDK, regardless of category: a retried call may already have executed. Retry policy for actions is an application decision.
+Action call results are never auto-retried by the SDK, regardless of category: a retried call may already have executed. Retry policy for actions is an application decision. For action calls, `PERMISSION_DENIED` covers `invoke` rule denials, and `SCHEMA_VALIDATION_FAILED` covers invalid params or worker return payloads.
+
+`server` retries are capped by the SDK's `maxServerRetries` option (default: 3).
 
 ## Related Specifications
 

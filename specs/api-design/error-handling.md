@@ -11,9 +11,8 @@ How the SDK surfaces errors to developers: the `ZyncBaseError` interface, propag
 
 1. [The ZyncBaseError Object](#the-zyncbaseerror-object)
 2. [Error Propagation](#error-propagation)
-3. [Common Error Codes](#common-error-codes)
-4. [Write Failure Reporting](#write-failure-reporting)
-5. [Auto-Retry Summary](#auto-retry-summary)
+3. [Write Failure Reporting](#write-failure-reporting)
+4. [Auto-Retry Summary](#auto-retry-summary)
 
 ---
 
@@ -101,78 +100,6 @@ if (error) { /* render error state */ }
 
 ---
 
-## Common Error Codes
-
-Error codes relevant to SDK consumers, grouped by category:
-
-### Authentication & Authorization
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `AUTH_FAILED` | Invalid ticket or expired initial JWT | No — get new token |
-| `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
-| `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
-| `PERMISSION_DENIED` | Rule blocked the operation via `authorization.json` or a same-row guard matched no row | No |
-
-### State
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
-| `NAMESPACE_SWITCH_REJECTED` | Namespace switching is not allowed when `users.namespaced` is enabled | No — reconnect per namespace |
-| `REQUEST_SUPERSEDED` | Scope superseded by a newer namespace switch request | No — retry with updated scope |
-| `SUBSCRIPTION_NOT_FOUND` | Subscription ID not recognized (stale subscription) | No — re-subscribe |
-
-### Validation
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `SCHEMA_VALIDATION_FAILED` | Data does not match schema definition | No — fix data |
-| `UNIQUE_CONSTRAINT_VIOLATED` | Write conflicts with a schema-declared unique constraint | No — choose a different value |
-| `FIELD_NOT_FOUND` | Field name not defined in schema | No — fix path or data |
-| `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
-| `IMMUTABLE_FIELD` | Attempted to modify a protected system field (e.g., `id`) | No |
-| `INVALID_FIELD_NAME` | Field name contains forbidden `__` sequence | No |
-| `INVALID_ARRAY_ELEMENT` | Array contains non-literal value (e.g., nested object) | No — fix data |
-| `INVALID_MESSAGE` | Malformed message or missing `type` field | No |
-| `INVALID_MESSAGE_FORMAT` | Missing required fields: type or id | No |
-| `INVALID_MESSAGE_TYPE` | Only binary MessagePack frames are supported | No — fix message format |
-
-### Client
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `INVALID_PATH` | Path format is invalid (empty segments or malformed) | No — fix path |
-| `BATCH_TOO_LARGE` | Batch exceeds 500 operations | No — reduce batch size |
-| `MESSAGE_TOO_LARGE` | Payload exceeds `maxMessageSize` | No — reduce payload |
-
-### Rate Limiting
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `RATE_LIMITED` | Message frequency exceeded | Yes — exponential backoff, respects `retryAfter` |
-
-### Connection & Server
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `CONNECTION_FAILED` | Transport failure (WebSocket closed) | Yes — reconnect |
-| `MAX_CONNECTIONS_REACHED` | Server at capacity | No — try later |
-| `RESOURCE_EXHAUSTED` | Subscription engine memory budget reached | No — reduce active subscriptions |
-| `TIMEOUT` | Operation timed out | Yes — retry with backoff |
-| `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
-| `ENGINE_UNHEALTHY` | Write engine is in degraded state | Yes — retry up to 3 times |
-
-### Actions
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `NO_ACTION_WORKER` | No worker is registered for this action in the bound scope and namespace | No — start a worker or retry later |
-| `ACTION_TIMEOUT` | Worker did not reply before the server deadline; the action may still execute | No — never auto-retried |
-| `WORKER_DISCONNECTED` | Worker disconnected while processing a sync action; it may have partially executed | No — never auto-retried |
-
-Action calls are never auto-retried by the SDK: a retried call may execute twice. Retry policy for actions is an application decision. `PERMISSION_DENIED` covers action `invoke` rule denials, and `SCHEMA_VALIDATION_FAILED` covers invalid params or worker return payloads.
-
 ## Write Failure Reporting
 
 ZyncBase separates state delivery from write outcome reporting:
@@ -189,18 +116,7 @@ Confirmed write timeouts mean confirmation was not received. They do not imply t
 
 ## Auto-Retry Summary
 
-| Error Category | Auto-Retry | Max Attempts | Strategy |
-|----------------|------------|--------------|----------|
-| Connection | ✅ Yes | Infinite | Exponential backoff (see [Reconnection](./connection-management.md#reconnection-strategy)) |
-| Rate-Limit | ✅ Yes (opt-out) | Infinite | Respect `retryAfter`, else backoff |
-| Server | ✅ Yes | 3 | Exponential backoff |
-| Authentication | ⚠️ Partial | 1 | Fire `tokenExpired`; wait for refresh |
-| Authorization | ❌ No | 0 | Surface immediately |
-| State | ❌ No | 0 | Surface immediately |
-| Validation | ❌ No | 0 | Surface immediately |
-| Client | ❌ No | 0 | Surface immediately |
-
-Action calls are never auto-retried, regardless of category: a retried call may already have executed. See [Actions](#actions).
+Per-category retry behavior and the canonical error code catalog live in [Error Taxonomy](../implementation/error-taxonomy.md). Reconnection backoff and attempt limits live in [Connection Management](./connection-management.md#reconnection-strategy).
 
 ---
 
@@ -208,3 +124,4 @@ Action calls are never auto-retried, regardless of category: a retried call may 
 
 - [Connection Management](./connection-management.md) — Client lifecycle and events
 - [Store API](./store-api.md) — Accepted/committed mutation methods
+- [Error Taxonomy](../implementation/error-taxonomy.md) — Canonical public error code catalog and retry behavior
