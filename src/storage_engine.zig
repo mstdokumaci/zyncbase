@@ -381,34 +381,11 @@ pub const StorageEngine = struct {
         return self.pk_sets[table_index].contains(id);
     }
 
-    fn reset_pk_sets(self: *StorageEngine) void {
+    pub fn reset_pk_sets(self: *StorageEngine) void {
         for (self.pk_sets) |*pk_set| {
             pk_set.deinit(self.allocator);
             pk_set.* = storage_cache.pk_set_type.init(self.io);
         }
-    }
-
-    /// Execute setup SQL (DDL/Migrations) before the engine starts.
-    /// This method is only allowed when the engine is in the 'setup' state.
-    pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
-        if (self.state.load(.acquire) != .setup) {
-            std.log.err("execSetupSQL called outside of setup phase", .{});
-            return error.InvalidState;
-        }
-        try self.write_worker.conn.execMulti(sql_query, .{});
-        // Reset caches since DDL may have modified table structures, invalidating
-        // any cached prepared statements and metadata.
-        self.write_worker.stmt_cache.deinit(self.allocator);
-        self.write_worker.stmt_cache.init(self.allocator, self.write_worker.performance_config.statement_cache_size);
-        self.document_cache.deinit();
-        try self.document_cache.init(self.io, self.allocator, .{});
-        self.namespace_cache.deinit(self.allocator);
-        self.namespace_cache = storage_cache.namespace_cache_type.init(self.io);
-        self.identity_cache.deinit(self.allocator);
-        self.identity_cache = storage_cache.identity_cache_type.init(self.io);
-        self.reset_pk_sets();
-        // Increment write_seq to notify readers that the state has changed (DDL/setup)
-        self.write_worker.bumpVersion();
     }
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.

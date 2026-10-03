@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const msgpack = @import("msgpack");
+
 const msgpack_utils = @import("msgpack_utils.zig");
 
 /// Wrapper for decode to maintain compatibility with zig-msgpack v0.0.16
@@ -7,6 +9,17 @@ pub const Payload = msgpack_utils.Payload;
 pub const decode = msgpack_utils.decode;
 pub const encode = msgpack_utils.encode;
 pub const writeMsgPackStr = msgpack_utils.writeMsgPackStr;
+
+/// Decode with standard msgpack limits (moved from msgpack_utils; test-only callers).
+pub fn decodeTrusted(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Payload {
+    const tp = msgpack_utils.tightPacker(void, @TypeOf(reader), msgpack.DEFAULT_LIMITS);
+    var packer = tp.init(
+        // SAFETY: reader Context is provided, writer is not used for decoding
+        undefined,
+        .{ .reader = reader },
+    );
+    return packer.read(allocator);
+}
 
 /// Helper to create a MessagePack map for testing
 /// Creates a simple map with string keys and values

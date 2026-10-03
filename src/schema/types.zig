@@ -123,16 +123,6 @@ pub const Constraints = struct {
         }
     };
 
-    pub fn hasAny(self: Constraints) bool {
-        return self.enum_values != null or
-            self.pattern_source != null or
-            self.format != null or
-            self.min_length != null or
-            self.max_length != null or
-            self.minimum != null or
-            self.maximum != null;
-    }
-
     pub fn clone(self: Constraints, allocator: Allocator) !Constraints {
         var cloned_enums: ?[]const EnumValue = null;
         if (self.enum_values) |enums| {
@@ -412,14 +402,6 @@ pub const Action = struct {
 
     pub fn isSync(self: *const Action) bool {
         return self.returns != null;
-    }
-
-    pub fn paramIndex(self: *const Action, name: []const u8) ?usize {
-        return self.param_index_map.get(name);
-    }
-
-    pub fn returnIndex(self: *const Action, name: []const u8) ?usize {
-        return self.return_index_map.get(name);
     }
 
     pub fn clone(self: Action, allocator: Allocator) !Action {

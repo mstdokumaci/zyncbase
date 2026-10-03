@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const query_ast = @import("../query/ast.zig");
-const query_eval = @import("../query/eval.zig");
 const hash_context = @import("../query/hash_context.zig");
 const typed = @import("../typed/types.zig");
 const predicate_trie = @import("predicate_trie.zig");
@@ -513,10 +512,5 @@ pub const SubscriptionEngine = struct {
             }
         }
         candidates.items = candidates.items[0..write];
-    }
-
-    /// Evaluates a record against a filter AST.
-    pub fn evaluateFilter(filter: *const QueryFilter, record: *const Record) !bool {
-        return query_eval.evaluatePredicate(&filter.predicate, record);
     }
 };

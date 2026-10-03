@@ -162,25 +162,6 @@ pub const DDLGenerator = struct {
         return buf.toOwnedSlice(self.allocator);
     }
 
-    /// Generate only the managed-index statements for a table, joined like
-    /// `generateDDL`. Caller owns the returned slice.
-    pub fn generateIndexesDDL(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
-        var buf = SqlBuf.init();
-        defer buf.deinit(self.allocator);
-
-        var first = true;
-        var iter = ManagedIndexIterator.init(&table);
-        while (iter.next()) |managed_index| {
-            if (!first) try buf.appendSlice(self.allocator, ";\n");
-            first = false;
-            try emitManagedIndex(self.allocator, &buf, &table, managed_index);
-        }
-
-        try buf.append(self.allocator, ';');
-
-        return buf.toOwnedSlice(self.allocator);
-    }
-
     /// Generate the single statement for one managed index. Caller owns the result.
     pub fn generateIndexDDL(self: *DDLGenerator, table: schema_types.Table, managed_index: ManagedIndex) ![]const u8 {
         var buf = SqlBuf.init();

@@ -42,7 +42,7 @@ fn readerCtx(comptime R: type) type {
     };
 }
 
-fn tightPacker(comptime W: type, comptime R: type, comptime limits: msgpack.ParseLimits) type {
+pub fn tightPacker(comptime W: type, comptime R: type, comptime limits: msgpack.ParseLimits) type {
     return msgpack.PackWithLimits(
         writerCtx(W),
         readerCtx(R),
@@ -84,17 +84,6 @@ pub fn decodeConsumed(
     );
     const payload = try packer.read(allocator);
     return .{ .payload = payload, .consumed = reader.seek };
-}
-
-/// Decode with standard msgpack limits (used for internal cloning and db reads)
-pub fn decodeTrusted(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Payload {
-    const tp = tightPacker(void, @TypeOf(reader), msgpack.DEFAULT_LIMITS);
-    var packer = tp.init(
-        // SAFETY: reader Context is provided, writer is not used for decoding
-        undefined,
-        .{ .reader = reader },
-    );
-    return packer.read(allocator);
 }
 
 /// Standard wrapper for encoding MsgPack payloads for wire transmission.

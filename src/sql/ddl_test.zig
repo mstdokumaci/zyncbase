@@ -400,11 +400,11 @@ test "ddl_generator: exact SQL for single and compound unique constraints" {
     };
     const table = makeUniqueTable("projects", &fields, &constraints);
 
-    const indexes_ddl = try gen.generateIndexesDDL(table);
-    defer allocator.free(indexes_ddl);
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
 
-    try std.testing.expect(std.mem.indexOf(u8, indexes_ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, indexes_ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__1\" ON \"projects\"(\"namespace_id\", \"provider\", \"externalId\")") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__1\" ON \"projects\"(\"namespace_id\", \"provider\", \"externalId\")"));
 }
 
 test "ddl_generator: namespace_id is first column for namespaced and global tables" {
@@ -536,7 +536,7 @@ test "ddl_generator: managed names cannot collide across valid table and field b
     );
 }
 
-test "ddl_generator: generateDDL contains exactly generateIndexesDDL definitions" {
+test "ddl_generator: generateDDL contains exactly the managed-index definitions" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
@@ -554,15 +554,22 @@ test "ddl_generator: generateDDL contains exactly generateIndexesDDL definitions
 
     const full = try gen.generateDDL(table);
     defer allocator.free(full);
-    const indexes_only = try gen.generateIndexesDDL(table);
-    defer allocator.free(indexes_only);
 
-    // Full DDL ends with the aggregate index statements.
-    const suffix_len = indexes_only.len + 1; // + separator between table/index sections
-    try std.testing.expect(full.len >= suffix_len);
-    const tail = full[full.len - suffix_len ..];
-    try std.testing.expectEqualStrings("\n", tail[0..1]);
-    try std.testing.expectEqualStrings(indexes_only, tail[1..]);
+    // Every managed index statement appears in generateDDL exactly once.
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, full, "CREATE INDEX"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, full, "CREATE UNIQUE INDEX"));
+
+    const expected_indexes = [_][]const u8{
+        "CREATE INDEX \"idx__posts__namespace\" ON \"posts\"(\"namespace_id\")",
+        "CREATE INDEX \"idx__posts__owner\" ON \"posts\"(\"owner_id\")",
+        "CREATE UNIQUE INDEX \"uidx__posts__created_at\" ON \"posts\"(\"created_at\")",
+        "CREATE INDEX \"idx__posts__field__status\" ON \"posts\"(\"status\")",
+        "CREATE INDEX \"idx__posts__field__author_id\" ON \"posts\"(\"author_id\")",
+        "CREATE UNIQUE INDEX \"uidx__posts__constraint__0\" ON \"posts\"(\"namespace_id\", \"slug\")",
+    };
+    for (expected_indexes) |stmt| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, full, stmt));
+    }
 
     // Managed iterator enumerates namespace, owner, created_at, users identity, field/ref, unique.
     var iter = ddl_generator.ManagedIndexIterator.init(&table);
