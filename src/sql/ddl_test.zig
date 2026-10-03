@@ -559,6 +559,18 @@ test "ddl_generator: generateDDL contains exactly the managed-index definitions"
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, full, "CREATE INDEX"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, full, "CREATE UNIQUE INDEX"));
 
+    const expected_indexes = [_][]const u8{
+        "CREATE INDEX \"idx__posts__namespace\" ON \"posts\"(\"namespace_id\")",
+        "CREATE INDEX \"idx__posts__owner\" ON \"posts\"(\"owner_id\")",
+        "CREATE UNIQUE INDEX \"uidx__posts__created_at\" ON \"posts\"(\"created_at\")",
+        "CREATE INDEX \"idx__posts__field__status\" ON \"posts\"(\"status\")",
+        "CREATE INDEX \"idx__posts__field__author_id\" ON \"posts\"(\"author_id\")",
+        "CREATE UNIQUE INDEX \"uidx__posts__constraint__0\" ON \"posts\"(\"namespace_id\", \"slug\")",
+    };
+    for (expected_indexes) |stmt| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, full, stmt));
+    }
+
     // Managed iterator enumerates namespace, owner, created_at, users identity, field/ref, unique.
     var iter = ddl_generator.ManagedIndexIterator.init(&table);
     var count: usize = 0;
