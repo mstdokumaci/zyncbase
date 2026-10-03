@@ -377,7 +377,7 @@ pub const MigrationDetector = struct {
             }
         }
 
-        // Expected indexes are exactly those emitted by generateIndexesDDL.
+        // Expected indexes are exactly those emitted by generateDDL.
         var expected_iter = ddl_generator.ManagedIndexIterator.init(table);
         while (expected_iter.next()) |managed_index| {
             var name_buf = sql_buf.SqlBuf.init();

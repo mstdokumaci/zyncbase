@@ -122,7 +122,7 @@ test "actions service: pickWorker round-robins across registered workers" {
 
     // Unregistering a worker removes it from the rotation.
     service.unregister(10, null);
-    try testing.expectEqual(@as(usize, 1), service.workerCount(key));
+    try testing.expectEqual(@as(usize, 1), if (service.registry.getPtr(key)) |bucket| bucket.workers.items.len else 0);
     try testing.expectEqual(@as(?u64, 11), service.pickWorker(key));
     try testing.expectEqual(@as(?u64, 11), service.pickWorker(key));
 }
@@ -147,7 +147,7 @@ test "actions service: round-robin registration and sync pending bookkeeping" {
     try service.register(workerCtx(11, user_id, &claims), &.{0});
 
     const key = RegistryKey{ .scope = .store, .namespace_id = 1, .action_id = 0 };
-    try testing.expectEqual(@as(usize, 2), service.workerCount(key));
+    try testing.expectEqual(@as(usize, 2), if (service.registry.getPtr(key)) |bucket| bucket.workers.items.len else 0);
 
     const caller = callerCtx(20, user_id);
     var params = try makePairs(allocator, &.{
@@ -156,11 +156,11 @@ test "actions service: round-robin registration and sync pending bookkeeping" {
     defer params.free(allocator);
 
     try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 7, 0, &params, null));
-    try testing.expectEqual(@as(usize, 1), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 1), service.pending_counts.get(20) orelse 0);
 
     // Foreign worker reply is discarded.
     service.resolveReply(11, 1, true, &params);
-    try testing.expectEqual(@as(usize, 1), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 1), service.pending_counts.get(20) orelse 0);
 
     // Owning worker reply with a valid returns payload settles the call.
     var returns = try makePairs(allocator, &.{
@@ -168,19 +168,19 @@ test "actions service: round-robin registration and sync pending bookkeeping" {
     });
     defer returns.free(allocator);
     service.resolveReply(10, 1, true, &returns);
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 0), service.pending_counts.get(20) orelse 0);
 
     // Expired deadlines are swept.
     try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 8, 0, &params, null));
-    try testing.expectEqual(@as(usize, 1), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 1), service.pending_counts.get(20) orelse 0);
     service.sweepDeadlinesAt(std.math.maxInt(i96));
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 0), service.pending_counts.get(20) orelse 0);
 
     // Worker disconnect removes registrations and fails its in-flight calls.
     try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 9, 0, &params, null));
     service.removeAllForConnection(10);
-    try testing.expectEqual(@as(usize, 1), service.workerCount(key));
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 1), if (service.registry.getPtr(key)) |bucket| bucket.workers.items.len else 0);
+    try testing.expectEqual(@as(usize, 0), service.pending_counts.get(20) orelse 0);
 }
 
 test "actions service: rate-limited sync calls are not forwarded" {
@@ -216,7 +216,7 @@ test "actions service: rate-limited sync calls are not forwarded" {
     }
 
     try testing.expect(accepted > 0);
-    try testing.expectEqual(accepted, app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(accepted, app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     try testing.expectEqual(@as(u64, @intCast(accepted)), recorder.send_count.load(.monotonic));
 }
 
@@ -250,7 +250,7 @@ test "actions service: late worker reply times out instead of succeeding" {
 
     app.actions_service.resolveReply(worker.conn.id, pending_entry.key_ptr.*, true, &params);
 
-    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const response = try helpers.parseResponse(allocator, recorder.bytes());
     defer if (response.code) |code| allocator.free(code);
     try testing.expectEqual(MessageType.@"error", response.resp_type);
@@ -373,17 +373,17 @@ test "actions service: scope invalidation and auth refresh revocation" {
     // Namespace change on the caller's bound scope drops registrations and pending calls.
     try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 1, 0, &params, null));
     service.invalidateScope(20, .store);
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 0), service.pending_counts.get(20) orelse 0);
     // Worker registrations are untouched by the caller's scope change.
-    try testing.expectEqual(@as(usize, 1), service.workerCount(key));
+    try testing.expectEqual(@as(usize, 1), if (service.registry.getPtr(key)) |bucket| bucket.workers.items.len else 0);
 
     // A failed re-authorization revokes registrations and in-flight calls.
     try testing.expectEqual(service_mod.CallOutcome.pending, try service.call(caller, 2, 0, &params, null));
     var demoted = try makeClaims(allocator, "member");
     defer demoted.deinit(allocator);
     service.reauthorizeRegistrations(workerCtx(10, user_id, &demoted));
-    try testing.expectEqual(@as(usize, 0), service.workerCount(key));
-    try testing.expectEqual(@as(usize, 0), service.pendingCount(20));
+    try testing.expectEqual(@as(usize, 0), if (service.registry.getPtr(key)) |bucket| bucket.workers.items.len else 0);
+    try testing.expectEqual(@as(usize, 0), service.pending_counts.get(20) orelse 0);
 }
 
 test "actions service: worker error tuples and return validation settle callers" {
@@ -419,7 +419,7 @@ test "actions service: worker error tuples and return validation settle callers"
     defer err_tuple.free(allocator);
 
     app.actions_service.resolveReply(worker.conn.id, 1, false, &err_tuple);
-    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const error_response = try helpers.parseResponse(allocator, recorder.bytes());
     defer if (error_response.code) |code| allocator.free(code);
     try testing.expectEqual(MessageType.@"error", error_response.resp_type);
@@ -431,7 +431,7 @@ test "actions service: worker error tuples and return validation settle callers"
 
     var empty_returns = msgpack.Payload{ .arr = &.{} };
     app.actions_service.resolveReply(worker.conn.id, 2, true, &empty_returns);
-    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const validation_response = try helpers.parseResponse(allocator, recorder.bytes());
     defer if (validation_response.code) |code| allocator.free(code);
     try testing.expectEqual(MessageType.@"error", validation_response.resp_type);

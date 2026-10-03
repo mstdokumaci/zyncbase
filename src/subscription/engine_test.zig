@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const query_ast = @import("../query/ast.zig");
+const query_eval = @import("../query/eval.zig");
 const qth = @import("../query/test_helpers.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
@@ -202,7 +203,7 @@ test "SubscriptionEngine: subscribe/unsubscribe state consistency across all ind
     try testing.expect(engine.active_subs.get(.{ .connection_id = 30, .id = 300 }) == null);
 }
 
-test "SubscriptionEngine: evaluateFilter: startsWith operator" {
+test "SubscriptionEngine: evaluatePredicate: startsWith operator" {
     const allocator = std.heap.smp_allocator;
 
     var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
@@ -216,8 +217,8 @@ test "SubscriptionEngine: evaluateFilter: startsWith operator" {
     var row2 = try tth.recordFromValues(allocator, &.{tth.valText("Bob")});
     defer row2.deinit(allocator);
 
-    try testing.expect(try SubscriptionEngine.evaluateFilter(&filter, &row1));
-    try testing.expect(!try SubscriptionEngine.evaluateFilter(&filter, &row2));
+    try testing.expect(try query_eval.evaluatePredicate(&filter.predicate, &row1));
+    try testing.expect(!try query_eval.evaluatePredicate(&filter.predicate, &row2));
 }
 
 test "SubscriptionEngine: canonical filter key includes values" {
@@ -394,7 +395,7 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
     try testing.expectEqual(@as(u64, 100), matches[0].subscription_id);
 }
 
-test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/endsWith" {
+test "SubscriptionEngine: evaluatePredicate: case-insensitive contains/startsWith/endsWith" {
     const allocator = std.heap.smp_allocator;
 
     const val = tth.valText("Al");
@@ -418,21 +419,21 @@ test "SubscriptionEngine: evaluateFilter: case-insensitive contains/startsWith/e
     {
         var r = try tth.recordFromValues(allocator, &.{tth.valText("aLiCe")});
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(&filter_starts_with, &r));
+        try testing.expect(try query_eval.evaluatePredicate(&filter_starts_with.predicate, &r));
     }
 
     // Case-insensitive endsWith
     {
         var r = try tth.recordFromValues(allocator, &.{tth.valText("reAL")});
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(&filter_ends_with, &r));
+        try testing.expect(try query_eval.evaluatePredicate(&filter_ends_with.predicate, &r));
     }
 
     // Case-insensitive contains
     {
         var r = try tth.recordFromValues(allocator, &.{tth.valText("vALid")});
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(&filter_contains, &r));
+        try testing.expect(try query_eval.evaluatePredicate(&filter_contains.predicate, &r));
     }
 }
 

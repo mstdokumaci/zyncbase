@@ -852,8 +852,8 @@ test "schema_parse: parses actions with scope, required, and sync tiers" {
     try std.testing.expectEqualStrings("direction", move.params[0].name);
     try std.testing.expect(move.params[0].required);
     try std.testing.expect(!move.params[1].required);
-    try std.testing.expectEqual(@as(?usize, 0), move.paramIndex("direction"));
-    try std.testing.expectEqual(@as(?usize, 3), move.paramIndex("origin__y"));
+    try std.testing.expectEqual(@as(?usize, 0), move.param_index_map.get("direction"));
+    try std.testing.expectEqual(@as(?usize, 3), move.param_index_map.get("origin__y"));
 
     const checkout = parsed.action("checkout") orelse return error.TestExpectedValue;
     try std.testing.expectEqual(schema_types.ActionScope.store, checkout.scope);

@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const query_ast = @import("query/ast.zig");
+const query_eval = @import("query/eval.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
@@ -8,7 +9,6 @@ const sth = @import("storage_engine_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
-const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 
 const testing = std.testing;
 
@@ -111,7 +111,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {
-        if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
+        if (try query_eval.evaluatePredicate(&mem_filter.predicate, &row)) {
             const id = sth.getFieldDocIdOrNull(row, items_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }
@@ -212,7 +212,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {
-        if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
+        if (try query_eval.evaluatePredicate(&mem_filter.predicate, &row)) {
             const id = sth.getFieldDocIdOrNull(row, players_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }

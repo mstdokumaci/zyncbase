@@ -48,7 +48,7 @@ const DirectWriterContext = struct {
             defer allocator.free(ddl);
             const ddl_z = try allocator.dupeZ(u8, ddl);
             defer allocator.free(ddl_z);
-            try self.engine.execSetupSQL(ddl_z);
+            try sth.execSetupSQL(&self.engine, ddl_z);
         }
     }
 

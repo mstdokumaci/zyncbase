@@ -179,5 +179,5 @@ pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema
     }
 
     var reader: std.Io.Reader = .fixed(buf.written());
-    return try msgpack_utils.decodeTrusted(allocator, &reader);
+    return try msgpack_test_helpers.decodeTrusted(allocator, &reader);
 }

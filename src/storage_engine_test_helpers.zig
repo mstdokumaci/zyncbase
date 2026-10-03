@@ -8,6 +8,7 @@ const schema_system = @import("schema/system.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const storage_engine = @import("storage_engine.zig");
+const storage_cache = @import("storage_engine/cache.zig");
 const reader_mod = @import("storage_engine/reader.zig");
 const sql = @import("storage_engine/sql.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
@@ -656,4 +657,28 @@ pub fn expectFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []
 pub fn nextReaderNode(engine: *StorageEngine) *storage_engine.ReaderNode {
     const idx = engine.next_reader_idx.fetchAdd(1, .monotonic) % engine.reader_nodes.len;
     return &engine.reader_nodes[idx];
+}
+
+/// Execute setup SQL (DDL/Migrations) before the engine starts.
+/// This method is only allowed when the engine is in the 'setup' state.
+/// Moved from StorageEngine (test-only call sites) to keep prod free of test accommodations.
+pub fn execSetupSQL(engine: *StorageEngine, sql_query: []const u8) !void {
+    if (engine.state.load(.acquire) != .setup) {
+        std.log.err("execSetupSQL called outside of setup phase", .{});
+        return error.InvalidState;
+    }
+    try engine.write_worker.conn.execMulti(sql_query, .{});
+    // Reset caches since DDL may have modified table structures, invalidating
+    // any cached prepared statements and metadata.
+    engine.write_worker.stmt_cache.deinit(engine.allocator);
+    engine.write_worker.stmt_cache.init(engine.allocator, engine.write_worker.performance_config.statement_cache_size);
+    engine.document_cache.deinit();
+    try engine.document_cache.init(engine.io, engine.allocator, .{});
+    engine.namespace_cache.deinit(engine.allocator);
+    engine.namespace_cache = storage_cache.namespace_cache_type.init(engine.io);
+    engine.identity_cache.deinit(engine.allocator);
+    engine.identity_cache = storage_cache.identity_cache_type.init(engine.io);
+    engine.reset_pk_sets();
+    // Increment write_seq to notify readers that the state has changed (DDL/setup)
+    engine.write_worker.bumpVersion();
 }

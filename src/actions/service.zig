@@ -515,15 +515,6 @@ pub const ActionsService = struct {
         }
     }
 
-    pub fn pendingCount(self: *ActionsService, conn_id: u64) usize {
-        return self.pending_counts.get(conn_id) orelse 0;
-    }
-
-    pub fn workerCount(self: *ActionsService, key: RegistryKey) usize {
-        const bucket = self.registry.getPtr(key) orelse return 0;
-        return bucket.workers.items.len;
-    }
-
     // === Helpers ===
 
     fn sendTo(self: *ActionsService, conn_id: u64, bytes: []const u8) void {

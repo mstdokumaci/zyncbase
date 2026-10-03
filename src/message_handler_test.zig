@@ -961,7 +961,7 @@ test "MessageHandler: action register, call, and reply route through the service
     defer allocator.free(call_bytes);
 
     try testing.expect((try routeWithArenaOptional(&app.handler, allocator, caller.conn, call_bytes)) == null);
-    try testing.expectEqual(@as(usize, 1), app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(usize, 1), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
 
     // ActionReply settles the pending call.
     var reply_map = msgpack.Payload.mapPayload(allocator);
@@ -981,7 +981,7 @@ test "MessageHandler: action register, call, and reply route through the service
     defer allocator.free(reply_bytes);
 
     try testing.expect((try routeWithArenaOptional(&app.handler, allocator, worker.conn, reply_bytes)) == null);
-    try testing.expectEqual(@as(usize, 0), app.actions_service.pendingCount(caller.conn.id));
+    try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
 
     // Server-only ActionForward is rejected from clients.
     var forward_map = msgpack.Payload.mapPayload(allocator);

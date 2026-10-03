@@ -1957,7 +1957,7 @@ test "foreign key startup rejects legacy orphaned rows" {
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
-        try engine.execSetupSQL(ddl_z);
+        try sth.execSetupSQL(&engine, ddl_z);
     }
 
     const setup_conn = try engine.getSetupConn();

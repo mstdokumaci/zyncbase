@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const msgpack_test_helpers = @import("../msgpack_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const query_ast = @import("../query/ast.zig");
 const query_parser = @import("../query/parser.zig");
@@ -178,7 +179,7 @@ test "encodeSetDeltaSuffix: set operation" {
     const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
-    const p = try msgpack.decodeTrusted(allocator, &reader);
+    const p = try msgpack_test_helpers.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
@@ -202,7 +203,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
-    const p = try msgpack.decodeTrusted(allocator, &reader);
+    const p = try msgpack_test_helpers.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
@@ -232,7 +233,7 @@ test "encodeRecord: preserves nil positions and rejects wrong field count" {
     try wire_encode.encodeRecord(&output.writer, record, table_metadata);
 
     var reader: std.Io.Reader = .fixed(output.written());
-    const parsed = try msgpack.decodeTrusted(allocator, &reader);
+    const parsed = try msgpack_test_helpers.decodeTrusted(allocator, &reader);
     defer parsed.free(allocator);
     try testing.expect(parsed == .arr);
     try testing.expectEqual(table_metadata.fields.len, parsed.arr.len);
@@ -304,7 +305,7 @@ test "store_delta_header: decodes to StoreDelta type" {
     try msgpack.writeMsgPackStr(writer, "doc-1");
 
     var reader: std.Io.Reader = .fixed(buf.written());
-    const p = try msgpack.decodeTrusted(allocator, &reader);
+    const p = try msgpack_test_helpers.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
@@ -323,7 +324,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const full_msg = try assembleBroadcast(allocator, &wire_encode.store_delta_header, 42, suffix);
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
-    const p = try msgpack.decodeTrusted(allocator, &reader);
+    const p = try msgpack_test_helpers.decodeTrusted(allocator, &reader);
     defer p.free(allocator);
 
     try testing.expect(p == .arr);
