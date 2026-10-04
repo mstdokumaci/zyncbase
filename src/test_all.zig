@@ -12,7 +12,6 @@ test {
     _ = @import("typed/types_test.zig");
     _ = @import("json/read_test.zig");
     _ = @import("json/write_test.zig");
-    _ = @import("json/iterate_test.zig");
     _ = @import("sql/buf_test.zig");
     _ = @import("sql/build_test.zig");
     _ = @import("sql/ddl_test.zig");

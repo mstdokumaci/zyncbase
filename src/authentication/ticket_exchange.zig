@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const json_iterate = @import("../json/iterate.zig");
-const json_read = @import("../json/read.zig");
 const json_write = @import("../json/write.zig");
 const typed_codec = @import("../typed/codec.zig");
 const typed = @import("../typed/types.zig");
@@ -93,7 +91,13 @@ pub const TicketExchange = struct {
         const payload_json = try base64_utils.urlDecodeAlloc(allocator, parts.payload_b64);
         defer allocator.free(payload_json);
 
-        const extracted = extractTicketPayloadFast(payload_json) orelse return error.InvalidTicket;
+        const parsed = std.json.parseFromSlice(TicketJson, allocator, payload_json, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.InvalidTicket,
+        };
+        defer parsed.deinit();
+        const extracted = parsed.value;
+        const sess = extracted.session;
 
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         if (now >= extracted.exp) {
@@ -102,7 +106,7 @@ pub const TicketExchange = struct {
 
         try self.redeemTicket(extracted.jti, extracted.exp, now);
 
-        const external_id_slice = extracted.external_id orelse extracted.sub;
+        const external_id_slice = (if (sess) |s| s.externalId else null) orelse extracted.sub;
         const external_id = try allocator.dupe(u8, external_id_slice);
 
         var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
@@ -116,14 +120,20 @@ pub const TicketExchange = struct {
             claims.deinit(allocator);
         }
 
-        if (extracted.claims_json) |claims_json| {
-            claims = try extractClaims(allocator, claims_json);
+        if (sess) |s| {
+            if (s.claims) |claims_value| {
+                if (claims_value == .object and claims_value.object.count() > 0) {
+                    claims = try extractClaims(allocator, claims_value.object);
+                }
+            }
         }
+
+        const token_expires_at: ?i64 = if (sess) |s| s.tokenExpiresAt else null;
 
         return Session{
             .external_id = external_id,
-            .is_anonymous = extracted.is_anonymous,
-            .token_expires_at = extracted.token_expires_at orelse return error.InvalidTicket,
+            .is_anonymous = if (sess) |s| s.isAnonymous else false,
+            .token_expires_at = token_expires_at orelse return error.InvalidTicket,
             .claims = claims,
         };
     }
@@ -236,9 +246,10 @@ pub const TicketExchange = struct {
             }
         } else {
             const body = ctx.body.items;
-            const anon_sub = extractAnonymousSubject(body) orelse return error.InvalidMessage;
+            const anon_sub = (try extractAnonymousSubject(allocator, body)) orelse return error.InvalidMessage;
+            errdefer allocator.free(anon_sub);
             try self.validateAnonymousSubject(anon_sub);
-            subject = try allocator.dupe(u8, anon_sub);
+            subject = anon_sub;
             is_anonymous = true;
         }
 
@@ -445,92 +456,32 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
     c.uws_res_on_data(ssl_val, res_nn, onDataCallback, ctx);
 }
 
-fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
-    const AnonCtx = struct {
-        subject: ?[]const u8 = null,
+fn extractAnonymousSubject(allocator: Allocator, json_body: []const u8) !?[]const u8 {
+    const AnonRequest = struct {
+        anonymousSubject: ?[]const u8 = null,
     };
-    const S = struct {
-        fn anonHandler(ctx: *AnonCtx, key: []const u8, value: []const u8) void {
-            if (std.mem.eql(u8, key, "anonymousSubject")) {
-                var pos: usize = 0;
-                ctx.subject = json_read.extractJsonString(value, &pos);
-            }
-        }
+    const parsed = std.json.parseFromSlice(AnonRequest, allocator, json_body, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
     };
-    var ctx = AnonCtx{};
-    json_iterate.forEachJsonFieldExtract(json_body, AnonCtx, &ctx, S.anonHandler);
-    return ctx.subject;
+    defer parsed.deinit();
+    const subject = parsed.value.anonymousSubject orelse return null;
+    return try allocator.dupe(u8, subject);
 }
 
-const TicketPayload = struct {
+const TicketSessionJson = struct {
+    externalId: ?[]const u8 = null,
+    isAnonymous: bool = false,
+    tokenExpiresAt: ?i64 = null,
+    claims: ?std.json.Value = null,
+};
+
+const TicketJson = struct {
     sub: []const u8,
     exp: i64,
     jti: []const u8,
-    external_id: ?[]const u8,
-    is_anonymous: bool,
-    token_expires_at: ?i64 = null,
-    claims_json: ?[]const u8,
+    session: ?TicketSessionJson = null,
 };
-
-fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
-    const Ctx = struct {
-        result: TicketPayload = .{
-            .sub = "",
-            .exp = 0,
-            .jti = "",
-            .external_id = null,
-            .is_anonymous = false,
-            .claims_json = null,
-        },
-        found_sub: bool = false,
-        found_exp: bool = false,
-        found_jti: bool = false,
-    };
-    const S = struct {
-        fn handler(ctx: *Ctx, key: []const u8, value: []const u8) void {
-            if (std.mem.eql(u8, key, "sub")) {
-                var pos: usize = 0;
-                ctx.result.sub = json_read.extractJsonString(value, &pos) orelse return;
-                ctx.found_sub = true;
-            } else if (std.mem.eql(u8, key, "exp")) {
-                var pos: usize = 0;
-                ctx.result.exp = json_read.extractJsonInt(value, &pos) orelse return;
-                ctx.found_exp = true;
-            } else if (std.mem.eql(u8, key, "jti")) {
-                var pos: usize = 0;
-                ctx.result.jti = json_read.extractJsonString(value, &pos) orelse return;
-                ctx.found_jti = true;
-            } else if (std.mem.eql(u8, key, "session")) {
-                extractSessionFields(value, &ctx.result);
-            }
-        }
-    };
-    var ctx = Ctx{};
-    json_iterate.forEachJsonFieldExtract(json, Ctx, &ctx, S.handler);
-    if (!ctx.found_sub or !ctx.found_exp or !ctx.found_jti) return null;
-    return ctx.result;
-}
-
-fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
-    const S = struct {
-        fn handler(ctx: *TicketPayload, key: []const u8, value: []const u8) void {
-            if (std.mem.eql(u8, key, "externalId")) {
-                var pos: usize = 0;
-                ctx.external_id = json_read.extractJsonString(value, &pos);
-            } else if (std.mem.eql(u8, key, "isAnonymous")) {
-                ctx.is_anonymous = std.mem.eql(u8, value, "true");
-            } else if (std.mem.eql(u8, key, "tokenExpiresAt")) {
-                var pos: usize = 0;
-                ctx.token_expires_at = json_read.extractJsonInt(value, &pos);
-            } else if (std.mem.eql(u8, key, "claims")) {
-                if (value.len > 2 and value[0] == '{' and value[1] != '}') {
-                    ctx.claims_json = value;
-                }
-            }
-        }
-    };
-    json_iterate.forEachJsonFieldExtract(session_json, TicketPayload, result, S.handler);
-}
 
 const TicketParts = struct { payload_b64: []const u8, sig_b64: []const u8 };
 
@@ -562,7 +513,7 @@ fn verifyTicketHmac(ticket_secret: []const u8, payload_b64: []const u8, sig_b64:
     }
 }
 
-fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashMapUnmanaged(typed.Value) {
+fn extractClaims(allocator: Allocator, claims_obj: std.json.ObjectMap) !std.StringHashMapUnmanaged(typed.Value) {
     var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
     errdefer {
         var it = claims.iterator();
@@ -573,27 +524,19 @@ fn extractClaims(allocator: Allocator, claims_json: []const u8) !std.StringHashM
         claims.deinit(allocator);
     }
 
-    const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidTicket,
-    };
-    defer parsed_claims.deinit();
+    var claims_it = claims_obj.iterator();
+    while (claims_it.next()) |entry| {
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+        errdefer allocator.free(key);
+        const val = try typed_codec.fromDynamicJson(allocator, entry.value_ptr.*);
+        errdefer val.deinit(allocator);
 
-    if (parsed_claims.value == .object) {
-        var claims_it = parsed_claims.value.object.iterator();
-        while (claims_it.next()) |entry| {
-            const key = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(key);
-            const val = try typed_codec.fromDynamicJson(allocator, entry.value_ptr.*);
-            errdefer val.deinit(allocator);
-
-            const gop = try claims.getOrPut(allocator, key);
-            if (gop.found_existing) {
-                allocator.free(key);
-                gop.value_ptr.deinit(allocator);
-            }
-            gop.value_ptr.* = val;
+        const gop = try claims.getOrPut(allocator, key);
+        if (gop.found_existing) {
+            allocator.free(key);
+            gop.value_ptr.deinit(allocator);
         }
+        gop.value_ptr.* = val;
     }
 
     return claims;

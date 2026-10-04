@@ -40,6 +40,41 @@ test "TicketExchange: generate and verify ticket" {
     try testing.expectError(error.AuthFailed, exchange.verifyTicket(allocator, ticket));
 }
 
+test "TicketExchange: verify ticket round-trips session claims" {
+    const allocator = std.testing.allocator;
+
+    const exchange = try TicketExchange.init(
+        testing.io,
+        allocator,
+        "test-ticket-signing-secret-key-32b",
+        60,
+        null,
+        false,
+        null,
+        false,
+        &empty_claims_mapping,
+    );
+    defer exchange.deinit();
+
+    var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+    defer claims.deinit(allocator);
+    try claims.put(allocator, "role", .{ .scalar = .{ .text = "player" } });
+
+    const subject = "user:we\\ird \"quoted\"";
+    const token_expiry = std.Io.Clock.real.now(testing.io).toSeconds() + 3600;
+    const ticket = try exchange.generateTicket(allocator, subject, false, token_expiry, &claims);
+    defer allocator.free(ticket);
+
+    var verified_session = try exchange.verifyTicket(allocator, ticket);
+    defer verified_session.deinit(allocator);
+
+    try testing.expectEqualStrings(subject, verified_session.external_id);
+    const role = verified_session.claims.get("role") orelse return error.TestExpectedValue;
+    try testing.expectEqualStrings("player", role.scalar.text);
+
+    try testing.expectError(error.AuthFailed, exchange.verifyTicket(allocator, ticket));
+}
+
 test "TicketExchange: expired ticket verification fails" {
     const allocator = std.testing.allocator;
 
