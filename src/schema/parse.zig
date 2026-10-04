@@ -219,7 +219,11 @@ fn parseActionClaims(allocator: Allocator, claims_val: ?std.json.Value) ![]const
         for (claims.items) |existing| {
             if (std.mem.eql(u8, existing, item.string)) return error.InvalidActionClaims;
         }
-        try claims.append(allocator, try allocator.dupe(u8, item.string));
+        // Transfer ownership to `claims` only after the append succeeds so an
+        // OOM failure cannot leak the duplicate.
+        const duped = try allocator.dupe(u8, item.string);
+        errdefer allocator.free(duped);
+        try claims.append(allocator, duped);
     }
     return claims.toOwnedSlice(allocator);
 }

@@ -725,6 +725,7 @@ export class ConnectionWireCodec {
 			!isPresencePairArray(raw[4]) ||
 			typeof raw[5] !== "object" ||
 			raw[5] === null ||
+			raw[5] instanceof Uint8Array ||
 			Array.isArray(raw[5])
 		) {
 			return null;

@@ -540,6 +540,17 @@ describe("ConnectionWireCodec actions", () => {
 				null,
 			]),
 		).toBeNull();
+		// Binary values decode from msgpack `bin` and must not pass as a claims map.
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[[0, "up"]],
+				new Uint8Array([1]),
+			]),
+		).toBeNull();
 	});
 
 	test("decodes sync ActionCall ok responses into actionResult", async () => {

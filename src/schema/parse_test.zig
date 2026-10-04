@@ -712,7 +712,8 @@ const unique_allocation_failure_json =
     \\      "meta":{"type":"object","fields":{"note":{"type":"string"}}}
     \\    },
     \\    "required":["cart_id"],
-    \\    "returns":{"order_id":{"type":"string"},"remaining":{"type":"integer"}}
+    \\    "returns":{"order_id":{"type":"string"},"remaining":{"type":"integer"}},
+    \\    "claims":["role"]
     \\  },
     \\  "ping":{"params":{"seq":{"type":"integer"}},"returns":null,"scope":"presence"}
     \\}}
