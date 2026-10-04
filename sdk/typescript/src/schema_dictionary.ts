@@ -4,7 +4,6 @@
 // (collection names, field names) and their dense integer indices.
 // Built from the SchemaSync message pushed by the server on connect.
 
-import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
@@ -145,7 +144,7 @@ export class SchemaDictionary {
 		this.buildStoreMaps(payload);
 		this.buildPresenceMaps(payload);
 		this.buildActionMaps(payload);
-		this.hash = await this.computeHash(payload);
+		this.hash = this.computeHash(payload);
 		this.ready = true;
 		return this.previousHash !== null && this.previousHash !== this.hash;
 	}
@@ -781,8 +780,6 @@ export class SchemaDictionary {
 	}
 
 	// ─── Private helpers ───────────────────────────────────────────────────
-	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
-
 	private getFieldFlags(tableIndex: number, fieldIndex: number): number {
 		if (tableIndex < 0 || tableIndex >= this.tables.length) {
 			throw new SchemaError(
@@ -805,10 +802,10 @@ export class SchemaDictionary {
 	}
 
 	/**
-	 * Compute an xxHash64 of the canonical SchemaSync routing dictionaries.
-	 * Used for offline safety detection.
+	 * Compute an FNV-1a 32-bit hash of the canonical SchemaSync routing
+	 * dictionaries. Used for offline safety detection.
 	 */
-	private async computeHash(payload: {
+	private computeHash(payload: {
 		tables: string[];
 		fields: string[][];
 		fieldFlags: number[][];
@@ -818,11 +815,7 @@ export class SchemaDictionary {
 		actionParams?: string[][];
 		actionReturns?: string[][];
 		actionFlags?: number[];
-	}): Promise<string> {
-		if (!SchemaDictionary.xxhashPromise) {
-			SchemaDictionary.xxhashPromise = xxhash();
-		}
-		const hasher = await SchemaDictionary.xxhashPromise;
+	}): string {
 		const canonical = JSON.stringify({
 			tables: payload.tables,
 			fields: payload.fields,
@@ -834,6 +827,11 @@ export class SchemaDictionary {
 			actionReturns: payload.actionReturns ?? [],
 			actionFlags: payload.actionFlags ?? [],
 		});
-		return hasher.h64ToString(canonical).padStart(16, "0");
+		let hash = 0x811c9dc5;
+		for (let i = 0; i < canonical.length; i++) {
+			hash ^= canonical.charCodeAt(i);
+			hash = Math.imul(hash, 0x01000193);
+		}
+		return (hash >>> 0).toString(16).padStart(8, "0");
 	}
 }
