@@ -170,7 +170,7 @@ fn parsePresenceTier(
 
 pub const max_action_fields: usize = 500;
 
-const action_keys = [_][]const u8{ "params", "required", "returns", "scope" };
+const action_keys = [_][]const u8{ "params", "required", "returns", "scope", "claims" };
 
 const action_leaf_field_keys = [_][]const u8{ "type", "items" } ++ constraint_keys;
 
@@ -198,6 +198,35 @@ fn parseActionScope(scope_val: ?std.json.Value) !types.ActionScope {
     if (std.mem.eql(u8, val.string, "store")) return .store;
     if (std.mem.eql(u8, val.string, "presence")) return .presence;
     return error.InvalidActionScope;
+}
+
+/// Session variable names projected into the worker's `ActionContext.claims`.
+/// Not validated against `authentication.session.claims`: an unmapped name
+/// simply never resolves at forward time.
+fn parseActionClaims(allocator: Allocator, claims_val: ?std.json.Value) ![]const []const u8 {
+    const val = claims_val orelse return &.{};
+    if (val != .array) return error.InvalidActionClaims;
+
+    var claims = std.ArrayListUnmanaged([]const u8).empty;
+    errdefer {
+        for (claims.items) |s| allocator.free(s);
+        claims.deinit(allocator);
+    }
+
+    for (val.array.items) |item| {
+        if (item != .string) return error.InvalidActionClaims;
+        if (item.string.len == 0) return error.InvalidActionClaims;
+        for (claims.items) |existing| {
+            if (std.mem.eql(u8, existing, item.string)) return error.InvalidActionClaims;
+        }
+        try claims.append(allocator, try allocator.dupe(u8, item.string));
+    }
+    return claims.toOwnedSlice(allocator);
+}
+
+fn deinitStringList(list: []const []const u8, allocator: Allocator) void {
+    for (list) |s| allocator.free(s);
+    if (list.len > 0) allocator.free(list);
 }
 
 fn parseActionRequiredSet(allocator: Allocator, action_obj: std.json.ObjectMap) !std.StringHashMap(bool) {
@@ -253,6 +282,9 @@ fn parseAction(allocator: Allocator, action_name_raw: []const u8, action_def: st
 
     const scope = try parseActionScope(action_def.object.get("scope"));
 
+    const claims = try parseActionClaims(allocator, action_def.object.get("claims"));
+    errdefer deinitStringList(claims, allocator);
+
     var required_set = try parseActionRequiredSet(allocator, action_def.object);
     defer deinitRequiredSet(allocator, &required_set);
 
@@ -284,6 +316,7 @@ fn parseAction(allocator: Allocator, action_name_raw: []const u8, action_def: st
         .scope = scope,
         .params = params,
         .returns = returns,
+        .claims = claims,
     };
 }
 

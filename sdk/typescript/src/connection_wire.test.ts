@@ -483,7 +483,7 @@ describe("ConnectionWireCodec actions", () => {
 		});
 	});
 
-	test("decodes ActionForward tuples with bin16 userId", async () => {
+	test("decodes ActionForward tuples with bin16 userId and claims", async () => {
 		const codec = await makeCodec();
 		const userId = generateUUIDv7();
 		const decoded = codec.decodeMessage([
@@ -492,6 +492,7 @@ describe("ConnectionWireCodec actions", () => {
 			packDocId(userId, "INVALID_MESSAGE"),
 			2,
 			[[0, "up"]],
+			{ role: "member", tenant_id: 42 },
 		]);
 
 		expect(decoded).toEqual({
@@ -500,12 +501,45 @@ describe("ConnectionWireCodec actions", () => {
 			userId,
 			action_id: 2,
 			params: [[0, "up"]],
+			claims: { role: "member", tenant_id: 42 },
 		});
 	});
 
 	test("rejects malformed ActionForward tuples", async () => {
 		const codec = await makeCodec();
 		expect(codec.decodeMessage([WireMessageType.ActionForward, 5])).toBeNull();
+		// Legacy five-element tuple without the claims map is invalid.
+		const userId = generateUUIDv7();
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[[0, "up"]],
+			]),
+		).toBeNull();
+		// Claims must be a plain map, not an array or null.
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[[0, "up"]],
+				[],
+			]),
+		).toBeNull();
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[[0, "up"]],
+				null,
+			]),
+		).toBeNull();
 	});
 
 	test("decodes sync ActionCall ok responses into actionResult", async () => {

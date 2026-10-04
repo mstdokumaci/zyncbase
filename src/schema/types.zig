@@ -397,6 +397,9 @@ pub const Action = struct {
     params: []const ActionField,
     /// `null` declares an asynchronous action.
     returns: ?[]const ActionField = null,
+    /// Session variable names (`$session.<field>`) projected into the
+    /// worker's `ActionContext.claims` when the call is forwarded.
+    claims: []const []const u8 = &.{},
     param_index_map: std.StringHashMapUnmanaged(usize) = .{},
     return_index_map: std.StringHashMapUnmanaged(usize) = .{},
 
@@ -414,11 +417,15 @@ pub const Action = struct {
         const cloned_returns = if (self.returns) |returns| try cloneActionFields(allocator, returns) else null;
         errdefer if (cloned_returns) |returns| deinitActionFields(returns, allocator);
 
+        const cloned_claims = try cloneStringList(allocator, self.claims);
+        errdefer deinitStringList(cloned_claims, allocator);
+
         return .{
             .name = cloned_name,
             .scope = self.scope,
             .params = cloned_params,
             .returns = cloned_returns,
+            .claims = cloned_claims,
             // Index maps are rebuilt by `buildActionIndex` after cloning.
         };
     }
@@ -428,9 +435,30 @@ pub const Action = struct {
         self.return_index_map.deinit(allocator);
         deinitActionFields(self.params, allocator);
         if (self.returns) |returns| deinitActionFields(returns, allocator);
+        deinitStringList(self.claims, allocator);
         allocator.free(self.name);
     }
 };
+
+fn cloneStringList(allocator: Allocator, list: []const []const u8) ![]const []const u8 {
+    if (list.len == 0) return &.{};
+    const cloned = try allocator.alloc([]const u8, list.len);
+    var built: usize = 0;
+    errdefer {
+        for (cloned[0..built]) |s| allocator.free(s);
+        allocator.free(cloned);
+    }
+    for (list) |s| {
+        cloned[built] = try allocator.dupe(u8, s);
+        built += 1;
+    }
+    return cloned;
+}
+
+fn deinitStringList(list: []const []const u8, allocator: Allocator) void {
+    for (list) |s| allocator.free(s);
+    if (list.len > 0) allocator.free(list);
+}
 
 fn cloneActionFields(allocator: Allocator, fields: []const ActionField) ![]const ActionField {
     if (fields.len == 0) return &.{};

@@ -22,11 +22,20 @@ const capturedServerLogs: string[] = [];
 
 export const PRESENCE_E2E_JWT_SECRET = "e2e-presence-secret-at-least-32bytes";
 
-export function createTestJwt(secret: string, subject: string): string {
+export function createTestJwt(
+	secret: string,
+	subject: string,
+	extraClaims: Record<string, unknown> = {},
+): string {
 	const now = Math.floor(Date.now() / 1000);
 	const encode = (value: unknown) =>
 		Buffer.from(JSON.stringify(value)).toString("base64url");
-	const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: subject, iat: now, exp: now + 600 })}`;
+	const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
+		sub: subject,
+		iat: now,
+		exp: now + 600,
+		...extraClaims,
+	})}`;
 	const signature = createHmac("sha256", secret)
 		.update(unsigned)
 		.digest("base64url");
@@ -470,6 +479,11 @@ export async function withServer<T>(
 		authentication: options.jwtSecret
 			? {
 					jwt: { secret: options.jwtSecret, algorithm: "HS256" },
+					// Identity mapping so tests can mint JWT claims that land in
+					// `$session.<name>` (and thus ActionContext.claims).
+					session: {
+						claims: { role: "role", corr: "corr", tenant: "tenant" },
+					},
 					ticket: { secret: "e2e-test-ticket-secret-32bytes!" },
 				}
 			: {

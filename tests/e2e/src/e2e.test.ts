@@ -142,9 +142,10 @@ describe("ZyncBase E2E", () => {
 					dataDir: ctx.dataPath("actions"),
 					configName: "zyncbase-config-actions.json",
 					authPath: ctx.schemaPath("auth-actions.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
 				},
 				async ({ port }) => {
-					await runActions(port);
+					await runActions(port, PRESENCE_E2E_JWT_SECRET);
 				},
 			);
 		});

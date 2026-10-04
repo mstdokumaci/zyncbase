@@ -517,10 +517,12 @@ test "actions service: async forwards stage until flush and concatenate in order
     for (1..4) |exec_id| {
         const msg = try msgpack.decode(allocator, &reader);
         defer msg.free(allocator);
-        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(usize, 6), msg.arr.len);
         try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
         try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
         try testing.expectEqual(@as(u64, 0), msg.arr[3].uint);
+        // Schema declares no `claims` → empty projected map.
+        try testing.expectEqual(@as(usize, 0), msg.arr[5].map.count());
     }
 
     // Flushing again is a no-op.
@@ -573,10 +575,11 @@ test "actions service: sync forward flushes staged async forwards first" {
     for (expected_action_ids, 1..) |action_id, exec_id| {
         const msg = try msgpack.decode(allocator, &reader);
         defer msg.free(allocator);
-        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(usize, 6), msg.arr.len);
         try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
         try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
         try testing.expectEqual(action_id, msg.arr[3].uint);
+        try testing.expectEqual(@as(usize, 0), msg.arr[5].map.count());
     }
 }
 

@@ -191,6 +191,7 @@ export class ActionsImpl implements Actions {
 					? this.conn.getPresenceNamespace()
 					: this.conn.getStoreNamespace(),
 			execId: msg.execId,
+			claims: msg.claims,
 		};
 	}
 

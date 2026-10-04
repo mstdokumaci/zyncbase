@@ -232,8 +232,19 @@ interface ActionContext {
    * carried by `ActionForward` and echoed by `ActionReply`.
    */
   readonly execId: number;
+  /**
+   * Caller session claims projected through the action's schema `claims` list
+   * (`{ "claims": ["role", "tenant_id"] }`). Keys are session variable names —
+   * the same names `$session.<field>` resolves in authorization rules.
+   * Projected at forward time, so `AuthRefresh` swaps are reflected. A claim
+   * absent from the caller's session is omitted, not `null`. `{}` when the
+   * action declares no `claims`.
+   */
+  readonly claims: Readonly<Record<string, JsonValue>>;
 }
 ```
+
+Projection is server-side and read-only: handlers receive only the names the schema declares, never the full session claim set. To make a claim visible to a handler, add it to the action's `claims` list *and* map it in `authentication.session.claims`.
 
 Worker-side cancellation is not part of this version: a caller timeout or disconnect does not stop a running handler. Handlers must assume they may run to completion even when the caller stopped waiting.
 
