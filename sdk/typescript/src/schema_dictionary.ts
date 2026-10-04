@@ -4,7 +4,6 @@
 // (collection names, field names) and their dense integer indices.
 // Built from the SchemaSync message pushed by the server on connect.
 
-import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
@@ -110,8 +109,8 @@ export class SchemaDictionary {
 	private actionsByIndex: ActionSchemaEntry[] = [];
 
 	// ─── Offline safety hash ───────────────────────────────────────────────
-	private hash: string | null = null;
-	private previousHash: string | null = null;
+	private hash: number | null = null;
+	private previousHash: number | null = null;
 
 	// ─── State ─────────────────────────────────────────────────────────────
 	private ready = false;
@@ -145,7 +144,7 @@ export class SchemaDictionary {
 		this.buildStoreMaps(payload);
 		this.buildPresenceMaps(payload);
 		this.buildActionMaps(payload);
-		this.hash = await this.computeHash(payload);
+		this.hash = this.computeHash(payload);
 		this.ready = true;
 		return this.previousHash !== null && this.previousHash !== this.hash;
 	}
@@ -330,11 +329,6 @@ export class SchemaDictionary {
 			);
 		}
 		return tableFields[fieldIndex];
-	}
-
-	/** Get the current schema hash (null if not yet synced). */
-	getHash(): string | null {
-		return this.hash;
 	}
 
 	// ─── Path Encoding / Decoding ──────────────────────────────────────────
@@ -781,8 +775,6 @@ export class SchemaDictionary {
 	}
 
 	// ─── Private helpers ───────────────────────────────────────────────────
-	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
-
 	private getFieldFlags(tableIndex: number, fieldIndex: number): number {
 		if (tableIndex < 0 || tableIndex >= this.tables.length) {
 			throw new SchemaError(
@@ -805,10 +797,10 @@ export class SchemaDictionary {
 	}
 
 	/**
-	 * Compute an xxHash64 of the canonical SchemaSync routing dictionaries.
-	 * Used for offline safety detection.
+	 * Compute a dual-djb2 53-bit hash of the canonical SchemaSync routing
+	 * dictionaries. Used for offline safety detection.
 	 */
-	private async computeHash(payload: {
+	private computeHash(payload: {
 		tables: string[];
 		fields: string[][];
 		fieldFlags: number[][];
@@ -818,11 +810,7 @@ export class SchemaDictionary {
 		actionParams?: string[][];
 		actionReturns?: string[][];
 		actionFlags?: number[];
-	}): Promise<string> {
-		if (!SchemaDictionary.xxhashPromise) {
-			SchemaDictionary.xxhashPromise = xxhash();
-		}
-		const hasher = await SchemaDictionary.xxhashPromise;
+	}): number {
 		const canonical = JSON.stringify({
 			tables: payload.tables,
 			fields: payload.fields,
@@ -834,6 +822,17 @@ export class SchemaDictionary {
 			actionReturns: payload.actionReturns ?? [],
 			actionFlags: payload.actionFlags ?? [],
 		});
-		return hasher.h64ToString(canonical).padStart(16, "0");
+		// Dual djb2-xor accumulators; ^ truncates to int32 every step, so the
+		// float *33 never loses precision. Packs to 53 bits (< 2^53) exactly.
+		// ponytail: change detection only — miss chance 2^-53 per reconnect
+		const n = canonical.length;
+		let h1 = 5381;
+		let h2 = 52711;
+		for (let i = 0; i < n; i++) {
+			const c = canonical.charCodeAt(i);
+			h1 = (h1 * 33) ^ c;
+			h2 = (h2 * 33) ^ c;
+		}
+		return ((h2 >>> 0) & 0x1fffff) * 4294967296 + (h1 >>> 0);
 	}
 }
