@@ -403,10 +403,6 @@ export class ConnectionWireCodec {
 		return this.schema.isReady();
 	}
 
-	get schemaHash(): string | null {
-		return this.schema.getHash();
-	}
-
 	private encodeWireMessage(
 		msg: Record<string, unknown>,
 	): Record<string, unknown> {
