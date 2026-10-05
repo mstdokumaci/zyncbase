@@ -9,6 +9,7 @@
 3. **C/C++ Compiler**
    - macOS: Xcode Command Line Tools (`xcode-select --install`)
    - Linux: `sudo apt-get install build-essential`
+4. **Bun** — https://bun.sh (for `test:tsan`, lint, and E2E commands)
 
 ## Build
 
