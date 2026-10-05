@@ -551,6 +551,18 @@ describe("ConnectionWireCodec actions", () => {
 				new Uint8Array([1]),
 			]),
 		).toBeNull();
+		// Class instances (e.g. a msgpack timestamp decoded as `Date`) must not
+		// pass the plain-object guard.
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[[0, "up"]],
+				new Date(0),
+			]),
+		).toBeNull();
 	});
 
 	test("decodes sync ActionCall ok responses into actionResult", async () => {

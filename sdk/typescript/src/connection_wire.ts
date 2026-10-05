@@ -161,6 +161,13 @@ function isPresencePairArray(
 	);
 }
 
+/** Rejects `null`, arrays, and non-POJOs (`Date`, `Map`, `Set`, `Uint8Array`). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null) return false;
+	const proto: unknown = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
 function isPresenceEntryHeader(
 	value: unknown,
 ): value is [Uint8Array, 0 | 1 | 2, ...unknown[]] {
@@ -723,10 +730,7 @@ export class ConnectionWireCodec {
 			raw[2].length !== 16 ||
 			!isNonNegativeSafeInteger(raw[3]) ||
 			!isPresencePairArray(raw[4]) ||
-			typeof raw[5] !== "object" ||
-			raw[5] === null ||
-			raw[5] instanceof Uint8Array ||
-			Array.isArray(raw[5])
+			!isPlainObject(raw[5])
 		) {
 			return null;
 		}

@@ -469,7 +469,7 @@ export interface ActionForward {
 	 * Session claims projected through the action's schema `claims` list at
 	 * forward time. Keys are session variable names; absent claims are omitted.
 	 */
-	claims: Record<string, JsonValue>;
+	claims: Readonly<Record<string, JsonValue>>;
 }
 
 /** Decoded presence entry exposed to SDK consumers. */
