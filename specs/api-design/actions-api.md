@@ -236,7 +236,8 @@ interface ActionContext {
    * Caller session claims projected through the action's schema `claims` list
    * (`{ "claims": ["role", "tenant_id"] }`). Keys are session variable names —
    * the same names `$session.<field>` resolves in authorization rules.
-   * Projected at forward time, so `AuthRefresh` swaps are reflected. A claim
+   * Projected when each forward is encoded, so an `AuthRefresh` affects
+   * subsequent calls, not forwards already encoded. A claim
    * absent from the caller's session is omitted, not `null`. `{}` when the
    * action declares no `claims`.
    */
