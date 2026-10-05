@@ -1,46 +1,29 @@
 # Building ZyncBase
 
-> [!NOTE]
-> ZyncBase is licensed under the [Business Source License 1.1](LICENSE). Source code is available, but production use as a managed service is restricted until 2032-01-01.
-
 ## Prerequisites
 
-### Required Tools
-
-1. **Zig** (0.16.0)
-   - Download from https://ziglang.org/download/
-
+1. **Zig** (0.16.0) — https://ziglang.org/download/
 2. **OpenSSL**
-   - macOS: `brew install openssl`
+   - macOS: `brew install openssl` (include/lib paths auto-detected by `build.zig`)
    - Linux: `sudo apt-get install libssl-dev`
-
 3. **C/C++ Compiler**
    - macOS: Xcode Command Line Tools (`xcode-select --install`)
-   - Linux: GCC or Clang (`sudo apt-get install build-essential`)
+   - Linux: `sudo apt-get install build-essential`
+4. **Bun** — https://bun.sh (for `test:tsan`, lint, and E2E commands)
 
-## Build Steps
-
-### 1. Clone Repository
+## Build
 
 ```bash
-git clone https://github.com/your-org/zyncbase.git
+git clone https://github.com/mstdokumaci/zyncbase.git
 cd zyncbase
-```
-
-### 2. uWebSockets
-
-uWebSockets and µSockets are directly vendored under `vendor/uwebsockets/` and `vendor/usockets/`.
-The Zig server calls them through the C bridge in `src/uws_bridge.cpp` and `src/uws_wrapper.h`.
-
-### 3. Build ZyncBase
-
-```bash
 zig build
 ```
 
-The executable will be created at `./zig-out/bin/zyncbase`.
+The executable is created at `./zig-out/bin/zyncbase`.
 
-### 4. Run Tests
+uWebSockets and µSockets are vendored under `vendor/uwebsockets/` and `vendor/usockets/`; the Zig server calls them through the C bridge in `src/uws_bridge.cpp` and `src/uws_wrapper.h`.
+
+## Test
 
 ```bash
 zig build test
@@ -48,86 +31,20 @@ zig build test
 
 ## Build Options
 
-### Debug Build (default)
-
 ```bash
-zig build
-```
-
-### Release Build
-
-```bash
+zig build                              # Debug (default)
+zig build -Doptimize=ReleaseSafe
 zig build -Doptimize=ReleaseFast
+bun run test:tsan                      # ThreadSanitizer (runs scripts/tsan-prep.sh first)
 ```
 
-### With Sanitizers
+Clean build:
 
 ```bash
-# Thread sanitizer
-zig build -Dsanitize=thread
-
-# Address sanitizer (if supported)
-zig build -Dsanitize=address
-```
-
-## Troubleshooting
-
-### Vendored uWebSockets Missing
-
-```
-Error: vendor/uwebsockets/App.h not found
-```
-
-**Solution:**
-```bash
-git status --short vendor/uwebsockets vendor/usockets
-```
-
-## Development Workflow
-
-### Clean Build
-
-```bash
-rm -rf zig-out zig-cache
+rm -rf zig-out .zig-cache
 zig build
 ```
 
-## Platform-Specific Notes
+## More
 
-### macOS
-
-- Requires Xcode Command Line Tools
-- Homebrew recommended for installing dependencies (`brew install zig openssl`)
-- Uses kqueue for event loop
-
-### Linux
-
-- Requires build-essential package
-- Uses epoll for event loop
-- `sudo apt-get install libssl-dev` for OpenSSL headers
-
-## CI/CD Integration
-
-For automated builds, ensure your CI environment has:
-
-1. Zig installed
-2. OpenSSL headers installed
-3. C/C++ compiler available
-
-Example GitHub Actions workflow:
-
-```yaml
-- name: Install dependencies
-  run: |
-    brew install openssl  # macOS
-    # OR: sudo apt-get install -y libssl-dev  # Linux
-
-- name: Checkout
-  uses: actions/checkout@v3
-
-- name: Build ZyncBase
-  run: zig build
-
-- name: Run tests
-  run: zig build test
-```
+Lint (`bun run lint`), E2E (`bun run test:e2e`), and SDK commands are defined in `package.json`. CI runs in `.github/workflows/ci.yml`.
