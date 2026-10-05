@@ -712,7 +712,8 @@ const unique_allocation_failure_json =
     \\      "meta":{"type":"object","fields":{"note":{"type":"string"}}}
     \\    },
     \\    "required":["cart_id"],
-    \\    "returns":{"order_id":{"type":"string"},"remaining":{"type":"integer"}}
+    \\    "returns":{"order_id":{"type":"string"},"remaining":{"type":"integer"}},
+    \\    "claims":["role"]
     \\  },
     \\  "ping":{"params":{"seq":{"type":"integer"}},"returns":null,"scope":"presence"}
     \\}}
@@ -929,6 +930,51 @@ test "schema_parse: rejects malformed action definitions" {
     try std.testing.expectError(error.InvalidRequiredField, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{},"actions":{"a":{"params":{"x":{"type":"object","fields":{"y":{"type":"string"}}}},"required":["x"]}}}
     ));
+}
+
+test "schema_parse: parses action claims projection list" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{},"actions":{
+        \\  "a":{"claims":["role","tenant_id","correlation_id"]},
+        \\  "b":{}}
+        \\}
+    );
+    defer parsed.deinit();
+
+    const a = parsed.action("a") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 3), a.claims.len);
+    try std.testing.expectEqualStrings("role", a.claims[0]);
+    try std.testing.expectEqualStrings("tenant_id", a.claims[1]);
+    try std.testing.expectEqualStrings("correlation_id", a.claims[2]);
+
+    const b = parsed.action("b") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 0), b.claims.len);
+
+    // Claims survive clone (used by schema reload paths).
+    var cloned = try a.clone(allocator);
+    defer cloned.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 3), cloned.claims.len);
+    try std.testing.expectEqualStrings("correlation_id", cloned.claims[2]);
+}
+
+test "schema_parse: rejects malformed action claims" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_][]const u8{
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"claims":"role"}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"claims":[5]}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"claims":[""]}}}
+        ,
+        \\{"version":"1.0.0","store":{},"actions":{"a":{"claims":["role","role"]}}}
+        ,
+    };
+    for (cases) |schema_json| {
+        try std.testing.expectError(error.InvalidActionClaims, schema_parse.initFromJson(allocator, schema_json));
+    }
 }
 
 test "schema_parse: caps action params and returns at 500 fields" {

@@ -465,6 +465,11 @@ export interface ActionForward {
 	userId: string;
 	action_id: number;
 	params: Array<[number, unknown]>;
+	/**
+	 * Session claims projected through the action's schema `claims` list at
+	 * forward time. Keys are session variable names; absent claims are omitted.
+	 */
+	claims: Readonly<Record<string, JsonValue>>;
 }
 
 /** Decoded presence entry exposed to SDK consumers. */
@@ -529,6 +534,14 @@ export interface ActionContext {
 	readonly namespace: string;
 	/** Server-assigned execution id for this invocation. */
 	readonly execId: number;
+	/**
+	 * Caller session claims projected through the action's schema `claims`
+	 * list. Keys are session variable names — the same names `$session.<field>`
+	 * resolves in authorization rules. Projected at forward time; a claim
+	 * absent from the caller's session is omitted, not `null`. `{}` when the
+	 * action declares no `claims`.
+	 */
+	readonly claims: Readonly<Record<string, JsonValue>>;
 }
 
 export type ActionHandler = (

@@ -588,24 +588,52 @@ test "encodeSchemaSync: action dictionaries encode names, fields, and flags" {
     try testing.expectEqual(@as(u64, 1), flags_val.arr[1].uint);
 }
 
-test "encodeActionForward: fixed tuple with bin16 userId and params" {
+test "encodeActionForward: fixed tuple with bin16 userId, params, and empty claims map" {
     const allocator = std.heap.smp_allocator;
     const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
 
     const params = msgpack.Payload{ .arr = &.{} };
-    const bytes = try wire_encode.encodeActionForward(allocator, 7, user_id, 2, &params);
+    const bytes = try wire_encode.encodeActionForward(allocator, 7, user_id, 2, &params, &.{"role"}, null);
     defer allocator.free(bytes);
 
     var reader: std.Io.Reader = .fixed(bytes);
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    try testing.expectEqual(@as(usize, 5), parsed.arr.len);
+    try testing.expectEqual(@as(usize, 6), parsed.arr.len);
     try testing.expectEqual(@as(u64, 0x31), parsed.arr[0].uint);
     try testing.expectEqual(@as(u64, 7), parsed.arr[1].uint);
     try testing.expectEqualSlices(u8, &typed_doc_id.toBytes(user_id), parsed.arr[2].bin.value());
     try testing.expectEqual(@as(u64, 2), parsed.arr[3].uint);
     try testing.expectEqual(@as(usize, 0), parsed.arr[4].arr.len);
+    try testing.expectEqual(@as(usize, 0), parsed.arr[5].map.count());
+}
+
+test "encodeActionForward: projects declared session claims, omits absent ones" {
+    const allocator = std.heap.smp_allocator;
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
+
+    var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+    defer claims.deinit(allocator);
+    try claims.put(allocator, "role", .{ .scalar = .{ .text = "admin" } });
+    try claims.put(allocator, "tenant_id", .{ .scalar = .{ .integer = 42 } });
+
+    const params = msgpack.Payload{ .arr = &.{} };
+    const claim_names = [_][]const u8{ "role", "tenant_id", "correlation" };
+    const bytes = try wire_encode.encodeActionForward(allocator, 9, user_id, 3, &params, &claim_names, &claims);
+    defer allocator.free(bytes);
+
+    var reader: std.Io.Reader = .fixed(bytes);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    try testing.expectEqual(@as(usize, 6), parsed.arr.len);
+    const forwarded_claims = parsed.arr[5];
+    // "correlation" is declared but absent from the session → omitted.
+    try testing.expectEqual(@as(usize, 2), forwarded_claims.map.count());
+    try testing.expectEqualStrings("admin", (try forwarded_claims.mapGet("role")).?.str.value());
+    try testing.expectEqual(@as(u64, 42), (try forwarded_claims.mapGet("tenant_id")).?.uint);
+    try testing.expectEqual(@as(?msgpack.Payload, null), try forwarded_claims.mapGet("correlation"));
 }
 
 test "encodeActionOkWithValue: ok response carries returns value" {

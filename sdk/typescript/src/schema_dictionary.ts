@@ -822,9 +822,6 @@ export class SchemaDictionary {
 			actionReturns: payload.actionReturns ?? [],
 			actionFlags: payload.actionFlags ?? [],
 		});
-		// Dual djb2-xor accumulators; ^ truncates to int32 every step, so the
-		// float *33 never loses precision. Packs to 53 bits (< 2^53) exactly.
-		// ponytail: change detection only — miss chance 2^-53 per reconnect
 		const n = canonical.length;
 		let h1 = 5381;
 		let h2 = 52711;

@@ -517,10 +517,12 @@ test "actions service: async forwards stage until flush and concatenate in order
     for (1..4) |exec_id| {
         const msg = try msgpack.decode(allocator, &reader);
         defer msg.free(allocator);
-        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(usize, 6), msg.arr.len);
         try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
         try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
         try testing.expectEqual(@as(u64, 0), msg.arr[3].uint);
+        // Schema declares no `claims` → empty projected map.
+        try testing.expectEqual(@as(usize, 0), msg.arr[5].map.count());
     }
 
     // Flushing again is a no-op.
@@ -573,10 +575,114 @@ test "actions service: sync forward flushes staged async forwards first" {
     for (expected_action_ids, 1..) |action_id, exec_id| {
         const msg = try msgpack.decode(allocator, &reader);
         defer msg.free(allocator);
-        try testing.expectEqual(@as(usize, 5), msg.arr.len);
+        try testing.expectEqual(@as(usize, 6), msg.arr.len);
         try testing.expectEqual(@as(u64, 0x31), msg.arr[0].uint);
         try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
         try testing.expectEqual(action_id, msg.arr[3].uint);
+        try testing.expectEqual(@as(usize, 0), msg.arr[5].map.count());
+    }
+}
+
+const claims_schema_json =
+    \\{"version":"1.0.0","store":{},"actions":{
+    \\  "tagged":{"params":{"n":{"type":"integer"}},"required":["n"],"returns":null,"claims":["role","tenant_id"]}
+    \\}}
+;
+
+test "actions service: projects declared session claims and omits absent ones" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-claims-projection", claims_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+
+    // Declared and present (`role`), declared but absent (`tenant_id`), and
+    // session-held but undeclared (`corr`).
+    var claims = try makeClaims(allocator, "member");
+    defer claims.deinit(allocator);
+    try claims.put(allocator, "corr", .{ .scalar = .{ .text = "trace-9" } });
+
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = msgpack.Payload.uintToPayload(1) },
+    });
+    defer params.free(allocator);
+
+    var caller_ctx = connectionContext(caller.conn);
+    caller_ctx.session_claims = &claims;
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &params, null));
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+
+    var reader: std.Io.Reader = .fixed(recorder.bytes());
+    const msg = try msgpack.decode(allocator, &reader);
+    defer msg.free(allocator);
+    try testing.expectEqual(@as(usize, 6), msg.arr.len);
+
+    const forwarded = msg.arr[5];
+    try testing.expectEqual(@as(usize, 1), forwarded.map.count());
+    try testing.expectEqualStrings("member", (try forwarded.mapGet("role")).?.str.value());
+    try testing.expectEqual(@as(?msgpack.Payload, null), try forwarded.mapGet("tenant_id"));
+    try testing.expectEqual(@as(?msgpack.Payload, null), try forwarded.mapGet("corr"));
+}
+
+test "actions service: re-reads session claims at forward time" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "actions-claims-swap", claims_schema_json);
+    defer app.deinit();
+
+    const worker = try app.setupMockConnection();
+    defer worker.deinit();
+    const caller = try app.setupMockConnection();
+    defer caller.deinit();
+
+    var capture: [512]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&capture);
+    worker.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    worker.conn.ws.test_send_observer_ctx = &recorder;
+    recorder.reset();
+
+    try app.actions_service.register(connectionContext(worker.conn), &.{0});
+
+    var claims = try makeClaims(allocator, "member");
+    defer claims.deinit(allocator);
+
+    var params = try makePairs(allocator, &.{
+        .{ .index = 0, .value = msgpack.Payload.uintToPayload(1) },
+    });
+    defer params.free(allocator);
+
+    var caller_ctx = connectionContext(caller.conn);
+    caller_ctx.session_claims = &claims;
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &params, null));
+
+    // An AuthRefresh-style swap between forwards must be reflected: projection
+    // reads the session at forward time, not at registration.
+    try claims.put(allocator, "role", .{ .scalar = .{ .text = "admin" } });
+    try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &params, null));
+
+    app.actions_service.flushOutbox();
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+
+    var reader: std.Io.Reader = .fixed(recorder.bytes());
+    for ([_][]const u8{ "member", "admin" }, 1..) |expected_role, exec_id| {
+        const msg = try msgpack.decode(allocator, &reader);
+        defer msg.free(allocator);
+        try testing.expectEqual(@as(usize, 6), msg.arr.len);
+        try testing.expectEqual(@as(u64, exec_id), msg.arr[1].uint);
+        try testing.expectEqualStrings(expected_role, (try msg.arr[5].mapGet("role")).?.str.value());
     }
 }
 

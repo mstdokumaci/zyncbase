@@ -211,6 +211,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			action_id: 1,
 			params: [[0, "cart-9"]],
+			claims: { role: "member", corr: "trace-1" },
 		});
 		await nextTick();
 
@@ -218,6 +219,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			namespace: "public",
 			execId: 42,
+			claims: { role: "member", corr: "trace-1" },
 		});
 		expect(conn.replies).toHaveLength(1);
 		expect(conn.replies[0]).toMatchObject({
@@ -243,6 +245,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			action_id: 1,
 			params: [[0, "cart-1"]],
+			claims: {},
 		});
 		await nextTick();
 
@@ -269,6 +272,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			action_id: 1,
 			params: [[0, "cart-1"]],
+			claims: {},
 		});
 		await nextTick();
 
@@ -302,6 +306,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			action_id: 0,
 			params: [[0, "up"]],
+			claims: {},
 		});
 		await nextTick();
 
@@ -321,6 +326,7 @@ describe("ActionsImpl.handle", () => {
 			userId: "user-1",
 			action_id: 1,
 			params: [[0, "cart-1"]],
+			claims: {},
 		});
 		await nextTick();
 

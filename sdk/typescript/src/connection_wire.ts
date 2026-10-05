@@ -161,6 +161,13 @@ function isPresencePairArray(
 	);
 }
 
+/** Rejects `null`, arrays, and non-POJOs (`Date`, `Map`, `Set`, `Uint8Array`). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null) return false;
+	const proto: unknown = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
 function isPresenceEntryHeader(
 	value: unknown,
 ): value is [Uint8Array, 0 | 1 | 2, ...unknown[]] {
@@ -716,13 +723,14 @@ export class ConnectionWireCodec {
 
 	private decodeActionForward(raw: unknown[]): ActionForward | null {
 		if (
-			raw.length !== 5 ||
+			raw.length !== 6 ||
 			raw[0] !== WireMessageType.ActionForward ||
 			!isNonNegativeSafeInteger(raw[1]) ||
 			!(raw[2] instanceof Uint8Array) ||
 			raw[2].length !== 16 ||
 			!isNonNegativeSafeInteger(raw[3]) ||
-			!isPresencePairArray(raw[4])
+			!isPresencePairArray(raw[4]) ||
+			!isPlainObject(raw[5])
 		) {
 			return null;
 		}
@@ -734,6 +742,7 @@ export class ConnectionWireCodec {
 				userId: this.schema.decodePresenceUserId(raw[2]),
 				action_id: raw[3],
 				params: raw[4] as Array<[number, unknown]>,
+				claims: raw[5] as Record<string, JsonValue>,
 			};
 		} catch {
 			return null;

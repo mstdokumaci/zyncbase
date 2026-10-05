@@ -6,6 +6,7 @@ import {
 	ZyncBaseError,
 } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
+import { createTestJwt } from "./harness";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -59,9 +60,31 @@ async function pollUntil(
 	throw new Error(message);
 }
 
-export async function run(port: number = 3000): Promise<void> {
-	const caller = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
-	const worker = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
+export async function run(
+	port: number = 3000,
+	jwtSecret?: string,
+): Promise<void> {
+	const url = `ws://127.0.0.1:${port}`;
+	const callerAuth = jwtSecret
+		? {
+				token: createTestJwt(jwtSecret, "actions-caller", {
+					role: "member",
+					corr: "trace-42",
+					tenant: "acme",
+				}),
+			}
+		: undefined;
+	const workerAuth = jwtSecret
+		? { token: createTestJwt(jwtSecret, "actions-worker", { role: "worker" }) }
+		: undefined;
+	const caller = new ZyncBaseClient({
+		url,
+		...(callerAuth ? { auth: callerAuth } : {}),
+	});
+	const worker = new ZyncBaseClient({
+		url,
+		...(workerAuth ? { auth: workerAuth } : {}),
+	});
 
 	try {
 		await caller.connect();
@@ -82,6 +105,7 @@ export async function run(port: number = 3000): Promise<void> {
 			userId: string;
 			namespace: string;
 			execId: number;
+			claims: Record<string, unknown>;
 		}> = [];
 		const moves: Array<Record<string, unknown>> = [];
 
@@ -117,6 +141,28 @@ export async function run(port: number = 3000): Promise<void> {
 			typeof contexts[0].userId === "string" && contexts[0].userId.length > 0,
 			"expected a resolved userId in ActionContext",
 		);
+
+		// Projected session claims (schema `claims: ["role","corr","tenant_id"]`).
+		if (jwtSecret) {
+			assert(
+				contexts[0].claims.role === "member",
+				`expected role=member in claims, got ${JSON.stringify(contexts[0].claims)}`,
+			);
+			assert(
+				contexts[0].claims.corr === "trace-42",
+				`expected corr=trace-42 in claims, got ${JSON.stringify(contexts[0].claims)}`,
+			);
+			// Declared in schema but absent from the caller's session → omitted.
+			assert(
+				!("tenant_id" in contexts[0].claims),
+				"declared-but-absent claim must be omitted, not null",
+			);
+			// Mapped into $session but not declared in the action → not projected.
+			assert(
+				!("tenant" in contexts[0].claims),
+				"undeclared session claim must not be projected",
+			);
+		}
 
 		// 4. Worker application error surfaces as ActionExecutionError.
 		const execErr = await expectReject(

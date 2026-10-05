@@ -126,7 +126,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
     const user_id = caller.conn.user_doc_id;
     const encode_start_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
     for (0..total_calls) |i| {
-        const bytes = try wire_encode.encodeActionForward(allocator, @intCast(i + 1), user_id, 0, &params);
+        const bytes = try wire_encode.encodeActionForward(allocator, @intCast(i + 1), user_id, 0, &params, &.{}, null);
         allocator.free(bytes);
     }
     const encode_ns: u64 = @intCast(std.Io.Clock.awake.now(testing.io).toNanoseconds() - encode_start_ns);

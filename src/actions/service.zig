@@ -246,6 +246,8 @@ pub const ActionsService = struct {
             ctx.user_doc_id,
             action_id,
             params,
+            action.claims,
+            ctx.session_claims,
         );
         defer self.allocator.free(forward);
 

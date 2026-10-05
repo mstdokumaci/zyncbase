@@ -170,7 +170,7 @@ fn parsePresenceTier(
 
 pub const max_action_fields: usize = 500;
 
-const action_keys = [_][]const u8{ "params", "required", "returns", "scope" };
+const action_keys = [_][]const u8{ "params", "required", "returns", "scope", "claims" };
 
 const action_leaf_field_keys = [_][]const u8{ "type", "items" } ++ constraint_keys;
 
@@ -198,6 +198,39 @@ fn parseActionScope(scope_val: ?std.json.Value) !types.ActionScope {
     if (std.mem.eql(u8, val.string, "store")) return .store;
     if (std.mem.eql(u8, val.string, "presence")) return .presence;
     return error.InvalidActionScope;
+}
+
+/// Session variable names projected into the worker's `ActionContext.claims`.
+/// Not validated against `authentication.session.claims`: an unmapped name
+/// simply never resolves at forward time.
+fn parseActionClaims(allocator: Allocator, claims_val: ?std.json.Value) ![]const []const u8 {
+    const val = claims_val orelse return &.{};
+    if (val != .array) return error.InvalidActionClaims;
+
+    var claims = std.ArrayListUnmanaged([]const u8).empty;
+    errdefer {
+        for (claims.items) |s| allocator.free(s);
+        claims.deinit(allocator);
+    }
+
+    // `claims` preserves insertion order for the owned slice; `seen` only
+    // answers "already present" so dedup stays linear. Keys borrow the JSON
+    // tree, which outlives this function's maps.
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+
+    for (val.array.items) |item| {
+        if (item != .string) return error.InvalidActionClaims;
+        if (item.string.len == 0) return error.InvalidActionClaims;
+        const gop = try seen.getOrPut(allocator, item.string);
+        if (gop.found_existing) return error.InvalidActionClaims;
+        // Transfer ownership to `claims` only after the append succeeds so an
+        // OOM failure cannot leak the duplicate.
+        const duped = try allocator.dupe(u8, item.string);
+        errdefer allocator.free(duped);
+        try claims.append(allocator, duped);
+    }
+    return claims.toOwnedSlice(allocator);
 }
 
 fn parseActionRequiredSet(allocator: Allocator, action_obj: std.json.ObjectMap) !std.StringHashMap(bool) {
@@ -253,6 +286,9 @@ fn parseAction(allocator: Allocator, action_name_raw: []const u8, action_def: st
 
     const scope = try parseActionScope(action_def.object.get("scope"));
 
+    const claims = try parseActionClaims(allocator, action_def.object.get("claims"));
+    errdefer types.deinitStringSlice(claims, allocator);
+
     var required_set = try parseActionRequiredSet(allocator, action_def.object);
     defer deinitRequiredSet(allocator, &required_set);
 
@@ -284,6 +320,7 @@ fn parseAction(allocator: Allocator, action_name_raw: []const u8, action_def: st
         .scope = scope,
         .params = params,
         .returns = returns,
+        .claims = claims,
     };
 }
 
@@ -709,20 +746,6 @@ fn clonePresenceFields(allocator: Allocator, fields: []const types.PresenceField
     return cloned;
 }
 
-fn cloneStringSlice(allocator: Allocator, strings: []const []const u8) ![]const []const u8 {
-    const cloned = try allocator.alloc([]const u8, strings.len);
-    var built: usize = 0;
-    errdefer {
-        for (cloned[0..built]) |s| allocator.free(s);
-        allocator.free(cloned);
-    }
-    for (strings) |s| {
-        cloned[built] = try allocator.dupe(u8, s);
-        built += 1;
-    }
-    return cloned;
-}
-
 fn cloneActions(allocator: Allocator, actions: []const types.Action) ![]types.Action {
     const cloned = try allocator.alloc(types.Action, actions.len);
     var built: usize = 0;
@@ -827,13 +850,13 @@ fn clonePresenceState(
         allocator.free(shared_fields);
     }
 
-    const user_fields_names = try cloneStringSlice(allocator, presence_user_fields_names);
+    const user_fields_names = try types.cloneStringSlice(allocator, presence_user_fields_names);
     errdefer {
         for (user_fields_names) |name| allocator.free(name);
         allocator.free(user_fields_names);
     }
 
-    const shared_fields_names = try cloneStringSlice(allocator, presence_shared_fields_names);
+    const shared_fields_names = try types.cloneStringSlice(allocator, presence_shared_fields_names);
     errdefer {
         for (shared_fields_names) |name| allocator.free(name);
         allocator.free(shared_fields_names);

@@ -24,7 +24,8 @@
 			"required": ["cart_id"],
 			"returns": {
 				"order_id": { "type": "string" }
-			}
+			},
+			"claims": ["role", "corr", "tenant_id"]
 		},
 		"player_move": {
 			"params": {

@@ -252,25 +252,45 @@ pub fn encodeActionOkWithValue(
     return output.toOwnedSlice();
 }
 
-/// `ActionForward` push tuple: `[0x31, execId, userId(bin16), actionId, paramsPairArray]`.
+/// `ActionForward` push tuple: `[0x31, execId, userId(bin16), actionId, paramsPairArray, claimsMap]`.
+/// `claimsMap` projects `claim_names` (the action's schema `claims`) from
+/// `session_claims` at forward time; names absent from the session are
+/// omitted. The map is always present, possibly empty.
 pub fn encodeActionForward(
     allocator: Allocator,
     exec_id: u64,
     user_id: typed_doc_id.DocId,
     action_id: u64,
     params: *const msgpack.Payload,
+    claim_names: []const []const u8,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
 ) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try writer.writeByte(0x95);
+    var present: usize = 0;
+    if (session_claims) |claims| {
+        for (claim_names) |name| {
+            if (claims.get(name) != null) present += 1;
+        }
+    }
+
+    try writer.writeByte(0x96);
     try writer.writeByte(@intFromEnum(MessageType.action_forward));
     try msgpack.encode(msgpack.Payload.uintToPayload(exec_id), writer);
     const id_bytes = typed_doc_id.toBytes(user_id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
     try msgpack.encode(msgpack.Payload.uintToPayload(action_id), writer);
     try msgpack.encode(params.*, writer);
+    try msgpack.encodeMapHeader(writer, present);
+    if (session_claims) |claims| {
+        for (claim_names) |name| {
+            const value = claims.get(name) orelse continue;
+            try msgpack.writeMsgPackStr(writer, name);
+            try typed_codec.writeMsgPack(value, writer);
+        }
+    }
 
     return output.toOwnedSlice();
 }
