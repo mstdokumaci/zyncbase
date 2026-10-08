@@ -61,7 +61,13 @@ export function toggleMute() {
 
 // The mute key ignores keystrokes meant for the name and country inputs.
 addEventListener("keydown", (event) => {
-	if (event.code !== "KeyM" || event.ctrlKey || event.metaKey || event.altKey)
+	if (
+		event.code !== "KeyM" ||
+		event.repeat ||
+		event.ctrlKey ||
+		event.metaKey ||
+		event.altKey
+	)
 		return;
 	const target = event.target as HTMLElement | null;
 	if (
