@@ -136,6 +136,9 @@ export type PlayerRow = {
 	last_x: number;
 	last_y: number;
 	slot: number;
+	// Enclosure fills this player's own step paint triggered; the capture cue
+	// watches the row of the local player only.
+	captured?: number;
 };
 // A country's numeric identity: referenced by PlayerRow.country_id. Its row key
 // in the countries table is the string form, and its palette color selects the
@@ -146,6 +149,9 @@ export type Country = {
 	color: string;
 	count: number;
 	is_bot: boolean;
+	// Round-local loss counter: land taken by enemy enclosure fills only,
+	// never ordinary step painting. Clients turn an increment into a sound.
+	lost?: number;
 };
 export type CountryChunkRow = {
 	id: string;

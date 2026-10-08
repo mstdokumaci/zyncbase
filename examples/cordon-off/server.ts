@@ -527,6 +527,8 @@ function allocatorOp(): BatchOperation[] {
  * writes never reference a row that has not landed yet. */
 function shouldPublishRosters(force: boolean) {
 	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
+	// Captures bypass the throttle: their sound cues read the roster rows.
+	if (world.capturesPending) return true;
 	for (const countryId of world.dirtyCountries)
 		if (!persistedCountries.has(countryId)) return true;
 	return false;
@@ -538,6 +540,7 @@ function recordRosterCommit(snapshot: PublishSnapshot) {
 	for (const countryId of snapshot.removed)
 		persistedCountries.delete(countryId);
 	lastPublishedMark = world.allocatorMark;
+	world.capturesPending = false;
 }
 
 /** Split-tables metrics: one counter pair per chunk grid. */

@@ -66,6 +66,7 @@ test("a chunks-only drain holds roster rows back for the slower flush", () => {
 			color: "#ef4444",
 			count: 0,
 			is_bot: false,
+			lost: 0,
 		},
 	});
 });

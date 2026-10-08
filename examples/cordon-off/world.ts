@@ -52,6 +52,9 @@ type Player = {
 	credit: number;
 	// Round-local numeric identity carried by packed dots.
 	slot: number;
+	// Enclosure fills this player's own step paint triggered, for the capture
+	// cue. Never persisted; disappears with the player.
+	captured: number;
 	// Spawn point whose bots this player's crowd calls in. Every human has
 	// one; bots carry none.
 	point?: number;
@@ -138,6 +141,10 @@ export class World {
 	>();
 	inputMessages = 0;
 	ticks = 0;
+	// Set when an enclosure fill changed land; the publisher forces a roster
+	// flush so clients hear the capture in the same tick, not after the
+	// roster throttle.
+	capturesPending = false;
 	private nextCountryId = 1;
 	// Round-local player identity carried by packed dots. Monotonic so a slot
 	// is never reused while a tombstone or stale subscription may reference
@@ -154,6 +161,9 @@ export class World {
 	private readonly bounds = new Map<number, Bounds>();
 	private readonly changedCountries = new Set<number>();
 	private readonly enclosureCountries = new Map<number, Set<number> | null>();
+	// Country -> player whose step queued this tick's enclosure candidates.
+	// Fills are credited to that player only; reclaimed land has no trigger.
+	private readonly enclosureTriggers = new Map<number, string>();
 	// Spawn-point wave latch: 1 = first three points, 2 = six, 3 = all nine.
 	private wave = 1;
 
@@ -173,6 +183,7 @@ export class World {
 				last_x: player.last_x,
 				last_y: player.last_y,
 				slot: player.slot,
+				captured: player.captured,
 			};
 			if (player.name !== undefined) row.name = player.name;
 			return row;
@@ -339,13 +350,14 @@ export class World {
 		// start at 1, so 0 unambiguously marks "no country".
 		const byCode = new Uint16Array(MAX_COUNTRIES + 1);
 		for (const country of countries) {
-			const { country_id, name, color, is_bot } = country;
+			const { country_id, name, color, is_bot, lost } = country;
 			this.countries.set(country_id, {
 				country_id,
 				name,
 				color,
 				count: 0,
 				is_bot,
+				lost: lost ?? 0,
 			});
 			const code = COUNTRY_COLOR_INDEX.get(color);
 			if (code !== undefined) {
@@ -435,6 +447,7 @@ export class World {
 			color,
 			count: 0,
 			is_bot: isBot,
+			lost: 0,
 		};
 		this.ownerCodes[countryId] = code;
 		this.countries.set(countryId, country);
@@ -838,6 +851,7 @@ export class World {
 			seq: -1,
 			direction: "idle",
 			credit: 0,
+			captured: 0,
 			point,
 			slot: slot ?? this.reserveSlots(1),
 		};
@@ -903,6 +917,7 @@ export class World {
 			last_x: player.x,
 			last_y: player.y,
 			slot: player.slot,
+			captured: player.captured,
 		};
 		if (player.name !== undefined) row.name = player.name;
 		this.graveyard.set(id, {
@@ -1001,7 +1016,7 @@ export class World {
 			this.dirtyPlayerRows.add(player.id);
 		}
 		if (!this.land[to] || owner === player.country_id) return;
-		this.claim(to, player.country_id);
+		this.claim(to, player.country_id, false, player.id);
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each affected country fills and updates ownership at most once.
@@ -1023,11 +1038,14 @@ export class World {
 			const starts = this.enclosureCountries.get(countryId);
 			// A processed country needs no more candidates from its own captures.
 			this.enclosureCountries.set(countryId, null);
+			// Fills resolve the candidates this tick's moves queued; land that
+			// only an enemy cut away has no trigger and stays silent.
+			const by = this.enclosureTriggers.get(countryId);
 			const local = starts
 				? localEnclosures(this.owners, countryId, starts, box, WIDTH)
 				: undefined;
 			if (local) {
-				for (const cell of local) this.claim(cell, countryId, true);
+				for (const cell of local) this.claim(cell, countryId, true, by);
 				continue;
 			}
 			// Filling only grows a country inside its original bounds. Other
@@ -1037,11 +1055,12 @@ export class World {
 				const end = y * WIDTH + box.right;
 				for (let cell = y * WIDTH + box.left; cell <= end; cell++)
 					if (labels[cell] === 0 && this.land[cell])
-						this.claim(cell, countryId, true);
+						this.claim(cell, countryId, true, by);
 			}
 		}
 		this.changedCountries.clear();
 		this.enclosureCountries.clear();
+		this.enclosureTriggers.clear();
 	}
 
 	private queueEnclosure(countryId: number, cell: number) {
@@ -1072,7 +1091,12 @@ export class World {
 	}
 
 	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: update both owners and collect bounded enclosure candidates at their shared mutation point.
-	private claim(cell: number, countryId: number, fromFill = false) {
+	private claim(
+		cell: number,
+		countryId: number,
+		fromFill = false,
+		by?: string,
+	) {
 		const owner = this.owners[cell];
 		if (!this.land[cell] || owner === countryId) return;
 		this.owners[cell] = countryId;
@@ -1084,6 +1108,9 @@ export class World {
 			// A later claim can consume a queued start while its hole still exists.
 			(starts?.has(cell) || mayEnclose(this.owners, countryId, cell, WIDTH))
 		) {
+			// A teammate moving in the same tick may overwrite the credit; one
+			// cue for the enclosure is enough.
+			if (by) this.enclosureTriggers.set(countryId, by);
 			const x = cell % WIDTH;
 			if (cell >= WIDTH) this.queueEnclosure(countryId, cell - WIDTH);
 			if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
@@ -1095,11 +1122,26 @@ export class World {
 			countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
 		);
 		const country = this.countries.get(countryId);
-		if (country) country.count++;
+		if (country) {
+			country.count++;
+			if (fromFill) {
+				// Credit the mover who closed the enclosure, not the country:
+				// teammates and bots capture silently for everyone else.
+				const capturer = by ? this.players.get(by) : undefined;
+				if (capturer) {
+					capturer.captured++;
+					this.dirtyPlayerRows.add(capturer.id);
+				}
+				this.capturesPending = true;
+			}
+		}
 		this.dirtyCountries.add(countryId);
 		if (!owner) return;
 		const previous = this.countries.get(owner);
-		if (previous) previous.count--;
+		if (previous) {
+			previous.count--;
+			if (fromFill) previous.lost = (previous.lost ?? 0) + 1;
+		}
 		this.dirtyCountries.add(owner);
 		this.changedCountries.add(owner);
 		if (previous?.count === 0) this.maybeDeleteCountry(owner);

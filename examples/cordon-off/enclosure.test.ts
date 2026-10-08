@@ -224,6 +224,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 			color: COUNTRY_COLORS[countryId - 1],
 			count: 0,
 			is_bot: false,
+			lost: 0,
 		});
 	const chunks = new Set<number>();
 	for (const [x, y, countryId] of pixels) {
@@ -248,6 +249,7 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 				color: COUNTRY_COLORS[countryId - 1],
 				count: 0,
 				is_bot: false,
+				lost: 0,
 			});
 	world.dirtyCountryChunks.clear();
 	world.dirtyUserChunks.clear();
@@ -310,6 +312,8 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	const { world, chunks, actor, move, owner } = scenario(pixels, [[34, 34]]);
 	expect(owner(32, 32)).toBe(2);
 	actor("attacker", 1, 32, 36);
+	// A teammate inside the future enclosure must not be credited with it.
+	actor("teammate", 1, 35, 35);
 	const fill = spyOn(HoleFiller.prototype, "fill");
 	try {
 		move("attacker", "right");
@@ -323,6 +327,11 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	expect(owner(40, 40)).toBe(2);
 	expect(world.countries.get(1)?.count).toBe(48);
 	expect(world.countries.get(2)?.count).toBe(1);
+	// Only the 24-cell fill credits the mover; the step paint through the gap
+	// is not a capture, and a teammate gains nothing.
+	expect(world.players.get("attacker")?.captured).toBe(24);
+	expect(world.players.get("teammate")?.captured).toBe(0);
+	expect(world.countries.get(2)?.lost).toBe(1);
 	for (const [x, y] of [
 		[31, 31],
 		[32, 31],
@@ -591,21 +600,26 @@ test("gated ticks match unconditional fills and leave no holes after inter-count
 		color: COUNTRY_COLORS[2],
 		count: 0,
 		is_bot: false,
+		lost: 0,
 	});
 	const reference = new World(world.land);
 	for (const country of world.countries.values())
 		reference.countries.set(country.country_id, { ...country });
 	const referenceClaim = Reflect.get(reference, "claim").bind(reference);
-	Reflect.set(reference, "claim", (cell: number, countryId: number) => {
-		const owner = reference.owners[cell];
-		const changed = reference.land[cell] && owner !== countryId;
-		referenceClaim(cell, countryId);
-		if (changed) {
-			const pending = Reflect.get(reference, "enclosureCountries");
-			pending.set(countryId, null);
-			if (owner) pending.set(owner, null);
-		}
-	});
+	Reflect.set(
+		reference,
+		"claim",
+		(cell: number, countryId: number, fromFill = false, by?: string) => {
+			const owner = reference.owners[cell];
+			const changed = reference.land[cell] && owner !== countryId;
+			referenceClaim(cell, countryId, fromFill, by);
+			if (changed) {
+				const pending = Reflect.get(reference, "enclosureCountries");
+				pending.set(countryId, null);
+				if (owner) pending.set(owner, null);
+			}
+		},
+	);
 	let random = 123;
 	const next = () => {
 		random = (Math.imul(random, 1664525) + 1013904223) >>> 0;

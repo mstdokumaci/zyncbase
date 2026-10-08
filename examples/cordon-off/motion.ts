@@ -7,7 +7,7 @@ import {
 	wrapX,
 } from "./shared";
 
-const steps = {
+export const steps: Record<Direction, readonly [number, number]> = {
 	idle: [0, 0],
 	up: [0, -1],
 	down: [0, 1],
