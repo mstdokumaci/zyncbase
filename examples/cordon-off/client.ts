@@ -1128,6 +1128,8 @@ function returnToLobby(message: string) {
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
 	stopJoystick();
+	if (document.fullscreenElement)
+		void document.exitFullscreen().catch(() => {});
 	errorLabel.textContent = message;
 	setConnection("");
 	dirty = true;
@@ -1427,6 +1429,10 @@ async function enterGame(next: ZyncBaseClient) {
 joinForm.addEventListener("submit", async (event) => {
 	event.preventDefault();
 	if (phase !== "lobby" || !worldReady) return;
+	if (matchMedia("(pointer: coarse)").matches && document.fullscreenEnabled)
+		void document.documentElement
+			.requestFullscreen({ navigationUI: "hide" })
+			.catch(() => {});
 	phase = "joining";
 	updateCountryChoice();
 	errorLabel.textContent = "";
