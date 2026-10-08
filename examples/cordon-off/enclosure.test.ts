@@ -571,7 +571,7 @@ test("defensive reclaim still runs beside an enclosed water pixel", () => {
 	for (let y = 30; y <= 34; y++)
 		for (let x = 30; x <= 34; x++)
 			if (x !== 32 || y !== 32) pixels.push([x, y, 1]);
-	const { actor, move, owner } = scenario(pixels, [[32, 32]]);
+	const { world, actor, move, owner } = scenario(pixels, [[32, 32]]);
 	actor("invader", 2, 31, 32);
 	move("invader", "right");
 	const fill = spyOn(HoleFiller.prototype, "fill");
@@ -580,6 +580,7 @@ test("defensive reclaim still runs beside an enclosed water pixel", () => {
 		expect(fill).not.toHaveBeenCalled();
 		expect(owner(32, 31)).toBe(1);
 		expect(owner(32, 32)).toBe(0);
+		expect(world.countries.get(2)?.lost).toBe(0);
 	} finally {
 		fill.mockRestore();
 	}

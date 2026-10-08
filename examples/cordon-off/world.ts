@@ -1140,7 +1140,8 @@ export class World {
 		const previous = this.countries.get(owner);
 		if (previous) {
 			previous.count--;
-			if (fromFill) previous.lost = (previous.lost ?? 0) + 1;
+			if (fromFill && by !== undefined)
+				previous.lost = (previous.lost ?? 0) + 1;
 		}
 		this.dirtyCountries.add(owner);
 		this.changedCountries.add(owner);
