@@ -461,29 +461,20 @@ pub const WriteWorker = struct {
             .pending_cache_ops = &pending_cache_ops,
         };
 
+        try self.runOps(&ctx, ops, fail_fast, guard_rejected);
+
+        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops);
+    }
+
+    fn runOps(
+        self: *WriteWorker,
+        ctx: *BatchCtx,
+        ops: []const WriteOp,
+        fail_fast: bool,
+        guard_rejected: *std.ArrayListUnmanaged(usize),
+    ) !void {
         for (ops, 0..) |op, op_idx| {
-            const succeeded = switch (op) {
-                .upsert => |iop| blk: {
-                    const target = try self.resolveEntryTarget(iop, op_idx, fail_fast, guard_rejected);
-                    break :blk executeUpsertEntry(&ctx, iop, target.namespace_id, target.table);
-                },
-                .update => |uop| blk: {
-                    const target = try self.resolveEntryTarget(uop, op_idx, fail_fast, guard_rejected);
-                    break :blk executeUpdateEntry(&ctx, uop, target.namespace_id, target.table);
-                },
-                .delete => |dop| blk: {
-                    const target = try self.resolveEntryTarget(dop, op_idx, fail_fast, guard_rejected);
-                    break :blk executeDeleteEntry(&ctx, dop, target.namespace_id, target.table);
-                },
-                else => {
-                    std.log.debug("Unsupported WriteOp variant at op #{d}", .{op_idx});
-                    if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
-                    return StorageError.InvalidOperation;
-                },
-            } catch |err| {
-                if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
-                return err;
-            };
+            const succeeded = try executeOp(ctx, op, op_idx, fail_fast, guard_rejected);
             if (!succeeded) {
                 try guard_rejected.append(self.allocator, op_idx);
                 // (fail_fast=true) aborts on first guard rejection; flush
@@ -492,8 +483,38 @@ pub const WriteWorker = struct {
                 if (fail_fast) return error.PermissionDenied;
             }
         }
+    }
 
-        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops);
+    fn executeOp(
+        ctx: *BatchCtx,
+        op: WriteOp,
+        op_idx: usize,
+        fail_fast: bool,
+        guard_rejected: *std.ArrayListUnmanaged(usize),
+    ) !bool {
+        const self = ctx.self;
+        return switch (op) {
+            .upsert => |iop| blk: {
+                const target = try self.resolveEntryTarget(iop, op_idx, fail_fast, guard_rejected);
+                break :blk executeUpsertEntry(ctx, iop, target.namespace_id, target.table);
+            },
+            .update => |uop| blk: {
+                const target = try self.resolveEntryTarget(uop, op_idx, fail_fast, guard_rejected);
+                break :blk executeUpdateEntry(ctx, uop, target.namespace_id, target.table);
+            },
+            .delete => |dop| blk: {
+                const target = try self.resolveEntryTarget(dop, op_idx, fail_fast, guard_rejected);
+                break :blk executeDeleteEntry(ctx, dop, target.namespace_id, target.table);
+            },
+            else => {
+                std.log.debug("Unsupported WriteOp variant at op #{d}", .{op_idx});
+                if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                return StorageError.InvalidOperation;
+            },
+        } catch |err| {
+            if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+            return err;
+        };
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
@@ -521,48 +542,9 @@ pub const WriteWorker = struct {
                 if (new_record) |r| r.deinit(self.allocator);
             }
             const table_index = table_metadata.index;
-            const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, doc_id);
-            if (new_record) |nr| {
-                if (nr.clone(self.allocator)) |cloned| {
-                    errdefer cloned.deinit(self.allocator);
-                    try ctx.pending_cache_ops.append(self.allocator, .{ .update = .{
-                        .key = cache_key,
-                        .data = cloned,
-                    } });
-                } else |err| {
-                    const classified_err = errors.classifyError(err);
-                    std.log.warn("Failed to clone record for cache write-through: {}", .{classified_err});
-                    try ctx.pending_cache_ops.append(self.allocator, .{ .evict = cache_key });
-                }
-            } else if (pk_delete and old_record != null) {
-                try ctx.pending_cache_ops.append(self.allocator, .{ .evict = cache_key });
-            }
-            if (pk_insert and old_record == null) {
-                try ctx.pk_mutations.append(self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .insert });
-            }
-            if (pk_delete) {
-                try ctx.pk_mutations.append(self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .delete });
-            }
-            if (self.change_queue != null) {
-                accumulateOwnedChange(
-                    self.allocator,
-                    self.batch_arena.allocator(),
-                    ctx.pending_changes,
-                    ctx.pending_change_index,
-                    namespace_id,
-                    table_index,
-                    doc_id,
-                    old_record,
-                    new_record,
-                ) catch |err| {
-                    const classified_err = errors.classifyError(err);
-                    std.log.err("Failed to capture row change: {}", .{classified_err});
-                    return classified_err;
-                };
-            } else {
-                if (old_record) |r| r.deinit(self.allocator);
-                if (new_record) |r| r.deinit(self.allocator);
-            }
+            try trackCacheOp(ctx, table_metadata, namespace_id, doc_id, pk_delete, old_record, new_record);
+            try trackPkMutations(ctx, table_index, doc_id, pk_insert, pk_delete, old_record);
+            try pushRowChange(ctx, namespace_id, table_index, doc_id, old_record, new_record);
             return true;
         } else {
             // Row was not affected — check for guard conflict.
@@ -570,6 +552,81 @@ pub const WriteWorker = struct {
             if (old_record) |r| r.deinit(self.allocator);
             if (new_record) |r| r.deinit(self.allocator);
             return !guard_conflict;
+        }
+    }
+
+    fn trackCacheOp(
+        ctx: *BatchCtx,
+        table_metadata: *const schema_types.Table,
+        namespace_id: i64,
+        doc_id: typed_doc_id.DocId,
+        pk_delete: bool,
+        old_record: ?Record,
+        new_record: ?Record,
+    ) !void {
+        const allocator = ctx.self.allocator;
+        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, doc_id);
+        if (new_record) |nr| {
+            if (nr.clone(allocator)) |cloned| {
+                errdefer cloned.deinit(allocator);
+                try ctx.pending_cache_ops.append(allocator, .{ .update = .{
+                    .key = cache_key,
+                    .data = cloned,
+                } });
+            } else |err| {
+                const classified_err = errors.classifyError(err);
+                std.log.warn("Failed to clone record for cache write-through: {}", .{classified_err});
+                try ctx.pending_cache_ops.append(allocator, .{ .evict = cache_key });
+            }
+        } else if (pk_delete and old_record != null) {
+            try ctx.pending_cache_ops.append(allocator, .{ .evict = cache_key });
+        }
+    }
+
+    fn trackPkMutations(
+        ctx: *BatchCtx,
+        table_index: usize,
+        doc_id: typed_doc_id.DocId,
+        pk_insert: bool,
+        pk_delete: bool,
+        old_record: ?Record,
+    ) !void {
+        if (pk_insert and old_record == null) {
+            try ctx.pk_mutations.append(ctx.self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .insert });
+        }
+        if (pk_delete) {
+            try ctx.pk_mutations.append(ctx.self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .delete });
+        }
+    }
+
+    fn pushRowChange(
+        ctx: *BatchCtx,
+        namespace_id: i64,
+        table_index: usize,
+        doc_id: typed_doc_id.DocId,
+        old_record: ?Record,
+        new_record: ?Record,
+    ) !void {
+        const self = ctx.self;
+        if (self.change_queue != null) {
+            accumulateOwnedChange(
+                self.allocator,
+                self.batch_arena.allocator(),
+                ctx.pending_changes,
+                ctx.pending_change_index,
+                namespace_id,
+                table_index,
+                doc_id,
+                old_record,
+                new_record,
+            ) catch |err| {
+                const classified_err = errors.classifyError(err);
+                std.log.err("Failed to capture row change: {}", .{classified_err});
+                return classified_err;
+            };
+        } else {
+            if (old_record) |r| r.deinit(self.allocator);
+            if (new_record) |r| r.deinit(self.allocator);
         }
     }
 
@@ -713,52 +770,87 @@ pub const WriteWorker = struct {
         var queue_index: usize = 0;
         while (queue_index < queue.items.len) : (queue_index += 1) {
             const parent = queue.items[queue_index];
-            const parent_metadata = self.schema.tableByIndex(parent.table_index) orelse return StorageError.UnknownTable;
-
-            for (lookups) |lookup| {
-                if (lookup.parent_table_index != parent_metadata.index) continue;
-                const child_table = self.schema.tableByIndex(lookup.child_table_index) orelse return StorageError.UnknownTable;
-                const action = lookup.action;
-
-                var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, lookup.cache_key, lookup.sql);
-                defer mstmt.release();
-                const stmt = mstmt.stmt;
-                const parent_id_bytes = typed_doc_id.toBytes(parent.id);
-                if (sql.bindBlobTransient(stmt, 1, &parent_id_bytes) != sqlite.c.SQLITE_OK) {
-                    return errors.classifyStepError(&self.conn);
-                }
-
-                while (try sql.fetchRecord(self.allocator, &self.conn, stmt, child_table)) |record| {
-                    var keep_record = false;
-                    defer if (!keep_record) record.deinit(self.allocator);
-                    const identity = try recordIdentity(record);
-                    const key = ReferentialKey{ .table_index = child_table.index, .id = identity.id };
-
-                    if (affected_index.get(key)) |change_index| {
-                        if (change_index != std.math.maxInt(usize) and action == .delete) {
-                            changes.items[change_index].action = .delete;
-                        }
-                    } else {
-                        try changes.append(self.allocator, .{
-                            .table_index = child_table.index,
-                            .namespace_id = identity.namespace_id,
-                            .id = identity.id,
-                            .action = action,
-                            .old_record = record,
-                        });
-                        keep_record = true;
-                        try affected_index.put(key, changes.items.len - 1);
-                    }
-
-                    if (action == .delete and !cascade_seen.contains(key)) {
-                        try cascade_seen.put(key, {});
-                        try queue.append(self.allocator, key);
-                    }
-                }
-            }
+            try scanLookupRows(self, lookups, parent, &changes, &affected_index, &cascade_seen, &queue);
         }
 
         return changes;
+    }
+
+    fn scanLookupRows(
+        self: *WriteWorker,
+        lookups: []const ReferentialLookup,
+        parent: ReferentialKey,
+        changes: *std.ArrayListUnmanaged(ReferentialChange),
+        affected_index: *std.AutoHashMap(ReferentialKey, usize),
+        cascade_seen: *std.AutoHashMap(ReferentialKey, void),
+        queue: *std.ArrayListUnmanaged(ReferentialKey),
+    ) !void {
+        const parent_metadata = self.schema.tableByIndex(parent.table_index) orelse return StorageError.UnknownTable;
+
+        for (lookups) |lookup| {
+            if (lookup.parent_table_index != parent_metadata.index) continue;
+            const child_table = self.schema.tableByIndex(lookup.child_table_index) orelse return StorageError.UnknownTable;
+            const action = lookup.action;
+
+            var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, lookup.cache_key, lookup.sql);
+            defer mstmt.release();
+            const stmt = mstmt.stmt;
+            const parent_id_bytes = typed_doc_id.toBytes(parent.id);
+            if (sql.bindBlobTransient(stmt, 1, &parent_id_bytes) != sqlite.c.SQLITE_OK) {
+                return errors.classifyStepError(&self.conn);
+            }
+
+            try collectLookupRows(self, stmt, child_table, action, changes, affected_index, cascade_seen, queue);
+        }
+    }
+
+    fn collectLookupRows(
+        self: *WriteWorker,
+        stmt: *sqlite.c.sqlite3_stmt,
+        child_table: *const schema_types.Table,
+        action: ReferentialAction,
+        changes: *std.ArrayListUnmanaged(ReferentialChange),
+        affected_index: *std.AutoHashMap(ReferentialKey, usize),
+        cascade_seen: *std.AutoHashMap(ReferentialKey, void),
+        queue: *std.ArrayListUnmanaged(ReferentialKey),
+    ) !void {
+        while (try sql.fetchRecord(self.allocator, &self.conn, stmt, child_table)) |record| {
+            var keep_record = false;
+            defer if (!keep_record) record.deinit(self.allocator);
+            const identity = try recordIdentity(record);
+            const key = ReferentialKey{ .table_index = child_table.index, .id = identity.id };
+
+            if (affected_index.get(key)) |change_index| {
+                if (change_index != std.math.maxInt(usize) and action == .delete) {
+                    changes.items[change_index].action = .delete;
+                }
+            } else {
+                try changes.append(self.allocator, .{
+                    .table_index = child_table.index,
+                    .namespace_id = identity.namespace_id,
+                    .id = identity.id,
+                    .action = action,
+                    .old_record = record,
+                });
+                keep_record = true;
+                try affected_index.put(key, changes.items.len - 1);
+            }
+
+            try enqueueCascade(self.allocator, cascade_seen, queue, action, key);
+        }
+    }
+
+    fn enqueueCascade(
+        allocator: Allocator,
+        cascade_seen: *std.AutoHashMap(ReferentialKey, void),
+        queue: *std.ArrayListUnmanaged(ReferentialKey),
+        action: ReferentialAction,
+        key: ReferentialKey,
+    ) !void {
+        if (action == .delete and !cascade_seen.contains(key)) {
+            try cascade_seen.put(key, {});
+            try queue.append(allocator, key);
+        }
     }
 
     fn applyReferentialChanges(
@@ -1113,6 +1205,21 @@ pub const WriteWorker = struct {
         tx_started.* = false;
         self.bumpVersion();
 
+        try self.applyDocumentCache(pending_cache_ops);
+
+        for (pk_mutations.items) |mutation| {
+            if (mutation.table_index < self.pk_sets.len) {
+                switch (mutation.operation) {
+                    .insert => self.pk_sets[mutation.table_index].putAssumeCapacity(mutation.id, {}),
+                    .delete => _ = self.pk_sets[mutation.table_index].remove(mutation.id),
+                }
+            }
+        }
+
+        flushPendingChanges(self, pending_changes);
+    }
+
+    fn applyDocumentCache(self: *WriteWorker, pending_cache_ops: *std.ArrayListUnmanaged(CacheOp)) !void {
         var recovery_ok = true;
         if (!self.document_cache.readable.load(.acquire)) {
             self.document_cache.clear() catch |clear_err| {
@@ -1147,17 +1254,6 @@ pub const WriteWorker = struct {
                 };
             }
         }
-
-        for (pk_mutations.items) |mutation| {
-            if (mutation.table_index < self.pk_sets.len) {
-                switch (mutation.operation) {
-                    .insert => self.pk_sets[mutation.table_index].putAssumeCapacity(mutation.id, {}),
-                    .delete => _ = self.pk_sets[mutation.table_index].remove(mutation.id),
-                }
-            }
-        }
-
-        flushPendingChanges(self, pending_changes);
     }
 
     fn executeResolveSessionOp(self: *WriteWorker, sop: anytype) void {
