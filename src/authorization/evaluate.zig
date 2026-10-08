@@ -174,26 +174,26 @@ pub fn authorizeNamespace(
 fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, strict: bool) EvalResult {
     switch (condition) {
         .boolean => |b| return if (b) .allow else .deny,
-        .logical_and => |conds| {
-            var has_injection = false;
-            for (conds) |cond| {
-                const result = evaluateConditionInternal(cond, ctx, strict);
-                if (result == .deny) return .deny;
-                if (result == .needs_doc_predicate) has_injection = true;
-            }
-            return if (has_injection and !strict) .needs_doc_predicate else .allow;
-        },
-        .logical_or => |conds| {
-            var has_injection = false;
-            for (conds) |cond| {
-                const result = evaluateConditionInternal(cond, ctx, strict);
-                if (result == .allow) return .allow;
-                if (result == .needs_doc_predicate) has_injection = true;
-            }
-            return if (has_injection and !strict) .needs_doc_predicate else .deny;
-        },
+        .logical_and => |conds| return evaluateLogical(conds, .deny, .allow, ctx, strict),
+        .logical_or => |conds| return evaluateLogical(conds, .allow, .deny, ctx, strict),
         .comparison => |comp| return evaluateComparison(comp, ctx, strict),
     }
+}
+
+fn evaluateLogical(
+    conds: []const types.Condition,
+    short_circuit: EvalResult,
+    default_verdict: EvalResult,
+    ctx: EvalContext,
+    strict: bool,
+) EvalResult {
+    var has_injection = false;
+    for (conds) |cond| {
+        const result = evaluateConditionInternal(cond, ctx, strict);
+        if (result == short_circuit) return short_circuit;
+        if (result == .needs_doc_predicate) has_injection = true;
+    }
+    return if (has_injection and !strict) .needs_doc_predicate else default_verdict;
 }
 
 fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) EvalResult {
@@ -218,24 +218,7 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
 
 fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (var_ctx.scope) {
-        .session => {
-            if (session_field_map.get(var_ctx.field)) |sf| switch (sf) {
-                .userId => return if (ctx.session_user_id) |id|
-                    .{ .borrowed = .{ .scalar = .{ .doc_id = id } } }
-                else
-                    null,
-                .externalId => return if (ctx.session_external_id) |id|
-                    .{ .borrowed = .{ .scalar = .{ .text = id } } }
-                else
-                    null,
-            };
-            if (ctx.session_claims) |claims| {
-                if (claims.get(var_ctx.field)) |value| {
-                    return .{ .borrowed = value };
-                }
-            }
-            return null;
-        },
+        .session => resolveSessionVar(var_ctx, ctx),
         .namespace => if (ctx.namespace_captures) |captures| blk: {
             const val = captures.get(var_ctx.field) orelse break :blk null;
             break :blk .{ .borrowed = .{ .scalar = .{ .text = val } } };
@@ -247,6 +230,25 @@ fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthV
         .value => resolveIncomingValueField(var_ctx.field, ctx),
         .doc => null,
     };
+}
+
+fn resolveSessionVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
+    if (session_field_map.get(var_ctx.field)) |sf| switch (sf) {
+        .userId => return if (ctx.session_user_id) |id|
+            .{ .borrowed = .{ .scalar = .{ .doc_id = id } } }
+        else
+            null,
+        .externalId => return if (ctx.session_external_id) |id|
+            .{ .borrowed = .{ .scalar = .{ .text = id } } }
+        else
+            null,
+    };
+    if (ctx.session_claims) |claims| {
+        if (claims.get(var_ctx.field)) |value| {
+            return .{ .borrowed = value };
+        }
+    }
+    return null;
 }
 
 pub fn resolveOperand(value: types.Operand, ctx: EvalContext) ?ResolvedAuthValue {

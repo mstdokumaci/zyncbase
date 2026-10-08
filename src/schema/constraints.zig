@@ -45,14 +45,21 @@ pub fn validateEmail(str: []const u8) bool {
 
     const local = str[0..at_idx];
     const domain = str[at_idx + 1 ..];
+    return validateEmailLocal(local) and validateEmailDomain(domain);
+}
 
+fn validateEmailLocal(local: []const u8) bool {
     if (local.len == 0 or local.len > 64) return false;
-    if (domain.len == 0 or domain.len > 253) return false;
 
     // Check local part: no spaces or control chars
     for (local) |ch| {
         if (ch <= 32 or ch >= 127) return false;
     }
+    return true;
+}
+
+fn validateEmailDomain(domain: []const u8) bool {
+    if (domain.len == 0 or domain.len > 253) return false;
 
     // Domain part: must have at least one dot, no leading/trailing dot, no consecutive dots
     if (domain[0] == '.' or domain[domain.len - 1] == '.') return false;
@@ -213,37 +220,49 @@ fn validateEnum(enums: []const types.Constraints.EnumValue, ft: types.FieldType,
     switch (ft) {
         .text => {
             if (value != .str) return error.TypeMismatch;
-            const str = value.str.value();
-            for (enums) |e| {
-                switch (e) {
-                    .text => |t| if (std.mem.eql(u8, t, str)) return,
-                    else => {},
-                }
-            }
-            return error.EnumViolation;
+            if (!matchTextEnum(enums, value.str.value())) return error.EnumViolation;
         },
         .integer => {
             const iv = msgpack.payloadToInt(value) catch return error.TypeMismatch;
-            for (enums) |e| {
-                switch (e) {
-                    .integer => |expected| if (expected == iv) return,
-                    .real => |expected| if (@as(f64, @floatFromInt(iv)) == expected) return,
-                    else => {},
-                }
-            }
-            return error.EnumViolation;
+            if (!matchIntEnum(enums, iv)) return error.EnumViolation;
         },
         .real => {
             const fv = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
-            for (enums) |e| {
-                switch (e) {
-                    .real => |expected| if (expected == fv) return,
-                    .integer => |expected| if (@as(f64, @floatFromInt(expected)) == fv) return,
-                    else => {},
-                }
-            }
-            return error.EnumViolation;
+            if (!matchRealEnum(enums, fv)) return error.EnumViolation;
         },
         else => return error.EnumViolation,
     }
+}
+
+fn matchTextEnum(enums: []const types.Constraints.EnumValue, str: []const u8) bool {
+    for (enums) |e| {
+        switch (e) {
+            .text => |t| if (std.mem.eql(u8, t, str)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn matchIntEnum(enums: []const types.Constraints.EnumValue, iv: i64) bool {
+    for (enums) |e| {
+        switch (e) {
+            .integer => |expected| if (expected == iv) return true,
+            // integer compared exactly first; f64 only as cross-type fallback
+            .real => |expected| if (@as(f64, @floatFromInt(iv)) == expected) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn matchRealEnum(enums: []const types.Constraints.EnumValue, fv: f64) bool {
+    for (enums) |e| {
+        switch (e) {
+            .real => |expected| if (expected == fv) return true,
+            .integer => |expected| if (@as(f64, @floatFromInt(expected)) == fv) return true,
+            else => {},
+        }
+    }
+    return false;
 }

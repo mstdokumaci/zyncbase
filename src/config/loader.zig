@@ -140,20 +140,23 @@ pub const ConfigLoader = struct {
             config.server.idle_timeout_seconds = @intCast(idle_timeout_seconds);
         }
         try json_read.replaceString(allocator, &config.server.host, server_obj, "host");
+        try parseTls(allocator, config, server_obj);
+    }
+
+    fn parseTls(allocator: Allocator, config: *Config, server_obj: std.json.ObjectMap) !void {
         if (server_obj.get("tls")) |v| {
             if (v == .null) return error.TypeMismatch;
         }
-        if (try json_read.getObject(server_obj, "tls")) |tls| {
-            try json_read.setString(allocator, &config.server.tls_cert_file, tls, "certFile");
-            try json_read.setString(allocator, &config.server.tls_key_file, tls, "keyFile");
-            const cert = config.server.tls_cert_file orelse return error.InvalidTlsConfig;
-            const key = config.server.tls_key_file orelse return error.InvalidTlsConfig;
-            if (cert.len == 0 or key.len == 0 or
-                std.mem.indexOfScalar(u8, cert, 0) != null or
-                std.mem.indexOfScalar(u8, key, 0) != null)
-            {
-                return error.InvalidTlsConfig;
-            }
+        const tls = (try json_read.getObject(server_obj, "tls")) orelse return;
+        try json_read.setString(allocator, &config.server.tls_cert_file, tls, "certFile");
+        try json_read.setString(allocator, &config.server.tls_key_file, tls, "keyFile");
+        const cert = config.server.tls_cert_file orelse return error.InvalidTlsConfig;
+        const key = config.server.tls_key_file orelse return error.InvalidTlsConfig;
+        if (cert.len == 0 or key.len == 0 or
+            std.mem.indexOfScalar(u8, cert, 0) != null or
+            std.mem.indexOfScalar(u8, key, 0) != null)
+        {
+            return error.InvalidTlsConfig;
         }
     }
 
