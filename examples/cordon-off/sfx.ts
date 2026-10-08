@@ -47,7 +47,7 @@ export function unlockAudio() {
 }
 
 for (const event of ["pointerdown", "keydown"] as const)
-	addEventListener(event, unlockAudio, { capture: true, once: true });
+	addEventListener(event, unlockAudio, { capture: true });
 
 export function toggleMute() {
 	muted = !muted;
