@@ -646,6 +646,13 @@ kbd {
 	}
 	.joystick {
 		bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+		right: max(26px, env(safe-area-inset-right, 0px));
+	}
+}
+@media (orientation: landscape) and (pointer: coarse) {
+	.panel {
+		left: max(12px, env(safe-area-inset-left, 0px));
+		right: auto;
 	}
 }
 
