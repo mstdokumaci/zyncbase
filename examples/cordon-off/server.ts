@@ -891,7 +891,14 @@ try {
 		playerSessions.set(ctx.userId, sessionId);
 		if (presentUsers.has(ctx.userId)) activateSession(lease);
 		else scheduleSessionExpiry(sessionId, lease);
-		return { user_id: ctx.userId, slot: player.slot };
+		// The spawned cell rides the reply: the roster row flush is throttled,
+		// so a client that reads it back immediately may still see no row.
+		return {
+			user_id: ctx.userId,
+			slot: player.slot,
+			x: player.x,
+			y: player.y,
+		};
 	});
 	await client.actions.handle("player_move", (ctx, params) => {
 		if (stopping || ending) return;

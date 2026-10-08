@@ -122,6 +122,9 @@ let myPlayerId = "",
 	mySlot = 0,
 	nickname = "",
 	seq = 0;
+// Spawn cell from the join reply. The roster row flush is throttled, so the
+// initial camera must not wait on a locate() read.
+let admittedPosition: { x: number; y: number } | undefined;
 let direction: Direction = "idle";
 // Heading used to choose the prefetch edge. Kept after release so stopping
 // does not drop the leading margin and churn subscriptions on the next move.
@@ -812,12 +815,21 @@ async function joinWorld() {
 		name: nickname,
 		country_id: selectedCountryId,
 		session_id: sessionId,
-	})) as { user_id?: unknown; slot?: unknown };
+	})) as {
+		user_id?: unknown;
+		slot?: unknown;
+		x?: unknown;
+		y?: unknown;
+	};
 	if (typeof result.user_id !== "string" || !result.user_id)
 		throw new Error("Join returned no player identity");
 	await client.presence.set({});
 	myPlayerId = result.user_id;
 	mySlot = Number.isSafeInteger(result.slot) ? (result.slot as number) : 0;
+	admittedPosition =
+		Number.isSafeInteger(result.x) && Number.isSafeInteger(result.y)
+			? { x: result.x as number, y: result.y as number }
+			: undefined;
 	joined = true;
 	joinedAt = performance.now();
 	lastOwnDot = 0;
@@ -1472,7 +1484,9 @@ async function enterGame(next: ZyncBaseClient) {
 	startMusic();
 	if (!(await subscribeColdStores(next))) return;
 	motion = undefined;
-	camera = { ...INITIAL_CAMERA };
+	camera = admittedPosition
+		? { x: admittedPosition.x + 0.5, y: admittedPosition.y + 0.5 }
+		: { ...INITIAL_CAMERA };
 	release();
 	updateSubscriptions();
 	dirty = true;

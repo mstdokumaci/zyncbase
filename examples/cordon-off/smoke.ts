@@ -571,9 +571,11 @@ async function joinPlayer(
 				name,
 				country_id: countryId,
 				session_id: sessionId,
-			})) as { user_id?: string; slot?: number };
+			})) as { user_id?: string; slot?: number; x?: number; y?: number };
 			assert.equal(typeof result.user_id, "string");
 			assert.equal(typeof result.slot, "number");
+			assert.equal(typeof result.x, "number");
+			assert.equal(typeof result.y, "number");
 			await client.presence.set({});
 			const localUserId = client.presence.localUserId;
 			if (!localUserId) throw new Error("Presence scope has no user id");
@@ -587,7 +589,12 @@ async function joinPlayer(
 			} finally {
 				await unsubscribe();
 			}
-			return { id: result.user_id as string, slot: result.slot as number };
+			return {
+				id: result.user_id as string,
+				slot: result.slot as number,
+				x: result.x as number,
+				y: result.y as number,
+			};
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
 			await Bun.sleep(50);
@@ -686,7 +693,12 @@ try {
 		subscribed.clear();
 		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
 	});
-	const { id: aliceId, slot: aliceSlot } = await joinPlayer(
+	const {
+		id: aliceId,
+		slot: aliceSlot,
+		x: aliceX,
+		y: aliceY,
+	} = await joinPlayer(
 		alice.client,
 		alice.countryId,
 		"Ａlice",
@@ -722,6 +734,8 @@ try {
 		async () => dot(),
 		"join action creates a subscribed dot",
 	);
+	// The join reply names the spawn cell the client anchors its camera on.
+	assert.deepEqual([aliceX, aliceY], [first.x, first.y]);
 	const aliceRow = await eventually(async () => {
 		const row = (await rosterOf(bob.client)).get(aliceId);
 		return row?.name === "Alice" ? row : undefined;
