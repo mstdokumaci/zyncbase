@@ -719,6 +719,83 @@ function maybeUpdateSubscriptions() {
 	updateSubscriptions();
 }
 
+// Keyed scoreboard rows: roster flushes arrive several times a second, so a
+// full repaint churned DOM and layout on every publish and dropped scroll and
+// hover state. Reuse each <li> and touch only values that changed.
+type ScoreboardRow = {
+	li: HTMLLIElement;
+	swatch: HTMLSpanElement;
+	name: HTMLSpanElement;
+	players: HTMLSpanElement;
+	score: HTMLSpanElement;
+	rendered: {
+		name: string;
+		players: number;
+		score: number;
+		color: string;
+		local: boolean;
+	};
+};
+const scoreboardRows = new Map<number, ScoreboardRow>();
+
+function createScoreboardRow(): ScoreboardRow {
+	const li = document.createElement("li");
+	const swatch = document.createElement("span");
+	swatch.className = "swatch";
+	const name = document.createElement("span");
+	name.className = "name";
+	const players = document.createElement("span");
+	players.className = "players";
+	players.title = "Players";
+	const score = document.createElement("span");
+	score.className = "score";
+	li.append(swatch, name, players, score);
+	return {
+		li,
+		swatch,
+		name,
+		players,
+		score,
+		rendered: { name: "", players: -1, score: -1, color: "", local: false },
+	};
+}
+
+function updateScoreboardRow(
+	row: ScoreboardRow,
+	country: Country,
+	members: number,
+	local: boolean,
+) {
+	const { rendered } = row;
+	if (rendered.name !== country.name) {
+		row.name.textContent = country.name;
+		rendered.name = country.name;
+	}
+	if (rendered.players !== members) {
+		row.players.textContent = String(members);
+		rendered.players = members;
+	}
+	if (rendered.score !== country.count) {
+		row.score.textContent = country.count.toLocaleString();
+		rendered.score = country.count;
+	}
+	if (rendered.color !== country.color) {
+		row.swatch.style.background = country.color;
+		rendered.color = country.color;
+	}
+	if (rendered.local !== local) {
+		row.li.classList.toggle("local", local);
+		rendered.local = local;
+	}
+}
+
+function placeScoreboardRow(row: ScoreboardRow, index: number) {
+	// CSS rank counters follow sibling order; move only when the slot already
+	// holds another row so unchanged lists stay mutation-free.
+	if (countriesList.children[index] !== row.li)
+		countriesList.insertBefore(row.li, countriesList.children[index] ?? null);
+}
+
 function scoreboard(rows: Country[]) {
 	// roster rows include reconnect-grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
@@ -733,31 +810,33 @@ function scoreboard(rows: Country[]) {
 		rows.some((row) => countries.get(row.country_id)?.color !== row.color);
 	countries.clear();
 	for (const row of rows) countries.set(row.country_id, row);
-	countryCount.textContent = String(rows.length);
+	const countLabel = String(rows.length);
+	if (countryCount.textContent !== countLabel)
+		countryCount.textContent = countLabel;
 	const mine = myCountryId();
-	countriesList.replaceChildren(
-		...[...rows]
-			.sort((a, b) => b.count - a.count)
-			.map((country) => {
-				const li = document.createElement("li");
-				li.classList.toggle("local", country.country_id === mine);
-				const swatch = document.createElement("span");
-				swatch.className = "swatch";
-				swatch.style.background = country.color;
-				const label = document.createElement("span");
-				label.className = "name";
-				label.textContent = country.name;
-				const members = document.createElement("span");
-				members.className = "players";
-				members.title = "Players";
-				members.textContent = String(headcount.get(country.country_id) ?? 0);
-				const score = document.createElement("span");
-				score.className = "score";
-				score.textContent = country.count.toLocaleString();
-				li.append(swatch, label, members, score);
-				return li;
-			}),
-	);
+	const seen = new Set<number>();
+	[...rows]
+		.sort((a, b) => b.count - a.count)
+		.forEach((country, index) => {
+			let row = scoreboardRows.get(country.country_id);
+			if (!row) {
+				row = createScoreboardRow();
+				scoreboardRows.set(country.country_id, row);
+			}
+			updateScoreboardRow(
+				row,
+				country,
+				headcount.get(country.country_id) ?? 0,
+				country.country_id === mine,
+			);
+			placeScoreboardRow(row, index);
+			seen.add(country.country_id);
+		});
+	for (const [countryId, row] of scoreboardRows) {
+		if (seen.has(countryId)) continue;
+		row.li.remove();
+		scoreboardRows.delete(countryId);
+	}
 	// The motion's color joins the roster later than its first dot, so refresh
 	// it here without treating the change as a relocation.
 	refreshMotionColor();
