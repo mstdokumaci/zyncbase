@@ -107,6 +107,7 @@ type Tone = {
 	endFrequency?: number;
 	type?: OscillatorType;
 	volume?: number;
+	attack?: number;
 };
 
 /** Schedule one enveloped oscillator; a no-op when audio is unavailable. */
@@ -127,7 +128,10 @@ export function scheduleTone(target: GainNode, tone: Tone) {
 			at + duration,
 		);
 	gain.gain.setValueAtTime(0, at);
-	gain.gain.linearRampToValueAtTime(tone.volume ?? 0.4, at + 0.008);
+	gain.gain.linearRampToValueAtTime(
+		tone.volume ?? 0.4,
+		at + (tone.attack ?? 0.008),
+	);
 	gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
 	oscillator.connect(gain);
 	gain.connect(target);
