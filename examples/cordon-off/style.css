@@ -672,6 +672,12 @@ kbd {
 	.zoom-hint {
 		display: none;
 	}
+	/* 16px stops iOS Safari auto-zoom on focus, which leaves the layout
+	   viewport wider than the screen and pushes right-anchored HUD off it. */
+	input,
+	select {
+		font-size: 16px;
+	}
 	.joystick {
 		bottom: calc(20px + env(safe-area-inset-bottom, 0px));
 		right: max(26px, env(safe-area-inset-right, 0px));
