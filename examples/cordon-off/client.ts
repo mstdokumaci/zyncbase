@@ -13,7 +13,7 @@ import {
 	LocalMotion,
 	type MotionDot,
 } from "./motion";
-import { setMood, startMusic, stopMusic } from "./music";
+import { setMood, setMusicTempo, startMusic, stopMusic } from "./music";
 import { sfx } from "./sfx";
 import {
 	COUNTRY_CHUNK_HEIGHT,
@@ -523,6 +523,7 @@ function ownerAt(x: number, y: number) {
 // time a step confirms.
 function updateMood() {
 	if (phase !== "playing" || !online || !motion) return;
+	setMusicTempo(motion.stepDuration());
 	const [dx, dy] = steps[direction];
 	const y = motion.dot.y + dy;
 	if (y < 0 || y >= HEIGHT) {

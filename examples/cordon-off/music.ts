@@ -2,14 +2,18 @@
 // own clocks into crossfaded gains. Calm plays on own/neutral/water cells, the
 // tense pattern on another country's land. Switching is a gain ramp, not a
 // restart, so the loop stays continuous; the mood must hold before it fades.
+// Tempo tracks the dot's movement speed: slow at a standstill, quick on fast
+// terrain.
 
 import { audio, masterChannel, scheduleTone } from "./sfx";
+import { RULES } from "./shared";
 
 export type Mood = "calm" | "hostile";
 
 type Track = {
 	mood: Mood;
 	notes: (number | null)[];
+	baseStep: number;
 	step: number;
 	type: OscillatorType;
 	volume: number;
@@ -59,8 +63,14 @@ const HOSTILE_NOTES = [
 
 const TICK_MS = 120;
 const LOOKAHEAD_S = 0.5;
-const DEBOUNCE_MS = 500;
-const FADE_S = 1.5;
+const DEBOUNCE_MS = 200;
+const FADE_S = 0.6;
+
+// The loop tempo follows the dot's step time: a slower pace at a standstill,
+// quickening with movement until the fastest step (home land) is reached.
+const FASTEST_STEP_MS = RULES.own * RULES.tickMs;
+const IDLE_SCALE = 1.5;
+const FAST_SCALE = 0.8;
 
 let tracks: Track[] | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -87,6 +97,7 @@ function ensureTracks(): Track[] | undefined {
 		return {
 			mood,
 			notes,
+			baseStep: step,
 			step,
 			type,
 			volume,
@@ -118,6 +129,15 @@ function rampTracks(seconds: number, target: (track: Track) => number) {
 function fadeTo(next: Mood) {
 	current = next;
 	rampTracks(FADE_S, (track) => (track.mood === next ? track.target : 0));
+}
+
+/** Match the loop tempo to the dot's current step time; Infinity is idle. */
+export function setMusicTempo(stepMs: number) {
+	const speed = Number.isFinite(stepMs)
+		? Math.min(1, FASTEST_STEP_MS / stepMs)
+		: 0;
+	const scale = IDLE_SCALE + (FAST_SCALE - IDLE_SCALE) * speed;
+	for (const track of tracks ?? []) track.step = track.baseStep * scale;
 }
 
 function scheduleTrack(track: Track, now: number, horizon: number) {
@@ -156,6 +176,7 @@ export function startMusic() {
 	timer = setInterval(tick, TICK_MS);
 	const list = ensureTracks();
 	if (list) for (const track of list) track.nextAt = 0;
+	setMusicTempo(Number.POSITIVE_INFINITY);
 	rampTracks(0.5, (track) => (track.mood === current ? track.target : 0));
 	tick();
 }
