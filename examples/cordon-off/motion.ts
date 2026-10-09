@@ -161,7 +161,7 @@ export class LocalMotion {
 		};
 	}
 
-	private stepDuration() {
+	stepDuration() {
 		if (this.direction === "idle") return Number.POSITIVE_INFINITY;
 		const [dx, dy] = steps[this.direction];
 		const y = this.dot.y + dy;
