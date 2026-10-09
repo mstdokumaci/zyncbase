@@ -519,6 +519,70 @@ test "checkpoint: escalation logic - frame-based decision" {
     }));
 }
 
+test "checkpoint: truncate completion needs both busy=0 and no frames left" {
+    // busy=1 with 0/0 frames is the ckpt-lock race: SQLite never wrote log/ckpt
+    // (they come back as -1 and get clamped to 0), so the frame comparison
+    // alone reads 0 < 0 and would call a skipped checkpoint clean.
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 0,
+        .frames_in_wal = 0,
+        .busy = true,
+        .success = true,
+    }));
+    // busy=0 with frames outstanding is the writer-lock downgrade: SQLite
+    // silently falls back to a passive checkpoint.
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = true,
+    }));
+    // A truncate that both ran clean and backfilled everything is complete.
+    try testing.expect(CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 0,
+        .frames_checkpointed = 10,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 10,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = false,
+    }));
+}
+
+test "CheckpointWorker: performCheckpoint - reports SQLite busy status" {
+    const allocator = std.heap.smp_allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{});
+    defer ctx.deinit();
+
+    // An uncontended in-memory checkpoint reports busy=0, which is what makes
+    // truncateCompleted meaningful downstream.
+    const result = try ctx.manager.performCheckpoint(.truncate);
+    try testing.expect(result.success);
+    try testing.expect(!result.busy);
+    try testing.expect(CheckpointWorker.truncateCompleted(result));
+}
+
 test "checkpoint: empty passive checkpoint does not escalate" {
     const allocator = std.heap.smp_allocator;
 

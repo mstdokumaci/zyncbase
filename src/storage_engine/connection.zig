@@ -125,6 +125,7 @@ pub fn internalExecuteCheckpoint(io: std.Io, conn: *sqlite.Db, allocator: Alloca
     const start_time = std.Io.Clock.real.now(io).toMilliseconds();
     const wal_size_before = try getWalSize(io, allocator, db_path, in_memory);
 
+    var busy = false;
     var frames_checkpointed: usize = 0;
     var frames_in_wal: usize = 0;
 
@@ -141,6 +142,7 @@ pub fn internalExecuteCheckpoint(io: std.Io, conn: *sqlite.Db, allocator: Alloca
     };
 
     if (result) |res| {
+        busy = res.busy != 0;
         // SQLite may return negative values in edge conditions (e.g. no WAL pages).
         // Clamp to zero to keep stats unsigned and avoid cast panics.
         frames_checkpointed = if (res.checkpointed > 0) @intCast(res.checkpointed) else 0;
@@ -162,6 +164,7 @@ pub fn internalExecuteCheckpoint(io: std.Io, conn: *sqlite.Db, allocator: Alloca
     return CheckpointStats{
         .mode = mode,
         .duration_ms = duration,
+        .busy = busy,
         .frames_checkpointed = frames_checkpointed,
         .frames_in_wal = frames_in_wal,
         .wal_size_before = wal_size_before,

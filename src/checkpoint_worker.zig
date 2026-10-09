@@ -46,6 +46,9 @@ pub const CheckpointWorker = struct {
         wal_size_after: usize,
         frames_checkpointed: usize = 0,
         frames_in_wal: usize = 0,
+        /// SQLite could not complete the checkpoint as requested. See
+        /// CheckpointStats.busy.
+        busy: bool = false,
         success: bool,
     };
 
@@ -57,6 +60,19 @@ pub const CheckpointWorker = struct {
         return result.success and
             result.mode == .passive and
             result.frames_checkpointed < result.frames_in_wal;
+    }
+
+    /// A truncate checkpoint only zeroes the WAL when SQLite both ran it to
+    /// completion and left nothing behind. Both halves are needed:
+    /// `busy` catches the ckpt-lock race, where SQLite reports log/ckpt as -1
+    /// (clamped to 0 above), so the frame comparison alone reads 0 < 0 and
+    /// calls a skipped checkpoint clean. The frame comparison catches the
+    /// writer-lock downgrade, where SQLite silently falls back to a passive
+    /// checkpoint and reports `busy = 0` with frames outstanding.
+    pub fn truncateCompleted(result: CheckpointResult) bool {
+        return result.success and
+            !result.busy and
+            result.frames_checkpointed >= result.frames_in_wal;
     }
 
     /// Metrics for Prometheus export
@@ -185,9 +201,10 @@ pub const CheckpointWorker = struct {
         // cached atomic can be stale while a checkpoint runs.
         self.wal_size.store(stats.wal_size_after, .release);
 
-        std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
+        std.log.info("Checkpoint completed: mode={s}, duration={}ms, busy={}, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
             @tagName(mode),
             duration,
+            stats.busy,
             stats.frames_checkpointed,
             stats.frames_in_wal,
             stats.wal_size_before,
@@ -201,6 +218,7 @@ pub const CheckpointWorker = struct {
             .wal_size_after = stats.wal_size_after,
             .frames_checkpointed = stats.frames_checkpointed,
             .frames_in_wal = stats.frames_in_wal,
+            .busy = stats.busy,
             .success = true,
         };
     }
@@ -240,9 +258,10 @@ pub const CheckpointWorker = struct {
                     .success = false,
                 };
             };
-            if (result.success and result.frames_checkpointed < result.frames_in_wal) {
-                std.log.warn("Truncate checkpoint still left {}/{} WAL frames uncheckpointed; a reader is pinning the WAL", .{
-                    result.frames_in_wal - result.frames_checkpointed,
+            if (!truncateCompleted(result)) {
+                std.log.warn("Truncate checkpoint incomplete (busy={}): {}/{} WAL frames backfilled; WAL not reset", .{
+                    result.busy,
+                    result.frames_checkpointed,
                     result.frames_in_wal,
                 });
             }

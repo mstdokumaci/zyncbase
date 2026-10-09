@@ -23,6 +23,11 @@ pub const CheckpointMode = enum {
 pub const CheckpointStats = struct {
     mode: CheckpointMode,
     duration_ms: u64,
+    /// SQLite reported that it could not complete the checkpoint as requested:
+    /// a concurrent checkpoint held the lock, or a reader/writer prevented the
+    /// blocking step. Frame counts alone do not reveal this, because SQLite
+    /// reports log/ckpt as -1 when the lock is taken away before they are set.
+    busy: bool,
     frames_checkpointed: usize,
     frames_in_wal: usize,
     wal_size_before: usize,
