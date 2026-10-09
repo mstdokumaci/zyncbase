@@ -194,6 +194,10 @@ pub const CheckpointWorker = struct {
         const duration = elapsedMilliseconds(start_time, end_time);
 
         self.last_checkpoint.store(std.Io.Clock.real.now(self.io).toSeconds(), .release);
+        // this counts checkpoints that ran, not checkpoints that did
+        // useful work — a no-op passive and a truncate abandoned by the retry
+        // wrapper both count here. Move the increment to the completion gate in
+        // performCheckpointWithRetry if checkpoint_total needs to mean "done".
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);
         self.last_checkpoint_duration_ms.store(duration, .release);
 
@@ -246,6 +250,8 @@ pub const CheckpointWorker = struct {
         if (shouldEscalateFromPassive(result)) {
             const remaining = result.frames_in_wal - result.frames_checkpointed;
             std.log.warn("Passive checkpoint left {}/{} WAL frames uncheckpointed, escalating to truncate", .{ remaining, result.frames_in_wal });
+            // An incomplete truncate never reaches here: performCheckpointWithRetry
+            // only returns a truncate result that passes truncateCompleted.
             result = self.performCheckpointWithRetry(.truncate, self.config.max_attempts) catch |err| {
                 if (err != error.CheckpointFailed) return err;
                 return CheckpointResult{
@@ -258,13 +264,6 @@ pub const CheckpointWorker = struct {
                     .success = false,
                 };
             };
-            if (!truncateCompleted(result)) {
-                std.log.warn("Truncate checkpoint incomplete (busy={}): {}/{} WAL frames backfilled; WAL not reset", .{
-                    result.busy,
-                    result.frames_checkpointed,
-                    result.frames_in_wal,
-                });
-            }
         }
 
         return result;
@@ -279,7 +278,14 @@ pub const CheckpointWorker = struct {
         while (attempt < attempts) : (attempt += 1) {
             const result = try self.performCheckpoint(mode);
 
-            if (result.success) {
+            // A truncate that could not reset the WAL has not done its job even
+            // though the pragma ran without throwing, so it must not count as a
+            // completed attempt — a reader pinning the WAL is usually a
+            // millisecond-scale conflict, not a permanent one. Passive, full and
+            // restart backfill frames without promising to reset the file, so
+            // `success` stays the sole gate for them.
+            const completed = result.success and (mode != .truncate or truncateCompleted(result));
+            if (completed) {
                 if (attempt > 0) {
                     std.log.info("Checkpoint succeeded after {} retries", .{attempt});
                 }
@@ -288,7 +294,14 @@ pub const CheckpointWorker = struct {
 
             // Exponential backoff
             if (attempt < attempts - 1) {
-                std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, attempt + 1, attempts });
+                std.log.warn("Checkpoint did not complete (busy={}, frames {}/{} backfilled), retrying in {}ms (attempt {}/{})", .{
+                    result.busy,
+                    result.frames_checkpointed,
+                    result.frames_in_wal,
+                    backoff_ms,
+                    attempt + 1,
+                    attempts,
+                });
                 try self.io.sleep(.fromMilliseconds(@intCast(backoff_ms)), .awake);
                 backoff_ms *= 2; // Double the backoff time
             }

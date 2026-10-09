@@ -583,6 +583,35 @@ test "CheckpointWorker: performCheckpoint - reports SQLite busy status" {
     try testing.expect(CheckpointWorker.truncateCompleted(result));
 }
 
+test "checkpoint: retry wrapper does not retry a completed truncate" {
+    // An uncontended truncate completes on the first attempt, so the backoff
+    // path must stay cold. An inverted completion gate here would spin the
+    // whole max_attempts budget before returning.
+    const SleepCounter = struct {
+        calls: usize = 0,
+
+        fn sleep(ctx: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.calls += 1;
+        }
+    };
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(std.heap.smp_allocator, .{});
+    defer ctx.deinit();
+
+    var counter: SleepCounter = .{};
+    var io_vtable = testing.io.vtable.*;
+    io_vtable.sleep = SleepCounter.sleep;
+    ctx.manager.io = .{ .userdata = &counter, .vtable = &io_vtable };
+
+    const result = try ctx.manager.performCheckpointWithRetry(.truncate, 3);
+
+    try testing.expect(result.success);
+    try testing.expect(!result.busy);
+    try testing.expectEqual(@as(usize, 0), counter.calls);
+}
+
 test "checkpoint: empty passive checkpoint does not escalate" {
     const allocator = std.heap.smp_allocator;
 
