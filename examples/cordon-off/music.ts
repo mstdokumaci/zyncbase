@@ -108,8 +108,8 @@ function ensureTracks(): Track[] | undefined {
 		};
 	};
 	tracks = [
-		make("calm", CALM_NOTES, 0.32, "triangle", 0.35, 0.4),
-		make("hostile", HOSTILE_NOTES, 0.25, "square", 0.28, 0.34),
+		make("calm", CALM_NOTES, 0.32, "triangle", 0.35, 0.55),
+		make("hostile", HOSTILE_NOTES, 0.25, "square", 0.28, 0.45),
 	];
 	return tracks;
 }
