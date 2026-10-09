@@ -527,7 +527,8 @@ function allocatorOp(): BatchOperation[] {
  * writes never reference a row that has not landed yet. */
 function shouldPublishRosters(force: boolean) {
 	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
-	// Captures bypass the throttle: their sound cues read the roster rows.
+	// Human-visible captures bypass the throttle: their sound cues read the
+	// roster rows. Bot-only fills ride the normal cadence.
 	if (world.capturesPending) return true;
 	for (const countryId of world.dirtyCountries)
 		if (!persistedCountries.has(countryId)) return true;

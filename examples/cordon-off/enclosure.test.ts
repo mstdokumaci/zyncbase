@@ -350,6 +350,54 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	]);
 });
 
+// A roster flush skips the 500 ms publish throttle only for cues a human can
+// hear: a human's own capture, or land lost by a country humans can be in.
+// Bot-only fills must ride the throttle or every client's scoreboard rebuilds
+// on every fill tick.
+test.each([
+	["human capture over neutral land", false, "human", "none", true],
+	["human capture over bot land", false, "human", "bot", true],
+	["bot capture over neutral land", true, "bot", "none", false],
+	["bot capture over bot land", true, "bot", "bot", false],
+	["bot capture over human land", true, "bot", "human", true],
+] as const)("roster flush forced for %s", (_name, capturerBot, winningKind, previousKind, expected) => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const humans = world.country("Humans");
+	const bots = world.country("Bots", true);
+	if (!humans || !bots) throw new Error("Missing countries");
+	world.input(
+		"capturer",
+		{
+			name: "Capturer",
+			country_id: humans.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	const capturer = world.players.get("capturer");
+	if (!capturer) throw new Error("Missing capturer");
+	capturer.is_bot = capturerBot;
+	const ids = { human: humans.country_id, bot: bots.country_id };
+	const previous = previousKind === "none" ? 0 : ids[previousKind];
+	if (previous) {
+		const loser = world.countries.get(previous);
+		if (!loser) throw new Error("Missing losing country");
+		loser.count = 5;
+	}
+	const cell = 10 * WIDTH + 10;
+	world.owners[cell] = previous;
+	world.capturesPending = false;
+	Reflect.get(world, "claim").call(
+		world,
+		cell,
+		ids[winningKind],
+		true,
+		"capturer",
+	);
+	expect(world.capturesPending).toBe(expected);
+});
+
 test("closing a loop at the world edge resolves locally without wrapping rows", () => {
 	const pixels: Pixel[] = [];
 	for (let y = 30; y <= 32; y++)
