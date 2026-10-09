@@ -12,7 +12,6 @@ import {
 	JoystickSteering,
 	LocalMotion,
 	type MotionDot,
-	steps,
 } from "./motion";
 import { setMood, startMusic, stopMusic } from "./music";
 import { sfx } from "./sfx";
@@ -39,6 +38,7 @@ import {
 	playerName,
 	readColorIndexes,
 	readCoordinates,
+	steps,
 	terrain,
 	USER_CHUNK_HEIGHT,
 	USER_CHUNK_WIDTH,

@@ -114,6 +114,15 @@ export const LITTLE_ENDIAN =
 	new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
+// Cardinal step vectors, shared so server movement and client prediction can
+// never disagree about the movement table.
+export const steps: Record<Direction, readonly [number, number]> = {
+	idle: [0, 0],
+	up: [0, -1],
+	down: [0, 1],
+	left: [-1, 0],
+	right: [1, 0],
+};
 // Hot per-tick position broadcast, packed into user chunk rows. The numeric
 // slot is a round-local player identity: names, countries and auth ids live in
 // the users table (one cold row per player, subscribed once), joined

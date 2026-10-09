@@ -58,7 +58,7 @@ const HOSTILE_NOTES = [
 ];
 
 const TICK_MS = 120;
-const LOOKAHEAD_S = 0.3;
+const LOOKAHEAD_S = 0.5;
 const DEBOUNCE_MS = 500;
 const FADE_S = 1.5;
 
@@ -166,6 +166,9 @@ export function stopMusic() {
 	timer = undefined;
 	for (const track of tracks ?? []) track.nextAt = 0;
 	rampTracks(0.4, () => 0);
+	// The next entry starts calm; a stale mood must not bleed into it.
+	current = "calm";
+	requested = "calm";
 }
 
 /** Request a mood; the switch happens after it holds for the debounce. */

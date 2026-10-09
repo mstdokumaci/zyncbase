@@ -37,7 +37,7 @@ function ensureAudio() {
 }
 
 /** Create/resume the context from a user gesture; safe to call repeatedly. */
-export function unlockAudio() {
+function unlockAudio() {
 	try {
 		const audio = ensureAudio();
 		if (audio.state === "suspended") void audio.resume();
@@ -49,7 +49,7 @@ export function unlockAudio() {
 for (const event of ["pointerdown", "keydown"] as const)
 	addEventListener(event, unlockAudio, { capture: true });
 
-export function toggleMute() {
+function toggleMute() {
 	muted = !muted;
 	try {
 		localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
@@ -57,6 +57,7 @@ export function toggleMute() {
 		// Persisting the choice is best-effort.
 	}
 	setMasterGain();
+	renderMute();
 }
 
 // The mute key ignores keystrokes meant for the name and country inputs.
@@ -77,6 +78,18 @@ addEventListener("keydown", (event) => {
 		return;
 	toggleMute();
 });
+
+// The on-screen toggle mirrors the key: one state owner, two inputs.
+const muteButton = document.querySelector<HTMLButtonElement>("#mute-toggle");
+
+function renderMute() {
+	if (!muteButton) return;
+	muteButton.textContent = muted ? "UNMUTE" : "MUTE";
+	muteButton.setAttribute("aria-pressed", String(muted));
+}
+
+muteButton?.addEventListener("click", toggleMute);
+renderMute();
 
 /** Running context, or undefined while locked/blocked/hidden. */
 export function audio(): AudioContext | undefined {

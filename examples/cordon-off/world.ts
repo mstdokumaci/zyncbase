@@ -31,6 +31,7 @@ import {
 	RULES,
 	readColorIndexes,
 	rowId,
+	steps,
 	USER_CHUNK_COUNT,
 	type UserChunkRow,
 	userChunkIndex,
@@ -60,13 +61,6 @@ type Player = {
 	point?: number;
 	plan?: BotPlan;
 	thinkAt?: number;
-};
-const steps = {
-	idle: [0, 0],
-	up: [0, -1],
-	down: [0, 1],
-	left: [-1, 0],
-	right: [1, 0],
 };
 // One playful country per spawn point, named after where its bots come from.
 // Humans may never create or join these (see reservedBotCountry).
@@ -1023,6 +1017,7 @@ export class World {
 	private fillEnclosures() {
 		if (!this.enclosureCountries.size) {
 			this.changedCountries.clear();
+			this.enclosureTriggers.clear();
 			return;
 		}
 		// Keep entries until the pass ends: captures can append affected countries,
