@@ -138,6 +138,20 @@ body:has(#lobby:not([hidden])) .connection {
 	color: var(--alert);
 	border-color: var(--alert);
 }
+.mute-toggle svg {
+	display: block;
+	width: clamp(14px, 2vh, 18px);
+	height: clamp(14px, 2vh, 18px);
+}
+.mute-toggle .slash {
+	display: none;
+}
+.mute-toggle[aria-pressed="true"] .waves {
+	display: none;
+}
+.mute-toggle[aria-pressed="true"] .slash {
+	display: block;
+}
 body:has(#lobby:not([hidden])) .mute-toggle {
 	display: none;
 }
