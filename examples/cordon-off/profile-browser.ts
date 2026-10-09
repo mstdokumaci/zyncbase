@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { cpus } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { buildServerIfNeeded } from "../../tests/e2e/src/harness";
 import { buildBrowser } from "./build";
 import { startLocalEdge } from "./dev";
 import { type Country, MAX_PLAYERS } from "./shared";
@@ -24,6 +25,7 @@ const { values } = parseArgs({
 		channel: { type: "string", default: "msedge" },
 		headed: { type: "boolean", default: false },
 		profile: { type: "boolean", default: false },
+		"server-profile": { type: "boolean", default: false },
 		url: { type: "string" },
 		port: { type: "string", default: "18080" },
 		output: {
@@ -221,6 +223,9 @@ async function addPeer(codes: number[]) {
 
 try {
 	if (!values.url) {
+		// Never measure a stale or Debug ZyncBase: the harness spawns the
+		// binary directly, so make sure the ReleaseFast build is current.
+		buildServerIfNeeded();
 		const assets = await buildBrowser(join(output, "assets"));
 		if (values.profile) {
 			const bundle = await Bun.build({
@@ -231,31 +236,37 @@ try {
 			});
 			assert(bundle.success);
 		}
-		server = Bun.spawn(
-			[
-				process.execPath,
-				"--preload",
-				join(import.meta.dir, "profile-live.preload.ts"),
-				join(import.meta.dir, "server.ts"),
-			],
-			{
-				env: {
-					...process.env,
-					GAME_ORIGIN: url,
-					GAME_PORT: String(port + 1),
-					GAME_DB_PORT: String(port + 2),
-					GAME_DATA_DIR: join(output, "data"),
-					GAME_PROFILE_OUTPUT: join(output, "server.json"),
-					// Profiling ramp: admit quickly instead of pacing 1024
-					// sessions over ten minutes at the public demo budget,
-					// and lift the per-network cap the ramp would trip.
-					GAME_SESSION_BUDGET: "100000",
-					GAME_PLAYERS_PER_IP: "0",
-				},
-				stdout: Bun.file(join(output, "server.log")),
-				stderr: Bun.file(join(output, "server-errors.log")),
-			},
+		const serverArgs = [process.execPath];
+		if (values["server-profile"])
+			serverArgs.push(
+				"--cpu-prof",
+				"--cpu-prof-dir",
+				output,
+				"--cpu-prof-name",
+				"server.cpuprofile",
+			);
+		serverArgs.push(
+			"--preload",
+			join(import.meta.dir, "profile-live.preload.ts"),
+			join(import.meta.dir, "server.ts"),
 		);
+		server = Bun.spawn(serverArgs, {
+			env: {
+				...process.env,
+				GAME_ORIGIN: url,
+				GAME_PORT: String(port + 1),
+				GAME_DB_PORT: String(port + 2),
+				GAME_DATA_DIR: join(output, "data"),
+				GAME_PROFILE_OUTPUT: join(output, "server.json"),
+				// Profiling ramp: admit quickly instead of pacing 1024
+				// sessions over ten minutes at the public demo budget,
+				// and lift the per-network cap the ramp would trip.
+				GAME_SESSION_BUDGET: "100000",
+				GAME_PLAYERS_PER_IP: "0",
+			},
+			stdout: Bun.file(join(output, "server.log")),
+			stderr: Bun.file(join(output, "server-errors.log")),
+		});
 		closeEdge = (
 			await startLocalEdge({
 				port,

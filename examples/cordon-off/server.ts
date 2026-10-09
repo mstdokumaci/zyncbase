@@ -541,7 +541,6 @@ function recordRosterCommit(snapshot: PublishSnapshot) {
 	for (const countryId of snapshot.removed)
 		persistedCountries.delete(countryId);
 	lastPublishedMark = world.allocatorMark;
-	world.capturesPending = false;
 }
 
 /** Split-tables metrics: one counter pair per chunk grid. */
@@ -563,13 +562,21 @@ function recordChunkWrites(operations: BatchOperation[]) {
 async function publish(forceRosters = false) {
 	tickCount++;
 	const rosters = shouldPublishRosters(forceRosters);
+	// Capture the cue flag at drain time: ticks keep running while this commit
+	// is in flight and may set it again for the next flush. On failure it is
+	// restored so a cue is never lost.
+	const capturesPending = world.capturesPending;
+	world.capturesPending = false;
 	const snapshot = drainPublishState(world, { rosters });
 	const operations = buildPublishOperations(
 		world,
 		snapshot,
 		rosters ? allocatorOp() : [],
 	);
-	if (!operations.length) return;
+	if (!operations.length) {
+		if (capturesPending) world.capturesPending = true;
+		return;
+	}
 	// A rejected batch restores every drained entry, so a retry resends all
 	// uncommitted operations instead of silently dropping them.
 	const started = performance.now();
@@ -580,6 +587,7 @@ async function publish(forceRosters = false) {
 		);
 	} catch (error) {
 		restorePublishState(world, snapshot);
+		if (capturesPending) world.capturesPending = true;
 		throw error;
 	}
 	// The allocator mark rides with the country removes (see allocatorOp), so
@@ -773,6 +781,13 @@ function failed(error: unknown) {
 	// Leave recovery to a restart: only committed territory is authoritative on disk.
 	void stop(1);
 }
+/** Why the round should end now, if it should. */
+function roundEndReason(now: number) {
+	if (now >= round.endsAt) return "boundary" as const;
+	if (idleWipeMs > 0 && emptySince && now - emptySince >= idleWipeMs)
+		return "idle" as const;
+	return undefined;
+}
 process.on("SIGINT", () => void stop());
 process.on("SIGTERM", () => void stop());
 void database.exited.then((code) => {
@@ -930,8 +945,11 @@ try {
 	await presenceSnapshot;
 	ready = true;
 	if (deployEnabled) void runDeploy(0);
-	tick = setInterval(() => {
-		if (inFlight || stopping || ending) return;
+	// One tick: advance the world on the tick clock even while a commit is in
+	// flight; the next publish drains whatever accumulated meanwhile. At most
+	// one commit is in flight, so published lag stays bounded.
+	const tickOnce = () => {
+		if (stopping || ending) return;
 		const now = Date.now();
 		if (world.humanCount > 0) {
 			roundActive = true;
@@ -939,13 +957,10 @@ try {
 		} else if (roundActive && !emptySince) {
 			emptySince = now;
 		}
-		const reason =
-			now >= round.endsAt
-				? ("boundary" as const)
-				: idleWipeMs > 0 && emptySince && now - emptySince >= idleWipeMs
-					? ("idle" as const)
-					: undefined;
+		const reason = roundEndReason(now);
 		if (reason) {
+			// Let the in-flight commit land before archiving or restarting.
+			if (inFlight) return;
 			ending = true;
 			ready = false;
 			inFlight = endRound(now, reason)
@@ -956,12 +971,14 @@ try {
 			return;
 		}
 		world.tick(performance.now());
+		if (inFlight) return;
 		inFlight = publish()
 			.catch(failed)
 			.finally(() => {
 				inFlight = null;
 			});
-	}, RULES.tickMs);
+	};
+	tick = setInterval(tickOnce, RULES.tickMs);
 	statistics = setInterval(
 		() =>
 			console.log(
