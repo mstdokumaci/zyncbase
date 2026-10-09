@@ -44,8 +44,36 @@ pub const CheckpointWorker = struct {
         duration_ms: u64,
         wal_size_before: usize,
         wal_size_after: usize,
+        frames_checkpointed: usize = 0,
+        frames_in_wal: usize = 0,
+        /// SQLite could not complete the checkpoint as requested. See
+        /// CheckpointStats.busy.
+        busy: bool = false,
         success: bool,
     };
+
+    /// A passive checkpoint that left frames behind found a pinned WAL: a
+    /// reader still holds a snapshot older than the backfilled frames. Passive
+    /// and full modes cannot reset the file, so only a truncate checkpoint can
+    /// clear the remainder.
+    pub fn shouldEscalateFromPassive(result: CheckpointResult) bool {
+        return result.success and
+            result.mode == .passive and
+            result.frames_checkpointed < result.frames_in_wal;
+    }
+
+    /// A truncate checkpoint only zeroes the WAL when SQLite both ran it to
+    /// completion and left nothing behind. Both halves are needed:
+    /// `busy` catches the ckpt-lock race, where SQLite reports log/ckpt as -1
+    /// (clamped to 0 above), so the frame comparison alone reads 0 < 0 and
+    /// calls a skipped checkpoint clean. The frame comparison catches the
+    /// writer-lock downgrade, where SQLite silently falls back to a passive
+    /// checkpoint and reports `busy = 0` with frames outstanding.
+    pub fn truncateCompleted(result: CheckpointResult) bool {
+        return result.success and
+            !result.busy and
+            result.frames_checkpointed >= result.frames_in_wal;
+    }
 
     /// Metrics for Prometheus export
     pub const CheckpointMetrics = struct {
@@ -145,7 +173,7 @@ pub const CheckpointWorker = struct {
         const wal_size_before = self.wal_size.load(.acquire);
 
         // Execute checkpoint
-        _ = self.storage_engine.executeCheckpoint(mode) catch |err| {
+        const stats = self.storage_engine.executeCheckpoint(mode) catch |err| {
             // Increment failure counter
             _ = self.failed_checkpoint_count.fetchAdd(1, .acq_rel);
 
@@ -166,25 +194,35 @@ pub const CheckpointWorker = struct {
         const duration = elapsedMilliseconds(start_time, end_time);
 
         self.last_checkpoint.store(std.Io.Clock.real.now(self.io).toSeconds(), .release);
+        // this counts checkpoints that ran, not checkpoints that did
+        // useful work — a no-op passive and a truncate abandoned by the retry
+        // wrapper both count here. Move the increment to the completion gate in
+        // performCheckpointWithRetry if checkpoint_total needs to mean "done".
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);
         self.last_checkpoint_duration_ms.store(duration, .release);
 
-        // Query new WAL size
-        const new_wal_size = try self.storage_engine.getWalSize();
-        self.wal_size.store(new_wal_size, .release);
+        // Report the sizes and frames measured by the checkpoint itself; the
+        // cached atomic can be stale while a checkpoint runs.
+        self.wal_size.store(stats.wal_size_after, .release);
 
-        std.log.info("Checkpoint completed: mode={s}, duration={}ms, wal_before={}, wal_after={}", .{
+        std.log.info("Checkpoint completed: mode={s}, duration={}ms, busy={}, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
             @tagName(mode),
             duration,
-            wal_size_before,
-            new_wal_size,
+            stats.busy,
+            stats.frames_checkpointed,
+            stats.frames_in_wal,
+            stats.wal_size_before,
+            stats.wal_size_after,
         });
 
         return CheckpointResult{
             .mode = mode,
             .duration_ms = duration,
-            .wal_size_before = wal_size_before,
-            .wal_size_after = new_wal_size,
+            .wal_size_before = stats.wal_size_before,
+            .wal_size_after = stats.wal_size_after,
+            .frames_checkpointed = stats.frames_checkpointed,
+            .frames_in_wal = stats.frames_in_wal,
+            .busy = stats.busy,
             .success = true,
         };
     }
@@ -205,32 +243,27 @@ pub const CheckpointWorker = struct {
             };
         };
 
-        // If passive mode didn't reduce WAL size significantly, escalate to full
-        if (self.config.checkpoint_mode == .passive and result.success) {
-            const reduction = if (result.wal_size_before > result.wal_size_after)
-                result.wal_size_before - result.wal_size_after
-            else
-                0;
-
-            // If WAL size reduced by less than 10%, escalate to full mode
-            const reduction_percent = if (result.wal_size_before > 0)
-                (reduction * 100) / result.wal_size_before
-            else
-                0;
-
-            if (reduction_percent < 10) {
-                std.log.warn("Passive checkpoint only reduced WAL by {}%, escalating to full mode", .{reduction_percent});
-                result = self.performCheckpointWithRetry(.full, self.config.max_attempts) catch |err| {
-                    if (err != error.CheckpointFailed) return err;
-                    return CheckpointResult{
-                        .mode = .full,
-                        .duration_ms = 0,
-                        .wal_size_before = result.wal_size_after,
-                        .wal_size_after = self.wal_size.load(.acquire),
-                        .success = false,
-                    };
+        // Passive and full checkpoints backfill WAL pages but cannot reset or
+        // truncate the file, so file-size reduction is not a completion signal.
+        // Escalate only when frames remain uncheckpointed: a reader is pinning
+        // the WAL, and only a truncate checkpoint can clear the remainder.
+        if (shouldEscalateFromPassive(result)) {
+            const remaining = result.frames_in_wal - result.frames_checkpointed;
+            std.log.warn("Passive checkpoint left {}/{} WAL frames uncheckpointed, escalating to truncate", .{ remaining, result.frames_in_wal });
+            // An incomplete truncate never reaches here: performCheckpointWithRetry
+            // only returns a truncate result that passes truncateCompleted.
+            result = self.performCheckpointWithRetry(.truncate, self.config.max_attempts) catch |err| {
+                if (err != error.CheckpointFailed) return err;
+                return CheckpointResult{
+                    .mode = .truncate,
+                    .duration_ms = 0,
+                    .wal_size_before = result.wal_size_after,
+                    .wal_size_after = self.wal_size.load(.acquire),
+                    .frames_checkpointed = 0,
+                    .frames_in_wal = result.frames_in_wal,
+                    .success = false,
                 };
-            }
+            };
         }
 
         return result;
@@ -245,7 +278,14 @@ pub const CheckpointWorker = struct {
         while (attempt < attempts) : (attempt += 1) {
             const result = try self.performCheckpoint(mode);
 
-            if (result.success) {
+            // A truncate that could not reset the WAL has not done its job even
+            // though the pragma ran without throwing, so it must not count as a
+            // completed attempt — a reader pinning the WAL is usually a
+            // millisecond-scale conflict, not a permanent one. Passive, full and
+            // restart backfill frames without promising to reset the file, so
+            // `success` stays the sole gate for them.
+            const completed = result.success and (mode != .truncate or truncateCompleted(result));
+            if (completed) {
                 if (attempt > 0) {
                     std.log.info("Checkpoint succeeded after {} retries", .{attempt});
                 }
@@ -254,7 +294,14 @@ pub const CheckpointWorker = struct {
 
             // Exponential backoff
             if (attempt < attempts - 1) {
-                std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, attempt + 1, attempts });
+                std.log.warn("Checkpoint did not complete (busy={}, frames {}/{} backfilled), retrying in {}ms (attempt {}/{})", .{
+                    result.busy,
+                    result.frames_checkpointed,
+                    result.frames_in_wal,
+                    backoff_ms,
+                    attempt + 1,
+                    attempts,
+                });
                 try self.io.sleep(.fromMilliseconds(@intCast(backoff_ms)), .awake);
                 backoff_ms *= 2; // Double the backoff time
             }

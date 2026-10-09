@@ -281,6 +281,8 @@ test "CheckpointWorker: CheckpointResult structure" {
         .duration_ms = 100,
         .wal_size_before = 5000,
         .wal_size_after = 1000,
+        .frames_checkpointed = 8,
+        .frames_in_wal = 10,
         .success = true,
     };
 
@@ -288,6 +290,8 @@ test "CheckpointWorker: CheckpointResult structure" {
     try testing.expect(result.duration_ms == 100);
     try testing.expect(result.wal_size_before == 5000);
     try testing.expect(result.wal_size_after == 1000);
+    try testing.expect(result.frames_checkpointed == 8);
+    try testing.expect(result.frames_in_wal == 10);
     try testing.expect(result.success);
 }
 
@@ -418,15 +422,12 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
     const manager = &ctx.manager;
 
     // Property: WAL size should decrease or stay same after successful checkpoint
-    const initial_wal_size: usize = 5000;
-    manager.wal_size.store(initial_wal_size, .release);
-
     const result = try manager.performCheckpoint(.truncate);
 
-    // WAL size after should be <= WAL size before
+    // Sizes are reported by the checkpoint itself, not the cached metric; an
+    // in-memory database reports zero-byte WAL files.
     try testing.expect(result.success);
     try testing.expect(result.wal_size_after <= result.wal_size_before);
-    try testing.expect(result.wal_size_before == initial_wal_size);
 }
 
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
@@ -476,7 +477,142 @@ test "checkpoint: failure handling - failure counter starts at zero" {
     try testing.expect(initial_failures == 0);
 }
 
-test "checkpoint: escalation logic - works correctly when needed" {
+test "checkpoint: escalation logic - frame-based decision" {
+    // Escalation keys off uncheckpointed frames, not WAL file size: passive
+    // and full modes cannot reset the file, so a size-based signal always
+    // fired. A clean passive pass (no frames left) must not escalate.
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 0,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 0,
+        .frames_in_wal = 0,
+        .success = true,
+    }));
+    try testing.expect(CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .full,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = false,
+    }));
+}
+
+test "checkpoint: truncate completion needs both busy=0 and no frames left" {
+    // busy=1 with 0/0 frames is the ckpt-lock race: SQLite never wrote log/ckpt
+    // (they come back as -1 and get clamped to 0), so the frame comparison
+    // alone reads 0 < 0 and would call a skipped checkpoint clean.
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 0,
+        .frames_in_wal = 0,
+        .busy = true,
+        .success = true,
+    }));
+    // busy=0 with frames outstanding is the writer-lock downgrade: SQLite
+    // silently falls back to a passive checkpoint.
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = true,
+    }));
+    // A truncate that both ran clean and backfilled everything is complete.
+    try testing.expect(CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 0,
+        .frames_checkpointed = 10,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.truncateCompleted(.{
+        .mode = .truncate,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 10,
+        .frames_in_wal = 10,
+        .busy = false,
+        .success = false,
+    }));
+}
+
+test "CheckpointWorker: performCheckpoint - reports SQLite busy status" {
+    const allocator = std.heap.smp_allocator;
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{});
+    defer ctx.deinit();
+
+    // An uncontended in-memory checkpoint reports busy=0, which is what makes
+    // truncateCompleted meaningful downstream.
+    const result = try ctx.manager.performCheckpoint(.truncate);
+    try testing.expect(result.success);
+    try testing.expect(!result.busy);
+    try testing.expect(CheckpointWorker.truncateCompleted(result));
+}
+
+test "checkpoint: retry wrapper does not retry a completed truncate" {
+    // An uncontended truncate completes on the first attempt, so the backoff
+    // path must stay cold. An inverted completion gate here would spin the
+    // whole max_attempts budget before returning.
+    const SleepCounter = struct {
+        calls: usize = 0,
+
+        fn sleep(ctx: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.calls += 1;
+        }
+    };
+
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(std.heap.smp_allocator, .{});
+    defer ctx.deinit();
+
+    var counter: SleepCounter = .{};
+    var io_vtable = testing.io.vtable.*;
+    io_vtable.sleep = SleepCounter.sleep;
+    ctx.manager.io = .{ .userdata = &counter, .vtable = &io_vtable };
+
+    const result = try ctx.manager.performCheckpointWithRetry(.truncate, 3);
+
+    try testing.expect(result.success);
+    try testing.expect(!result.busy);
+    try testing.expectEqual(@as(usize, 0), counter.calls);
+}
+
+test "checkpoint: empty passive checkpoint does not escalate" {
     const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -489,13 +625,9 @@ test "checkpoint: escalation logic - works correctly when needed" {
 
     const manager = &ctx.manager;
 
-    // Property: Escalation logic works correctly.
-    // The in-memory WAL size is 0, so a passive checkpoint cannot reduce the
-    // WAL by >=10% and the worker must escalate to full mode.
+    // An empty WAL checkpoints cleanly, so no escalation to truncate happens.
     const result = try manager.performCheckpointWithEscalation();
 
-    // Verify checkpoint was attempted (success flag should be set)
     try testing.expect(result.success);
-    // Verify escalation actually occurred (passive would mean no escalation)
-    try testing.expect(result.mode != .passive);
+    try testing.expect(result.mode == .passive);
 }
