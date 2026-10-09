@@ -120,6 +120,27 @@ button:disabled {
 body:has(#lobby:not([hidden])) .connection {
 	display: none;
 }
+.mute-toggle {
+	position: absolute;
+	top: clamp(12px, 2vh, 20px);
+	left: 24px;
+	pointer-events: auto;
+	color: var(--muted);
+	background: #0d1822d9;
+	border: 2px solid var(--line);
+	padding: clamp(8px, 1.2vh, 11px) 16px;
+	font-family: var(--font-pixel);
+	font-size: clamp(10px, 1.5vh, 13px);
+	letter-spacing: 1px;
+	text-transform: uppercase;
+}
+.mute-toggle[aria-pressed="true"] {
+	color: var(--alert);
+	border-color: var(--alert);
+}
+body:has(#lobby:not([hidden])) .mute-toggle {
+	display: none;
+}
 
 /* Lobby doubles as the title screen: brand, tagline, join form. */
 #lobby {
@@ -473,6 +494,9 @@ input::placeholder {
 	grid-template-columns: repeat(3, auto);
 	gap: 6px;
 }
+.keys-mute {
+	grid-template-columns: auto;
+}
 .keys-move kbd:nth-child(1),
 .keys-arrows kbd:nth-child(2) {
 	grid-area: 1 / 2;
@@ -540,6 +564,10 @@ kbd {
 		background: #0d1822d9;
 		border: 2px solid var(--alert);
 		padding: 7px 12px;
+	}
+	.mute-toggle {
+		left: 12px;
+		padding: 8px 12px;
 	}
 	.nav {
 		font-size: 10px;

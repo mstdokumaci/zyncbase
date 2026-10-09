@@ -3,17 +3,10 @@ import {
 	type Dot,
 	HEIGHT,
 	RULES,
+	steps,
 	WIDTH,
 	wrapX,
 } from "./shared";
-
-const steps = {
-	idle: [0, 0],
-	up: [0, -1],
-	down: [0, 1],
-	left: [-1, 0],
-	right: [1, 0],
-};
 
 // Deterministic axis mixing for joystick diagonals: accumulate the minority
 // axis's share of the vector and take it whenever the accumulated share fills

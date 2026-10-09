@@ -13,6 +13,8 @@ import {
 	LocalMotion,
 	type MotionDot,
 } from "./motion";
+import { setMood, startMusic, stopMusic } from "./music";
+import { sfx } from "./sfx";
 import {
 	COUNTRY_CHUNK_HEIGHT,
 	COUNTRY_CHUNK_WIDTH,
@@ -36,6 +38,7 @@ import {
 	playerName,
 	readColorIndexes,
 	readCoordinates,
+	steps,
 	terrain,
 	USER_CHUNK_HEIGHT,
 	USER_CHUNK_WIDTH,
@@ -119,6 +122,9 @@ let myPlayerId = "",
 	mySlot = 0,
 	nickname = "",
 	seq = 0;
+// Spawn cell from the join reply. The roster row flush is throttled, so the
+// initial camera must not wait on a locate() read.
+let admittedPosition: { x: number; y: number } | undefined;
 let direction: Direction = "idle";
 // Heading used to choose the prefetch edge. Kept after release so stopping
 // does not drop the leading margin and churn subscriptions on the next move.
@@ -510,6 +516,24 @@ function ownerAt(x: number, y: number) {
 	];
 }
 
+// The music tracks the land being painted, not the interpolated dot: the
+// server paints each step's destination, so the cell under the dot is already
+// ours. Looking one step ahead of the confirmed cell (the current cell when
+// idle) keeps the mood stable through a crossing instead of flickering every
+// time a step confirms.
+function updateMood() {
+	if (phase !== "playing" || !online || !motion) return;
+	const [dx, dy] = steps[direction];
+	const y = motion.dot.y + dy;
+	if (y < 0 || y >= HEIGHT) {
+		setMood("calm");
+		return;
+	}
+	const owner = ownerAt(wrapX(motion.dot.x + dx), y);
+	const mine = myColorIndex();
+	setMood(owner && mine && owner !== mine ? "hostile" : "calm");
+}
+
 // A world copy is WIDTH wide but chunk columns are chunk-width; both grids
 // divide WIDTH exactly, so wrapped columns come from world copies rather than
 // a modulo of the chunk column. Straddling the seam can need both ends.
@@ -741,6 +765,37 @@ function scoreboard(rows: Country[]) {
 	if (paletteChanged) dirty = true;
 }
 
+// Loss cues come from the country rows: an enemy enclosure taking our land.
+// First sight initializes silently: joining an already-active country must not
+// replay its history.
+const heardLosses = new Map<number, number>();
+
+function watchCountryLosses(rows: Country[]) {
+	if (phase !== "playing") return;
+	const mine = myCountryId();
+	for (const row of rows) {
+		const lost = row.lost ?? 0;
+		const seen = heardLosses.get(row.country_id);
+		if (row.country_id === mine && seen !== undefined && lost > seen)
+			sfx.lost();
+		heardLosses.set(row.country_id, lost);
+	}
+}
+
+// Capture cues come from our own player row: only fills our own paint closed.
+// Teammates and bots gain land on their own rows. First sight initializes
+// silently so a mid-round join does not replay history.
+let heardCaptured: number | undefined;
+
+function watchOwnCaptures(rows: PlayerRow[]) {
+	if (phase !== "playing") return;
+	const me = rows.find((row) => row.id === myPlayerId);
+	if (!me) return;
+	const captured = me.captured ?? 0;
+	if (heardCaptured !== undefined && captured > heardCaptured) sfx.capture();
+	heardCaptured = captured;
+}
+
 function refreshMotionColor() {
 	if (!motion) return;
 	const colorIndex = myColorIndex();
@@ -760,12 +815,21 @@ async function joinWorld() {
 		name: nickname,
 		country_id: selectedCountryId,
 		session_id: sessionId,
-	})) as { user_id?: unknown; slot?: unknown };
+	})) as {
+		user_id?: unknown;
+		slot?: unknown;
+		x?: unknown;
+		y?: unknown;
+	};
 	if (typeof result.user_id !== "string" || !result.user_id)
 		throw new Error("Join returned no player identity");
 	await client.presence.set({});
 	myPlayerId = result.user_id;
 	mySlot = Number.isSafeInteger(result.slot) ? (result.slot as number) : 0;
+	admittedPosition =
+		Number.isSafeInteger(result.x) && Number.isSafeInteger(result.y)
+			? { x: result.x as number, y: result.y as number }
+			: undefined;
 	joined = true;
 	joinedAt = performance.now();
 	lastOwnDot = 0;
@@ -1128,6 +1192,9 @@ function returnToLobby(message: string) {
 	lobby.hidden = false;
 	scoreboardPanel.hidden = true;
 	stopJoystick();
+	stopMusic();
+	heardLosses.clear();
+	heardCaptured = undefined;
 	if (document.fullscreenElement)
 		void document.exitFullscreen().catch(() => {});
 	errorLabel.textContent = message;
@@ -1355,6 +1422,7 @@ function rebuildRoster(rows: PlayerRow[], generation: number) {
 		if (Number.isSafeInteger(row.slot) && row.slot > 0)
 			rosterBySlot.set(row.slot, row);
 	}
+	watchOwnCaptures(rows);
 	scoreboard(latestCountries);
 	dirty = true;
 }
@@ -1375,6 +1443,7 @@ async function subscribeColdStores(next: ZyncBaseClient): Promise<boolean> {
 			const list = rows as Country[];
 			latestCountries = list;
 			scoreboard(list);
+			watchCountryLosses(list);
 		},
 	);
 	if (countriesGeneration !== sessionGeneration) {
@@ -1411,9 +1480,13 @@ async function enterGame(next: ZyncBaseClient) {
 	canvas.focus({ preventScroll: true });
 	if (matchMedia("(pointer: coarse)").matches) startJoystick();
 	else flash(controlsHint);
+	sfx.deploy();
+	startMusic();
 	if (!(await subscribeColdStores(next))) return;
 	motion = undefined;
-	camera = { ...INITIAL_CAMERA };
+	camera = admittedPosition
+		? { x: admittedPosition.x + 0.5, y: admittedPosition.y + 0.5 }
+		: { ...INITIAL_CAMERA };
 	release();
 	updateSubscriptions();
 	dirty = true;
@@ -1584,6 +1657,7 @@ function draw(now: number) {
 	// Allow timestamp rounding at the frame boundary without accumulating drift.
 	if (elapsed + 0.1 < FRAME_MS) return;
 	const position = motion?.position(now);
+	updateMood();
 	// Idle frames are identical: repaint only when the camera moved or a
 	// mutation (chunk, roster, palette, resize) marked the scene dirty.
 	const moved =

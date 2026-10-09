@@ -112,6 +112,7 @@ function fixture() {
 			seq: 0,
 			direction: "idle",
 			credit: 0,
+			captured: 0,
 			slot: world.reserveSlots(1),
 		});
 		world.dirtyUserChunks.add(userChunkIndex(start.x, start.y));
@@ -143,10 +144,12 @@ function verify(world: World) {
 	}
 	for (const country of world.countries.values())
 		assert.equal(country.count, counts[country.country_id]);
-	for (const player of world.players.values())
+	for (const player of world.players.values()) {
 		assert(
 			player.x >= 0 && player.x < WIDTH && player.y >= 0 && player.y < HEIGHT,
 		);
+		assert(Number.isSafeInteger(player.captured) && player.captured >= 0);
+	}
 }
 
 function steer(world: World, tick: number) {

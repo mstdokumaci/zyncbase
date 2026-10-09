@@ -527,6 +527,8 @@ function allocatorOp(): BatchOperation[] {
  * writes never reference a row that has not landed yet. */
 function shouldPublishRosters(force: boolean) {
 	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
+	// Captures bypass the throttle: their sound cues read the roster rows.
+	if (world.capturesPending) return true;
 	for (const countryId of world.dirtyCountries)
 		if (!persistedCountries.has(countryId)) return true;
 	return false;
@@ -538,6 +540,7 @@ function recordRosterCommit(snapshot: PublishSnapshot) {
 	for (const countryId of snapshot.removed)
 		persistedCountries.delete(countryId);
 	lastPublishedMark = world.allocatorMark;
+	world.capturesPending = false;
 }
 
 /** Split-tables metrics: one counter pair per chunk grid. */
@@ -888,7 +891,14 @@ try {
 		playerSessions.set(ctx.userId, sessionId);
 		if (presentUsers.has(ctx.userId)) activateSession(lease);
 		else scheduleSessionExpiry(sessionId, lease);
-		return { user_id: ctx.userId, slot: player.slot };
+		// The spawned cell rides the reply: the roster row flush is throttled,
+		// so a client that reads it back immediately may still see no row.
+		return {
+			user_id: ctx.userId,
+			slot: player.slot,
+			x: player.x,
+			y: player.y,
+		};
 	});
 	await client.actions.handle("player_move", (ctx, params) => {
 		if (stopping || ending) return;

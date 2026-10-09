@@ -114,6 +114,15 @@ export const LITTLE_ENDIAN =
 	new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export type Direction = "idle" | "up" | "down" | "left" | "right";
+// Cardinal step vectors, shared so server movement and client prediction can
+// never disagree about the movement table.
+export const steps: Record<Direction, readonly [number, number]> = {
+	idle: [0, 0],
+	up: [0, -1],
+	down: [0, 1],
+	left: [-1, 0],
+	right: [1, 0],
+};
 // Hot per-tick position broadcast, packed into user chunk rows. The numeric
 // slot is a round-local player identity: names, countries and auth ids live in
 // the users table (one cold row per player, subscribed once), joined
@@ -136,6 +145,9 @@ export type PlayerRow = {
 	last_x: number;
 	last_y: number;
 	slot: number;
+	// Enclosure fills this player's own step paint triggered; the capture cue
+	// watches the row of the local player only.
+	captured?: number;
 };
 // A country's numeric identity: referenced by PlayerRow.country_id. Its row key
 // in the countries table is the string form, and its palette color selects the
@@ -146,6 +158,9 @@ export type Country = {
 	color: string;
 	count: number;
 	is_bot: boolean;
+	// Round-local loss counter: land taken by enemy enclosure fills only,
+	// never ordinary step painting. Clients turn an increment into a sound.
+	lost?: number;
 };
 export type CountryChunkRow = {
 	id: string;
