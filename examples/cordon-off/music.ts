@@ -40,6 +40,10 @@ const LOOKAHEAD_S = 0.5;
 const DEBOUNCE_MS = 200;
 const FADE_S = 0.6;
 const IDLE_BPM = 85;
+// Applied tempo glides toward its target with this time constant. The raw
+// target can flicker while claiming land (the paint row for the next cell can
+// arrive a frame before its dot), and a glide keeps that inaudible.
+const TEMPO_GLIDE_S = 0.35;
 
 // Movement step time (ms) -> loop BPM anchors. 110 BPM sits on neutral ground,
 // own land quickens toward 126, slower terrain settles toward the idle pace.
@@ -57,6 +61,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let step = 0;
 let nextAt = 0;
 let stepSeconds = 60 / 110 / 4;
+let targetStepSeconds = stepSeconds;
 let current: Mood = "calm";
 let requested: Mood = "calm";
 let requestedAt = 0;
@@ -192,7 +197,7 @@ function fadeTo(next: Mood) {
 
 /** Match the loop tempo to the dot's current step time; Infinity is idle. */
 export function setMusicTempo(stepMs: number) {
-	stepSeconds = 60 / musicBpm(stepMs) / 4;
+	targetStepSeconds = 60 / musicBpm(stepMs) / 4;
 }
 
 function tick() {
@@ -210,6 +215,9 @@ function tick() {
 		const bar = Math.floor(step / STEPS_PER_BAR) % BARS;
 		for (const layer of list) layer.run(layer.gain, stepInBar, bar, nextAt);
 		step++;
+		stepSeconds +=
+			(targetStepSeconds - stepSeconds) *
+			(1 - Math.exp(-stepSeconds / TEMPO_GLIDE_S));
 		nextAt += stepSeconds;
 	}
 	if (requested !== current && performance.now() - requestedAt >= DEBOUNCE_MS)
@@ -225,6 +233,7 @@ export function startMusic() {
 		nextAt = 0;
 	}
 	setMusicTempo(Number.POSITIVE_INFINITY);
+	stepSeconds = targetStepSeconds;
 	rampLayers(0.5, (layer) =>
 		current === "hostile" ? layer.hostile : layer.calm,
 	);
@@ -237,6 +246,7 @@ export function stopMusic() {
 	timer = undefined;
 	step = 0;
 	nextAt = 0;
+	stepSeconds = targetStepSeconds;
 	rampLayers(0.4, () => 0);
 	// The next entry starts calm; a stale mood must not bleed into it.
 	current = "calm";
