@@ -187,7 +187,7 @@ pub const ConnectionManager = struct {
     }
 
     /// Entry point for WebSocket close events
-    pub fn onClose(self: *ConnectionManager, ws: *WebSocket) void {
+    pub fn onClose(self: *ConnectionManager, ws: *WebSocket, code: i32, reason: []const u8) void {
         const conn_id = ws.getConnId();
 
         const maybe_conn = blk: {
@@ -208,7 +208,7 @@ pub const ConnectionManager = struct {
             if (self.active_connection_count.fetchSub(1, .acq_rel) == 1) {
                 self.last_conn_notifier.notify();
             }
-            std.log.info("Client disconnected: id={}", .{conn_id});
+            std.log.info("Client disconnected: id={} code={} reason={s}", .{ conn_id, code, reason });
         }
     }
 

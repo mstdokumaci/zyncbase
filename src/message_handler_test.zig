@@ -142,7 +142,7 @@ test "MessageHandler: store operations require ready scope" {
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {
-        app.connection_manager.onClose(ws);
+        app.connection_manager.onClose(ws, 1000, "");
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 
@@ -505,7 +505,7 @@ test "NamespaceSwitch: initial store namespace setup succeeds with users.namespa
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {
-        app.connection_manager.onClose(ws);
+        app.connection_manager.onClose(ws, 1000, "");
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 
@@ -550,7 +550,7 @@ test "NamespaceSwitch: namespaced=true enforces lock across both scopes" {
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {
-        app.connection_manager.onClose(ws);
+        app.connection_manager.onClose(ws, 1000, "");
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 
@@ -621,7 +621,7 @@ test "NamespaceSwitch: namespaced=false allows any switch" {
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {
-        app.connection_manager.onClose(ws);
+        app.connection_manager.onClose(ws, 1000, "");
         if (conn.release()) app.memory_strategy.releaseConnection(conn);
     }
 

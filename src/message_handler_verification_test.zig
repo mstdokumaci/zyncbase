@@ -26,7 +26,7 @@ test "Verification: WebSocket connection lifecycle" {
     var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
     try app.connection_manager.onOpen(&ws);
     var closed = false;
-    defer if (!closed) app.connection_manager.onClose(&ws);
+    defer if (!closed) app.connection_manager.onClose(&ws, 1000, "");
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
@@ -36,7 +36,7 @@ test "Verification: WebSocket connection lifecycle" {
     try testing.expectEqual(conn_id, state.id);
     try testing.expectEqual(@as(i64, -1), state.namespace_id);
 
-    app.connection_manager.onClose(&ws);
+    app.connection_manager.onClose(&ws, 1000, "");
     closed = true;
 
     const removed = app.connection_manager.acquireConnection(conn_id);
@@ -108,7 +108,7 @@ test "Verification: Error handling for invalid messages" {
     {
         var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
         try app.connection_manager.onOpen(&ws);
-        defer app.connection_manager.onClose(&ws);
+        defer app.connection_manager.onClose(&ws, 1000, "");
 
         app.connection_manager.onMessage(&ws, "text message", .text);
     }

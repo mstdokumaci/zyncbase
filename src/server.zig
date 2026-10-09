@@ -953,10 +953,10 @@ fn onWebSocketMessage(
 
 fn onWebSocketClose(
     ws: *WebSocket,
-    _: i32,
-    _: []const u8,
+    code: i32,
+    reason: []const u8,
     user_data: ?*anyopaque,
 ) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
-    server.connection_manager.onClose(ws);
+    server.connection_manager.onClose(ws, code, reason);
 }

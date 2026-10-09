@@ -32,7 +32,7 @@ test "connection: state deallocation on close" {
         try testing.expectEqual(conn_id, retrieved.id);
 
         // Remove connection - should deallocate state once all refs are gone
-        app.connection_manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws, 1000, "");
 
         // Verify connection is no longer in manager
         const result = app.connection_manager.acquireConnection(conn_id);
@@ -55,7 +55,7 @@ test "connection: state deallocation on close" {
 
         // Close all connections
         for (&websockets) |*ws| {
-            app.connection_manager.onClose(ws);
+            app.connection_manager.onClose(ws, 1000, "");
         }
 
         // Verify all connections are removed
@@ -85,7 +85,7 @@ test "connection: state deallocation on close" {
         try state.subscription_ids.append(state.allocator, 300);
 
         // Remove connection - should deallocate state including subscription list
-        app.connection_manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws, 1000, "");
 
         // Verify connection is removed
         const result = app.connection_manager.acquireConnection(conn_id);
@@ -138,7 +138,7 @@ test "connection: state deallocation on close" {
             try state.subscription_ids.append(state.allocator, conn_id * 10 + 1);
 
             // Immediately remove
-            app.connection_manager.onClose(&dummy_ws);
+            app.connection_manager.onClose(&dummy_ws, 1000, "");
         }
     }
 
@@ -165,7 +165,7 @@ test "connection: state deallocation on close" {
                     if (state.release()) ctx.releaseConnection(state);
 
                     // Remove immediately
-                    ctx.connection_manager.onClose(&dummy_ws);
+                    ctx.connection_manager.onClose(&dummy_ws, 1000, "");
                 }
             }
         }.run;
@@ -215,7 +215,7 @@ test "connection: state deallocation edge cases" {
         const gpa = app.memory_strategy.generalAllocator();
         // Try to remove a connection that doesn't exist
         var dummy_ws = createMockWebSocket(gpa);
-        app.connection_manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws, 1000, "");
         destroyMockWebSocket(gpa, &dummy_ws);
     }
 
@@ -229,7 +229,7 @@ test "connection: state deallocation edge cases" {
         var dummy_ws = createMockWebSocket(gpa);
         try app.connection_manager.onOpen(&dummy_ws);
         // Don't add any subscriptions
-        app.connection_manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws, 1000, "");
     }
 
     // Test: Connection with large subscription list
@@ -250,7 +250,7 @@ test "connection: state deallocation edge cases" {
         while (i < 128) : (i += 1) {
             try state.subscription_ids.append(state.allocator, i);
         }
-        app.connection_manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws, 1000, "");
     }
 }
 
@@ -279,5 +279,5 @@ test "connection: uWS backpressure is accepted and dropped is terminal" {
     conn.ws.test_send_status = .dropped;
     try testing.expectError(error.Dropped, conn.send("dropped"));
 
-    app.connection_manager.onClose(&dummy_ws);
+    app.connection_manager.onClose(&dummy_ws, 1000, "");
 }
