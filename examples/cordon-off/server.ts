@@ -457,7 +457,7 @@ await writeFile(
 		server: {
 			host,
 			port: databasePort,
-			idleTimeoutSeconds: 2,
+			idleTimeoutSeconds: 5,
 			...(tlsConfig ? { tls: tlsConfig } : {}),
 		},
 		dataDir,

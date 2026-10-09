@@ -32,7 +32,7 @@ export const MAX_COUNTRIES = 64;
 export const MAX_PLAYER_NAME_LENGTH = 16;
 export const COUNTRY_RESERVATION_MS = 10_000;
 // A disconnected player can reconnect and resume at the saved cell for this long.
-export const PLAYER_RESUME_GRACE_MS = 20_000;
+export const PLAYER_RESUME_GRACE_MS = 15_000;
 // Farthest-point sampling in OKLab, seeded with eight vivid colors.
 // Lightness 0.55–0.94 and chroma >= 0.055 keep claims visible on the dark map.
 export const COUNTRY_COLORS = [
