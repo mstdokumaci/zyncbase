@@ -113,7 +113,9 @@ type Tone = {
 /** Schedule one enveloped oscillator; a no-op when audio is unavailable. */
 export function scheduleTone(target: GainNode, tone: Tone) {
 	const audioContext = audio();
-	if (!audioContext || document.hidden) return;
+	// A muted game must not synthesize: zero-gain nodes still cost main-thread
+	// time and keep the audio graph busy on every note.
+	if (!audioContext || document.hidden || muted) return;
 	const at = Math.max(tone.at, audioContext.currentTime);
 	const duration = Math.max(0.02, tone.duration);
 	const oscillator = audioContext.createOscillator();
