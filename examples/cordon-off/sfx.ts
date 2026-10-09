@@ -84,7 +84,6 @@ const muteButton = document.querySelector<HTMLButtonElement>("#mute-toggle");
 
 function renderMute() {
 	if (!muteButton) return;
-	muteButton.textContent = muted ? "UNMUTE" : "MUTE";
 	muteButton.setAttribute("aria-pressed", String(muted));
 }
 

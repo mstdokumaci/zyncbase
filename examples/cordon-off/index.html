@@ -57,7 +57,13 @@
 	<div class="hud">
 		<span class="round" id="round" hidden></span>
 		<span class="connection" id="connection" role="status"></span>
-		<button class="mute-toggle" id="mute-toggle" type="button" aria-label="Mute sound" aria-pressed="false">MUTE</button>
+		<button class="mute-toggle" id="mute-toggle" type="button" aria-label="Mute sound" aria-pressed="false">
+			<svg viewBox="0 0 16 16" aria-hidden="true">
+				<path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor" />
+				<path class="waves" d="M11.5 6a3.5 3.5 0 0 1 0 4M13.5 4a6.5 6.5 0 0 1 0 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+				<path class="slash" d="M3 3l10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+			</svg>
+		</button>
 	</div>
 	<main id="lobby">
 		<div class="lobby-top">
