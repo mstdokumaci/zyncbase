@@ -134,11 +134,12 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	expect(world.owners[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 3]).toBe(
 		alice.country_id,
 	);
+	// The dot stays frozen in its chunk for the reconnect grace window.
 	expect(
 		readCoordinates(
 			world.userChunk(userChunkIndex(COUNTRY_CHUNK_WIDTH + 3, 10)).coordinates,
 		).some((dot) => dot.slot === alice.slot),
-	).toBe(false);
+	).toBe(true);
 });
 
 test("color-index chunks round-trip and reject malformed streams", () => {
@@ -762,7 +763,7 @@ test("input only joins country codes and unused country reservations can be rele
 	);
 });
 
-test("leave keeps a 20s tombstone row so same-id reconnects resume in place", () => {
+test("leave keeps a 15s tombstone row so same-id reconnects resume in place", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Alice",
@@ -783,13 +784,14 @@ test("leave keeps a 20s tombstone row so same-id reconnects resume in place", ()
 		last_y: y,
 	});
 	world.remove("alice", 0);
-	// Dots vanish immediately but the row lingers with its final position.
+	// The dot freezes in place during the grace window while the row lingers
+	// with its final position.
 	expect(world.players.has("alice")).toBe(false);
 	expect(
 		readCoordinates(world.userChunk(userChunkIndex(x, y)).coordinates).some(
 			(dot) => dot.slot === player.slot,
 		),
-	).toBe(false);
+	).toBe(true);
 	expect(world.playerRow("alice")).toMatchObject({ last_x: x, last_y: y });
 	expect(world.dirtyPlayerRows.has("alice")).toBe(true);
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
@@ -802,11 +804,18 @@ test("leave keeps a 20s tombstone row so same-id reconnects resume in place", ()
 	const returned = world.players.get("alice");
 	expect([returned?.x, returned?.y]).toEqual([x, y]);
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
-	// After the window the row is queued for removal.
+	// After the window the row is queued for removal and the ghost leaves
+	// its chunk.
 	world.remove("alice", 1);
 	world.tick(1 + PLAYER_RESUME_GRACE_MS);
 	expect(world.playerRow("alice")).toBeUndefined();
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
+	expect(world.dirtyUserChunks.has(userChunkIndex(x, y))).toBe(true);
+	expect(
+		readCoordinates(world.userChunk(userChunkIndex(x, y)).coordinates).some(
+			(dot) => dot.slot === player.slot,
+		),
+	).toBe(false);
 	const drained = drainPublishState(world);
 	const ops = buildPublishOperations(world, drained);
 	expect(ops).toContainEqual({ op: "remove", path: ["users", "alice"] });

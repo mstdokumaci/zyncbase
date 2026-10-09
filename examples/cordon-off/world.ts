@@ -791,6 +791,9 @@ export class World {
 		if (grave) {
 			this.graveyard.delete(id);
 			this.dirtyRemovedPlayerRows.delete(id);
+			this.dirtyUserChunks.add(
+				userChunkIndex(grave.row.last_x, grave.row.last_y),
+			);
 			const { last_x: x, last_y: y } = grave.row;
 			if (
 				x >= 0 &&
@@ -899,12 +902,11 @@ export class World {
 	remove(id: string, now: number) {
 		const player = this.players.get(id);
 		if (!player) return;
-		this.dirtyUserChunks.add(userChunkIndex(player.x, player.y));
 		this.players.delete(id);
-		// Tombstone: the dots vanish now, but the roster row lingers with its
-		// final position so a same-id reconnect resumes in place. Expiry runs
-		// from disconnect time, giving every reconnect the full grace window.
-		// It is purely in-memory; the row shape
+		// Tombstone: the dot freezes in place for the reconnect window while the
+		// roster row keeps the final position, so a same-id reconnect resumes in
+		// place. Expiry runs from disconnect time, giving every reconnect the
+		// full grace window. It is purely in-memory; the row shape
 		// never changes, so rejoin overwrites it with no field-clearing hazards.
 		const row: PlayerRow = {
 			id: player.id,
@@ -942,6 +944,10 @@ export class World {
 		for (const [id, grave] of this.graveyard) {
 			if (now < grave.expires) continue;
 			this.graveyard.delete(id);
+			// Expiring ghost: rewrite its chunk so the frozen dot disappears.
+			this.dirtyUserChunks.add(
+				userChunkIndex(grave.row.last_x, grave.row.last_y),
+			);
 			if (!this.players.has(id)) this.dirtyRemovedPlayerRows.add(id);
 		}
 	}
@@ -1206,6 +1212,12 @@ export class World {
 		const dots: Dot[] = [...this.players.values()]
 			.filter((player) => userChunkIndex(player.x, player.y) === index)
 			.map(({ slot, x, y }) => ({ slot, x, y }));
+		// Grace tombstones keep their dot frozen in the chunk until the window
+		// expires, so a transient drop never blinks the player off the map.
+		for (const grave of this.graveyard.values()) {
+			const { last_x: x, last_y: y, slot } = grave.row;
+			if (userChunkIndex(x, y) === index) dots.push({ slot, x, y });
+		}
 		return {
 			id: rowId(index),
 			coordinates: encodeCoordinates(index, dots),
