@@ -44,8 +44,20 @@ pub const CheckpointWorker = struct {
         duration_ms: u64,
         wal_size_before: usize,
         wal_size_after: usize,
+        frames_checkpointed: usize = 0,
+        frames_in_wal: usize = 0,
         success: bool,
     };
+
+    /// A passive checkpoint that left frames behind found a pinned WAL: a
+    /// reader still holds a snapshot older than the backfilled frames. Passive
+    /// and full modes cannot reset the file, so only a truncate checkpoint can
+    /// clear the remainder.
+    pub fn shouldEscalateFromPassive(result: CheckpointResult) bool {
+        return result.success and
+            result.mode == .passive and
+            result.frames_checkpointed < result.frames_in_wal;
+    }
 
     /// Metrics for Prometheus export
     pub const CheckpointMetrics = struct {
@@ -145,7 +157,7 @@ pub const CheckpointWorker = struct {
         const wal_size_before = self.wal_size.load(.acquire);
 
         // Execute checkpoint
-        _ = self.storage_engine.executeCheckpoint(mode) catch |err| {
+        const stats = self.storage_engine.executeCheckpoint(mode) catch |err| {
             // Increment failure counter
             _ = self.failed_checkpoint_count.fetchAdd(1, .acq_rel);
 
@@ -169,22 +181,26 @@ pub const CheckpointWorker = struct {
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);
         self.last_checkpoint_duration_ms.store(duration, .release);
 
-        // Query new WAL size
-        const new_wal_size = try self.storage_engine.getWalSize();
-        self.wal_size.store(new_wal_size, .release);
+        // Report the sizes and frames measured by the checkpoint itself; the
+        // cached atomic can be stale while a checkpoint runs.
+        self.wal_size.store(stats.wal_size_after, .release);
 
-        std.log.info("Checkpoint completed: mode={s}, duration={}ms, wal_before={}, wal_after={}", .{
+        std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
             @tagName(mode),
             duration,
-            wal_size_before,
-            new_wal_size,
+            stats.frames_checkpointed,
+            stats.frames_in_wal,
+            stats.wal_size_before,
+            stats.wal_size_after,
         });
 
         return CheckpointResult{
             .mode = mode,
             .duration_ms = duration,
-            .wal_size_before = wal_size_before,
-            .wal_size_after = new_wal_size,
+            .wal_size_before = stats.wal_size_before,
+            .wal_size_after = stats.wal_size_after,
+            .frames_checkpointed = stats.frames_checkpointed,
+            .frames_in_wal = stats.frames_in_wal,
             .success = true,
         };
     }
@@ -205,31 +221,30 @@ pub const CheckpointWorker = struct {
             };
         };
 
-        // If passive mode didn't reduce WAL size significantly, escalate to full
-        if (self.config.checkpoint_mode == .passive and result.success) {
-            const reduction = if (result.wal_size_before > result.wal_size_after)
-                result.wal_size_before - result.wal_size_after
-            else
-                0;
-
-            // If WAL size reduced by less than 10%, escalate to full mode
-            const reduction_percent = if (result.wal_size_before > 0)
-                (reduction * 100) / result.wal_size_before
-            else
-                0;
-
-            if (reduction_percent < 10) {
-                std.log.warn("Passive checkpoint only reduced WAL by {}%, escalating to full mode", .{reduction_percent});
-                result = self.performCheckpointWithRetry(.full, self.config.max_attempts) catch |err| {
-                    if (err != error.CheckpointFailed) return err;
-                    return CheckpointResult{
-                        .mode = .full,
-                        .duration_ms = 0,
-                        .wal_size_before = result.wal_size_after,
-                        .wal_size_after = self.wal_size.load(.acquire),
-                        .success = false,
-                    };
+        // Passive and full checkpoints backfill WAL pages but cannot reset or
+        // truncate the file, so file-size reduction is not a completion signal.
+        // Escalate only when frames remain uncheckpointed: a reader is pinning
+        // the WAL, and only a truncate checkpoint can clear the remainder.
+        if (shouldEscalateFromPassive(result)) {
+            const remaining = result.frames_in_wal - result.frames_checkpointed;
+            std.log.warn("Passive checkpoint left {}/{} WAL frames uncheckpointed, escalating to truncate", .{ remaining, result.frames_in_wal });
+            result = self.performCheckpointWithRetry(.truncate, self.config.max_attempts) catch |err| {
+                if (err != error.CheckpointFailed) return err;
+                return CheckpointResult{
+                    .mode = .truncate,
+                    .duration_ms = 0,
+                    .wal_size_before = result.wal_size_after,
+                    .wal_size_after = self.wal_size.load(.acquire),
+                    .frames_checkpointed = 0,
+                    .frames_in_wal = result.frames_in_wal,
+                    .success = false,
                 };
+            };
+            if (result.success and result.frames_checkpointed < result.frames_in_wal) {
+                std.log.warn("Truncate checkpoint still left {}/{} WAL frames uncheckpointed; a reader is pinning the WAL", .{
+                    result.frames_in_wal - result.frames_checkpointed,
+                    result.frames_in_wal,
+                });
             }
         }
 

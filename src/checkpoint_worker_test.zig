@@ -281,6 +281,8 @@ test "CheckpointWorker: CheckpointResult structure" {
         .duration_ms = 100,
         .wal_size_before = 5000,
         .wal_size_after = 1000,
+        .frames_checkpointed = 8,
+        .frames_in_wal = 10,
         .success = true,
     };
 
@@ -288,6 +290,8 @@ test "CheckpointWorker: CheckpointResult structure" {
     try testing.expect(result.duration_ms == 100);
     try testing.expect(result.wal_size_before == 5000);
     try testing.expect(result.wal_size_after == 1000);
+    try testing.expect(result.frames_checkpointed == 8);
+    try testing.expect(result.frames_in_wal == 10);
     try testing.expect(result.success);
 }
 
@@ -418,15 +422,12 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
     const manager = &ctx.manager;
 
     // Property: WAL size should decrease or stay same after successful checkpoint
-    const initial_wal_size: usize = 5000;
-    manager.wal_size.store(initial_wal_size, .release);
-
     const result = try manager.performCheckpoint(.truncate);
 
-    // WAL size after should be <= WAL size before
+    // Sizes are reported by the checkpoint itself, not the cached metric; an
+    // in-memory database reports zero-byte WAL files.
     try testing.expect(result.success);
     try testing.expect(result.wal_size_after <= result.wal_size_before);
-    try testing.expect(result.wal_size_before == initial_wal_size);
 }
 
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
@@ -476,7 +477,49 @@ test "checkpoint: failure handling - failure counter starts at zero" {
     try testing.expect(initial_failures == 0);
 }
 
-test "checkpoint: escalation logic - works correctly when needed" {
+test "checkpoint: escalation logic - frame-based decision" {
+    // Escalation keys off uncheckpointed frames, not WAL file size: passive
+    // and full modes cannot reset the file, so a size-based signal always
+    // fired. A clean passive pass (no frames left) must not escalate.
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 0,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 0,
+        .frames_in_wal = 0,
+        .success = true,
+    }));
+    try testing.expect(CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .full,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = true,
+    }));
+    try testing.expect(!CheckpointWorker.shouldEscalateFromPassive(.{
+        .mode = .passive,
+        .duration_ms = 1,
+        .wal_size_before = 4096,
+        .wal_size_after = 4096,
+        .frames_checkpointed = 4,
+        .frames_in_wal = 10,
+        .success = false,
+    }));
+}
+
+test "checkpoint: empty passive checkpoint does not escalate" {
     const allocator = std.heap.smp_allocator;
 
     var ctx: checkpoint_helpers.Context = undefined;
@@ -489,13 +532,9 @@ test "checkpoint: escalation logic - works correctly when needed" {
 
     const manager = &ctx.manager;
 
-    // Property: Escalation logic works correctly.
-    // The in-memory WAL size is 0, so a passive checkpoint cannot reduce the
-    // WAL by >=10% and the worker must escalate to full mode.
+    // An empty WAL checkpoints cleanly, so no escalation to truncate happens.
     const result = try manager.performCheckpointWithEscalation();
 
-    // Verify checkpoint was attempted (success flag should be set)
     try testing.expect(result.success);
-    // Verify escalation actually occurred (passive would mean no escalation)
-    try testing.expect(result.mode != .passive);
+    try testing.expect(result.mode == .passive);
 }
