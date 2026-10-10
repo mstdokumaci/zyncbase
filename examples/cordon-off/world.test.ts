@@ -586,7 +586,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 test("restart prunes abandoned zero-land countries and keeps codes monotonic", () => {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const src = new World(land);
-	let now = 0;
+	const now = 0;
 	src.input(
 		"f",
 		{
