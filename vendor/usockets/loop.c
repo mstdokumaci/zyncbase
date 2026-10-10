@@ -32,6 +32,7 @@ void us_internal_loop_data_init(struct us_loop_t *loop, void (*wakeup_cb)(struct
     loop->data.closed_head = 0;
     loop->data.low_prio_head = 0;
     loop->data.low_prio_budget = 0;
+    loop->data.sweep_pending = 0;
 
     loop->data.pre_cb = pre_cb;
     loop->data.post_cb = post_cb;
@@ -101,6 +102,11 @@ void us_internal_timer_sweep(struct us_loop_t *loop) {
             while (1) {
                 /* We only read from 1 random cache line here */
                 if (short_ticks == s->timeout || long_ticks == s->long_timeout) {
+                    /* A timeout armed this iteration is deferred one tick. */
+                    if (short_ticks == s->timeout && s->timeout_iteration == (unsigned int) loop_data->iteration_nr) {
+                        s->timeout = (unsigned short) ((s->timeout + 1) % LIBUS_TIMEOUT_TICK_COUNT);
+                        continue;
+                    }
                     break;
                 }
 
@@ -175,7 +181,11 @@ void us_internal_free_closed_sockets(struct us_loop_t *loop) {
 }
 
 void sweep_timer_cb(struct us_internal_callback_t *cb) {
-    us_internal_timer_sweep(cb->loop);
+    /* Defer the sweep to us_internal_loop_post: inbound frames dispatched
+     * during this iteration (such as a WebSocket pong) reset socket timeouts
+     * before the reaper evaluates them. Running the sweep here would let a
+     * timeout win a race against data already sitting in the socket buffer. */
+    cb->loop->data.sweep_pending = 1;
 }
 
 long long us_loop_iteration_number(struct us_loop_t *loop) {
@@ -190,6 +200,12 @@ void us_internal_loop_pre(struct us_loop_t *loop) {
 }
 
 void us_internal_loop_post(struct us_loop_t *loop) {
+    /* All ready polls were dispatched above; only now evaluate timeouts so
+     * pending inbound data (e.g. a pong) is always consumed first. */
+    if (loop->data.sweep_pending) {
+        loop->data.sweep_pending = 0;
+        us_internal_timer_sweep(loop);
+    }
     us_internal_free_closed_sockets(loop);
     loop->data.post_cb(loop);
 }
