@@ -208,7 +208,7 @@ pub const ConnectionManager = struct {
             if (self.active_connection_count.fetchSub(1, .acq_rel) == 1) {
                 self.last_conn_notifier.notify();
             }
-            std.log.info("Client disconnected: id={} code={} reason={s}", .{ conn_id, code, reason });
+            std.log.info("Client disconnected: id={} code={} reason={f}", .{ conn_id, code, std.zig.fmtString(reason) });
         }
     }
 
