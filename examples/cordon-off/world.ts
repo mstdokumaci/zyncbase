@@ -857,6 +857,9 @@ export class World {
 		this.players.set(id, player);
 		this.dirtyUserChunks.add(userChunkIndex(x, y));
 		this.dirtyPlayerRows.add(id);
+		// Landing paints like any other arrival: the dot never rests on land
+		// its country does not hold, on either spawn path or a grace resume.
+		this.claim(y * WIDTH + x, countryId, false, id);
 		return player;
 	}
 

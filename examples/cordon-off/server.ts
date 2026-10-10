@@ -304,15 +304,27 @@ function releaseSession(sessionId: string) {
 }
 
 /** `world.join` throws only when no land is available; callers treat that as a
- * rejection instead of a game-stopping error. */
+ * rejection instead of a game-stopping error. Rejections are logged with the
+ * failing branch so reconnects that lose their country stay diagnosable. */
 function tryJoin(
 	id: string,
 	data: Record<string, unknown>,
 	now: number,
 ): ReturnType<World["join"]> {
+	const countryId = Number(data.country_id);
 	try {
-		return world.join(id, data, now);
-	} catch {
+		const player = world.join(id, data, now);
+		if (!player) {
+			const country = world.countries.get(countryId);
+			console.warn(
+				`player_join rejected: user=${id} country=${countryId} exists=${country !== undefined} bot=${country?.is_bot ?? "-"} humans=${world.humanCount} name=${JSON.stringify(data.name)}`,
+			);
+		}
+		return player;
+	} catch (error) {
+		console.warn(
+			`player_join threw: user=${id} country=${countryId} error=${error instanceof Error ? error.message : String(error)}`,
+		);
 		return undefined;
 	}
 }
