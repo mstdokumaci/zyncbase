@@ -200,7 +200,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
                 const conn = try ctx.app.connection_manager.acquireConnection(ws.getConnId());
                 try testing.expectEqual(ws.getConnId(), conn.id);
 
-                ctx.app.connection_manager.onClose(&ws);
+                ctx.app.connection_manager.onClose(&ws, 1000, "");
                 if (conn.release()) {
                     ctx.app.releaseConnection(conn);
                 }
@@ -288,7 +288,7 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try testing.expectEqual(@as(usize, connection_count), connectionCount(&app));
 
     for (&websockets) |*ws| {
-        app.connection_manager.onClose(ws);
+        app.connection_manager.onClose(ws, 1000, "");
     }
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
 }
@@ -305,7 +305,7 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     dummy_ws.test_send_observer = helpers.sendRecorderObserver;
     dummy_ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&dummy_ws);
-    defer app.connection_manager.onClose(&dummy_ws);
+    defer app.connection_manager.onClose(&dummy_ws, 1000, "");
     // onOpen sends schema sync — ignore it.
     recorder.reset();
 
@@ -350,7 +350,7 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     ws.test_send_observer = helpers.sendRecorderObserver;
     ws.test_send_observer_ctx = &recorder;
     try app.connection_manager.onOpen(&ws);
-    defer app.connection_manager.onClose(&ws);
+    defer app.connection_manager.onClose(&ws, 1000, "");
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer app.releaseConnection(conn);
     const session = if (conn.session) |*session| session else return error.MissingSession;
@@ -419,7 +419,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
                 var ws = helpers.createMockWebSocket(ctx.allocator);
                 try ctx.app.connection_manager.onOpen(&ws);
                 ctx.ids[ctx.offset + i] = ws.getConnId();
-                ctx.app.connection_manager.onClose(&ws);
+                ctx.app.connection_manager.onClose(&ws, 1000, "");
             }
         }
     };

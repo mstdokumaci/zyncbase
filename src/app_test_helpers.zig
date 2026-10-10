@@ -462,7 +462,7 @@ pub const AppTestContext = struct {
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
-            self.app.connection_manager.onClose(self.ws);
+            self.app.connection_manager.onClose(self.ws, 1000, "");
 
             // 2. Test drops its reference (may return to pool)
             if (self.conn.release()) {
@@ -484,7 +484,7 @@ pub const AppTestContext = struct {
 
         ws.* = createMockWebSocket(gpa);
         try self.connection_manager.onOpen(ws);
-        errdefer self.connection_manager.onClose(ws);
+        errdefer self.connection_manager.onClose(ws, 1000, "");
 
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         errdefer {
@@ -540,7 +540,7 @@ pub const AppTestContext = struct {
 
             if (maybe_conn) |ws| {
                 var local_ws = ws; // Mutability for callback
-                self.connection_manager.onClose(&local_ws);
+                self.connection_manager.onClose(&local_ws, 1000, "");
             } else {
                 break;
             }

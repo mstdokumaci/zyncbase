@@ -55,7 +55,7 @@ test "logging: connection events" {
         try testing.expectEqual(conn_id, conn_state.id);
 
         // Clean up
-        manager.onClose(&ws);
+        manager.onClose(&ws, 1000, "");
     }
 
     // Test 2: Connection close logs connection ID
@@ -67,7 +67,7 @@ test "logging: connection events" {
         const conn_id = ws.getConnId();
 
         // Close connection - this should log "WebSocket connection closed: id={}, code={}, message={s}"
-        manager.onClose(&ws);
+        manager.onClose(&ws, 1000, "");
 
         // Verify connection was removed
         const result = manager.acquireConnection(conn_id);
@@ -97,7 +97,7 @@ test "logging: connection events" {
 
         // Close all connections
         for (&connections) |*ws| {
-            manager.onClose(ws);
+            manager.onClose(ws, 1000, "");
         }
     }
 
@@ -117,7 +117,7 @@ test "logging: connection events" {
 
                     // Open and close connection
                     ctx.manager.onOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
-                    ctx.manager.onClose(&ws);
+                    ctx.manager.onClose(&ws, 1000, "");
                 }
             }
         }.run;
@@ -186,7 +186,7 @@ test "logging: error details" {
         manager.onMessage(&ws, invalid_msg, .binary);
 
         // Clean up
-        manager.onClose(&ws);
+        manager.onClose(&ws, 1000, "");
     }
 
     // Test 2: Missing required fields logs error
@@ -209,7 +209,7 @@ test "logging: error details" {
         // This should log: "Failed to extract message info from connection {}: {}"
         manager.onMessage(&ws, incomplete_msg, .binary);
 
-        manager.onClose(&ws);
+        manager.onClose(&ws, 1000, "");
     }
 
     // Test 3: Missing records return null (not an error)
@@ -245,7 +245,7 @@ test "logging: error details" {
         const empty_map = &[_]u8{0x80};
         manager.onMessage(&ws, empty_map, .binary);
 
-        manager.onClose(&ws);
+        manager.onClose(&ws, 1000, "");
     }
 }
 
@@ -284,7 +284,7 @@ test "logging: level filtering" {
         app.connection_manager.onMessage(&ws, "invalid", .binary);
 
         // Error level: error handling
-        app.connection_manager.onClose(&ws);
+        app.connection_manager.onClose(&ws, 1000, "");
     }
 }
 
@@ -326,7 +326,7 @@ test "logging: message formatting" {
         app.connection_manager.onMessage(&ws, "invalid", .binary);
 
         // Close logging includes connection ID and close code
-        app.connection_manager.onClose(&ws);
+        app.connection_manager.onClose(&ws, 1000, "");
     }
 
     // Test 3: Verify log messages are properly formatted with parameters
@@ -348,7 +348,7 @@ test "logging: message formatting" {
 
         // Close all with different codes
         for (&connections) |*ws| {
-            app.connection_manager.onClose(ws);
+            app.connection_manager.onClose(ws, 1000, "");
         }
     }
 }
