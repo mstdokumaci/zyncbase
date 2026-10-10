@@ -65,8 +65,6 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	expect([alice.x, alice.y]).not.toEqual([bob.x, bob.y]);
 	alice.x = COUNTRY_CHUNK_WIDTH - 1;
 	alice.y = 10;
-	world.dirtyCountryChunks.clear();
-	world.dirtyUserChunks.clear();
 	input("alice", "right");
 	ticks(1);
 	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH - 1);
@@ -103,7 +101,8 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH);
 	ticks(1);
 	expect(alice.x).toBe(COUNTRY_CHUNK_WIDTH + 1);
-	expect(south.count).toBe(0);
+	// Beta keeps the cell it painted at spawn; the fixture cell is captured.
+	expect(south.count).toBe(1);
 
 	land[10 * WIDTH + COUNTRY_CHUNK_WIDTH + 2] = 0;
 	ticks(RULES.neutral + RULES.crossing - 1);
@@ -419,12 +418,23 @@ test("country creation stops at 64 live countries and freed names are reusable",
 	);
 	expect(world.players.has("ally")).toBe(true);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
+	// A rival nation captures both holders' painted cells, leaving Nation 0
+	// with no land while both players still roam.
+	const founder = world.players.get("founder:0");
+	const holder = world.players.get("ally");
+	const rival = world.players.get("founder:1");
+	if (!founder || !holder || !rival) throw new Error("Players missing");
+	for (const target of [founder, holder]) {
+		rival.x = target.x - 1;
+		rival.y = target.y;
+		world.input("founder:1", { direction: "right", seq: 2 }, now);
+		for (let i = 0; i < RULES.enemy; i++) world.tick(now);
+	}
+	expect(world.countries.get(founder.country_id)?.count).toBe(0);
 	// Nation 0 still has a live holder, so removing one of two holders keeps it.
 	world.remove("founder:0", now);
 	expect(world.countries.size).toBe(MAX_COUNTRIES);
 	// The last holder leaves a zero-land country: the slot is reclaimed.
-	const holder = world.players.get("ally");
-	if (!holder) throw new Error("Holder missing");
 	const freed = holder.country_id;
 	world.remove("ally", now);
 	expect(world.countries.has(freed)).toBe(false);
@@ -549,13 +559,9 @@ test("capturing the last cell deletes only abandoned countries", () => {
 	const a = world.players.get("a");
 	const b = world.players.get("b");
 	if (!a || !b) throw new Error("Missing players");
-	b.x = 100;
-	b.y = 100;
-	const cell = 100 * WIDTH + 101;
-	world.owners[cell] = a.country_id;
-	const alpha = world.countries.get(a.country_id);
-	if (!alpha) throw new Error("Alpha missing");
-	alpha.count = 1;
+	// Alice's spawn paint is Alpha's only cell; Bob walks onto it.
+	b.x = a.x - 1;
+	b.y = a.y;
 	world.input(
 		"b",
 		{
@@ -567,7 +573,7 @@ test("capturing the last cell deletes only abandoned countries", () => {
 		now,
 	);
 	for (let i = 0; i < RULES.enemy; i++) world.tick(++now);
-	expect([b.x, b.y]).toEqual([101, 100]);
+	expect([b.x, b.y]).toEqual([a.x, a.y]);
 	expect(world.countries.get(a.country_id)?.count).toBe(0);
 	// a still roams, so landless Alpha survives.
 	expect(world.countries.has(a.country_id)).toBe(true);
@@ -580,20 +586,20 @@ test("capturing the last cell deletes only abandoned countries", () => {
 test("restart prunes abandoned zero-land countries and keeps codes monotonic", () => {
 	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
 	const src = new World(land);
-	let now = 0;
+	const now = 0;
 	src.input(
 		"f",
 		{
 			name: "Founder",
-			direction: "right",
+			direction: "idle",
 			country_id: src.country("Keep")?.country_id,
 			seq: 1,
 		},
 		now,
 	);
-	for (let i = 0; i < RULES.neutral; i++) src.tick(++now);
 	const keep = src.players.get("f");
 	if (!keep) throw new Error("Founder missing");
+	// The spawn paint alone keeps Keep alive across the restart.
 	expect(src.countries.get(keep.country_id)?.count).toBe(1);
 	const chunks = [...src.dirtyCountryChunks].map((index) =>
 		src.countryChunk(index),
@@ -629,6 +635,24 @@ test("restart prunes abandoned zero-land countries and keeps codes monotonic", (
 	const fresh = dst.players.get("n");
 	if (!fresh) throw new Error("Fresh missing");
 	const retired = fresh.country_id;
+	// Keep's player captures Fresh's only cell, so the last holder's
+	// departure reclaims the zero-land country.
+	dst.input(
+		"raider",
+		{
+			name: "Raider",
+			direction: "idle",
+			country_id: dst.country("Keep")?.country_id,
+			seq: 1,
+		},
+		now,
+	);
+	const raider = dst.players.get("raider");
+	if (!raider) throw new Error("Raider missing");
+	raider.x = fresh.x - 1;
+	raider.y = fresh.y;
+	dst.input("raider", { direction: "right", seq: 2 }, now);
+	for (let i = 0; i < RULES.enemy; i++) dst.tick(now);
 	dst.remove("n", now);
 	expect(dst.countries.has(retired)).toBe(false);
 	const drained = drainPublishState(dst);
@@ -797,8 +821,8 @@ test("leave keeps a 15s tombstone row so same-id reconnects resume in place", ()
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(false);
 	// Tombstones never pin countries or consume the human cap.
 	expect(world.humanCount).toBe(0);
-	// Leaving deleted landless North; the lobby re-issues it on rejoin while
-	// the tombstone still restores the exact cell.
+	// North keeps the cell it painted, so the lobby finds it again on rejoin
+	// while the tombstone still restores the exact cell.
 	const revived = world.country("North")?.country_id;
 	world.input("alice", { ...data, country_id: revived, seq: 2 }, 1);
 	const returned = world.players.get("alice");
@@ -1004,8 +1028,9 @@ test("founders spawn on a border inside taken land so the first move paints", ()
 	if (!founder) throw new Error("Missing founder");
 	const at = founder.y * WIDTH + founder.x;
 	// Spawned on enemy land, but on a border near the anchor: the local ring
-	// found it, no teleport to the disk edge (300px) or beyond.
-	expect(world.owners[at]).toBe(enemy.country_id);
+	// found it, no teleport to the disk edge (300px) or beyond. Landing paints,
+	// so the founder already holds the cell it stood on.
+	expect(world.owners[at]).toBe(country.country_id);
 	expect(
 		Math.abs(founder.x - center.x) + Math.abs(founder.y - center.y),
 	).toBeLessThan(128);
@@ -1097,13 +1122,11 @@ test("joining an abandoned country's territory still brings its bots", () => {
 		{
 			name: "Founder",
 			country_id: country.country_id,
-			direction: "right",
+			direction: "idle",
 			seq: 1,
 		},
 		now,
 	);
-	for (let i = 0; i < RULES.neutral * 2 + 5 && country.count === 0; i++)
-		world.tick(++now);
 	const founder = world.players.get("founder");
 	if (!founder) throw new Error("Missing founder");
 	expect(founder.point).toBeDefined();

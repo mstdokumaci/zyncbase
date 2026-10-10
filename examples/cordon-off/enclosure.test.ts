@@ -325,7 +325,7 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	expect(owner(32, 32)).toBe(1);
 	expect(owner(34, 34)).toBe(0);
 	expect(owner(40, 40)).toBe(2);
-	expect(world.countries.get(1)?.count).toBe(48);
+	expect(world.countries.get(1)?.count).toBe(49);
 	expect(world.countries.get(2)?.count).toBe(1);
 	// Only the 24-cell fill credits the mover; the step paint through the gap
 	// is not a capture, and a teammate gains nothing.
@@ -340,9 +340,12 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	])
 		expect(world.dirtyCountryChunks.has(countryChunkIndex(x, y))).toBe(true);
 	const restored = new World(world.land);
+	// Spawn paints and the capture rewrite chunks the fixture never seeded.
 	restored.restore(
 		[...world.countries.values()],
-		[...chunks].map((index) => world.countryChunk(index)),
+		[...new Set([...chunks, ...world.dirtyCountryChunks])].map((index) =>
+			world.countryChunk(index),
+		),
 	);
 	expect(restored.owners).toEqual(world.owners);
 	expect([...restored.countries.values()]).toEqual([
@@ -478,7 +481,7 @@ test("ordinary gains and exposed losses skip scans, independently of publication
 	try {
 		world.tick(0);
 		expect(fill).not.toHaveBeenCalled();
-		expect(world.countries.get(1)?.count).toBe(10);
+		expect(world.countries.get(1)?.count).toBe(20);
 		expect(world.countries.get(2)?.count).toBe(1);
 		for (const player of world.players.values()) player.direction = "idle";
 		expect(world.dirtyCountries.size).toBeGreaterThan(0);

@@ -12,6 +12,7 @@ import {
 	encodeCoordinates,
 	HEIGHT,
 	MAX_PLAYERS,
+	RULES,
 	USER_CHUNK_WIDTH,
 	WIDTH,
 } from "./shared";
@@ -92,9 +93,18 @@ test("a rejected batch restores every drained entry so retry resends all", async
 		},
 		0,
 	);
+	// Keeper takes Ghost's painted cell: the country goes landless but lives
+	// on its holder, so leaving is what removes it.
+	const keeper = world.players.get("keeper");
+	const ghost = world.players.get("ghost");
+	if (!keeper || !ghost) throw new Error("Players missing");
+	keeper.x = ghost.x - 1;
+	keeper.y = ghost.y;
+	world.input("keeper", { direction: "right", seq: 2 }, 1);
+	for (let tick = 0; tick < RULES.enemy; tick++) world.tick(tick + 2);
 	world.remove("ghost", 0);
-	const ghost = [...world.dirtyRemovedCountries];
-	expect(ghost).toHaveLength(1);
+	const removed = [...world.dirtyRemovedCountries];
+	expect(removed).toHaveLength(1);
 	// The ghost's dots vanish but its roster row lingers as a tombstone.
 	expect(world.dirtyPlayerRows.has("keeper")).toBe(true);
 	expect(world.dirtyPlayerRows.has("ghost")).toBe(true);
@@ -113,7 +123,7 @@ test("a rejected batch restores every drained entry so retry resends all", async
 	expect(operations.length).toBeGreaterThan(100);
 	expect(operations[0]).toEqual({
 		op: "remove",
-		path: ["countries", String(ghost[0])],
+		path: ["countries", String(removed[0])],
 	});
 	expect(operations).toContainEqual({
 		op: "set",
