@@ -102,6 +102,11 @@ void us_internal_timer_sweep(struct us_loop_t *loop) {
             while (1) {
                 /* We only read from 1 random cache line here */
                 if (short_ticks == s->timeout || long_ticks == s->long_timeout) {
+                    /* A timeout armed this iteration is deferred one tick. */
+                    if (short_ticks == s->timeout && s->timeout_iteration == (unsigned int) loop_data->iteration_nr) {
+                        s->timeout = (unsigned short) ((s->timeout + 1) % LIBUS_TIMEOUT_TICK_COUNT);
+                        continue;
+                    }
                     break;
                 }
 

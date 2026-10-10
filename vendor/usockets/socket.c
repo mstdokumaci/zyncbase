@@ -66,6 +66,7 @@ void us_socket_timeout(int ssl, struct us_socket_t *s, unsigned int seconds) {
     if (seconds) {
         unsigned int timeout_ticks = (seconds + LIBUS_TIMEOUT_GRANULARITY - 1) / LIBUS_TIMEOUT_GRANULARITY;
         s->timeout = ((unsigned int)s->context->timestamp + timeout_ticks) % LIBUS_TIMEOUT_TICK_COUNT;
+        s->timeout_iteration = (unsigned int) s->context->loop->data.iteration_nr;
     } else {
         s->timeout = LIBUS_TIMEOUT_DISABLED;
     }
