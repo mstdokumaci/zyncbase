@@ -4,6 +4,7 @@ import {
 	LOCAL_SEARCH_BUDGET,
 	localEnclosures,
 	mayEnclose,
+	ringOf,
 } from "./enclosure";
 import { type Bounds, HoleFiller } from "./filler";
 import {
@@ -1051,22 +1052,131 @@ export class World {
 				? localEnclosures(this.owners, countryId, starts, box, WIDTH)
 				: undefined;
 			if (local) {
-				for (const cell of local) this.claim(cell, countryId, true, by);
+				this.captureEnclosure(local, countryId, by);
 				continue;
 			}
 			// Filling only grows a country inside its original bounds. Other
 			// countries only shrink, so these bounds stay safe throughout the pass.
-			const labels = this.filler.fill(this.owners, countryId, box);
-			for (let y = box.top; y <= box.bottom; y++) {
-				const end = y * WIDTH + box.right;
-				for (let cell = y * WIDTH + box.left; cell <= end; cell++)
-					if (labels[cell] === 0 && this.land[cell])
-						this.claim(cell, countryId, true, by);
-			}
+			this.captureEnclosure(
+				this.filler.fill(this.owners, countryId, box),
+				countryId,
+				by,
+			);
 		}
 		this.changedCountries.clear();
 		this.enclosureCountries.clear();
 		this.enclosureTriggers.clear();
+	}
+
+	/** An enclosure fill takes a whole region at once, so claim()'s per-pixel
+	 * bookkeeping is hoisted out of the loop: the owner write stays, the roster
+	 * counters, capture credit, dirty sets and bounds move out, and the chunk
+	 * index comes from the ascending cell order instead of dividing per pixel.
+	 * That loop was 97% of a large closure's tick; this is the 3%. */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the loop and the hoisted per-region bookkeeping are two halves of one bulk claim.
+	private captureEnclosure(
+		cells: ArrayLike<number>,
+		countryId: number,
+		by?: string,
+	) {
+		if (this.enclosureCountries.get(countryId) !== null) {
+			// Only the fill pass marks a country processed. Anything else keeps
+			// the per-cell path so enclosure candidates are still queued.
+			for (let i = 0; i < cells.length; i++)
+				this.claim(cells[i], countryId, true, by);
+			return;
+		}
+		const capturer = by ? this.players.get(by) : undefined;
+		const lost = new Map<number, number>();
+		let taken = 0;
+		// Cells arrive ascending, so the row only ever advances and the chunk
+		// boundary only has to be divided once per column block.
+		let row = -1,
+			rowEnd = 0,
+			rowBase = 0,
+			chunkRow = 0,
+			chunkFrom = WIDTH,
+			chunkTo = WIDTH;
+		let minX = WIDTH,
+			maxX = -1,
+			minY = HEIGHT,
+			maxY = -1;
+		let lastOwner = 0,
+			reclaim = false;
+		for (let i = 0; i < cells.length; i++) {
+			const cell = cells[i],
+				owner = this.owners[cell];
+			if (!this.land[cell] || owner === countryId) continue;
+			this.owners[cell] = countryId;
+			taken++;
+			if (owner) {
+				lost.set(owner, (lost.get(owner) ?? 0) + 1);
+				// A loss needs reclaim unless we can prove this pixel still reaches
+				// the exterior. Keep any scan already required by an earlier change.
+				if (owner !== lastOwner) {
+					lastOwner = owner;
+					reclaim = this.enclosureCountries.get(owner) !== null;
+				}
+				if (reclaim) this.queueEnclosure(owner, cell);
+			}
+			if (cell >= rowEnd) {
+				do {
+					row++;
+					rowEnd = (row + 1) * WIDTH;
+				} while (cell >= rowEnd);
+				rowBase = row * WIDTH;
+				chunkRow = ((row / COUNTRY_CHUNK_HEIGHT) | 0) * COUNTRY_COLUMNS;
+				chunkFrom = WIDTH;
+				if (row < minY) minY = row;
+				if (row > maxY) maxY = row;
+			}
+			const x = cell - rowBase;
+			if (x < minX) minX = x;
+			if (x > maxX) maxX = x;
+			if (x < chunkFrom || x >= chunkTo) {
+				const column = (x / COUNTRY_CHUNK_WIDTH) | 0;
+				chunkFrom = column * COUNTRY_CHUNK_WIDTH;
+				chunkTo = chunkFrom + COUNTRY_CHUNK_WIDTH;
+				this.dirtyCountryChunks.add(chunkRow + column);
+			}
+		}
+		if (!taken) return;
+		// Four corners cover the region's extent; fills stay inside the country's
+		// bounds today, so this is normally a no-op the fill does not have to skip.
+		this.extendBounds(countryId, minY * WIDTH + minX);
+		this.extendBounds(countryId, minY * WIDTH + maxX);
+		this.extendBounds(countryId, maxY * WIDTH + minX);
+		this.extendBounds(countryId, maxY * WIDTH + maxX);
+		const country = this.countries.get(countryId);
+		if (country) {
+			country.count += taken;
+			if (capturer) {
+				capturer.captured += taken;
+				this.dirtyPlayerRows.add(capturer.id);
+				// Only human-visible captures need the roster flush to jump the
+				// throttle; bot counts ride the normal roster cadence.
+				if (!capturer.is_bot) this.capturesPending = true;
+			}
+		}
+		this.changedCountries.add(countryId);
+		this.dirtyCountries.add(countryId);
+		// Insertion order matches the per-cell path's first-touch order, which is
+		// what decides who resolves their enclosure first in this pass.
+		for (const [owner, count] of lost) {
+			const previous = this.countries.get(owner);
+			if (previous) {
+				previous.count -= count;
+				if (by !== undefined) {
+					previous.lost = (previous.lost ?? 0) + count;
+					// A bot country never holds humans; its loss is the only one
+					// that can stay on the normal roster cadence.
+					if (!previous.is_bot) this.capturesPending = true;
+				}
+			}
+			this.dirtyCountries.add(owner);
+			this.changedCountries.add(owner);
+			if (previous?.count === 0) this.maybeDeleteCountry(owner);
+		}
 	}
 
 	private queueEnclosure(countryId: number, cell: number) {
@@ -1109,20 +1219,20 @@ export class World {
 		this.extendBounds(countryId, cell);
 		this.changedCountries.add(countryId);
 		const starts = this.enclosureCountries.get(countryId);
-		if (
-			starts !== null &&
-			// A later claim can consume a queued start while its hole still exists.
-			(starts?.has(cell) || mayEnclose(this.owners, countryId, cell, WIDTH))
-		) {
-			// A teammate moving in the same tick may overwrite the credit; one
-			// cue for the enclosure is enough.
-			if (by) this.enclosureTriggers.set(countryId, by);
-			const x = cell % WIDTH;
-			if (cell >= WIDTH) this.queueEnclosure(countryId, cell - WIDTH);
-			if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
-			if (cell < this.owners.length - WIDTH)
-				this.queueEnclosure(countryId, cell + WIDTH);
-			if (x > 0) this.queueEnclosure(countryId, cell - 1);
+		if (starts !== null) {
+			// A later claim can consume a queued start while its hole still exists,
+			// so that case queues the whole ring rather than trusting the gate.
+			const box = this.bounds.get(countryId);
+			const atRisk =
+				starts?.has(cell) || !box
+					? ringOf(this.owners, cell, WIDTH)
+					: mayEnclose(this.owners, countryId, cell, WIDTH, box);
+			if (atRisk) {
+				// A teammate moving in the same tick may overwrite the credit; one
+				// cue for the enclosure is enough.
+				if (by) this.enclosureTriggers.set(countryId, by);
+				for (const neighbor of atRisk) this.queueEnclosure(countryId, neighbor);
+			}
 		}
 		this.dirtyCountryChunks.add(
 			countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
