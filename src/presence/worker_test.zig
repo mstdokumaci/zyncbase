@@ -57,11 +57,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 256, null, null);
-    defer send_node_pool.deinit();
-
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
@@ -163,11 +159,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 256, null, null);
-    defer send_node_pool.deinit();
-
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
@@ -215,11 +207,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 256, null, null);
-    defer send_node_pool.deinit();
-
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
@@ -277,11 +265,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 256, null, null);
-    defer send_node_pool.deinit();
-
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
@@ -387,10 +371,7 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 64, null, null);
-    defer send_node_pool.deinit();
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();

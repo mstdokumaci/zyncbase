@@ -171,10 +171,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 2_048, null, null);
-    defer send_node_pool.deinit();
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();
@@ -266,10 +263,7 @@ test "PresenceWorker: 2 ms coalescing window latency" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    var send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try send_node_pool.init(allocator, 16, null, null);
-    defer send_node_pool.deinit();
-    var send_queue = try send_queue_type.init(&send_node_pool);
+    var send_queue = try send_queue_type.init(allocator);
     defer {
         while (send_queue.pop()) |entry| entry.deinit();
         send_queue.deinit();

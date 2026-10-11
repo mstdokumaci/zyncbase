@@ -11,6 +11,12 @@ pub const Entry = struct {
     pub fn deinit(self: *const Entry) void {
         self.arena.release();
     }
+
+    /// The queue allocates its node from this owner, so the arena must
+    /// outlive the entry — the caller holds a reference across the push.
+    pub fn owner(self: Entry) ArenaHandle {
+        return self.arena;
+    }
 };
 
-pub const send_queue = mpscQueue(Entry, memory_strategy.MemoryStrategy.IndexPool);
+pub const send_queue = mpscQueue(Entry, ArenaHandle);

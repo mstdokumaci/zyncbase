@@ -455,22 +455,18 @@ pub const EngineTestContext = struct {
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
         self.engine.deinit();
         self.schema.deinit();
-        // Drain send_queue before memory_strategy so arena handles are released
-        // back to the pool before the active_count assertion fires.
+        // Drain and deinit send_queue before memory_strategy: the queue holds a
+        // reference to the arena backing its head node, so the pool's
+        // active_count assertion only holds once the queue is gone.
         if (self.test_context.send_queue) |*sq| {
             while (sq.pop()) |entry| entry.deinit();
+            sq.deinit();
+            self.test_context.send_queue = null;
         }
         self.memory_strategy.deinit();
         if (cleanup) {
             self.test_context.deinit();
         } else {
-            if (self.test_context.send_queue) |*sq| {
-                while (sq.pop()) |entry| {
-                    entry.deinit();
-                }
-                sq.deinit();
-            }
-            if (self.test_context.send_node_pool) |*pool| pool.deinit();
             if (self.test_context.change_queue) |*cq| cq.deinit();
             self.allocator.free(self.test_context.test_dir);
         }

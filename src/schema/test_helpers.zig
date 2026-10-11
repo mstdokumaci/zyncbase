@@ -246,7 +246,6 @@ pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Sche
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     test_dir: []const u8,
-    send_node_pool: ?MemoryStrategy.IndexPool(send_queue_type.Node) = null,
     send_queue: ?send_queue_type = null,
     change_queue: ?ChangeQueue = null,
 
@@ -285,8 +284,8 @@ pub const TestContext = struct {
                 entry.deinit();
             }
             sq.deinit();
+            self.send_queue = null;
         }
-        if (self.send_node_pool) |*pool| pool.deinit();
         if (self.change_queue) |*cq| cq.deinit();
         if (self.test_dir.len > 0) {
             std.Io.Dir.cwd().deleteTree(std.testing.io, self.test_dir) catch |err| {
@@ -336,16 +335,7 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
         return err;
     };
 
-    // SAFETY: Immediately initialized by init() call below.
-    var node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try node_pool.init(allocator, 256, null, null);
-    context.send_node_pool = node_pool;
-    errdefer {
-        context.send_node_pool.?.deinit();
-        context.send_node_pool = null;
-    }
-
-    context.send_queue = try send_queue_type.init(&context.send_node_pool.?);
+    context.send_queue = try send_queue_type.init(allocator);
     errdefer {
         context.send_queue.?.deinit();
         context.send_queue = null;

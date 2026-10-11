@@ -3,7 +3,6 @@ const std = @import("std");
 const helpers = @import("../app_test_helpers.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const test_helpers = @import("test_helpers.zig");
-const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const send_queue_type = @import("send_queue.zig").send_queue;
@@ -311,12 +310,9 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
 
     const conn_id = dummy_ws.getConnId();
 
-    // Local queue + node pool: the queue is a pointer-linked structure, so
-    // copies would share nodes with the source — build one of our own.
-    var node_pool: MemoryStrategy.IndexPool(send_queue_type.Node) = undefined;
-    try node_pool.init(app.memory_strategy.generalAllocator(), 64, null, null);
-    defer node_pool.deinit();
-    var queue = try send_queue_type.init(&node_pool);
+    // Local queue: the queue is a pointer-linked structure, so copies
+    // would share nodes with the source — build one of our own.
+    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Two entries for one connection — concatenated into a single frame:
