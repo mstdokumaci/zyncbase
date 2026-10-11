@@ -26,6 +26,7 @@ const { values } = parseArgs({
 		headed: { type: "boolean", default: false },
 		profile: { type: "boolean", default: false },
 		"server-profile": { type: "boolean", default: false },
+		"zyncbase-profile": { type: "boolean", default: false },
 		url: { type: "string" },
 		port: { type: "string", default: "18080" },
 		output: {
@@ -160,6 +161,66 @@ function processSnapshot() {
 			];
 		});
 }
+type SampleSummary = {
+	work: number;
+	idle: number;
+	total: number;
+	workPct: number;
+	top: { symbol: string; samples: number; pct: number }[];
+};
+// Same idle classification as scripts/profile-combo-simple.sh, so the demo and
+// stress-test server numbers stay directly comparable.
+const IDLE_SYMBOL =
+	/__ulock_wait2|\bkevent\b|__psynch_mutexwait|mach_msg2_trap/;
+
+function findZyncBasePid(bunServerPid: number): number | undefined {
+	if (process.platform !== "darwin") return undefined;
+	const ps = Bun.spawnSync(["ps", "-ax", "-o", "pid=,ppid=,comm="]);
+	if (ps.exitCode !== 0) return undefined;
+	for (const line of ps.stdout.toString().split("\n")) {
+		const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+		if (!m || Number(m[2]) !== bunServerPid) continue;
+		if (m[3].split("/").pop() === "zyncbase") return Number(m[1]);
+	}
+	return undefined;
+}
+
+async function summarizeSample(
+	path: string,
+): Promise<SampleSummary | undefined> {
+	const file = Bun.file(path);
+	if (file.size === 0) return undefined;
+	const text = await file.text();
+	const start = text.indexOf("Sort by top of stack");
+	if (start < 0) return undefined;
+	let work = 0;
+	let idle = 0;
+	const rows: { symbol: string; samples: number }[] = [];
+	for (const line of text.slice(start).split("\n").slice(1)) {
+		const m = /^\s*(.+?)\s+\(in\s+(.+?)\)\s+(\d+)\s*$/.exec(line);
+		if (!m) continue;
+		const symbol = m[1];
+		const samples = Number(m[3]);
+		if (IDLE_SYMBOL.test(symbol)) idle += samples;
+		else {
+			work += samples;
+			rows.push({ symbol, samples });
+		}
+	}
+	const total = work + idle;
+	rows.sort((a, b) => b.samples - a.samples);
+	return {
+		work,
+		idle,
+		total,
+		workPct: total ? (work / total) * 100 : 0,
+		top: rows.slice(0, 15).map((r) => ({
+			...r,
+			pct: work ? (r.samples / work) * 100 : 0,
+		})),
+	};
+}
+
 async function until(
 	check: () => Promise<boolean>,
 	label: string,
@@ -283,6 +344,10 @@ try {
 			return false;
 		}
 	}, "server ready");
+	// ZyncBase is a child of the Bun game server, not of this process.
+	const zyncbasePid = server ? findZyncBasePid(server.pid) : undefined;
+	if (values["zyncbase-profile"] && !zyncbasePid)
+		console.warn("[warn] ZyncBase pid not found; skipping server sampling");
 	browser = await chromium.launch({
 		channel: values.channel,
 		headless: !values.headed,
@@ -385,6 +450,22 @@ try {
 		rxBytes = rxFrames = 0;
 		await broadcast({ type: "reset" });
 		await page.evaluate("window.__resetGamePerf()");
+		const sampleFile = join(output, `zyncbase-${target}.sample`);
+		const sampler =
+			zyncbasePid && values["zyncbase-profile"]
+				? Bun.spawn(
+						[
+							"sample",
+							String(zyncbasePid),
+							String(seconds),
+							"-mayDie",
+							"-file",
+							sampleFile,
+							"-fullPaths",
+						],
+						{ stdout: "ignore", stderr: "ignore" },
+					)
+				: undefined;
 		const started = Date.now();
 		for (let elapsed = 0; elapsed < seconds; elapsed += 2) {
 			await Bun.sleep(Math.min(2, seconds - elapsed) * 1000);
@@ -408,6 +489,10 @@ try {
 			scoreboard: number;
 		};
 		const ended = Date.now();
+		if (sampler) await sampler.exited;
+		const zyncbaseSample = sampler
+			? await summarizeSample(sampleFile)
+			: undefined;
 		const peerStats = await broadcast({ type: "stats" });
 		const peerErrors = peerStats.flatMap((s) => s.errors);
 		const serverAfter = processSnapshot();
@@ -463,6 +548,7 @@ try {
 			},
 			serverBefore,
 			serverAfter,
+			zyncbaseSample,
 			subscriptions: peerStats.reduce((n, s) => n + s.subscriptions, 0),
 			errors: [...errors, ...peerErrors],
 		};
@@ -491,6 +577,7 @@ try {
 				drawP95Ms: result.drawMs.p95,
 				rxKiBs: rxBytes / (ended - started) / 1.024,
 				driverCpuCores: result.driver.cpuMs / (ended - started),
+				zyncbaseCpuPct: result.zyncbaseSample?.workPct ?? null,
 				errors: result.errors.length,
 			}),
 		);

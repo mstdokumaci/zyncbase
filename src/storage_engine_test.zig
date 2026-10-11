@@ -1969,9 +1969,6 @@ test "foreign key startup rejects legacy orphaned rows" {
     );
     _ = try setup_conn.pragma(void, .{}, "foreign_keys", "on");
 
-    var send_node_pool: sth.MemoryStrategy.IndexPool(send_queue_mod.send_queue.Node) = undefined;
-    try send_node_pool.init(allocator, 1, null, null);
-    test_context.send_node_pool = send_node_pool;
-    test_context.send_queue = try send_queue_mod.send_queue.init(&test_context.send_node_pool.?);
+    test_context.send_queue = try send_queue_mod.send_queue.init(allocator);
     try testing.expectError(error.ForeignKeyViolation, engine.start(&test_context.send_queue.?, null, null));
 }

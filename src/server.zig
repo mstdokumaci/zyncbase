@@ -74,7 +74,6 @@ pub const ZyncBaseServer = struct {
     presence_service: PresenceService,
     actions_service: ActionsService,
     send_queue: send_queue_type,
-    send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     wakeup_pending: std.atomic.Value(bool),
@@ -141,7 +140,6 @@ pub const ZyncBaseServer = struct {
         errdefer self.auth_config.deinit();
 
         try self.initQueues();
-        errdefer self.send_node_pool.deinit();
         errdefer self.send_queue.deinit();
         errdefer self.change_queue.deinit();
 
@@ -273,9 +271,7 @@ pub const ZyncBaseServer = struct {
     }
 
     fn initQueues(self: *ZyncBaseServer) !void {
-        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 32_768, null, null);
-        errdefer self.send_node_pool.deinit();
-        self.send_queue = try send_queue_type.init(&self.send_node_pool);
+        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
         errdefer self.send_queue.deinit();
         self.change_queue = try ChangeQueue.init(
             self.io,
@@ -740,7 +736,6 @@ pub const ZyncBaseServer = struct {
             entry.deinit();
         }
         self.send_queue.deinit();
-        self.send_node_pool.deinit();
 
         // change_queue.deinit() frees any remaining unconsumed change jobs.
         std.log.debug("Deinitializing change_queue", .{});

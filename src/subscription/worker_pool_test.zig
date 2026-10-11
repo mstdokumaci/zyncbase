@@ -21,7 +21,6 @@ const TestContext = struct {
     memory_strategy: MemoryStrategy,
     change_queue: ChangeQueue,
     subscription_engine: SubscriptionEngine,
-    send_node_pool: MemoryStrategy.IndexPool(send_queue_type.Node),
     send_queue: send_queue_type,
     schema: sth.Schema,
     notifier_called: std.atomic.Value(u32),
@@ -33,8 +32,7 @@ const TestContext = struct {
         try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
-        try self.send_node_pool.init(self.memory_strategy.generalAllocator(), 256, null, null);
-        self.send_queue = try send_queue_type.init(&self.send_node_pool);
+        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
                 schema_helpers.makeField("status", .text),
@@ -49,7 +47,6 @@ const TestContext = struct {
             entry.deinit();
         }
         self.send_queue.deinit();
-        self.send_node_pool.deinit();
         self.subscription_engine.deinit();
         self.change_queue.deinit();
         self.memory_strategy.deinit();
