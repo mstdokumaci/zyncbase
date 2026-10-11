@@ -1138,17 +1138,27 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 		);
 	};
 
-	const workerCommand = [
-		process.execPath,
+	const workerCommand = [process.execPath];
+	const profileDir = process.env.ZYNCBASE_COMBO_PROFILE_DIR;
+	if (profileDir) {
+		workerCommand.push(
+			"--cpu-prof",
+			"--cpu-prof-dir",
+			profileDir,
+			"--cpu-prof-name",
+			`client-${processIndex + 1}.cpuprofile`,
+		);
+	}
+	workerCommand.push(
 		import.meta.path,
 		"--worker",
 		String(port),
 		String(processIndex),
 		jwtSecret,
-	];
+	);
 
 	const worker = Bun.spawn(workerCommand, {
-		stdio: ["ignore", "ignore", "inherit"],
+		stdio: ["ignore", profileDir ? "inherit" : "ignore", "inherit"],
 		ipc: handleMessage,
 	});
 
