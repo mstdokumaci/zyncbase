@@ -17,8 +17,8 @@ import { World } from "./world";
 
 type Pixel = [number, number, number];
 
-// Independent four-neighbor boundary flood; deliberately no scanline logic.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the independent reference flood explicit for comparison with the scanline implementation.
+// Independent eight-neighbour boundary flood; deliberately no run logic.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the independent reference flood explicit for comparison with the run implementation.
 function referenceFill(owners: Uint16Array, width: number, countryId: number) {
 	const labels = Uint8Array.from(owners, (owner) =>
 		owner === countryId ? 2 : 0,
@@ -38,14 +38,53 @@ function referenceFill(owners: Uint16Array, width: number, countryId: number) {
 		)
 			visit(cell);
 	for (let head = 0; head < queue.length; head++) {
-		const cell = queue[head];
-		if (cell >= width) visit(cell - width);
-		if (cell + width < labels.length) visit(cell + width);
-		if (cell % width > 0) visit(cell - 1);
-		if (cell % width < width - 1) visit(cell + 1);
+		const cell = queue[head],
+			x = cell % width,
+			y = (cell - x) / width;
+		for (let dy = -1; dy <= 1; dy++)
+			for (let dx = -1; dx <= 1; dx++) {
+				if (!dx && !dy) continue;
+				const nx = x + dx,
+					ny = y + dy;
+				if (nx < 0 || ny < 0 || nx >= width || ny >= labels.length / width)
+					continue;
+				visit(ny * width + nx);
+			}
 	}
 	return labels;
 }
+
+/** The cells a reference flood could not reach, in the order a fill reports them. */
+function referenceHoles(owners: Uint16Array, width: number, countryId: number) {
+	return [...referenceFill(owners, width, countryId).entries()]
+		.filter(([, label]) => label === 0)
+		.map(([cell]) => cell);
+}
+
+/** The tightest rectangle around a whole bitmap. */
+function boundsOf(width: number, height: number) {
+	return { left: 0, right: width - 1, top: 0, bottom: height - 1 };
+}
+
+test("a cross leaves its centre open through the corners, and filling every corner captures it", () => {
+	const width = 5,
+		// The centre is 12; its ring is 6,7,8 above, 11,13 beside, 16,17,18 below.
+		cross = [7, 11, 13, 17],
+		corners = [6, 8, 16, 18],
+		owners = new Uint16Array(width * width),
+		filler = new HoleFiller(width, width),
+		bounds = { left: 0, right: 4, top: 0, bottom: 4 },
+		holes = () => [...filler.fill(owners, 1, bounds)];
+	for (const cell of cross) owners[cell] = 1;
+	expect(holes()).toEqual([]);
+	// Any corner left open keeps the centre reachable, which is the whole rule.
+	for (const corner of corners.slice(0, -1)) owners[corner] = 1;
+	expect(holes()).toEqual([]);
+	owners[corners[3]] = 1;
+	expect(holes()).toEqual([12]);
+	owners[12] = 1;
+	expect(holes()).toEqual([]);
+});
 
 test("bounded local searches match a complete flood for every 4x4 mask", () => {
 	const owners = new Uint16Array(16);
@@ -53,10 +92,9 @@ test("bounded local searches match a complete flood for every 4x4 mask", () => {
 	const bounds = { left: 0, right: 3, top: 0, bottom: 3 };
 	for (let mask = 0; mask < 65536; mask++) {
 		for (let i = 0; i < owners.length; i++) owners[i] = (mask >> i) & 1;
-		const expected = [...referenceFill(owners, 4, 1).entries()]
-			.filter(([, label]) => label === 0)
-			.map(([cell]) => cell);
-		expect(localEnclosures(owners, 1, starts, bounds, 4)).toEqual(expected);
+		expect(localEnclosures(owners, 1, starts, bounds, 4)).toEqual(
+			referenceHoles(owners, 4, 1),
+		);
 	}
 });
 
@@ -101,7 +139,10 @@ test("the local budget is shared across components and exhaustion leaves ownersh
 			width,
 		),
 	).toBeUndefined();
-	expect(reads).toBeLessThanOrEqual(LOCAL_SEARCH_BUDGET * 5);
+	// Eight neighbour reads per flooded cell, plus the exit proof that can skip
+	// one. The point is that it stays a small multiple of the shared budget
+	// rather than growing with the component.
+	expect(reads).toBeLessThanOrEqual(LOCAL_SEARCH_BUDGET * 9);
 	expect(owners).toEqual(initial);
 });
 
@@ -118,7 +159,14 @@ test.each([
 		for (const cell of size === 3 ? owners.keys() : [size + 1]) {
 			if (owners[cell]) continue;
 			owners[cell] = 1;
-			if (!mayEnclose(owners, 1, cell, size))
+			if (
+				!mayEnclose(owners, 1, cell, size, {
+					left: 0,
+					right: size - 1,
+					top: 0,
+					bottom: size - 1,
+				})
+			)
 				expect(referenceFill(owners, size, 1).includes(0)).toBe(false);
 			owners[cell] = 0;
 		}
@@ -148,20 +196,20 @@ test.each([
 	[8, 1],
 	[3, 3],
 	[4, 4],
-])("scanline fill matches an independent flood for every %ix%i bitmap", (width, height) => {
+])("run fill matches an independent flood for every %ix%i bitmap", (width, height) => {
 	const owners = new Uint16Array(width * height);
 	const filler = new HoleFiller(width, height);
 	const bounds = { left: 0, right: width - 1, top: 0, bottom: height - 1 };
 	for (let mask = 0; mask < 2 ** owners.length; mask++) {
 		for (let i = 0; i < owners.length; i++)
 			owners[i] = (mask >> i) & 1 ? 65535 : i % 2 ? 2 : 0;
-		expect(filler.fill(owners, 65535, bounds)).toEqual(
-			referenceFill(owners, width, 65535),
+		expect([...filler.fill(owners, 65535, bounds)]).toEqual(
+			referenceHoles(owners, width, 65535),
 		);
 	}
 });
 
-test("scanline scratch buffers grow and can be reused across countries and shapes", () => {
+test("run scratch buffers grow and can be reused across countries and shapes", () => {
 	const width = 4097,
 		height = 7;
 	const owners = new Uint16Array(width * height);
@@ -174,13 +222,65 @@ test("scanline scratch buffers grow and can be reused across countries and shape
 			owners[i] = shape === 0 ? (i % width) % 2 : (random >>> 16) % 3;
 		}
 		for (const countryId of [1, 2])
-			expect(filler.fill(owners, countryId, bounds)).toEqual(
-				referenceFill(owners, width, countryId),
+			expect([...filler.fill(owners, countryId, bounds)]).toEqual(
+				referenceHoles(owners, width, countryId),
 			);
 	}
 });
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: exhaust translated masks and compare every captured cell with the independent full-world reference.
+// The exhaustive masks above are too small to grow a run buffer or to hold a
+// large interior. These are the shapes that do: a wall around open ground,
+// sometimes intact and sometimes holed, sometimes carrying scattered spall.
+// The wall is what decides the answer under eight-connectivity, so leaking a
+// gap has to be visible in the result.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one seeded generator builds each wall, its gaps, and its comparison.
+test("run fill matches an independent flood on walled shapes with interiors and gaps", () => {
+	let random = 20240517;
+	const next = () => {
+		random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+		return random / 4294967296;
+	};
+	let holeCells = 0,
+		largest = 0;
+	for (let shape = 0; shape < 400; shape++) {
+		const width = 6 + Math.floor(next() * 30),
+			height = 6 + Math.floor(next() * 30);
+		// Country 2 holds the rest of the world, so country 1's bounding box is
+		// the whole bitmap and the clip stands in for the exterior.
+		const owners = new Uint16Array(width * height).fill(2),
+			thickness = 1 + Math.floor(next() * 2);
+		for (let y = 0; y < height; y++)
+			for (let x = 0; x < width; x++) {
+				const wall =
+					x < thickness ||
+					x >= width - thickness ||
+					y < thickness ||
+					y >= height - thickness;
+				if (wall) owners[y * width + x] = 1;
+				else if (next() < 0.06) owners[y * width + x] = next() < 0.4 ? 1 : 0;
+			}
+		// A few holes through the wall, anywhere along it.
+		for (let gap = 0, count = Math.floor(next() * 6); gap < count; gap++) {
+			const side = Math.floor(next() * 4),
+				x = Math.floor(next() * width),
+				y = Math.floor(next() * height);
+			if (side === 0) owners[Math.min(y, thickness - 1) * width + x] = 0;
+			else if (side === 1)
+				owners[Math.max(y, height - thickness) * width + x] = 0;
+			else if (side === 2) owners[y * width + Math.min(x, thickness - 1)] = 0;
+			else owners[y * width + Math.max(x, width - thickness)] = 0;
+		}
+		const expected = referenceHoles(owners, width, 1);
+		holeCells += expected.length;
+		if (expected.length > largest) largest = expected.length;
+		expect([
+			...new HoleFiller(width, height).fill(owners, 1, boundsOf(width, height)),
+		]).toEqual(expected);
+	}
+	expect(largest).toBeGreaterThan(500);
+	expect(holeCells).toBeGreaterThan(50_000);
+});
+
 test("clipping preserves full-world results at edges and after bounds shrink or move", () => {
 	const width = 8,
 		height = 8;
@@ -199,15 +299,8 @@ test("clipping preserves full-world results at edges and after bounds shrink or 
 			for (let bit = 0; bit < 9; bit++)
 				owners[(top + Math.floor(bit / 3)) * width + left + (bit % 3)] =
 					(mask >> bit) & 1 ? 1 : 2;
-			const labels = filler.fill(owners, 1, bounds);
-			const holes: number[] = [];
-			for (let y = top; y <= bounds.bottom; y++)
-				for (let x = left; x <= bounds.right; x++)
-					if (labels[y * width + x] === 0) holes.push(y * width + x);
-			expect(holes).toEqual(
-				[...referenceFill(owners, width, 1).entries()]
-					.filter(([, label]) => label === 0)
-					.map(([cell]) => cell),
+			expect([...filler.fill(owners, 1, bounds)]).toEqual(
+				referenceHoles(owners, width, 1),
 			);
 		}
 	}

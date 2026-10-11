@@ -1,50 +1,69 @@
 import type { Bounds } from "./filler";
 
-// A gain can split the exterior only if its open side-neighbors do not all
-// connect around the eight-cell ring. False rules out a new enclosure; true
-// requests an enclosure search. At world edges, search conservatively.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the local ring once, counting groups that contain a side-neighbor.
+/** The eight neighbours of a cell, as x/y step pairs. */
+const RING_X = [-1, 0, 1, -1, 1, -1, 0, 1];
+const RING_Y = [-1, -1, -1, 0, 0, 1, 1, 1];
+
+/** Every in-array neighbour of a cell, for callers that cannot filter the ring. */
+export function ringOf(owners: Uint16Array, cell: number, width: number) {
+	const x = cell % width,
+		y = (cell - x) / width,
+		height = owners.length / width;
+	const ring: number[] = [];
+	for (let i = 0; i < 8; i++) {
+		const nx = x + RING_X[i],
+			ny = y + RING_Y[i];
+		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+		ring.push(ny * width + nx);
+	}
+	return ring;
+}
+
+// Claiming a pixel can only enclose what sits beside it, and only while that
+// pixel was the last way out. hasStraightExit runs after the claim, so its rays
+// stop at the new wall: a neighbour it can still prove open is not at risk.
+// A ring with no country pixel at all cannot be split either - the open ring is
+// itself eight-connected, so dropping one cell from it severs nothing.
+//
+// Returns the neighbours worth an enclosure search, or undefined when none are.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: walk the local ring once, collecting the neighbours a new wall could put at risk.
 export function mayEnclose(
 	owners: Uint16Array,
 	countryId: number,
 	cell: number,
 	width: number,
-) {
-	const x = cell % width;
-	if (
-		x === 0 ||
-		x === width - 1 ||
-		cell < width ||
-		cell >= owners.length - width
-	)
-		return true;
-	const ring = [
-		cell - width - 1,
-		cell - width,
-		cell - width + 1,
-		cell + 1,
-		cell + width + 1,
-		cell + width,
-		cell + width - 1,
-		cell - 1,
-	];
-	const wall = ring.findIndex((neighbor) => owners[neighbor] === countryId);
-	if (wall === -1) return false;
-	let groups = 0,
-		side = false;
-	for (let i = 1; i <= ring.length; i++) {
-		const index = (wall + i) % ring.length;
-		if (owners[ring[index]] === countryId) {
-			if (side && ++groups > 1) return true;
-			side = false;
-		} else if (index % 2 === 1) side = true;
+	bounds: Bounds,
+): number[] | undefined {
+	const x = cell % width,
+		y = (cell - x) / width,
+		height = owners.length / width;
+	let walled = false;
+	for (let i = 0; i < 8; i++) {
+		const nx = x + RING_X[i],
+			ny = y + RING_Y[i];
+		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+		if (owners[ny * width + nx] === countryId) {
+			walled = true;
+			break;
+		}
 	}
-	return false;
+	if (!walled) return undefined;
+	const atRisk: number[] = [];
+	for (let i = 0; i < 8; i++) {
+		const nx = x + RING_X[i],
+			ny = y + RING_Y[i];
+		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+		const neighbor = ny * width + nx;
+		if (owners[neighbor] === countryId) continue;
+		if (!hasStraightExit(owners, countryId, neighbor, width, bounds))
+			atRisk.push(neighbor);
+	}
+	return atRisk.length ? atRisk : undefined;
 }
 
 // A straight route through non-country pixels proves connection to the exterior.
 // Curved routes can fail this test; those deliberately request an enclosure search.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: four bounded rays avoid allocation and stop at the first country pixel.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: eight bounded rays avoid allocation and stop at the first country pixel.
 export function hasStraightExit(
 	owners: Uint16Array,
 	countryId: number,
@@ -54,7 +73,7 @@ export function hasStraightExit(
 ) {
 	if (owners[cell] === countryId) return false;
 	const x = cell % width,
-		y = Math.floor(cell / width);
+		y = (cell - x) / width;
 	if (
 		x <= bounds.left ||
 		x >= bounds.right ||
@@ -77,7 +96,41 @@ export function hasStraightExit(
 	if (cur === top) return true;
 	cur = cell;
 	while (cur < bottom && owners[cur + width] !== countryId) cur += width;
-	return cur === bottom;
+	if (cur === bottom) return true;
+	// Diagonals last, and only for pixels no straight ray saved: a corner gap is
+	// a real route out under eight-connectivity, and exactly what these miss.
+	return (
+		diagonalExit(owners, countryId, x, y, width, bounds, -1, -1) ||
+		diagonalExit(owners, countryId, x, y, width, bounds, 1, -1) ||
+		diagonalExit(owners, countryId, x, y, width, bounds, -1, 1) ||
+		diagonalExit(owners, countryId, x, y, width, bounds, 1, 1)
+	);
+}
+
+/** True when a diagonal leaves the rectangle without meeting country ground. */
+function diagonalExit(
+	owners: Uint16Array,
+	countryId: number,
+	x: number,
+	y: number,
+	width: number,
+	bounds: Bounds,
+	dx: number,
+	dy: number,
+) {
+	let cx = x + dx,
+		cy = y + dy;
+	while (
+		cx >= bounds.left &&
+		cx <= bounds.right &&
+		cy >= bounds.top &&
+		cy <= bounds.bottom
+	) {
+		if (owners[cy * width + cx] === countryId) return false;
+		cx += dx;
+		cy += dy;
+	}
+	return true;
 }
 
 // Bound all local work per country, then use the whole-country scan as fallback.
@@ -96,6 +149,17 @@ export function localEnclosures(
 	bounds: Bounds,
 	width: number,
 ): number[] | undefined {
+	// Flat neighbour offsets, built once per call rather than once per pixel.
+	const ring = [
+		-width - 1,
+		-width,
+		-width + 1,
+		-1,
+		1,
+		width - 1,
+		width,
+		width + 1,
+	];
 	let remaining = LOCAL_SEARCH_BUDGET;
 	const holes = new Set<number>();
 	localOutside.clear();
@@ -121,7 +185,7 @@ export function localEnclosures(
 		for (let head = 0; head < tail && !open; head++) {
 			const cell = localQueue[head],
 				x = cell % width,
-				y = Math.floor(cell / width);
+				y = (cell - x) / width;
 			if (
 				x <= bounds.left ||
 				x >= bounds.right ||
@@ -131,7 +195,8 @@ export function localEnclosures(
 				open = true;
 				break;
 			}
-			for (const next of [cell - width, cell + 1, cell + width, cell - 1]) {
+			for (let i = 0; i < ring.length; i++) {
+				const next = cell + ring[i];
 				if (owners[next] === countryId || localSeen.has(next)) continue;
 				if (localOutside.has(next)) {
 					open = true;
