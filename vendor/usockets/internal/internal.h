@@ -94,9 +94,9 @@ void us_internal_socket_context_unlink_socket(struct us_socket_context_t *contex
 /* Sockets are polls */
 struct us_socket_t {
     alignas(LIBUS_EXT_ALIGNMENT) struct us_poll_t p; // 4 bytes
-    unsigned short timeout;
+    unsigned char timeout; // 1 byte
     unsigned char long_timeout; // 1 byte
-    unsigned char low_prio_state; /* 0 = not in low-prio queue, 1 = is in low-prio queue, 2 = was in low-prio queue in this iteration */
+    unsigned short low_prio_state; /* 0 = not in low-prio queue, 1 = is in low-prio queue, 2 = was in low-prio queue in this iteration */
     unsigned int timeout_iteration; /* Loop iteration that last armed timeout. */
     struct us_socket_context_t *context;
     struct us_socket_t *prev, *next;
@@ -124,7 +124,7 @@ void us_internal_socket_context_unlink_listen_socket(struct us_socket_context_t 
 struct us_socket_context_t {
     alignas(LIBUS_EXT_ALIGNMENT) struct us_loop_t *loop;
     uint32_t global_tick;
-    unsigned short timestamp;
+    unsigned char timestamp;
     unsigned char long_timestamp;
     struct us_socket_t *head_sockets;
     struct us_listen_socket_t *head_listen_sockets;

@@ -136,7 +136,7 @@ pub const ConfigLoader = struct {
         }
         const idle_timeout_opt = try json_read.getInt(server_obj, "idleTimeoutSeconds");
         if (idle_timeout_opt) |idle_timeout_seconds| {
-            if (idle_timeout_seconds < 2 or idle_timeout_seconds > 600) return error.InvalidIdleTimeout;
+            if (idle_timeout_seconds < 2 or idle_timeout_seconds > 239) return error.InvalidIdleTimeout;
             config.server.idle_timeout_seconds = @intCast(idle_timeout_seconds);
         }
         try json_read.replaceString(allocator, &config.server.host, server_obj, "host");

@@ -105,7 +105,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
-					idleTimeoutSeconds: 600,
+					idleTimeoutSeconds: 239,
 				},
 				async ({ port }) => {
 					await runPresence(port, PRESENCE_E2E_JWT_SECRET);
@@ -124,7 +124,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-presence-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
-					idleTimeoutSeconds: 600,
+					idleTimeoutSeconds: 239,
 				},
 				async ({ port }) => {
 					await runPresenceStress(port, PRESENCE_E2E_JWT_SECRET);
@@ -161,7 +161,7 @@ describe("ZyncBase E2E", () => {
 					configName: "zyncbase-config-combo-stress.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
 					jwtSecret: PRESENCE_E2E_JWT_SECRET,
-					idleTimeoutSeconds: 600,
+					idleTimeoutSeconds: 239,
 				},
 				async ({ port }) => {
 					await runComboStress(port, PRESENCE_E2E_JWT_SECRET);

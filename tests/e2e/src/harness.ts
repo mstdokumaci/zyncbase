@@ -69,7 +69,7 @@ export type ServerOptions = {
 	configName?: string;
 	authPath?: string;
 	jwtSecret?: string;
-	/** Override `server.idleTimeoutSeconds` (2-600). */
+	/** Override `server.idleTimeoutSeconds` (2-239). */
 	idleTimeoutSeconds?: number;
 };
 
