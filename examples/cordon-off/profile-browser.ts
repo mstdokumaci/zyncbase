@@ -22,7 +22,7 @@ const { values } = parseArgs({
 		width: { type: "string", default: "1440" },
 		height: { type: "string", default: "900" },
 		dpr: { type: "string", default: "1" },
-		channel: { type: "string", default: "msedge" },
+		channel: { type: "string", default: "chromium" },
 		headed: { type: "boolean", default: false },
 		profile: { type: "boolean", default: false },
 		"server-profile": { type: "boolean", default: false },

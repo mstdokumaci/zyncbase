@@ -130,10 +130,42 @@ function diagonalExit(
 }
 
 // Bound all local work per country, then use the whole-country scan as fallback.
-export const LOCAL_SEARCH_BUDGET = 1024;
-const localQueue = new Uint32Array(LOCAL_SEARCH_BUDGET);
-const localSeen = new Set<number>();
-const localOutside = new Set<number>();
+// A stamp write is cheap enough that the budget mostly guards pathological
+// geometry: the dive resolves every candidate in the profile workloads well
+// inside it, and only enclosed regions too large to walk locally fall back.
+export const LOCAL_SEARCH_BUDGET = 16384;
+
+// The flood is a depth-first dive toward the nearest bound, so a component that
+// reaches the exterior is proven open in about the length of its shortest route
+// rather than the area of the region it covers. Push order is worst-first, so
+// the neighbour closest to the bound ends up on top of the stack.
+const PUSH_ORDER: Int8Array[] = [];
+for (const px of [-1, 1])
+	for (const py of [-1, 1])
+		PUSH_ORDER.push(
+			Int8Array.from(
+				[0, 1, 2, 3, 4, 5, 6, 7].sort(
+					(a, b) =>
+						RING_X[a] * px + RING_Y[a] * py - (RING_X[b] * px + RING_Y[b] * py),
+				),
+			),
+		);
+
+// Flat stamp maps replace Set storage: a visited cell costs one typed-array
+// write instead of a hash insert, which is what makes deeper dives affordable.
+let visited = new Int32Array(0);
+let outside = new Int32Array(0);
+let stack = new Int32Array(1024);
+let component = new Int32Array(1024);
+let holeBuf = new Int32Array(1024);
+let stamp = 0;
+const OFFSETS = new Int32Array(8);
+
+function growInt32(buffer: Int32Array) {
+	const grown = new Int32Array(buffer.length * 2);
+	grown.set(buffer);
+	return grown;
+}
 
 // Scratch storage is reused synchronously. Nothing is painted unless every
 // candidate is resolved within the shared budget; undefined requests a full fill.
@@ -145,66 +177,82 @@ export function localEnclosures(
 	bounds: Bounds,
 	width: number,
 ): number[] | undefined {
+	const { left, right, top, bottom } = bounds;
+	if (visited.length !== owners.length) {
+		visited = new Int32Array(owners.length);
+		outside = new Int32Array(owners.length);
+	}
+	stamp++;
+	// Stamps never reset per call, so only an overflow has to clear the maps.
+	if (stamp === 0x7fffffff) {
+		visited.fill(0);
+		outside.fill(0);
+		stamp = 1;
+	}
 	// Flat neighbour offsets, built once per call rather than once per pixel.
-	const ring = [
-		-width - 1,
-		-width,
-		-width + 1,
-		-1,
-		1,
-		width - 1,
-		width,
-		width + 1,
-	];
+	for (let i = 0; i < 8; i++) OFFSETS[i] = RING_X[i] + RING_Y[i] * width;
 	let remaining = LOCAL_SEARCH_BUDGET;
-	const holes = new Set<number>();
-	localOutside.clear();
+	let holeCount = 0;
 	for (const start of starts) {
 		if (
 			owners[start] === countryId ||
-			holes.has(start) ||
-			localOutside.has(start)
+			visited[start] === stamp ||
+			outside[start] === stamp
 		)
 			continue;
 		// Gains and bulk captures also queue exterior cells. Reuse the loss gate
 		// before a broad open component can exhaust the local flood budget.
 		if (hasStraightExit(owners, countryId, start, width, bounds)) {
-			localOutside.add(start);
+			outside[start] = stamp;
 			continue;
 		}
 		if (!remaining--) return;
-		localSeen.clear();
-		localSeen.add(start);
-		localQueue[0] = start;
-		let tail = 1,
+		let depth = 0,
+			seen = 0,
 			open = false;
-		for (let head = 0; head < tail && !open; head++) {
-			const cell = localQueue[head],
+		visited[start] = stamp;
+		stack[depth++] = start;
+		component[seen++] = start;
+		while (depth > 0 && !open) {
+			const cell = stack[--depth],
 				x = cell % width,
 				y = (cell - x) / width;
-			if (
-				x <= bounds.left ||
-				x >= bounds.right ||
-				y <= bounds.top ||
-				y >= bounds.bottom
-			) {
+			if (x <= left || x >= right || y <= top || y >= bottom) {
 				open = true;
 				break;
 			}
-			for (let i = 0; i < ring.length; i++) {
-				const next = cell + ring[i];
-				if (owners[next] === countryId || localSeen.has(next)) continue;
-				if (localOutside.has(next)) {
+			const px = x - left <= right - x ? -1 : 1;
+			const py = y - top <= bottom - y ? -1 : 1;
+			const order = PUSH_ORDER[((px + 1) >> 1) * 2 + ((py + 1) >> 1)];
+			for (let i = 0; i < 8; i++) {
+				const next = cell + OFFSETS[order[i]];
+				if (owners[next] === countryId) continue;
+				if (outside[next] === stamp) {
 					open = true;
 					break;
 				}
+				if (visited[next] === stamp) continue;
 				if (!remaining--) return;
-				localSeen.add(next);
-				localQueue[tail++] = next;
+				visited[next] = stamp;
+				if (seen === component.length) {
+					component = growInt32(component);
+					stack = growInt32(stack);
+				}
+				component[seen++] = next;
+				stack[depth++] = next;
 			}
 		}
-		for (const cell of localSeen) (open ? localOutside : holes).add(cell);
+		for (let i = 0; i < seen; i++) {
+			if (open) outside[component[i]] = stamp;
+			else {
+				if (holeCount === holeBuf.length) holeBuf = growInt32(holeBuf);
+				holeBuf[holeCount++] = component[i];
+			}
+		}
 	}
 	// Match the full fill's claim order, including which other countries it affects first.
-	return [...holes].sort((a, b) => a - b);
+	const holes = new Array<number>(holeCount);
+	for (let i = 0; i < holeCount; i++) holes[i] = holeBuf[i];
+	holes.sort((a, b) => a - b);
+	return holes;
 }
