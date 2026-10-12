@@ -629,6 +629,64 @@ test("later movers preserve enclosure searches when they paint over queued start
 	expect(owner(33, 32)).toBe(1);
 });
 
+// Two movers in one tick: the first closes a two-cell pocket's last exit, which
+// makes the second mover's target an at-risk start; the second then claims it and
+// consumes that start, taking claim's conservative branch. That branch cannot
+// trust the gate and must queue the whole ring. Its four side neighbours are all
+// country 1's here, so queueing only those would leave the diagonal pocket
+// unfound, and no local proof or fallback scan would rescue it.
+test("a claim that consumes a queued start still seals a diagonal pocket", () => {
+	const pocket = [32, 33] as const;
+	const exit = [34, 31] as const;
+	// Country 1 walls everything around the pocket except for the one exit cell
+	// the first mover is about to claim.
+	const walls: Pixel[] = [
+		[32, 32],
+		[33, 31],
+		[33, 33],
+		[34, 32],
+		[32, 31],
+		[34, 33],
+		[31, 32],
+		[31, 33],
+		[31, 34],
+		[32, 34],
+		[33, 34],
+	].map(([x, y]) => [x, y, 1]);
+	const { world, actor, owner } = scenario(walls);
+	// Both pocket cells start unowned, so nothing is enclosed yet.
+	expect(owner(33, 32)).toBe(0);
+	expect(owner(...pocket)).toBe(0);
+	const fill = spyOn(HoleFiller.prototype, "fill");
+	try {
+		// The first mover stands on open ground and closes the exit. That leaves
+		// the second mover's target with no proven way out, so the gate queues it.
+		const closer = actor("closer", 1, 35, 31);
+		closer.direction = "left";
+		closer.credit = 1;
+		// The second mover stands on country 1's own wall and claims the cell the
+		// gate just queued, consuming that start.
+		const sealer = actor("sealer", 1, 34, 32);
+		sealer.direction = "left";
+		sealer.credit = 1;
+		world.tick(0);
+		for (const player of world.players.values()) player.direction = "idle";
+	} finally {
+		fill.mockRestore();
+	}
+	expect(owner(...exit)).toBe(1);
+	// The pocket can fill in only on a later pass, once the claimed cell has been
+	// written and the rest of the tick has settled.
+	for (let tick = 1; tick <= 40; tick++) world.tick(tick);
+	// The diagonal pocket is captured: reachable only through the cell just
+	// claimed, which is exactly what side-neighbours-only queueing would miss.
+	expect(owner(...pocket)).toBe(1);
+	expect(world.countries.get(1)?.count).toBe(15);
+	// Nothing above came from a fallback scan. A future change that made the
+	// bounded search give up here would keep the count right while hiding the bug.
+	expect(fill).not.toHaveBeenCalled();
+});
+
 test("own-territory and water movement do not schedule enclosure scans", () => {
 	const { actor, move } = scenario(
 		[

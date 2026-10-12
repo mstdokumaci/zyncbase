@@ -1,23 +1,10 @@
 import type { Bounds } from "./filler";
 
-/** The eight neighbours of a cell, as x/y step pairs. */
-const RING_X = [-1, 0, 1, -1, 1, -1, 0, 1];
-const RING_Y = [-1, -1, -1, 0, 0, 1, 1, 1];
-
-/** Every in-array neighbour of a cell, for callers that cannot filter the ring. */
-export function ringOf(owners: Uint16Array, cell: number, width: number) {
-	const x = cell % width,
-		y = (cell - x) / width,
-		height = owners.length / width;
-	const ring: number[] = [];
-	for (let i = 0; i < 8; i++) {
-		const nx = x + RING_X[i],
-			ny = y + RING_Y[i];
-		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-		ring.push(ny * width + nx);
-	}
-	return ring;
-}
+/** The eight neighbours of a cell in cyclic order, as x/y step pairs:
+ * NW, N, NE, E, SE, S, SW, W. Consecutive entries are eight-adjacent, so the
+ * open cells of a ring fall into runs; side-neighbours keep the odd indices. */
+const RING_X = [-1, 0, 1, 1, 1, 0, -1, -1];
+const RING_Y = [-1, -1, -1, 0, 1, 1, 1, 0];
 
 // Claiming a pixel can only enclose what sits beside it, and only while that
 // pixel was the last way out. hasStraightExit runs after the claim, so its rays
@@ -37,24 +24,33 @@ export function mayEnclose(
 	const x = cell % width,
 		y = (cell - x) / width,
 		height = owners.length / width;
-	let walled = false;
+	let open = 0,
+		walled = false,
+		edge = false;
 	for (let i = 0; i < 8; i++) {
 		const nx = x + RING_X[i],
 			ny = y + RING_Y[i];
-		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-		if (owners[ny * width + nx] === countryId) {
-			walled = true;
-			break;
+		if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+			edge = true;
+			continue;
 		}
+		if (owners[ny * width + nx] === countryId) walled = true;
+		else open |= 1 << i;
 	}
 	if (!walled) return undefined;
+	// One open run means every open neighbour is still joined around the new
+	// wall, so nothing beside this cell is severed and no ray walk is needed.
+	// An incomplete ring cannot be counted this way - the run boundary may sit
+	// off the array - and a ring with no open cell at all counts as zero runs,
+	// which is exactly the fully enclosed case.
+	let runs = 0;
+	for (let i = 0; i < 8; i++)
+		if (open & (1 << i) && !(open & (1 << ((i + 7) % 8)))) runs++;
+	if (!edge && runs < 2) return undefined;
 	const atRisk: number[] = [];
 	for (let i = 0; i < 8; i++) {
-		const nx = x + RING_X[i],
-			ny = y + RING_Y[i];
-		if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-		const neighbor = ny * width + nx;
-		if (owners[neighbor] === countryId) continue;
+		if (!(open & (1 << i))) continue;
+		const neighbor = (y + RING_Y[i]) * width + (x + RING_X[i]);
 		if (!hasStraightExit(owners, countryId, neighbor, width, bounds))
 			atRisk.push(neighbor);
 	}
