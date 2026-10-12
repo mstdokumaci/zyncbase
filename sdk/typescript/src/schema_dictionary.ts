@@ -4,6 +4,7 @@
 // (collection names, field names) and their dense integer indices.
 // Built from the SchemaSync message pushed by the server on connect.
 
+import hash from "string-hash-64";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
@@ -797,7 +798,7 @@ export class SchemaDictionary {
 	}
 
 	/**
-	 * Compute a dual-djb2 53-bit hash of the canonical SchemaSync routing
+	 * Compute a 53-bit hash of the canonical SchemaSync routing
 	 * dictionaries. Used for offline safety detection.
 	 */
 	private computeHash(payload: {
@@ -822,14 +823,6 @@ export class SchemaDictionary {
 			actionReturns: payload.actionReturns ?? [],
 			actionFlags: payload.actionFlags ?? [],
 		});
-		const n = canonical.length;
-		let h1 = 5381;
-		let h2 = 52711;
-		for (let i = 0; i < n; i++) {
-			const c = canonical.charCodeAt(i);
-			h1 = (h1 * 33) ^ c;
-			h2 = (h2 * 33) ^ c;
-		}
-		return ((h2 >>> 0) & 0x1fffff) * 4294967296 + (h1 >>> 0);
+		return hash(canonical);
 	}
 }
