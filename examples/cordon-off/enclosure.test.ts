@@ -116,12 +116,15 @@ test("a straight exit resolves a broad open component without exhausting the flo
 });
 
 test("the local budget is shared across components and exhaustion leaves ownership untouched", () => {
-	const width = 80,
-		height = 30;
+	// Two open blocks, each comfortably under the budget alone, together over
+	// it: the second component has to exhaust what the first left behind.
+	const side = Math.ceil(Math.sqrt(LOCAL_SEARCH_BUDGET / 2)) + 3;
+	const width = side * 2 + 10,
+		height = side + 6;
 	const owners = new Uint16Array(width * height).fill(1);
-	for (const left of [2, 40])
-		for (let y = 2; y < 27; y++)
-			for (let x = left; x < left + 25; x++) owners[y * width + x] = 0;
+	for (const left of [2, side + 6])
+		for (let y = 2; y < height - 2; y++)
+			for (let x = left; x < left + side; x++) owners[y * width + x] = 0;
 	const initial = owners.slice();
 	let reads = 0;
 	const counted = new Proxy(owners, {
@@ -134,7 +137,7 @@ test("the local budget is shared across components and exhaustion leaves ownersh
 		localEnclosures(
 			counted,
 			1,
-			new Set([2 * width + 2, 2 * width + 40]),
+			new Set([2 * width + 2, 2 * width + side + 6]),
 			{ left: 0, right: width - 1, top: 0, bottom: height - 1 },
 			width,
 		),
@@ -741,18 +744,25 @@ test("teammates closing two small loops in one tick resolve both without a scan"
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: both loops exceed the shared local budget and must resolve in one fallback scan.
 test("two large closures in one country trigger only one fallback scan", () => {
+	// Each interior alone fits the budget; together they cannot, so the second
+	// component's exhaustion must collapse both into one country-wide scan.
+	const outer = Math.ceil(Math.sqrt(LOCAL_SEARCH_BUDGET * 0.6)) + 2;
+	const gap = (left: number) => left + (outer >> 1);
 	const pixels: Pixel[] = [];
-	for (const left of [30, 80])
-		for (let y = 30; y < 70; y++)
-			for (let x = left; x < left + 40; x++)
+	for (const left of [30, 30 + outer + 10])
+		for (let y = 30; y < 30 + outer; y++)
+			for (let x = left; x < left + outer; x++)
 				if (
-					(x === left || x === left + 39 || y === 30 || y === 69) &&
-					!(x === left + 20 && y === 69)
+					(x === left ||
+						x === left + outer - 1 ||
+						y === 30 ||
+						y === 30 + outer - 1) &&
+					!(x === gap(left) && y === 30 + outer - 1)
 				)
 					pixels.push([x, y, 1]);
 	const { world, actor, owner } = scenario(pixels);
-	for (const left of [30, 80]) {
-		const player = actor(String(left), 1, left + 19, 69);
+	for (const left of [30, 30 + outer + 10]) {
+		const player = actor(String(left), 1, gap(left) - 1, 30 + outer - 1);
 		player.direction = "right";
 		player.credit = 1;
 	}
@@ -760,9 +770,9 @@ test("two large closures in one country trigger only one fallback scan", () => {
 	try {
 		world.tick(0);
 		expect(fill).toHaveBeenCalledTimes(1);
-		expect(owner(50, 50)).toBe(1);
-		expect(owner(100, 50)).toBe(1);
-		expect(world.countries.get(1)?.count).toBe(3200);
+		expect(owner(30 + (outer >> 1), 30 + (outer >> 1))).toBe(1);
+		expect(owner(30 + outer + 10 + (outer >> 1), 30 + (outer >> 1))).toBe(1);
+		expect(world.countries.get(1)?.count).toBe(2 * outer * outer);
 	} finally {
 		fill.mockRestore();
 	}

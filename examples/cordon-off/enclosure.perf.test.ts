@@ -264,13 +264,13 @@ function gameWorkload(radius: number, ticks: number) {
 // The world seeds its own generator, so this count is exact and does not move
 // with the machine the way a millisecond budget does. One fill is one
 // whole-country bbox rescan that the bounded local search failed to replace;
-// a gate that skips the ray walks lands near 2949 here instead of 570.
+// the dive-ordered search keeps this near the initial reconciliation count.
 test("contending nations stay off the whole-country fallback scan", () => {
 	const fill = spyOn(HoleFiller.prototype, "fill");
 	try {
 		const { players, owned } = gameWorkload(110, 6000);
 		expect(players).toBe(18);
-		expect(fill).toHaveBeenCalledTimes(570);
+		expect(fill).toHaveBeenCalledTimes(9);
 		// Capture semantics, pinned. Any other total means the gate changed which
 		// enclosures resolve, not merely how cheaply they are found.
 		expect(owned()).toBe(288359);
