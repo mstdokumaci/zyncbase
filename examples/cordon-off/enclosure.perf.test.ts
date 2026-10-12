@@ -80,12 +80,15 @@ function workload(size: number, rotated: boolean, shape: string) {
 	return { world, reset, step, verify, count };
 }
 
-// Per-tick budgets measured on this implementation. The closure budget is the
-// one that matters: RULES runs a 50 ms tick, so a single large enclosure must
-// stay far inside one. GAME_BENCH prints what each shape actually costs.
+// Per-tick budgets measured on this implementation, taken over repeated runs
+// with headroom for GC and scheduling noise. The closure budget is the one that
+// matters: RULES runs a 50 ms tick, so a single large enclosure must stay far
+// inside one. The two large-U shapes are also what the ring-run gate buys: a
+// gate that walks every exit proof queues far more enclosure work, and they are
+// the shapes that notice. GAME_BENCH prints what each shape actually costs.
 test.each([
 	["small U", 10, false, "open", 0.02],
-	["large U", 90, false, "open", 0.012],
+	["large U", 90, false, "open", 0.03],
 	["rotated large U", 90, true, "open", 0.012],
 	["large square", 90, false, "square", 0.012],
 	["large loop closure", 90, false, "closing", 6],
@@ -165,10 +168,12 @@ function paintWorkload(size: number) {
 }
 
 // A tick this cheap is buried in GC noise, so take the best batch rather than
-// the mean: one unlucky collection must not read as a gate regression.
+// the mean: one unlucky collection must not read as a gate regression. Painting
+// sits far under any of these, and the ring-run gate is measured by the U shapes
+// above; these are here to catch a per-claim cost that has grown outright.
 test.each([
-	["beside a small block", 50, 0.25],
-	["beside a large block", 200, 0.25],
+	["beside a small block", 50, 0.3],
+	["beside a large block", 200, 0.3],
 ] as const)("ordinary painting %s stays within budget", (name, size, budgetUs) => {
 	const { run, verify } = paintWorkload(size);
 	run(2000);

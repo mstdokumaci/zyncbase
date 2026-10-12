@@ -1205,7 +1205,109 @@ export class World {
 		}
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: update both owners and collect bounded enclosure candidates at their shared mutation point.
+	/** Queue enclosure searches for a cell this claim has just taken.
+	 *
+	 * The gate asks which neighbours lost their way out through this pixel. A
+	 * claim that consumes an already-queued start cannot trust that gate, so it
+	 * queues the whole eight-cell ring instead. All eight: enclosure is
+	 * eight-connected, so a pocket sealed only through a diagonal still has to be
+	 * found, and queueing the four side neighbours alone would leave it lost.
+	 */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: eight neighbours spelled out with their own bounds reads better than folded into an offset loop.
+	private queueEnclosureCandidates(
+		cell: number,
+		countryId: number,
+		by?: string,
+	) {
+		const starts = this.enclosureCountries.get(countryId);
+		if (starts === null) return;
+		const box = this.bounds.get(countryId);
+		// A teammate moving in the same tick may overwrite the credit; one cue
+		// for the enclosure is enough.
+		if (starts?.has(cell) || !box) {
+			if (by) this.enclosureTriggers.set(countryId, by);
+			const x = cell % WIDTH,
+				y = (cell - x) / WIDTH;
+			if (y > 0) {
+				if (x > 0) this.queueEnclosure(countryId, cell - WIDTH - 1);
+				this.queueEnclosure(countryId, cell - WIDTH);
+				if (x < WIDTH - 1) this.queueEnclosure(countryId, cell - WIDTH + 1);
+			}
+			if (x > 0) this.queueEnclosure(countryId, cell - 1);
+			if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
+			if (y < HEIGHT - 1) {
+				if (x > 0) this.queueEnclosure(countryId, cell + WIDTH - 1);
+				this.queueEnclosure(countryId, cell + WIDTH);
+				if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + WIDTH + 1);
+			}
+			return;
+		}
+		const atRisk = mayEnclose(this.owners, countryId, cell, WIDTH, box);
+		if (!atRisk) return;
+		if (by) this.enclosureTriggers.set(countryId, by);
+		for (const neighbor of atRisk) this.queueEnclosure(countryId, neighbor);
+	}
+
+	/** Count the pixel for the claiming country, and on a bulk capture credit the
+	 * mover who closed the enclosure rather than the country: teammates and bots
+	 * capture silently for everyone else. */
+	private creditGain(countryId: number, fromFill: boolean, by?: string) {
+		const country = this.countries.get(countryId);
+		if (!country) return;
+		country.count++;
+		if (!fromFill) return;
+		const capturer = by ? this.players.get(by) : undefined;
+		if (capturer) {
+			capturer.captured++;
+			this.dirtyPlayerRows.add(capturer.id);
+		}
+		// Only human-visible captures need the roster flush to jump the throttle;
+		// bot counts ride the normal roster cadence.
+		if (capturer && !capturer.is_bot) this.capturesPending = true;
+	}
+
+	/** Book the cell against the country that just lost it. */
+	private chargeLoss(previous: Country, fromFill: boolean, by?: string) {
+		previous.count--;
+		if (!fromFill || by === undefined) return;
+		previous.lost = (previous.lost ?? 0) + 1;
+		// A bot country never holds humans; its loss is the only one that can
+		// stay on the normal roster cadence.
+		if (!previous.is_bot) this.capturesPending = true;
+	}
+
+	/** A loss needs reclaim unless we can prove this pixel still reaches the
+	 * exterior. Keep any scan already required by an earlier change. */
+	private queueReclaim(owner: number, cell: number, fromFill: boolean) {
+		if (this.enclosureCountries.get(owner) === null) return;
+		// Bulk captures enqueue in constant time per pixel; their bounded local
+		// check or one full scan decides reclaim later in this pass.
+		if (fromFill) {
+			this.queueEnclosure(owner, cell);
+			return;
+		}
+		const box = this.bounds.get(owner);
+		if (!box || !hasStraightExit(this.owners, owner, cell, WIDTH, box))
+			this.queueEnclosure(owner, cell);
+	}
+
+	/** Settle the country that just lost this cell: its count, its roster
+	 * credit, whether it is now gone, and whether it needs to reclaim. */
+	private settleLoss(
+		owner: number,
+		cell: number,
+		fromFill: boolean,
+		by?: string,
+	) {
+		const previous = this.countries.get(owner);
+		if (previous) this.chargeLoss(previous, fromFill, by);
+		this.dirtyCountries.add(owner);
+		this.changedCountries.add(owner);
+		if (previous?.count === 0) this.maybeDeleteCountry(owner);
+		if (previous?.count) this.queueReclaim(owner, cell, fromFill);
+	}
+
+	/** Hand one cell to a country, then settle both sides of the trade. */
 	private claim(
 		cell: number,
 		countryId: number,
@@ -1217,77 +1319,13 @@ export class World {
 		this.owners[cell] = countryId;
 		this.extendBounds(countryId, cell);
 		this.changedCountries.add(countryId);
-		const starts = this.enclosureCountries.get(countryId);
-		if (starts !== null) {
-			const box = this.bounds.get(countryId);
-			if (starts?.has(cell) || !box) {
-				// A later claim can consume a queued start while its hole still
-				// exists, so that case queues the side ring rather than the gate.
-				// A teammate moving in the same tick may overwrite the credit;
-				// one cue for the enclosure is enough.
-				if (by) this.enclosureTriggers.set(countryId, by);
-				const x = cell % WIDTH;
-				if (cell >= WIDTH) this.queueEnclosure(countryId, cell - WIDTH);
-				if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
-				if (cell < this.owners.length - WIDTH)
-					this.queueEnclosure(countryId, cell + WIDTH);
-				if (x > 0) this.queueEnclosure(countryId, cell - 1);
-			} else {
-				const atRisk = mayEnclose(this.owners, countryId, cell, WIDTH, box);
-				if (atRisk) {
-					if (by) this.enclosureTriggers.set(countryId, by);
-					for (const neighbor of atRisk)
-						this.queueEnclosure(countryId, neighbor);
-				}
-			}
-		}
+		this.queueEnclosureCandidates(cell, countryId, by);
 		this.dirtyCountryChunks.add(
 			countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
 		);
-		const country = this.countries.get(countryId);
-		if (country) {
-			country.count++;
-			if (fromFill) {
-				// Credit the mover who closed the enclosure, not the country:
-				// teammates and bots capture silently for everyone else.
-				const capturer = by ? this.players.get(by) : undefined;
-				if (capturer) {
-					capturer.captured++;
-					this.dirtyPlayerRows.add(capturer.id);
-				}
-				// Only human-visible captures need the roster flush to jump the
-				// throttle; bot counts ride the normal roster cadence.
-				if (capturer && !capturer.is_bot) this.capturesPending = true;
-			}
-		}
+		this.creditGain(countryId, fromFill, by);
 		this.dirtyCountries.add(countryId);
-		if (!owner) return;
-		const previous = this.countries.get(owner);
-		if (previous) {
-			previous.count--;
-			if (fromFill && by !== undefined) {
-				previous.lost = (previous.lost ?? 0) + 1;
-				// A bot country never holds humans; its loss is the only one
-				// that can stay on the normal roster cadence.
-				if (!previous.is_bot) this.capturesPending = true;
-			}
-		}
-		this.dirtyCountries.add(owner);
-		this.changedCountries.add(owner);
-		if (previous?.count === 0) this.maybeDeleteCountry(owner);
-		if (!previous?.count) return;
-		const box = this.bounds.get(owner);
-		// A loss needs reclaim unless we can prove this pixel still reaches
-		// the exterior. Keep any scan already required by an earlier change.
-		if (
-			this.enclosureCountries.get(owner) !== null &&
-			// Bulk captures enqueue in constant time per pixel; their bounded
-			// local check or one full scan decides reclaim later in this pass.
-			(fromFill ||
-				!box ||
-				!hasStraightExit(this.owners, owner, cell, WIDTH, box))
-		)
-			this.queueEnclosure(owner, cell);
+		if (owner) this.settleLoss(owner, cell, fromFill, by);
 	}
 
 	/** Wire owner code for a country id; 0 when it has no palette color. */
