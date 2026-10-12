@@ -4,7 +4,6 @@ import {
 	LOCAL_SEARCH_BUDGET,
 	localEnclosures,
 	mayEnclose,
-	ringOf,
 } from "./enclosure";
 import { type Bounds, HoleFiller } from "./filler";
 import {
@@ -1220,18 +1219,26 @@ export class World {
 		this.changedCountries.add(countryId);
 		const starts = this.enclosureCountries.get(countryId);
 		if (starts !== null) {
-			// A later claim can consume a queued start while its hole still exists,
-			// so that case queues the whole ring rather than trusting the gate.
 			const box = this.bounds.get(countryId);
-			const atRisk =
-				starts?.has(cell) || !box
-					? ringOf(this.owners, cell, WIDTH)
-					: mayEnclose(this.owners, countryId, cell, WIDTH, box);
-			if (atRisk) {
-				// A teammate moving in the same tick may overwrite the credit; one
-				// cue for the enclosure is enough.
+			if (starts?.has(cell) || !box) {
+				// A later claim can consume a queued start while its hole still
+				// exists, so that case queues the side ring rather than the gate.
+				// A teammate moving in the same tick may overwrite the credit;
+				// one cue for the enclosure is enough.
 				if (by) this.enclosureTriggers.set(countryId, by);
-				for (const neighbor of atRisk) this.queueEnclosure(countryId, neighbor);
+				const x = cell % WIDTH;
+				if (cell >= WIDTH) this.queueEnclosure(countryId, cell - WIDTH);
+				if (x < WIDTH - 1) this.queueEnclosure(countryId, cell + 1);
+				if (cell < this.owners.length - WIDTH)
+					this.queueEnclosure(countryId, cell + WIDTH);
+				if (x > 0) this.queueEnclosure(countryId, cell - 1);
+			} else {
+				const atRisk = mayEnclose(this.owners, countryId, cell, WIDTH, box);
+				if (atRisk) {
+					if (by) this.enclosureTriggers.set(countryId, by);
+					for (const neighbor of atRisk)
+						this.queueEnclosure(countryId, neighbor);
+				}
 			}
 		}
 		this.dirtyCountryChunks.add(
