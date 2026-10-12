@@ -71,6 +71,33 @@ test("a chunks-only drain holds roster rows back for the slower flush", () => {
 		},
 	});
 });
+
+test("cue rows ship on a chunks-only drain without forcing the roster flush", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const held = world.country("Held");
+	const cued = world.country("Cued");
+	assert(held && cued);
+	world.dirtyCountries.add(held.country_id);
+	world.dirtyPlayerRows.add("bystander");
+	world.cueCountries.add(cued.country_id);
+	world.cuePlayers.add("courier");
+	const partial = drainPublishState(world, { rosters: false });
+	// Only the cue rows go out; the rest of the roster waits for its flush.
+	expect(partial.countries).toEqual([cued.country_id]);
+	expect(partial.playerRows).toEqual(["courier"]);
+	expect(partial.cueCountries).toEqual([cued.country_id]);
+	expect(partial.cuePlayers).toEqual(["courier"]);
+	expect(world.dirtyCountries.has(cued.country_id)).toBe(false);
+	expect(world.dirtyCountries.has(held.country_id)).toBe(true);
+	expect(world.dirtyPlayerRows.has("courier")).toBe(false);
+	expect(world.dirtyPlayerRows.has("bystander")).toBe(true);
+	expect(world.cueCountries.size).toBe(0);
+	expect(world.cuePlayers.size).toBe(0);
+	// A retry re-queues the cues so the sound is never lost with the commit.
+	restorePublishState(world, partial);
+	expect(world.cueCountries.has(cued.country_id)).toBe(true);
+	expect(world.cuePlayers.has("courier")).toBe(true);
+});
 test("a rejected batch restores every drained entry so retry resends all", async () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	world.input(

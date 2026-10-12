@@ -14,7 +14,45 @@ export type PublishSnapshot = {
 	removed: number[];
 	playerRows: string[];
 	removedPlayerRows: string[];
+	cueCountries: number[];
+	cuePlayers: string[];
 };
+
+/** The roster rows this drain carries: everything when the flush is due, only
+ * the cue rows when the roster is held. Held cue rows are pulled out of the
+ * dirty sets so the slower flush does not publish them twice. */
+function drainRosterRows(
+	world: World,
+	rosters: boolean,
+	cueCountries: number[],
+	cuePlayers: string[],
+): Pick<
+	PublishSnapshot,
+	"countries" | "removed" | "playerRows" | "removedPlayerRows"
+> {
+	if (!rosters) {
+		for (const countryId of cueCountries)
+			world.dirtyCountries.delete(countryId);
+		for (const id of cuePlayers) world.dirtyPlayerRows.delete(id);
+		return {
+			countries: cueCountries,
+			removed: [],
+			playerRows: cuePlayers,
+			removedPlayerRows: [],
+		};
+	}
+	const rows = {
+		countries: [...world.dirtyCountries],
+		removed: [...world.dirtyRemovedCountries],
+		playerRows: [...world.dirtyPlayerRows],
+		removedPlayerRows: [...world.dirtyRemovedPlayerRows],
+	};
+	world.dirtyCountries.clear();
+	world.dirtyRemovedCountries.clear();
+	world.dirtyPlayerRows.clear();
+	world.dirtyRemovedPlayerRows.clear();
+	return rows;
+}
 
 /** Snapshot the world's dirty sets and clear them for the next tick. */
 export function drainPublishState(
@@ -23,24 +61,21 @@ export function drainPublishState(
 ): PublishSnapshot {
 	// Roster rows (countries/users) can be held back for a slower flush while
 	// chunks stay per-tick: the sets dedupe, so held entries simply publish
-	// later with their latest values.
+	// later with their latest values. Cue rows ship now either way.
 	const rosters = opts?.rosters ?? true;
+	const cueCountries = [...world.cueCountries];
+	const cuePlayers = [...world.cuePlayers];
+	world.cueCountries.clear();
+	world.cuePlayers.clear();
 	const snapshot = {
 		countryChunks: [...world.dirtyCountryChunks],
 		userChunks: [...world.dirtyUserChunks],
-		countries: rosters ? [...world.dirtyCountries] : [],
-		removed: rosters ? [...world.dirtyRemovedCountries] : [],
-		playerRows: rosters ? [...world.dirtyPlayerRows] : [],
-		removedPlayerRows: rosters ? [...world.dirtyRemovedPlayerRows] : [],
+		cueCountries,
+		cuePlayers,
+		...drainRosterRows(world, rosters, cueCountries, cuePlayers),
 	};
 	world.dirtyCountryChunks.clear();
 	world.dirtyUserChunks.clear();
-	if (rosters) {
-		world.dirtyCountries.clear();
-		world.dirtyRemovedCountries.clear();
-		world.dirtyPlayerRows.clear();
-		world.dirtyRemovedPlayerRows.clear();
-	}
 	return snapshot;
 }
 
@@ -59,6 +94,9 @@ export function restorePublishState(
 	for (const id of snapshot.playerRows) world.dirtyPlayerRows.add(id);
 	for (const id of snapshot.removedPlayerRows)
 		world.dirtyRemovedPlayerRows.add(id);
+	for (const countryId of snapshot.cueCountries)
+		world.cueCountries.add(countryId);
+	for (const id of snapshot.cuePlayers) world.cuePlayers.add(id);
 }
 
 /** Build committed-batch operations from a snapshot; removes go first. */
@@ -67,7 +105,11 @@ export function buildPublishOperations(
 	snapshot: PublishSnapshot,
 	extra: BatchOperation[] = [],
 ): BatchOperation[] {
-	const countries = snapshot.countries
+	// Cue rows can also sit in the bulk lists (a forced flush drains both), so
+	// merge by id before building to keep each row in one operation.
+	const countryIds = new Set([...snapshot.countries, ...snapshot.cueCountries]);
+	const playerIds = new Set([...snapshot.playerRows, ...snapshot.cuePlayers]);
+	const countries = [...countryIds]
 		.map((countryId) => world.countries.get(countryId))
 		.filter((c) => c !== undefined);
 	// Stale tombstone expiry loses to a live rejoin: rejoins clear their
@@ -75,7 +117,7 @@ export function buildPublishOperations(
 	const removedPlayerRows = snapshot.removedPlayerRows.filter(
 		(id) => !world.players.has(id),
 	);
-	const playerRows = snapshot.playerRows
+	const playerRows = [...playerIds]
 		.map((id) => ({ id, row: world.playerRow(id) }))
 		.filter((entry) => entry.row !== undefined);
 	return [

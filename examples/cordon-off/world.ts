@@ -135,12 +135,11 @@ export class World {
 	>();
 	inputMessages = 0;
 	ticks = 0;
-	// Set when a human-visible capture changed land (a human capturer or a
-	// non-bot country losing cells); the publisher forces a roster flush so
-	// clients hear the cue in the same tick, not after the roster throttle.
-	// Bot-vs-bot fills leave it alone: flushing every fill tick rebuilt every
-	// client's scoreboard several times a second.
-	capturesPending = false;
+	// Cue rows: a human capturer's own row and the row of a human country
+	// whose lost count grew. The publisher ships just these rows on the tick
+	// they change; the bulk roster keeps its slower flush cadence.
+	readonly cueCountries = new Set<number>();
+	readonly cuePlayers = new Set<string>();
 	private nextCountryId = 1;
 	// Round-local player identity carried by packed dots. Monotonic so a slot
 	// is never reused while a tombstone or stale subscription may reference
@@ -1152,9 +1151,9 @@ export class World {
 			if (capturer) {
 				capturer.captured += taken;
 				this.dirtyPlayerRows.add(capturer.id);
-				// Only human-visible captures need the roster flush to jump the
-				// throttle; bot counts ride the normal roster cadence.
-				if (!capturer.is_bot) this.capturesPending = true;
+				// Only human-visible captures need the cue row now; bot counts
+				// ride the normal roster cadence.
+				if (!capturer.is_bot) this.cuePlayers.add(capturer.id);
 			}
 		}
 		this.changedCountries.add(countryId);
@@ -1167,9 +1166,9 @@ export class World {
 				previous.count -= count;
 				if (by !== undefined) {
 					previous.lost = (previous.lost ?? 0) + count;
-					// A bot country never holds humans; its loss is the only one
-					// that can stay on the normal roster cadence.
-					if (!previous.is_bot) this.capturesPending = true;
+					// A bot country never holds humans; its loss is the only
+					// one that can stay on the normal roster cadence.
+					if (!previous.is_bot) this.cueCountries.add(owner);
 				}
 			}
 			this.dirtyCountries.add(owner);
@@ -1261,9 +1260,9 @@ export class World {
 			capturer.captured++;
 			this.dirtyPlayerRows.add(capturer.id);
 		}
-		// Only human-visible captures need the roster flush to jump the throttle;
-		// bot counts ride the normal roster cadence.
-		if (capturer && !capturer.is_bot) this.capturesPending = true;
+		// Only human-visible captures need the cue row now; bot counts ride the
+		// normal roster cadence.
+		if (capturer && !capturer.is_bot) this.cuePlayers.add(capturer.id);
 	}
 
 	/** Book the cell against the country that just lost it. */
@@ -1273,7 +1272,7 @@ export class World {
 		previous.lost = (previous.lost ?? 0) + 1;
 		// A bot country never holds humans; its loss is the only one that can
 		// stay on the normal roster cadence.
-		if (!previous.is_bot) this.capturesPending = true;
+		if (!previous.is_bot) this.cueCountries.add(previous.country_id);
 	}
 
 	/** A loss needs reclaim unless we can prove this pixel still reaches the

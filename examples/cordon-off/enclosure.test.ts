@@ -449,17 +449,17 @@ test("closing ordinary territory captures enclosed land, updates all chunks and 
 	]);
 });
 
-// A roster flush skips the 500 ms publish throttle only for cues a human can
-// hear: a human's own capture, or land lost by a country humans can be in.
-// Bot-only fills must ride the throttle or every client's scoreboard rebuilds
+// Cue rows skip the 500 ms publish throttle only where a human can hear them:
+// a human's own capture row, or land lost by a country humans can be in.
+// Bot-only fills must ride the throttle or every client's scoreboard updates
 // on every fill tick.
 test.each([
-	["human capture over neutral land", false, "human", "none", true],
-	["human capture over bot land", false, "human", "bot", true],
-	["bot capture over neutral land", true, "bot", "none", false],
-	["bot capture over bot land", true, "bot", "bot", false],
-	["bot capture over human land", true, "bot", "human", true],
-] as const)("roster flush forced for %s", (_name, capturerBot, winningKind, previousKind, expected) => {
+	["human capture over neutral land", false, "human", "none", true, false],
+	["human capture over bot land", false, "human", "bot", true, false],
+	["bot capture over neutral land", true, "bot", "none", false, false],
+	["bot capture over bot land", true, "bot", "bot", false, false],
+	["bot capture over human land", true, "bot", "human", false, true],
+] as const)("cue rows queued for %s", (_name, capturerBot, winningKind, previousKind, playerCue, countryCue) => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const humans = world.country("Humans");
 	const bots = world.country("Bots", true);
@@ -486,7 +486,8 @@ test.each([
 	}
 	const cell = 10 * WIDTH + 10;
 	world.owners[cell] = previous;
-	world.capturesPending = false;
+	world.cueCountries.clear();
+	world.cuePlayers.clear();
 	Reflect.get(world, "claim").call(
 		world,
 		cell,
@@ -494,7 +495,8 @@ test.each([
 		true,
 		"capturer",
 	);
-	expect(world.capturesPending).toBe(expected);
+	expect(world.cuePlayers.has("capturer")).toBe(playerCue);
+	expect(world.cueCountries.size > 0).toBe(countryCue);
 });
 
 test("closing a loop at the world edge resolves locally without wrapping rows", () => {
