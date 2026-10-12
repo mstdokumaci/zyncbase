@@ -536,12 +536,11 @@ function allocatorOp(): BatchOperation[] {
 }
 
 /** Roster rows are throttled; a brand-new country forces a flush so its chunk
- * writes never reference a row that has not landed yet. */
+ * writes never reference a row that has not landed yet. Cue rows (a human
+ * capture, a human country's loss) ship every tick on their own and do not
+ * force the bulk flush. */
 function shouldPublishRosters(force: boolean) {
 	if (force || tickCount % ROSTER_PUBLISH_EVERY_TICKS === 0) return true;
-	// Human-visible captures bypass the throttle: their sound cues read the
-	// roster rows. Bot-only fills ride the normal cadence.
-	if (world.capturesPending) return true;
 	for (const countryId of world.dirtyCountries)
 		if (!persistedCountries.has(countryId)) return true;
 	return false;
@@ -574,11 +573,6 @@ function recordChunkWrites(operations: BatchOperation[]) {
 async function publish(forceRosters = false) {
 	tickCount++;
 	const rosters = shouldPublishRosters(forceRosters);
-	// Capture the cue flag at drain time: ticks keep running while this commit
-	// is in flight and may set it again for the next flush. On failure it is
-	// restored so a cue is never lost.
-	const capturesPending = world.capturesPending;
-	world.capturesPending = false;
 	const snapshot = drainPublishState(world, { rosters });
 	const operations = buildPublishOperations(
 		world,
@@ -586,7 +580,11 @@ async function publish(forceRosters = false) {
 		rosters ? allocatorOp() : [],
 	);
 	if (!operations.length) {
-		if (capturesPending) world.capturesPending = true;
+		// Rows without operations can only mean the row vanished mid-tick; keep
+		// the cues queued so a sound is never lost.
+		for (const countryId of snapshot.cueCountries)
+			world.cueCountries.add(countryId);
+		for (const id of snapshot.cuePlayers) world.cuePlayers.add(id);
 		return;
 	}
 	// A rejected batch restores every drained entry, so a retry resends all
@@ -599,7 +597,6 @@ async function publish(forceRosters = false) {
 		);
 	} catch (error) {
 		restorePublishState(world, snapshot);
-		if (capturesPending) world.capturesPending = true;
 		throw error;
 	}
 	// The allocator mark rides with the country removes (see allocatorOp), so

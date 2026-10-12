@@ -760,6 +760,10 @@ function createScoreboardRow(): ScoreboardRow {
 	};
 }
 
+// One formatter for every score: Number.toLocaleString builds a formatter per
+// call (for a reused instance it is a fraction of the cost).
+const COUNT_FORMAT = new Intl.NumberFormat();
+
 function updateScoreboardRow(
 	row: ScoreboardRow,
 	country: Country,
@@ -776,7 +780,7 @@ function updateScoreboardRow(
 		rendered.players = members;
 	}
 	if (rendered.score !== country.count) {
-		row.score.textContent = country.count.toLocaleString();
+		row.score.textContent = COUNT_FORMAT.format(country.count);
 		rendered.score = country.count;
 	}
 	if (rendered.color !== country.color) {
@@ -796,7 +800,18 @@ function placeScoreboardRow(row: ScoreboardRow, index: number) {
 		countriesList.insertBefore(row.li, countriesList.children[index] ?? null);
 }
 
+// Scoreboard rows change several times a second (cue rows arrive every tick),
+// so the handler records the latest list and the frame loop renders it once.
+let scoreboardDirty = false;
+
 function scoreboard(rows: Country[]) {
+	latestCountries = rows;
+	scoreboardDirty = true;
+}
+
+function renderScoreboard() {
+	scoreboardDirty = false;
+	const rows = latestCountries;
 	// roster rows include reconnect-grace tombstones, so a departed player
 	// keeps counting until expiry; filtering needs a live flag from the server.
 	const headcount = new Map<number, number>();
@@ -1521,7 +1536,6 @@ async function subscribeColdStores(next: ZyncBaseClient): Promise<boolean> {
 		(rows) => {
 			if (countriesGeneration !== sessionGeneration) return;
 			const list = rows as Country[];
-			latestCountries = list;
 			scoreboard(list);
 			watchCountryLosses(list);
 		},
@@ -1736,6 +1750,9 @@ function draw(now: number) {
 	const elapsed = now - lastFrame;
 	// Allow timestamp rounding at the frame boundary without accumulating drift.
 	if (elapsed + 0.1 < FRAME_MS) return;
+	// Roster deltas can arrive between frames; render the scoreboard at frame
+	// cadence instead of once per delta.
+	if (scoreboardDirty) renderScoreboard();
 	const position = motion?.position(now);
 	updateMood();
 	// Idle frames are identical: repaint only when the camera moved or a
