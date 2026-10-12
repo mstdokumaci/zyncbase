@@ -133,7 +133,7 @@ behavior.sendPingsAutomatically = true;
 
 uWebSockets treats `idleTimeout` as one total inbound-idle budget: it sends a native Ping after the derived idle period and force-closes the peer if no inbound frame, including Pong, arrives within the remaining grace. At 2 seconds that is 1 second before Ping and 1 second of Pong grace. ZyncBase adds no server-side idle timer, and a reaper close carries no ZyncBase close frame or code.
 
-µSockets sweeps socket timeouts once per second at the end of the loop iteration, after that iteration's inbound frames have been dispatched. A timeout reset by a frame consumed in the same iteration — a Pong, for example — is deferred one tick, so the sweep never reaps a socket that just refreshed it. Expiry is aligned to sweep ticks, so a 2-second timeout closes an unresponsive connection roughly 1–2 seconds after its last inbound frame. Each sweep scans every socket, so sweep cost scales with connection count.
+µSockets sweeps socket timeouts once per second at the end of the loop iteration, after that iteration's inbound frames have been dispatched. A timeout reset by a frame consumed in the same iteration — a Pong, for example — is deferred one tick at the cost of one extra second of slack, so the sweep never reaps a socket that just refreshed it. Expiry is aligned to sweep ticks, so a 2-second timeout closes an unresponsive connection roughly 1–2 seconds after its last inbound frame. Each sweep scans every socket, so sweep cost scales with connection count.
 
 The C bridge adds `uws_ws_end`, wrapping the vendored `WebSocket::end(code)`, and the Zig `WebSocket` wrapper exposes it. On the owning event loop, classified closes best-effort send `ServerDisconnect` and then call `end(code)` so the close frame carries the mapped code. Keep `uws_ws_close` for raw, unclassified transport closes.
 
@@ -145,6 +145,11 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 - `src/uws_bridge.cpp` and `src/uws_wrapper.h` must be updated to align with any upstream API changes.
 - Port-binding failure must propagate back to the host process as `error.ListenFailed`.
 
+Local changes that must be re-applied after that copy:
+- `usockets/libusockets.h`, `loop.c`, `socket.c`, `uwebsockets/App.h`, `WebSocketContextData.h` — 1 s timeout granularity, not upstream's 4 s, so a 2 s idle budget is expressible. `App.h` bounds `idleTimeout` with `>=`, not `>`, because `>` permits a full-wheel timeout that comes due on the sweep that armed it.
+- `usockets/eventing/epoll_kqueue.c` — async registers once with `EV_ADD | EV_CLEAR` and wakes with a bare `NOTE_TRIGGER`; FreeBSD drops upstream's oneshot pattern.
+- `usockets/loop.c`, `socket.c`, `internal/internal.h`, `internal/loop_data.h` — `sweep_pending` runs the 1 s sweep from `us_internal_loop_post`, after I/O dispatch; `timeout_iteration` defers a timeout armed in that same iteration. Both halves are load-bearing.
+
 ## Performance Contract
 
 ### Transport Limits
@@ -153,7 +158,7 @@ When updating the vendored uWebSockets or µSockets source files from upstream:
 |----------|-------|-------|
 | Max message size | 1 MB | Passed to uWS `maxPayloadLength` (connections sending larger frames are dropped). |
 | Max backpressure | 16 MB | Maximum bytes uWS will buffer per connection before dropping. |
-| Idle timeout | 15 sec default; configurable 2–600 sec | Total inbound-idle budget, including native Ping and Pong grace. |
+| Idle timeout | 15 sec default; configurable 2–239 sec | Total inbound-idle budget, including native Ping and Pong grace. |
 | Max connections | 100,000 | Hard cap on concurrent WebSocket connections. |
 
 ### Rate Limiting

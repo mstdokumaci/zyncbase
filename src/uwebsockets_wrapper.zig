@@ -70,7 +70,7 @@ pub const WebSocketServer = struct {
 
     /// Initialize WebSocket server
     pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
-        if (config.idle_timeout < 2 or config.idle_timeout > 600) return error.InvalidConfig;
+        if (config.idle_timeout < 2 or config.idle_timeout > 239) return error.InvalidConfig;
 
         const host_z = allocator.dupeZ(u8, config.host) catch return error.OutOfMemory;
         errdefer allocator.free(host_z);

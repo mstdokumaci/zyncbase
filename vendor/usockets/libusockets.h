@@ -23,10 +23,8 @@
 #define LIBUS_RECV_BUFFER_LENGTH 524288
 #endif
 
-/* Socket timeout sweeps run once per second. */
+/* A timeout granularity of 1 second; upstream ships 4, which cannot express a 2-second idle budget */
 #define LIBUS_TIMEOUT_GRANULARITY 1
-#define LIBUS_TIMEOUT_TICK_COUNT 600
-#define LIBUS_TIMEOUT_DISABLED 65535
 /* 32 byte padding of receive buffer ends */
 #define LIBUS_RECV_BUFFER_PADDING 32
 /* Guaranteed alignment of extension memory */
@@ -139,7 +137,7 @@ struct us_socket_context_options_t {
     int ssl_prefer_low_memory_usage; /* Todo: rename to prefer_low_memory_usage and apply for TCP as well */
 };
 
-/* Return the current short-timeout tick for this context */
+/* Return 15-bit timestamp for this context */
 unsigned short us_socket_context_timestamp(int ssl, struct us_socket_context_t *context);
 
 /* Adds SNI domain and cert in asn1 format */

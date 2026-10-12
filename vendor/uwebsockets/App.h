@@ -306,9 +306,11 @@ public:
             std::terminate();
         }
 
-        /* Maximum idleTimeout is 10 minutes */
-        if (behavior.idleTimeout > LIBUS_TIMEOUT_TICK_COUNT * LIBUS_TIMEOUT_GRANULARITY) {
-            std::cerr << "Error: idleTimeout must not be greater than 600 seconds!" << std::endl;
+        /* Maximum idleTimeout is one wheel minus one tick. Upstream compares with
+         * `>`, which permits a full-wheel timeout that comes due on the very
+         * sweep that armed it. */
+        if (behavior.idleTimeout >= 240 * LIBUS_TIMEOUT_GRANULARITY) {
+            std::cerr << "Error: idleTimeout must not be greater than 239 seconds!" << std::endl;
             std::terminate();
         }
 

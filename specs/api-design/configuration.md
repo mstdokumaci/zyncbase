@@ -144,7 +144,7 @@ Server network configuration.
 
 - `port` - Port to listen on (1-65535).
 - `host` - Host to bind to.
-- `idleTimeoutSeconds` - Total WebSocket idle timeout in seconds (2-600, default 15). The server sends a native WebSocket Ping before expiry and closes the connection if the peer does not respond within the remaining timeout.
+- `idleTimeoutSeconds` - Total WebSocket idle timeout in seconds (2-239, default 15). The server sends a native WebSocket Ping before expiry and closes the connection if the peer does not respond within the remaining timeout.
 - `tls` (object, optional) - Enables HTTPS ticket exchange and WSS on the same listener. When omitted, the server uses plaintext HTTP/WS.
 
 **`server.tls`:**

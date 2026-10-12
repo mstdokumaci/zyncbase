@@ -455,7 +455,7 @@ test "config: validation - port zero" {
     try std.testing.expectError(error.InvalidPort, result);
 }
 
-test "config: server idle timeout accepts 2 through 600 seconds" {
+test "config: server idle timeout accepts 2 through 239 seconds" {
     const allocator = std.heap.smp_allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-idle-timeout");
@@ -466,9 +466,9 @@ test "config: server idle timeout accepts 2 through 600 seconds" {
 
     const cases = [_]struct { value: i64, expected: ?u16 }{
         .{ .value = 2, .expected = 2 },
-        .{ .value = 600, .expected = 600 },
+        .{ .value = 239, .expected = 239 },
         .{ .value = 1, .expected = null },
-        .{ .value = 601, .expected = null },
+        .{ .value = 240, .expected = null },
     };
 
     for (cases, 0..) |case, index| {
