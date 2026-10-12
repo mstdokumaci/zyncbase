@@ -16,6 +16,25 @@ const Connection = @import("state.zig").Connection;
 
 const Allocator = std.mem.Allocator;
 
+/// Max bytes a single connection may accumulate in one drain pass before it is
+/// closed with BACKPRESSURE_LIMIT. Bounds per-pass copy memory, the retained
+/// drain arena, and the pending backlog.
+///
+/// The cap bounds *accumulation*, not single-message size: the entry that
+/// crosses it is kept so a legitimately large snapshot (a query result may be
+/// unbounded — the client supplies the limit) still reaches the client. Only
+/// the entries after it are dropped.
+pub const max_pending_group_bytes: usize = 4 * 1024 * 1024;
+
+/// Per-connection drain accumulator for one drain pass.
+const Group = struct {
+    entries: std.ArrayListUnmanaged(SendQueueEntry) = .empty,
+    bytes: usize = 0,
+    /// Entries dropped after the byte cap was crossed.
+    dropped: usize = 0,
+    over: bool = false,
+};
+
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
 pub const ConnectionManager = struct {
@@ -241,23 +260,36 @@ pub const ConnectionManager = struct {
     /// Groups entries by conn_id and sends each group as ONE concatenated
     /// frame: complete msgpack messages are byte-concatenated in pop order.
     /// The client decodes multiple messages per frame (decodeMulti).
+    /// A connection that accumulates more than `max_pending_group_bytes` in one
+    /// pass is dropped and closed with BACKPRESSURE_LIMIT.
     pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
         _ = self.drain_arena.reset(.retain_capacity);
         const alloc = self.drain_arena.allocator();
 
-        // Phase 1: pop all entries, group by conn_id
-        var groups = std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(SendQueueEntry)).empty;
+        // Phase 1: pop all entries, group by conn_id, capped per connection
+        var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
 
         while (send_queue.pop()) |entry| {
             const g = groups.getOrPut(alloc, entry.conn_id) catch {
+                std.log.warn("drainSendQueue: group alloc failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
                 entry.deinit();
                 continue;
             };
-            if (!g.found_existing) g.value_ptr.* = .empty;
-            g.value_ptr.append(alloc, entry) catch {
+            if (!g.found_existing) g.value_ptr.* = .{};
+            if (g.value_ptr.over) {
+                // Cap already crossed: release instead of accumulating so this
+                // pass stays bounded no matter how far behind the client is.
+                g.value_ptr.dropped += 1;
+                entry.deinit();
+                continue;
+            }
+            g.value_ptr.entries.append(alloc, entry) catch {
+                std.log.warn("drainSendQueue: group append failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
                 entry.deinit();
                 continue;
             };
+            g.value_ptr.bytes += entry.data.len;
+            if (g.value_ptr.bytes > max_pending_group_bytes) g.value_ptr.over = true;
         }
 
         // Phase 2: per connection, concatenate the group into one frame and send.
@@ -267,16 +299,31 @@ pub const ConnectionManager = struct {
             const group = kv.value_ptr;
 
             // Skip empty groups
-            if (group.items.len == 0) continue;
+            if (group.entries.items.len == 0) continue;
 
             const conn = self.acquireConnection(conn_id) catch {
                 // Connection gone — release all entries' arenas
-                for (group.items) |e| e.deinit();
+                for (group.entries.items) |e| e.deinit();
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            sendConcatenatedOrClose(conn, group.items, alloc, self.message_handler);
+            if (group.over) {
+                // The client is not draining fast enough. Drop the backlog
+                // rather than writing it to a peer we are about to close: the
+                // close is terminal and reconnect resubscribes from scratch.
+                for (group.entries.items) |e| e.deinit();
+                std.log.warn("Connection {}: send backlog exceeded {} bytes ({} entries held, {} dropped), closing", .{
+                    conn_id,
+                    max_pending_group_bytes,
+                    group.entries.items.len,
+                    group.dropped,
+                });
+                self.message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+                continue;
+            }
+
+            sendConcatenatedOrClose(conn, group.entries.items, alloc, self.message_handler);
         }
     }
 

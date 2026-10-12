@@ -5,6 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const test_helpers = @import("test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../wire/message_type.zig").MessageType;
+const max_pending_group_bytes = @import("manager.zig").max_pending_group_bytes;
 const send_queue_type = @import("send_queue.zig").send_queue;
 
 const testing = std.testing;
@@ -333,6 +334,77 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     // single frame in queue order per connection per drain pass.
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
     try testing.expectEqualSlices(u8, "first-messagesecond-message", recorder.bytes());
+}
+
+test "ConnectionManager: drain drops and closes a connection that exceeds the pending byte cap" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-drain-cap", &.{});
+    defer app.deinit();
+
+    var sent_buf: [256]u8 = undefined;
+    var recorder_a = helpers.SendRecorder.init(&sent_buf);
+    var ws_a = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws_a.test_send_observer = helpers.sendRecorderObserver;
+    ws_a.test_send_observer_ctx = &recorder_a;
+    try app.connection_manager.onOpen(&ws_a);
+    defer app.connection_manager.onClose(&ws_a, 1000, "");
+    recorder_a.reset(); // drop the schema_sync frame from onOpen
+
+    var sent_buf_b: [256]u8 = undefined;
+    var recorder_b = helpers.SendRecorder.init(&sent_buf_b);
+    var ws_b = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws_b.test_send_observer = helpers.sendRecorderObserver;
+    ws_b.test_send_observer_ctx = &recorder_b;
+    try app.connection_manager.onOpen(&ws_b);
+    defer app.connection_manager.onClose(&ws_b, 1000, "");
+    recorder_b.reset();
+
+    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    defer queue.deinit();
+
+    // Entry payloads for the over-cap connection. Only .len is ever read on the
+    // drop path, so every entry can share one buffer — no 4 MiB of test heap.
+    const chunk = try allocator.alloc(u8, max_pending_group_bytes / 2);
+    defer allocator.free(chunk);
+    @memset(chunk, 0xAB);
+
+    // 2 MiB each: the third entry crosses the 4 MiB cap and the fourth is
+    // dropped because the cap was already crossed when it was popped.
+    const entry_count = 4;
+    const handle_a = try app.memory_strategy.acquireArenaDeferred();
+    for (0..entry_count) |_| {
+        handle_a.retain();
+        try queue.push(.{ .conn_id = ws_a.getConnId(), .data = chunk, .arena = handle_a });
+    }
+    handle_a.release(); // producer hold; the entries hold the rest
+
+    // A second connection stays under the cap and must still be served: the
+    // cap is per connection, not global.
+    const handle_b = try app.memory_strategy.acquireArenaDeferred();
+    const alloc_b = handle_b.allocator();
+    const msg1 = try alloc_b.dupe(u8, "first");
+    const msg2 = try alloc_b.dupe(u8, "second");
+    handle_b.retain();
+    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg1, .arena = handle_b });
+    handle_b.retain();
+    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg2, .arena = handle_b });
+    handle_b.release();
+
+    app.connection_manager.drainSendQueue(&queue);
+
+    try testing.expect(!queue.hasItems());
+
+    // Over-cap connection: no data frame went out, only the disconnect that
+    // precedes the close.
+    try testing.expectEqual(@as(u64, 1), recorder_a.send_count.load(.monotonic));
+    const a_bytes = recorder_a.bytes();
+    try testing.expect(std.mem.indexOf(u8, a_bytes, "BACKPRESSURE_LIMIT") != null);
+    try testing.expect(std.mem.indexOf(u8, a_bytes, "first") == null);
+
+    // Healthy connection in the same pass is unaffected.
+    try testing.expectEqual(@as(u64, 1), recorder_b.send_count.load(.monotonic));
+    try testing.expectEqualSlices(u8, "firstsecond", recorder_b.bytes());
 }
 
 test "ConnectionManager: token sweep expires JWT sessions but preserves anonymous sessions" {
