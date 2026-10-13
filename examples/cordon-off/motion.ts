@@ -149,16 +149,20 @@ export class LocalMotion {
 		this.duration = this.stepDuration();
 	}
 
+	// Reused by every position() call: callers consume the fields within the
+	// frame (render pass, camera ease) and never retain the object.
+	private readonly result = { x: 0, y: 0 };
+
 	position(now: number) {
 		const elapsed = Math.max(0, now - this.started);
 		// anticipate one cell; predicting farther needs server tick/credit metadata.
 		const progress = Math.min(elapsed / this.duration, 1);
 		const correction = Math.max(0, 1 - elapsed / Math.min(100, this.duration));
 		const [dx, dy] = steps[this.direction];
-		return {
-			x: this.dot.x + this.shift + dx * progress + this.offset.x * correction,
-			y: this.dot.y + dy * progress + this.offset.y * correction,
-		};
+		this.result.x =
+			this.dot.x + this.shift + dx * progress + this.offset.x * correction;
+		this.result.y = this.dot.y + dy * progress + this.offset.y * correction;
+		return this.result;
 	}
 
 	stepDuration() {

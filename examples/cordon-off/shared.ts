@@ -259,14 +259,21 @@ export function encodeColorIndexes(codes: Uint8Array) {
 
 /** Decode an RLE color-index chunk; rejects any stream that is not exact. */
 export function readColorIndexes(bytes: Uint8Array) {
+	if (bytes.length % 2 !== 0) throw new Error("Invalid chunk size");
 	const codes = new Uint8Array(COUNTRY_CHUNK_CELLS);
 	let out = 0;
 	for (let i = 0; i < bytes.length; i += 2) {
-		if (i + 1 >= bytes.length) throw new Error("Invalid chunk size");
 		const run = bytes[i];
-		if (!run || out + run > codes.length) throw new Error("Invalid chunk size");
-		codes.fill(bytes[i + 1], out, out + run);
-		out += run;
+		if (run === 0) throw new Error("Invalid chunk size");
+		const code = bytes[i + 1];
+		// Battlefield chunks carry many single-cell runs; a fill() call per run
+		// costs more than the write itself there. Overflowing writes clamp and
+		// the exact-length check below rejects the stream.
+		if (run === 1) codes[out++] = code;
+		else {
+			codes.fill(code, out, out + run);
+			out += run;
+		}
 	}
 	if (out !== codes.length) throw new Error("Invalid chunk size");
 	return codes;
@@ -315,8 +322,8 @@ export function encodeCoordinates(chunkIndex: number, dots: Dot[]): Uint8Array {
 	return bytes;
 }
 
-/** Decode a packed coordinate row; rejects any stream that is not exact. */
-export function readCoordinates(bytes: Uint8Array): Dot[] {
+/** Validate a packed coordinate row's header and locate its chunk origin. */
+function coordinateHeader(bytes: Uint8Array) {
 	if (
 		bytes.byteLength < COORDINATES_HEADER_BYTES ||
 		bytes[0] !== COORDINATES_VERSION
@@ -328,8 +335,16 @@ export function readCoordinates(bytes: Uint8Array): Dot[] {
 	const count = bytes[3] | ((bytes[4] as number) << 8);
 	if (bytes.byteLength !== COORDINATES_HEADER_BYTES + count * 4)
 		throw new Error("Invalid coordinates encoding");
-	const originX = (chunkIndex % USER_COLUMNS) * USER_CHUNK_WIDTH;
-	const originY = Math.floor(chunkIndex / USER_COLUMNS) * USER_CHUNK_HEIGHT;
+	return {
+		originX: (chunkIndex % USER_COLUMNS) * USER_CHUNK_WIDTH,
+		originY: Math.floor(chunkIndex / USER_COLUMNS) * USER_CHUNK_HEIGHT,
+		count,
+	};
+}
+
+/** Decode a packed coordinate row; rejects any stream that is not exact. */
+export function readCoordinates(bytes: Uint8Array): Dot[] {
+	const { originX, originY, count } = coordinateHeader(bytes);
 	const dots: Dot[] = new Array(count);
 	let at = COORDINATES_HEADER_BYTES;
 	for (let i = 0; i < count; i++) {
@@ -347,6 +362,28 @@ export function readCoordinates(bytes: Uint8Array): Dot[] {
 		at += 4;
 	}
 	return dots;
+}
+
+/** Find one slot in a packed coordinate row without materializing the dots. */
+export function findCoordinate(
+	bytes: Uint8Array,
+	slot: number,
+): Dot | undefined {
+	const { originX, originY, count } = coordinateHeader(bytes);
+	let at = COORDINATES_HEADER_BYTES;
+	for (let i = 0; i < count; i++) {
+		const candidate = bytes[at] | ((bytes[at + 1] as number) << 8);
+		if (candidate < 1) throw new Error("Invalid coordinates encoding");
+		if (candidate === slot) {
+			const lx = bytes[at + 2] as number;
+			const ly = bytes[at + 3] as number;
+			if (lx >= USER_CHUNK_WIDTH || ly >= USER_CHUNK_HEIGHT)
+				throw new Error("Invalid coordinates encoding");
+			return { slot, x: originX + lx, y: originY + ly };
+		}
+		at += 4;
+	}
+	return undefined;
 }
 
 export function countryName(value: unknown): string {

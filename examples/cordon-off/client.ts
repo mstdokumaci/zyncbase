@@ -1,18 +1,11 @@
 import {
 	ActionExecutionError,
 	createClient,
-	type JsonValue,
-	type ListenHandle,
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import nipplejs from "nipplejs";
-import {
-	approach,
-	JoystickSteering,
-	LocalMotion,
-	type MotionDot,
-} from "./motion";
+import { JoystickSteering, type MotionDot } from "./motion";
 import { setMood, setMusicTempo, startMusic, stopMusic } from "./music";
 import { sfx } from "./sfx";
 import {
@@ -21,10 +14,8 @@ import {
 	COUNTRY_COLOR_INDEX,
 	COUNTRY_COLORS,
 	COUNTRY_COLUMNS,
-	COUNTRY_ROWS,
 	type Country,
 	type CountryChunkRow,
-	countryChunkIndex,
 	countryName,
 	type Direction,
 	type Dot,
@@ -40,16 +31,12 @@ import {
 	readCoordinates,
 	steps,
 	terrain,
-	USER_CHUNK_HEIGHT,
-	USER_CHUNK_WIDTH,
-	USER_COLUMNS,
-	USER_ROWS,
 	type UserChunkRow,
-	WATER_COUNTRY_CHUNKS,
 	WATER_RGB,
 	WIDTH,
 	wrapX,
 } from "./shared";
+import { ownerAt as chunkOwnerAt, ViewSession } from "./viewport";
 
 function element<T extends HTMLElement>(id: string): T {
 	const result = document.getElementById(id);
@@ -93,9 +80,6 @@ const chunks = new Map<
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
 const userChunks = new Map<number, Dot[]>();
-type PendingUnlisten = Promise<ListenHandle>;
-const subscriptions = new Map<number, PendingUnlisten>();
-const userSubscriptions = new Map<number, PendingUnlisten>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -120,15 +104,10 @@ let lobbyCountries: Country[] = [];
 let availableSlots = 0;
 let myPlayerId = "",
 	mySlot = 0,
-	nickname = "",
-	seq = 0;
+	nickname = "";
 // Spawn cell from the join reply. The roster row flush is throttled, so the
 // initial camera must not wait on a locate() read.
 let admittedPosition: { x: number; y: number } | undefined;
-let direction: Direction = "idle";
-// Heading used to choose the prefetch edge. Kept after release so stopping
-// does not drop the leading margin and churn subscriptions on the next move.
-let prefetchDirection: Direction = "idle";
 // Alternation: when two orthogonal directions are held (keyboard) or the
 // joystick provides a diagonal vector, we alternate between the two axes
 // on each confirmed server move instead of using a timer — this avoids
@@ -136,9 +115,6 @@ let prefetchDirection: Direction = "idle";
 let altDirections: Direction[] = [];
 let altIndex = 0;
 const joystickSteering = new JoystickSteering();
-let lastSentDirection: Direction = "idle";
-let motion: LocalMotion | undefined;
-let camera = { x: WIDTH / 2, y: HEIGHT / 2 };
 let scale = 8;
 let width = innerWidth,
 	height = innerHeight;
@@ -151,38 +127,17 @@ let locating = false;
 // Bumped when a session ends so in-flight locate() failures cannot write
 // status text into the lobby that started after them.
 let sessionGeneration = 0;
-// Dirty-frame rendering: the scene repaints only when something it draws changes.
-let dirty = true;
-let drawnX = Number.NaN;
-let drawnY = Number.NaN;
-let lastCountrySubKey = "";
-let lastUserSubKey = "";
-// A rejected listen removes itself from its map, but the key-gated check
-// below would never notice — this flag forces the next frame to re-sync.
-let subResyncNeeded = false;
 let focusWatch: ReturnType<typeof setInterval> | undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let joinRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 let latestCountries: Country[] = [];
-const FRAME_MS = 1000 / 30;
-// Camera catch-up time constant. Bigger = lazier trailing behind the dot.
-const CAMERA_TAU = 120;
-// A chunk subscription costs a listen round trip, so keep one extra country
-// chunk on the leading edge of travel; user chunks are 200 cells wide and need
-// no margin, and idle needs none either.
-const COUNTRY_PREFETCH_CHUNKS = 1;
-const USER_PREFETCH_CHUNKS = 0;
-let lastFrame = 0;
 const OFFLINE = "The world is offline";
-// Placeholder camera until locate() reads our roster row; applyOwnRow recenters.
-const INITIAL_CAMERA = { x: 933, y: 276 };
 // Join boot: retry while the worker starts, then give up.
 const JOIN_ATTEMPTS = 30;
 const JOIN_ATTEMPT_MS = 100;
 // A rejected or in-flight join re-checks on this cadence.
 const JOIN_RETRY_MS = 500;
-const MOVE_RETRY_MS = 500;
 const FOCUS_WATCH_MS = 500;
 // Consecutive self-locate misses tolerated before returning to the lobby.
 const MAX_OWN_ROW_MISSES = 3;
@@ -366,6 +321,39 @@ void checkHealth();
 setInterval(() => void checkHealth(), HEALTH_POLL_MS);
 
 const land = terrain();
+
+// One data-plane session for the tab, shared with the headless load farm:
+// motion prediction, camera follow, and chunk subscriptions are the same code
+// on both sides. The store is read lazily because no client exists in the
+// lobby; subscriptions no-op until a client is present.
+const session = new ViewSession({
+	store: () => client?.store,
+	width,
+	height,
+	scale,
+	land,
+	ownerAt: (x, y) => chunkOwnerAt(chunks, land, x, y),
+	isOnline: () => online && joined,
+	client: () => client,
+	onConfirmed: () => onMoveConfirmed(),
+	sinks: {
+		country: {
+			receive: (row) => receiveCountryChunk(row as unknown as CountryChunkRow),
+			removed: (index) => {
+				chunks.delete(index);
+				session.dirty = true;
+			},
+		},
+		user: {
+			receive: (row) => receiveUserChunk(row as unknown as UserChunkRow),
+			removed: (index) => {
+				userChunks.delete(index);
+				session.dirty = true;
+			},
+		},
+	},
+});
+
 const base = document.createElement("canvas");
 base.width = WIDTH;
 base.height = HEIGHT;
@@ -386,7 +374,8 @@ function resize() {
 	canvas.height = Math.round(height * ratio);
 	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 	ctx.imageSmoothingEnabled = false;
-	dirty = true;
+	session.setViewport(width, height, scale);
+	session.dirty = true;
 	if (phase === "playing") updateSubscriptions();
 }
 addEventListener("resize", resize);
@@ -436,42 +425,6 @@ function toMotion(dot: Dot): MotionDot {
 	return { ...dot, colorIndex: myColorIndex() };
 }
 
-function positionChanged(a: Dot, b: Dot) {
-	return a.x !== b.x || a.y !== b.y || a.slot !== b.slot;
-}
-
-function isConsistentMove(from: Dot, to: Dot, dir: Direction): boolean {
-	let dx = to.x - from.x;
-	dx -= WIDTH * Math.round(dx / WIDTH);
-	const dy = to.y - from.y;
-	switch (dir) {
-		case "left":
-			return dx < 0 && dy === 0;
-		case "right":
-			return dx > 0 && dy === 0;
-		case "up":
-			return dx === 0 && dy < 0;
-		case "down":
-			return dx === 0 && dy > 0;
-		default:
-			return false;
-	}
-}
-
-function updateSelfMotion(self: MotionDot, now: number) {
-	const moving = online ? direction : "idle";
-	if (motion) {
-		const confirmed =
-			positionChanged(self, motion.dot) &&
-			online &&
-			isConsistentMove(motion.dot, self, lastSentDirection);
-		motion.update(self, moving, now);
-		if (confirmed) onMoveConfirmed();
-		return;
-	}
-	motion = new LocalMotion(self, moving, now, land, ownerAt);
-}
-
 function receiveCountryChunk(row: CountryChunkRow) {
 	const index = Number(row.id);
 	if (!Number.isSafeInteger(index)) return;
@@ -481,7 +434,7 @@ function receiveCountryChunk(row: CountryChunkRow) {
 		colorIndexes,
 		image: chunkImage(colorIndexes, previous?.image),
 	});
-	dirty = true;
+	session.dirty = true;
 }
 
 function receiveUserChunk(row: UserChunkRow) {
@@ -489,11 +442,11 @@ function receiveUserChunk(row: UserChunkRow) {
 	if (!Number.isSafeInteger(index)) return;
 	const dots = readCoordinates(row.coordinates);
 	userChunks.set(index, dots);
-	dirty = true;
+	session.dirty = true;
 	const self = dots.find((dot) => dot.slot === mySlot);
 	const now = performance.now();
 	const selfMotion = self ? toMotion(self) : undefined;
-	if (selfMotion) updateSelfMotion(selfMotion, now);
+	if (selfMotion) session.receiveSelf(selfMotion, now);
 	if (!self || !selfMotion) return;
 	ownRowMisses = 0;
 	if (lastOwnDot === 0) {
@@ -506,14 +459,7 @@ function receiveUserChunk(row: UserChunkRow) {
 }
 
 function ownerAt(x: number, y: number) {
-	const wrapped = wrapX(x);
-	// Water is always unowned and water-only chunks have no rows; answer
-	// without a subscribed chunk so prediction keeps working over the ocean.
-	if (!land[y * WIDTH + wrapped]) return 0;
-	return chunks.get(countryChunkIndex(wrapped, y))?.colorIndexes[
-		(y % COUNTRY_CHUNK_HEIGHT) * COUNTRY_CHUNK_WIDTH +
-			(wrapped % COUNTRY_CHUNK_WIDTH)
-	];
+	return chunkOwnerAt(chunks, land, x, y);
 }
 
 // The music tracks the land being painted, not the interpolated dot: the
@@ -522,201 +468,33 @@ function ownerAt(x: number, y: number) {
 // idle) keeps the mood stable through a crossing instead of flickering every
 // time a step confirms.
 function updateMood() {
-	if (phase !== "playing" || !online || !motion) return;
-	setMusicTempo(motion.stepDuration());
-	const [dx, dy] = steps[direction];
-	const y = motion.dot.y + dy;
+	const moving = session.motion;
+	if (phase !== "playing" || !online || !moving) return;
+	setMusicTempo(moving.stepDuration());
+	const [dx, dy] = steps[session.direction];
+	const y = moving.dot.y + dy;
 	if (y < 0 || y >= HEIGHT) {
 		setMood("calm");
 		return;
 	}
-	const owner = ownerAt(wrapX(motion.dot.x + dx), y);
+	const owner = ownerAt(wrapX(moving.dot.x + dx), y);
 	const mine = myColorIndex();
 	setMood(owner && mine && owner !== mine ? "hostile" : "calm");
 }
 
-// A world copy is WIDTH wide but chunk columns are chunk-width; both grids
-// divide WIDTH exactly, so wrapped columns come from world copies rather than
-// a modulo of the chunk column. Straddling the seam can need both ends.
-type ChunkGrid = {
-	width: number;
-	height: number;
-	columns: number;
-	rows: number;
-	prefetch: number;
-	water?: Uint8Array;
-};
-
-const COUNTRY_GRID: ChunkGrid = {
-	width: COUNTRY_CHUNK_WIDTH,
-	height: COUNTRY_CHUNK_HEIGHT,
-	columns: COUNTRY_COLUMNS,
-	rows: COUNTRY_ROWS,
-	prefetch: COUNTRY_PREFETCH_CHUNKS,
-	water: WATER_COUNTRY_CHUNKS,
-};
-const USER_GRID: ChunkGrid = {
-	width: USER_CHUNK_WIDTH,
-	height: USER_CHUNK_HEIGHT,
-	columns: USER_COLUMNS,
-	rows: USER_ROWS,
-	prefetch: USER_PREFETCH_CHUNKS,
-};
-
-// Extend the view by the grid's prefetch margin in the direction of travel so
-// a tile is subscribed before its pixels reach the viewport edge. The heading
-// persists while idle so a stop keeps the margin it already paid for.
-function subscriptionBounds(grid: ChunkGrid) {
-	const halfWidth = width / scale / 2;
-	const halfHeight = height / scale / 2;
-	const heading = direction === "idle" ? prefetchDirection : direction;
-	return {
-		xMin:
-			camera.x -
-			halfWidth -
-			(heading === "left" ? grid.prefetch * grid.width : 0),
-		xMax:
-			camera.x +
-			halfWidth +
-			(heading === "right" ? grid.prefetch * grid.width : 0),
-		yMin:
-			camera.y -
-			halfHeight -
-			(heading === "up" ? grid.prefetch * grid.height : 0),
-		yMax:
-			camera.y +
-			halfHeight +
-			(heading === "down" ? grid.prefetch * grid.height : 0),
-	};
-}
-
-// Water-only country chunks can never change: never subscribe.
-function addVisibleColumns(
-	grid: ChunkGrid,
-	visible: Set<number>,
-	first: number,
-	last: number,
-	top: number,
-	bottom: number,
-) {
-	for (let col = first; col <= last; col++)
-		for (let y = top; y <= bottom; y++) {
-			const index = y * grid.columns + col;
-			if (!grid.water?.[index]) visible.add(index);
-		}
-}
-
-// One walk covers seam copies, row bounds, and the water filter for either grid.
-function visibleChunks(grid: ChunkGrid) {
-	const visible = new Set<number>();
-	const { xMin, xMax, yMin, yMax } = subscriptionBounds(grid);
-	const top = Math.max(0, Math.floor(yMin / grid.height));
-	const bottom = Math.min(grid.rows - 1, Math.floor(yMax / grid.height));
-	for (let k = Math.floor(xMin / WIDTH); k <= Math.floor(xMax / WIDTH); k++) {
-		const start = Math.max(0, xMin - k * WIDTH),
-			end = Math.min(WIDTH, xMax - k * WIDTH);
-		if (start >= end) continue;
-		const first = Math.floor(start / grid.width);
-		const last = Math.min(grid.columns - 1, Math.ceil(end / grid.width) - 1);
-		addVisibleColumns(grid, visible, first, last, top, bottom);
-	}
-	return visible;
-}
-
-function subscriptionKey(grid: ChunkGrid) {
-	const { xMin, xMax, yMin, yMax } = subscriptionBounds(grid);
-	return `${Math.floor(xMin / grid.width)},${Math.floor(xMax / grid.width)},${Math.floor(yMin / grid.height)},${Math.floor(yMax / grid.height)}`;
-}
-
-// Serve exactly the currently visible chunks of one grid: unlisten and drop
-// tiles that left the ring, listen for tiles that entered it. A listen issued
-// while the transport is down queues until the session is ready, so ring
-// changes during an outage are safe; a rejected handle would pin its chunk
-// index forever, so it removes itself below.
-function syncChunks<R>(
-	store: ZyncBaseClient["store"],
-	table: string,
-	subs: Map<number, PendingUnlisten>,
-	cache: Map<number, R>,
-	receive: (row: JsonValue) => void,
-	visible: Set<number>,
-) {
-	for (const [index, unlisten] of subs) {
-		if (visible.has(index)) continue;
-		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
-		subs.delete(index);
-		cache.delete(index);
-	}
-	for (const index of visible) {
-		if (subs.has(index)) continue;
-		// Direct document listens: chunk ids are the store primary keys, so
-		// no secondary index or query-subscription group is needed per tile.
-		const key = index;
-		const unlisten = store.listen([table, String(index)], (row) => {
-			if (!subs.has(key)) return;
-			if (row) receive(row);
-			else {
-				cache.delete(key);
-				dirty = true;
-			}
-		});
-		subs.set(index, unlisten);
-		void unlisten.catch(() => {
-			if (subs.get(key) !== unlisten) return;
-			subs.delete(key);
-			subResyncNeeded = true;
-		});
-	}
-}
-
-// Drop every served chunk of one grid (session end).
-function clearChunks<R>(
-	subs: Map<number, PendingUnlisten>,
-	cache: Map<number, R>,
-) {
-	for (const unlisten of subs.values())
-		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
-	subs.clear();
-	cache.clear();
-}
-
-// Both grids need the same serve/unserve bookkeeping in one pass; bounds are
-// recorded whenever they are served — offline ring changes queue on the wire
-// and flush when the session comes back.
+// Both grids share the session's subscription bookkeeping; bounds are recorded
+// whenever they are served — offline ring changes queue on the wire and flush
+// when the session comes back.
 function updateSubscriptions() {
 	if (!client || phase !== "playing") return;
-	subResyncNeeded = false;
-	lastCountrySubKey = subscriptionKey(COUNTRY_GRID);
-	lastUserSubKey = subscriptionKey(USER_GRID);
-	syncChunks(
-		client.store,
-		"country_chunks",
-		subscriptions,
-		chunks,
-		(row) => receiveCountryChunk(row as CountryChunkRow),
-		visibleChunks(COUNTRY_GRID),
-	);
-	syncChunks(
-		client.store,
-		"user_chunks",
-		userSubscriptions,
-		userChunks,
-		(row) => receiveUserChunk(row as UserChunkRow),
-		visibleChunks(USER_GRID),
-	);
+	session.subscriptions.update(session.viewport(), true);
 }
 
 // Recompute tiles only when the prefetched bounds cross a chunk edge or a
-// listen was rejected: chunk updates arrive at tick rate and must not
-// rescan subscriptions each time.
+// listen was rejected: chunk updates arrive at tick rate and must not rescan
+// subscriptions each time.
 function maybeUpdateSubscriptions() {
-	if (
-		!subResyncNeeded &&
-		subscriptionKey(COUNTRY_GRID) === lastCountrySubKey &&
-		subscriptionKey(USER_GRID) === lastUserSubKey
-	)
-		return;
-	updateSubscriptions();
+	session.subscriptions.update(session.viewport());
 }
 
 // Keyed scoreboard rows: roster flushes arrive several times a second, so a
@@ -857,7 +635,7 @@ function renderScoreboard() {
 	refreshMotionColor();
 	// Chunk images come from the palette LUT, but dots join their color from
 	// this map: repaint once when the roster's colors arrive or change.
-	if (paletteChanged) dirty = true;
+	if (paletteChanged) session.dirty = true;
 }
 
 // Loss cues come from the country rows: an enemy enclosure taking our land.
@@ -892,14 +670,7 @@ function watchOwnCaptures(rows: PlayerRow[]) {
 }
 
 function refreshMotionColor() {
-	if (!motion) return;
-	const colorIndex = myColorIndex();
-	if (motion.dot.colorIndex === colorIndex) return;
-	motion.update(
-		{ ...motion.dot, colorIndex },
-		online ? direction : "idle",
-		performance.now(),
-	);
+	session.refreshColor(myColorIndex(), performance.now());
 }
 
 // Admission and identity come from the sync join action: its reply carries the
@@ -971,37 +742,11 @@ function leave(): Promise<void> {
 }
 
 function publishDirection() {
-	motion?.update(motion.dot, online ? direction : "idle", performance.now());
-	if (!online || !client || !joined) return;
-	const moveClient = client;
-	const moveDirection = direction;
-	const moveSeq = ++seq;
-	const isCurrent = () =>
-		online &&
-		joined &&
-		client === moveClient &&
-		direction === moveDirection &&
-		seq === moveSeq;
-	const send = () => {
-		void moveClient.actions
-			.call("player_move", { direction: moveDirection, seq: moveSeq })
-			.catch(() => {
-				if (!isCurrent()) return;
-				setTimeout(() => {
-					if (isCurrent()) send();
-				}, MOVE_RETRY_MS);
-			});
-	};
-	send();
+	session.publishDirection();
 }
 
 function setDirection(next: Direction) {
-	if (next === direction) return;
-	direction = next;
-	lastSentDirection = next;
-	if (next !== "idle") prefetchDirection = next;
-	publishDirection();
-	updateSubscriptions();
+	session.setDirection(next);
 }
 
 // Called when the server confirms we actually moved (position changed in a
@@ -1071,8 +816,7 @@ function release() {
 	altDirections = [];
 	altIndex = 0;
 	joystickSteering.release();
-	lastSentDirection = "idle";
-	setDirection("idle");
+	session.release();
 }
 
 const keys: Record<string, Direction> = {
@@ -1125,7 +869,7 @@ addEventListener("focus", focusMap);
 canvas.addEventListener("pointerdown", focusMap);
 document.addEventListener("visibilitychange", () => {
 	release();
-	dirty = true;
+	session.dirty = true;
 	if (!document.hidden) focusMap();
 });
 addEventListener("pagehide", () => {
@@ -1188,7 +932,8 @@ function setScale(next: number) {
 	const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(next)));
 	if (clamped === scale) return;
 	scale = clamped;
-	dirty = true;
+	session.setViewport(width, height, scale);
+	session.dirty = true;
 	updateSubscriptions();
 }
 function zoom(change: number) {
@@ -1275,8 +1020,9 @@ function returnToLobby(message: string) {
 	phase = "lobby";
 	online = false;
 	void leavePromise.catch(() => {}).finally(() => leavingClient?.disconnect());
-	clearChunks(subscriptions, chunks);
-	clearChunks(userSubscriptions, userChunks);
+	session.subscriptions.reset();
+	chunks.clear();
+	userChunks.clear();
 	if (countriesSubscription)
 		void countriesSubscription.unsubscribe().catch(() => {});
 	countriesSubscription = undefined;
@@ -1294,7 +1040,7 @@ function returnToLobby(message: string) {
 		void document.exitFullscreen().catch(() => {});
 	errorLabel.textContent = message;
 	setConnection("");
-	dirty = true;
+	session.dirty = true;
 	updateCountryChoice();
 	void checkHealth();
 }
@@ -1340,16 +1086,8 @@ function applyOwnRow(me: PlayerRow) {
 	// The join reply carries the slot, but a reconnect that lands on an older
 	// roster read can arrive first; the row is authoritative either way.
 	mySlot = me.slot;
-	// The camera is the subscription focus, so this move re-targets the
-	// listening ring. Only do it before a local dot exists: the located
-	// cell is the chunk entry, up to COUNTRY_CHUNK_WIDTH-1 cells off, so
-	// it must not fight draw()'s eased follow once motion owns the view.
-	if (!motion) {
-		camera = { x: me.last_x + 0.5, y: me.last_y + 0.5 };
-		dirty = true;
-	}
+	session.retarget(me.last_x, me.last_y);
 	ownRowMisses = 0;
-	updateSubscriptions();
 }
 
 async function locate() {
@@ -1519,7 +1257,7 @@ function rebuildRoster(rows: PlayerRow[], generation: number) {
 	}
 	watchOwnCaptures(rows);
 	scoreboard(latestCountries);
-	dirty = true;
+	session.dirty = true;
 }
 
 // Country palette + counts for the scoreboard, plus the cold roster:
@@ -1577,13 +1315,8 @@ async function enterGame(next: ZyncBaseClient) {
 	sfx.deploy();
 	startMusic();
 	if (!(await subscribeColdStores(next))) return;
-	motion = undefined;
-	camera = admittedPosition
-		? { x: admittedPosition.x + 0.5, y: admittedPosition.y + 0.5 }
-		: { ...INITIAL_CAMERA };
+	session.admit(admittedPosition);
 	release();
-	updateSubscriptions();
-	dirty = true;
 	clearInterval(focusWatch);
 	focusWatch = setInterval(() => {
 		// Some browser modals swallow blur, so keep only this local safety check.
@@ -1670,7 +1403,7 @@ function collectVisibleDots(): Dot | undefined {
 	visibleDots.clear();
 	for (const dots of userChunks.values())
 		for (const dot of dots) visibleDots.set(dot.slot, dot);
-	const self = visibleDots.get(mySlot) ?? motion?.dot;
+	const self = visibleDots.get(mySlot) ?? session.motion?.dot;
 	if (self) {
 		visibleDots.delete(self.slot);
 		visibleDots.set(self.slot, self);
@@ -1691,7 +1424,8 @@ function paintDot(
 	const display =
 		key === mySlot && position ? { x: position.x, y: position.y } : dot;
 	// Draw the dot in whichever world copy is nearest the camera.
-	const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+	const dotX =
+		display.x + WIDTH * Math.round((session.camera.x - display.x) / WIDTH);
 	const x = view.left + (dotX + 0.5) * view.zoom,
 		y = view.top + (display.y + 0.5) * view.zoom;
 	ctx.beginPath();
@@ -1726,7 +1460,7 @@ function drawNames(
 		if (dot.slot === mySlot) continue;
 		const meta = rosterBySlot.get(dot.slot);
 		if (!meta?.name || meta.is_bot) continue;
-		const dotX = dot.x + WIDTH * Math.round((camera.x - dot.x) / WIDTH);
+		const dotX = dot.x + WIDTH * Math.round((session.camera.x - dot.x) / WIDTH);
 		const x = view.left + (dotX + 0.5) * view.zoom,
 			y = view.top + (dot.y + 0.5) * view.zoom;
 		ctx.strokeText(meta.name, x, y - view.zoom - 7, 120);
@@ -1735,7 +1469,8 @@ function drawNames(
 	const selfMeta = rosterBySlot.get(mySlot);
 	if (self && selfMeta?.name && !selfMeta.is_bot) {
 		const display = position ?? self;
-		const dotX = display.x + WIDTH * Math.round((camera.x - display.x) / WIDTH);
+		const dotX =
+			display.x + WIDTH * Math.round((session.camera.x - display.x) / WIDTH);
 		const x = view.left + (dotX + 0.5) * view.zoom,
 			y = view.top + (display.y + 0.5) * view.zoom;
 		ctx.font = "bold 11px Silkscreen, monospace";
@@ -1747,56 +1482,32 @@ function drawNames(
 
 function draw(now: number) {
 	requestAnimationFrame(draw);
-	const elapsed = now - lastFrame;
-	// Allow timestamp rounding at the frame boundary without accumulating drift.
-	if (elapsed + 0.1 < FRAME_MS) return;
+	// The session owns the frame gate, camera easing, and subscription bounds.
+	const frame = session.frame(now);
+	if (!frame.due) return;
 	// Roster deltas can arrive between frames; render the scoreboard at frame
 	// cadence instead of once per delta.
 	if (scoreboardDirty) renderScoreboard();
-	const position = motion?.position(now);
 	updateMood();
-	// Idle frames are identical: repaint only when the camera moved or a
-	// mutation (chunk, roster, palette, resize) marked the scene dirty.
-	const moved =
-		position !== undefined && (position.x !== drawnX || position.y !== drawnY);
-	// The camera keeps easing after the dot stops: stay active until it has
-	// settled exactly on the target.
-	const settling =
-		position !== undefined &&
-		(camera.x !== position.x + 0.5 || camera.y !== position.y + 0.5);
-	if (!dirty && !moved && !settling) {
-		// Keep the easing clock current: elapsed must never span an idle pause,
-		// or the first frame after it would ease by the whole pause at once.
-		lastFrame = now;
-		return;
-	}
-	lastFrame += Math.floor((elapsed + 0.1) / FRAME_MS) * FRAME_MS;
-	dirty = false;
-	if (position) {
-		drawnX = position.x;
-		drawnY = position.y;
-		camera.x = approach(camera.x, position.x + 0.5, elapsed, CAMERA_TAU);
-		camera.y = approach(camera.y, position.y + 0.5, elapsed, CAMERA_TAU);
-	}
-	maybeUpdateSubscriptions();
+	if (!frame.active) return;
 	const viewZoom =
 		phase === "playing" ? scale : Math.max(width / WIDTH, height / HEIGHT);
 	const view = {
-		left: width / 2 - camera.x * viewZoom,
-		top: height / 2 - camera.y * viewZoom,
-		xMin: camera.x - width / viewZoom / 2,
-		xMax: camera.x + width / viewZoom / 2,
+		left: width / 2 - session.camera.x * viewZoom,
+		top: height / 2 - session.camera.y * viewZoom,
+		xMin: session.camera.x - width / viewZoom / 2,
+		xMax: session.camera.x + width / viewZoom / 2,
 		zoom: viewZoom,
 	};
 	drawWorld(view);
 	const self = collectVisibleDots();
-	drawDots(view, position);
-	drawNames(view, position, self);
+	drawDots(view, frame.position);
+	drawNames(view, frame.position, self);
 }
 requestAnimationFrame(draw);
 
 // Canvas text does not repaint when a webfont finishes loading: mark the
 // scene dirty once the display face lands.
 void document.fonts.ready.then(() => {
-	dirty = true;
+	session.dirty = true;
 });
