@@ -521,6 +521,77 @@ test "config: validation - invalid max message size" {
     try std.testing.expectError(error.InvalidMaxMessageSize, result);
 }
 
+test "config: validation - invalid max query response size" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-invalid-max-query-resp");
+    defer context.deinit();
+
+    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-invalid-max-query-response.json" });
+    defer allocator.free(schema_file_path);
+
+    const config_content = try std.fmt.allocPrint(allocator,
+        \\{{
+        \\  "security": {{
+        \\    "maxQueryResponseSize": 0
+        \\  }},
+        \\  "schema": "{s}"
+        \\}}
+    , .{schema_file_path});
+    defer allocator.free(config_content);
+
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-max-query-response-size.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
+
+    const result = loadConfig(allocator, temp_file_path);
+    try std.testing.expectError(error.InvalidMaxQueryResponseSize, result);
+}
+
+test "config: max query response size defaults to 8 MiB and is overridable" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-max-query-resp");
+    defer context.deinit();
+
+    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-max-query-response.json" });
+    defer allocator.free(schema_file_path);
+
+    {
+        const config_content = try std.fmt.allocPrint(allocator,
+            \\{{
+            \\  "schema": "{s}"
+            \\}}
+        , .{schema_file_path});
+        defer allocator.free(config_content);
+
+        const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-max-query-response-default.json", schema_file_path, config_content);
+        defer allocator.free(temp_file_path);
+
+        var config = try loadConfig(allocator, temp_file_path);
+        defer config.deinit();
+        try std.testing.expectEqual(@as(usize, 8 * 1024 * 1024), config.security.max_query_response_size);
+    }
+
+    {
+        const config_content = try std.fmt.allocPrint(allocator,
+            \\{{
+            \\  "security": {{
+            \\    "maxQueryResponseSize": 2097152
+            \\  }},
+            \\  "schema": "{s}"
+            \\}}
+        , .{schema_file_path});
+        defer allocator.free(config_content);
+
+        const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-max-query-response-override.json", schema_file_path, config_content);
+        defer allocator.free(temp_file_path);
+
+        var config = try loadConfig(allocator, temp_file_path);
+        defer config.deinit();
+        try std.testing.expectEqual(@as(usize, 2097152), config.security.max_query_response_size);
+    }
+}
+
 // Logging configuration properties
 // Invariant: Missing schema file falls back to the implicit users-only schema.
 test "config: missing schema file is allowed" {

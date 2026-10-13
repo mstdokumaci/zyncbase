@@ -6,6 +6,7 @@ const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
+const wire_errors = @import("../wire/errors.zig");
 const storage_cache = @import("cache.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
@@ -58,12 +59,9 @@ pub const ReadWorker = struct {
     allocator: Allocator,
     notifier: Notifier,
     memory_strategy: *MemoryStrategy,
-    /// Per-request arena for record/value allocations. Bulk-freed via reset()
-    /// at the start of each request, replacing hundreds of individual GPA frees.
     read_arena: *std.heap.ArenaAllocator,
-    /// Reusable scratch buffer for streaming array-to-JSON serialization.
-    /// Reset (length only) between uses; capacity is retained for steady-state reuse.
     json_buf: sql.JsonBuf,
+    max_query_response_size: usize,
 
     pub fn init(
         allocator: Allocator,
@@ -76,6 +74,7 @@ pub const ReadWorker = struct {
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
+        max_query_response_size: usize,
     ) !ReadWorker {
         return .{
             .thread = managedThread(ReadWorker).init(node.io),
@@ -90,6 +89,7 @@ pub const ReadWorker = struct {
             .memory_strategy = memory_strategy,
             .read_arena = try memory_strategy.acquireArena(),
             .json_buf = sql.JsonBuf.init(allocator),
+            .max_query_response_size = max_query_response_size,
         };
     }
 
@@ -142,6 +142,29 @@ pub const ReadWorker = struct {
                     std.log.err("ReadWorker: failed to encode query", .{});
                     continue;
                 };
+                if (self.max_query_response_size != 0 and encoded.len > self.max_query_response_size) {
+                    std.log.warn("ReadWorker: query response {} bytes exceeds {} byte limit for conn {}", .{
+                        encoded.len,
+                        self.max_query_response_size,
+                        response.conn_id,
+                    });
+                    const too_large = wire_encode.encodeError(
+                        handle.allocator(),
+                        response.msg_id,
+                        wire_errors.response_too_large,
+                    ) catch {
+                        std.log.err("ReadWorker: failed to encode response-too-large error", .{});
+                        continue;
+                    };
+                    handle.retain();
+                    self.send_queue.push(.{ .conn_id = response.conn_id, .data = too_large, .arena = handle }) catch {
+                        std.log.err("ReadWorker: failed to push response-too-large error to send queue", .{});
+                        handle.release();
+                        continue;
+                    };
+                    self.notifier.notify();
+                    continue;
+                }
                 handle.retain();
                 self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push to send queue", .{});
@@ -402,6 +425,7 @@ pub const ReadWorkerPool = struct {
         writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
+        max_query_response_size: usize,
     ) !ReadWorkerPool {
         var pool = try workerPool(ReadWorker).init(allocator, reader_nodes.len);
         var initialized: usize = 0;
@@ -424,6 +448,7 @@ pub const ReadWorkerPool = struct {
                 writer_version,
                 notifier_fn,
                 notifier_ctx,
+                max_query_response_size,
             );
             initialized += 1;
         }

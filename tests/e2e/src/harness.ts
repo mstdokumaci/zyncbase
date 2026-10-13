@@ -71,6 +71,8 @@ export type ServerOptions = {
 	jwtSecret?: string;
 	/** Override `server.idleTimeoutSeconds` (2-239). */
 	idleTimeoutSeconds?: number;
+	/** Override `security.maxQueryResponseSize` (bytes). */
+	maxQueryResponseSize?: number;
 };
 
 export type ServerHandle = {
@@ -493,6 +495,9 @@ export async function withServer<T>(
 	};
 	if (options.authPath) {
 		config.authorization = options.authPath;
+	}
+	if (options.maxQueryResponseSize !== undefined) {
+		config.security = { maxQueryResponseSize: options.maxQueryResponseSize };
 	}
 	fs.writeFileSync(configPath, JSON.stringify(config));
 

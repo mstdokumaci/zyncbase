@@ -63,6 +63,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `INVALID_PATH` | `client` | SDK | Client path parsing failed before the request was sent. |
 | `BATCH_TOO_LARGE` | `client` | Server + SDK | Batch exceeds the configured maximum operation count. |
 | `MESSAGE_TOO_LARGE` | `client` | Server + SDK | Payload exceeded configured parser or message-size limits. |
+| `RESPONSE_TOO_LARGE` | `client` | Server | Store read response exceeded `security.maxQueryResponseSize`. Narrow the query or page it with `limit` and a cursor. |
 | `RATE_LIMITED` | `rate_limit` | Server | A per-connection request or Ping limit rejected the message. |
 | `MAX_CONNECTIONS` | `rate_limit` | Server | Server connection cap reached; the connection was not accepted. |
 | `ACTION_TIMEOUT` | `server` | Server | Sync action worker failed to reply before the server deadline. The action may still execute; action calls are never auto-retried. |

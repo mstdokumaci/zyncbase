@@ -101,6 +101,7 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | `maxMessagesPerSecond` | `number` | `100` | Hard cap on messages allowed per connection per second. |
 | `maxConnections` | `number` | `100000` | Hard cap on global simultaneous active connections. |
 | `maxMessageSize` | `number` | `1048576` | Hard cap on single WebSocket message payload size (in bytes). |
+| `maxQueryResponseSize` | `number` | `8388608` | Hard cap on a single store read response frame (in bytes). Over-limit reads fail with `RESPONSE_TOO_LARGE`. |
 | `violationThreshold` | `number` | `10` | Number of security violations before triggering temporary IP ban. |
 
 ### `logging` Settings

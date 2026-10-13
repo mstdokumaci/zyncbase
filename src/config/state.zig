@@ -48,6 +48,7 @@ pub const Config = struct {
         max_connections: u32 = 100_000,
         violation_threshold: u32 = 10,
         max_message_size: usize = 1024 * 1024, // 1MB
+        max_query_response_size: usize = 8 * 1024 * 1024, // 8MB
     };
 
     pub const LoggingConfig = struct {

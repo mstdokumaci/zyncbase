@@ -251,6 +251,7 @@ pub const ConfigLoader = struct {
         try json_read.setInt(u32, &config.security.max_messages_per_second, security_obj, "maxMessagesPerSecond");
         try json_read.setInt(u32, &config.security.max_connections, security_obj, "maxConnections");
         try json_read.setInt(usize, &config.security.max_message_size, security_obj, "maxMessageSize");
+        try json_read.setInt(usize, &config.security.max_query_response_size, security_obj, "maxQueryResponseSize");
         try json_read.setInt(u32, &config.security.violation_threshold, security_obj, "violationThreshold");
     }
 
@@ -318,6 +319,10 @@ pub const ConfigLoader = struct {
 
         if (config.security.max_message_size == 0) {
             return error.InvalidMaxMessageSize;
+        }
+
+        if (config.security.max_query_response_size == 0) {
+            return error.InvalidMaxQueryResponseSize;
         }
     }
 };

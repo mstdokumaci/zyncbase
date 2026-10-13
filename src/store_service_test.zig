@@ -599,6 +599,40 @@ test "StoreService: queryMore - pagination" {
     try testing.expect(load_more_req.filter.after != null);
 }
 
+test "StoreService: query response over the configured size limit fails with RESPONSE_TOO_LARGE" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    // 16 bytes: even an empty result envelope exceeds it, so the read worker
+    // must reject rather than push the payload.
+    try app.initWithOptions(allocator, "service-query-too-large", &.{
+        .{ .name = "people", .fields = &.{"name"} },
+    }, .{ .in_memory = true, .reader_pool_size = 1, .max_query_response_size = 16 });
+    defer app.deinit();
+
+    const ctx = readCtx(1);
+    const table_index = app.tableIndex("people");
+
+    const tbl_md = app.schema.table("people") orelse return error.UnknownTable;
+    const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
+    defer filter_map.free(allocator);
+
+    var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null);
+    errdefer read_req.deinit(allocator);
+    try app.store_service.enqueueRead(read_req);
+
+    // The read worker runs on its own thread; wait for its single response.
+    const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
+    for (0..2000) |_| {
+        if (send_queue.pop()) |entry| {
+            defer entry.deinit();
+            try testing.expect(std.mem.indexOf(u8, entry.data, "RESPONSE_TOO_LARGE") != null);
+            return;
+        }
+        try testing.io.sleep(.fromNanoseconds(std.time.ns_per_ms), .awake);
+    }
+    return error.TestExpectedValue;
+}
+
 test "StoreService: validateFieldWrite tests" {
     const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;

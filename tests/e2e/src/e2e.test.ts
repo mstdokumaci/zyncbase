@@ -21,6 +21,7 @@ import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
 import { run as runPresenceStress } from "./test-presence-stress";
+import { run as runResponseLimit } from "./test-response-limit";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
@@ -146,6 +147,24 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runActions(port, PRESENCE_E2E_JWT_SECRET);
+				},
+			);
+		});
+	});
+
+	test("query response over the configured size limit fails with RESPONSE_TOO_LARGE", async () => {
+		await runE2ETest("Response limit", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-sync.json"),
+					dataDir: ctx.dataPath("response-limit"),
+					configName: "zyncbase-config-response-limit.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+					maxQueryResponseSize: 1024,
+				},
+				async ({ port }) => {
+					await runResponseLimit(port);
 				},
 			);
 		});

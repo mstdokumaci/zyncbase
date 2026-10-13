@@ -289,7 +289,7 @@ pub const ZyncBaseServer = struct {
             config.data_dir,
             &self.schema,
             config.performance,
-            .{ .reader_pool_size = self.thread_budget.readers },
+            .{ .reader_pool_size = self.thread_budget.readers, .max_query_response_size = config.security.max_query_response_size },
             storageEngineWakeup,
             self,
         );
