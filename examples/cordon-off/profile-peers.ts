@@ -1,24 +1,20 @@
 // One native Worker per 64 SDK peers keeps load generation off a single JS loop.
+// Peers run the same data plane as the browser client (viewport.ts): decoded
+// chunk caches, LocalMotion prediction, eased camera, key-gated subscriptions,
+// and change-only move publishing.
+import { createClient, type ZyncBaseClient } from "@zyncbase/client";
 import {
-	createClient,
-	type ListenHandle,
-	type ZyncBaseClient,
-} from "@zyncbase/client";
-import {
-	COUNTRY_CHUNK_HEIGHT,
-	COUNTRY_CHUNK_WIDTH,
-	COUNTRY_COLUMNS,
-	COUNTRY_ROWS,
+	COUNTRY_COLOR_INDEX,
+	type Country,
+	type CountryChunkRow,
+	findCoordinate,
 	NAMESPACE,
 	type PlayerRow,
-	readCoordinates,
-	USER_CHUNK_HEIGHT,
-	USER_CHUNK_WIDTH,
-	USER_COLUMNS,
-	USER_ROWS,
+	readColorIndexes,
+	terrain,
 	type UserChunkRow,
-	WATER_COUNTRY_CHUNKS,
 } from "./shared";
+import { FRAME_MS, ownerAt, ViewSession } from "./viewport";
 
 type Peer = {
 	client: ZyncBaseClient;
@@ -26,9 +22,11 @@ type Peer = {
 	slot: number;
 	name: string;
 	countryId: number;
-	input: { direction: string; seq: number };
-	subscriptions: Map<number, PendingUnlisten>;
-	userSubscriptions: Map<number, PendingUnlisten>;
+	colorIndex: number;
+	// Decoded country chunks, exactly the browser's palette-code cache: the
+	// motion prediction joins owners through it.
+	chunks: Map<number, { colorIndexes: Uint8Array }>;
+	session: ViewSession;
 	x: number;
 	y: number;
 	positioned: boolean;
@@ -38,7 +36,6 @@ type Peer = {
 	zoom: number;
 	moves: number;
 };
-type PendingUnlisten = Promise<ListenHandle>;
 type Command = {
 	type: "add" | "move" | "reset" | "stats" | "close";
 	index: number;
@@ -53,6 +50,7 @@ type Command = {
 };
 const peers: Peer[] = [];
 const errors: string[] = [];
+const land = terrain();
 let lateDeltas = 0;
 const warn = console.warn;
 console.warn = (message, ...args) => {
@@ -69,111 +67,30 @@ let moving = false,
 	lastBeat = performance.now();
 let heartbeatLag: number[] = [];
 
-// Peers mirror the browser: one subscription set per grid, viewport-sized.
-function visibleFor(
-	peer: Peer,
-	chunkWidth: number,
-	chunkHeight: number,
-	columns: number,
-	rows: number,
-	margin: number,
-	water?: Uint8Array,
-) {
-	const visible = new Set<number>();
-	const left = Math.max(
-		0,
-		Math.floor((peer.x - peer.width / peer.zoom / 2) / chunkWidth) - margin,
-	);
-	const right = Math.min(
-		columns - 1,
-		Math.floor((peer.x + peer.width / peer.zoom / 2) / chunkWidth) + margin,
-	);
-	const top = Math.max(
-		0,
-		Math.floor((peer.y - peer.height / peer.zoom / 2) / chunkHeight) - margin,
-	);
-	const bottom = Math.min(
-		rows - 1,
-		Math.floor((peer.y + peer.height / peer.zoom / 2) / chunkHeight) + margin,
-	);
-	for (let y = top; y <= bottom; y++)
-		for (let x = left; x <= right; x++) {
-			const index = y * columns + x;
-			if (!water?.[index]) visible.add(index);
-		}
-	return visible;
+function receiveCountryChunk(peer: Peer, row: CountryChunkRow) {
+	const index = Number(row.id);
+	if (!Number.isSafeInteger(index)) return;
+	peer.chunks.set(index, { colorIndexes: readColorIndexes(row.color_indexes) });
+	peer.session.dirty = true;
 }
 
-// Bring one grid's subscription set in line with its viewport.
-function syncSubscriptions(
-	subscriptions: Map<number, PendingUnlisten>,
-	visible: Set<number>,
-	listenFor: (index: number) => PendingUnlisten,
-) {
-	for (const [index, unlisten] of subscriptions) {
-		if (visible.has(index)) continue;
-		void unlisten.then((handle) => handle.unlisten()).catch(() => {});
-		subscriptions.delete(index);
-	}
-	for (const index of visible) {
-		if (subscriptions.has(index)) continue;
-		const unlisten = listenFor(index);
-		subscriptions.set(index, unlisten);
-		void unlisten.catch(() => {
-			if (subscriptions.get(index) === unlisten) subscriptions.delete(index);
-		});
-	}
+function receiveUserChunk(peer: Peer, row: UserChunkRow) {
+	const index = Number(row.id);
+	if (!Number.isSafeInteger(index)) return;
+	peer.session.dirty = true;
+	// Slots, not arrays: only this peer's own dot matters here.
+	const self = findCoordinate(row.coordinates, peer.slot);
+	if (!self) return;
+	// Own dot: mirror the browser's updateSelfMotion + eased follow.
+	const dot = { ...self, colorIndex: peer.colorIndex };
+	if (peer.x !== self.x || peer.y !== self.y) peer.moves++;
+	peer.x = self.x;
+	peer.y = self.y;
+	peer.session.receiveSelf(dot, performance.now());
 }
 
-function subscribe(peer: Peer) {
-	syncSubscriptions(
-		peer.subscriptions,
-		visibleFor(
-			peer,
-			COUNTRY_CHUNK_WIDTH,
-			COUNTRY_CHUNK_HEIGHT,
-			COUNTRY_COLUMNS,
-			COUNTRY_ROWS,
-			// client.ts COUNTRY_PREFETCH_CHUNKS
-			1,
-			WATER_COUNTRY_CHUNKS,
-		),
-		(index) =>
-			peer.client.store.listen(["country_chunks", String(index)], () => {
-				callbacks++;
-			}),
-	);
-	syncSubscriptions(
-		peer.userSubscriptions,
-		visibleFor(
-			peer,
-			USER_CHUNK_WIDTH,
-			USER_CHUNK_HEIGHT,
-			USER_COLUMNS,
-			USER_ROWS,
-			// client.ts USER_PREFETCH_CHUNKS
-			0,
-		),
-		(index) =>
-			peer.client.store.listen(["user_chunks", String(index)], (row) => {
-				callbacks++;
-				if (!row) return;
-				const dot = readCoordinates(
-					(row as unknown as UserChunkRow).coordinates,
-				).find((dot) => dot.slot === peer.slot);
-				if (!dot || (peer.x === dot.x && peer.y === dot.y)) return;
-				peer.moves++;
-				peer.x = dot.x;
-				peer.y = dot.y;
-				subscribe(peer);
-			}),
-	);
-}
-
-// The committed roster row carries the admitted spawn cell. Roster fanout is
-// eventual, so read committed state and retry until the row lands; derive the
-// position from delta timing instead and a slow flush silently leaves the
-// peer framed on the wrong chunks.
+// The committed roster row carries the admitted cell; the roster publishes on a
+// slower cadence, so read it in the background rather than blocking admission.
 async function readSpawn(peer: Peer) {
 	const id = peer.id;
 	if (!id) return undefined;
@@ -201,7 +118,7 @@ async function locate(peer: Peer) {
 			peer.positioned = true;
 			peer.x = position.x;
 			peer.y = position.y;
-			subscribe(peer);
+			peer.session.retarget(position.x, position.y);
 			return;
 		}
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -214,22 +131,21 @@ const heartbeat = setInterval(() => {
 	lastBeat = now;
 	for (const peer of peers) {
 		const direction = moving
-			? ["right", "down", "left", "up"][
+			? (["right", "down", "left", "up"] as const)[
 					(Math.floor((Date.now() - started) / 4000) + (peer.index % 4)) % 4
 				]
 			: "idle";
-		if (peer.input.direction !== direction) {
-			peer.input.direction = direction;
-			peer.input.seq++;
-		}
-		void peer.client.actions
-			.call("player_move", {
-				direction: peer.input.direction,
-				seq: peer.input.seq,
-			})
-			.catch(() => {});
+		// The session sends only when the direction actually changes.
+		peer.session.setDirection(direction);
 	}
 }, 500);
+
+// The browser's frame loop, per worker: motion prediction, camera easing, and
+// key-gated subscription bounds for every local peer.
+const frame = setInterval(() => {
+	const now = performance.now();
+	for (const peer of peers) peer.session.frame(now);
+}, FRAME_MS);
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep validation next to the worker message it protects.
 self.onmessage = async ({ data }: MessageEvent<Command>) => {
@@ -257,45 +173,83 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				slot: 0,
 				name: `Player ${data.index + 1}`,
 				countryId: data.country_id,
+				colorIndex: 0,
+				chunks: new Map(),
+				session: undefined as unknown as ViewSession,
+				x: 933,
+				y: 276,
+				positioned: false,
 				index: data.index,
 				width: data.width,
 				height: data.height,
 				zoom: data.zoom,
-				x: 933,
-				y: 276,
-				positioned: false,
 				moves: 0,
-				subscriptions: new Map(),
-				userSubscriptions: new Map(),
-				input: { direction: "idle", seq: 0 },
 			};
+			peer.session = new ViewSession({
+				store: () => client.store,
+				width: peer.width,
+				height: peer.height,
+				scale: peer.zoom,
+				land,
+				ownerAt: (x, y) => ownerAt(peer.chunks, land, x, y),
+				isOnline: () => true,
+				client: () => client,
+				sinks: {
+					country: {
+						receive: (row) => {
+							callbacks++;
+							receiveCountryChunk(peer, row as unknown as CountryChunkRow);
+						},
+						removed: (index) => {
+							callbacks++;
+							peer.chunks.delete(index);
+							peer.session.dirty = true;
+						},
+					},
+					user: {
+						receive: (row) => {
+							callbacks++;
+							receiveUserChunk(peer, row as unknown as UserChunkRow);
+						},
+						removed: () => callbacks++,
+					},
+				},
+			});
 			try {
-				await client.store.subscribe(
-					"countries",
-					{ limit: 1000 },
-					() => callbacks++,
-				);
-				await client.store.subscribe(
-					"users",
-					{ limit: 2048 },
-					() => callbacks++,
-				);
 				const joined = (await client.actions.call("player_join", {
 					name: peer.name,
 					country_id: peer.countryId,
 					session_id: sessionId,
-				})) as { user_id?: string; slot?: number };
-				peer.id = joined.user_id ?? "";
+				})) as {
+					user_id?: unknown;
+					slot?: unknown;
+					x?: unknown;
+					y?: unknown;
+				};
+				peer.id = typeof joined.user_id === "string" ? joined.user_id : "";
 				peer.slot = Number.isSafeInteger(joined.slot)
 					? (joined.slot as number)
 					: 0;
 				await client.presence.set({});
-				subscribe(peer);
+				// Browser order: publish the initial move, subscribe the cold
+				// stores, then snap the camera to the admitted cell.
+				peer.session.publishDirection();
+				await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+					callbacks++;
+					const mine = (rows as Country[]).find(
+						(row) => row.country_id === peer.countryId,
+					);
+					if (mine) peer.colorIndex = COUNTRY_COLOR_INDEX.get(mine.color) ?? 0;
+				});
+				await client.store.subscribe("users", { limit: 2048 }, () => {
+					callbacks++;
+				});
+				peer.session.admit(
+					Number.isSafeInteger(joined.x) && Number.isSafeInteger(joined.y)
+						? { x: joined.x as number, y: joined.y as number }
+						: undefined,
+				);
 				peers.push(peer);
-				// Spawn regions are server state, so the placeholder above is only
-				// a camera start. The committed roster row carries the admitted
-				// cell; the roster publishes on a slower cadence, so read it in
-				// the background rather than blocking admission.
 				void locate(peer);
 			} catch (error) {
 				client.disconnect();
@@ -311,6 +265,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			for (const peer of peers) peer.moves = 0;
 		} else if (data.type === "close") {
 			clearInterval(heartbeat);
+			clearInterval(frame);
 			for (const peer of peers) peer.client.disconnect();
 		}
 		self.postMessage({
@@ -319,7 +274,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			heartbeatLag,
 			errors,
 			subscriptions: peers.reduce(
-				(n, p) => n + p.subscriptions.size + p.userSubscriptions.size + 2,
+				(n, p) => n + p.session.subscriptions.count + 2,
 				0,
 			),
 			movingPeers: peers.filter((p) => p.moves > 0).length,

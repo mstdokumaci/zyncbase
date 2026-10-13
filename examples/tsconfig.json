@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "Preserve",
+		"moduleDetection": "force",
+		"moduleResolution": "bundler",
+		"lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable", "WebWorker"],
+		"types": ["bun"],
+		"noEmit": true,
+		"skipLibCheck": true,
+		"baseUrl": "..",
+		"paths": {
+			"@zyncbase/client": ["sdk/typescript/src/index.ts"]
+		}
+	},
+	"include": ["cordon-off/**/*.ts"]
+}

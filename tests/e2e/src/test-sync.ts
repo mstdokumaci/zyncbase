@@ -1,4 +1,4 @@
-import type { ListenHandle } from "@zyncbase/client";
+import type { ConnectionStatus, ListenHandle } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
 /** Mock Task for testing */
@@ -67,7 +67,9 @@ export async function run(port: number = 3000) {
 		await Promise.all([clientA.connect(), clientB.connect()]);
 		console.log("Clients connected.");
 
-		if (clientA.status !== "connected")
+		// Narrowing from the disconnected check above must not leak past the
+		// awaited connect; widen the read before comparing.
+		if ((clientA.status as ConnectionStatus) !== "connected")
 			throw new Error(
 				`Expected connected after connect(), got ${clientA.status}`,
 			);
