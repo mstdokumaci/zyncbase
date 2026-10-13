@@ -67,6 +67,9 @@ jobs:
       - name: Check TypeScript formatting and lint
         run: bunx biome check --error-on-warnings
 
+      - name: Type-check TypeScript projects
+        run: bun run typecheck
+
       - name: Test TypeScript SDK
         run: bun test sdk
 

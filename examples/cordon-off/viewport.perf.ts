@@ -3,6 +3,7 @@
 // Report-only; no assertions. Simulates one farm worker's worth of peers and
 // isolates the hot paths the farm amplifies (frames, own-dot receives,
 // direction rotations, and the shared decode paths).
+import type { ZyncBaseClient } from "@zyncbase/client";
 import {
 	encodeColorIndexes,
 	encodeCoordinates,
@@ -18,6 +19,8 @@ const TICKS = 6000; // 5 simulated minutes at 20 Hz
 const DIRECTIONS = ["right", "down", "left", "up"] as const;
 const TARGET_SLOT = 7;
 let sink = 0;
+
+type PeerDot = { slot: number; x: number; y: number; colorIndex: number };
 
 type FakeStore = {
 	listen: () => Promise<{ unlisten: () => Promise<void> }>;
@@ -36,7 +39,7 @@ function makeStore(): FakeStore {
 
 function makeSession(store: FakeStore) {
 	return new ViewSession({
-		store: () => store as never,
+		store: () => store as unknown as ZyncBaseClient["store"],
 		sinks: { country: { receive: () => {} }, user: { receive: () => {} } },
 		width: 1440,
 		height: 900,
@@ -50,7 +53,7 @@ function makeSession(store: FakeStore) {
 
 function makeSessions(): {
 	sessions: ViewSession[];
-	dots: { slot: number; x: number; y: number; colorIndex: number }[];
+	dots: PeerDot[];
 } {
 	const dots = Array.from({ length: PEERS }, (_, index) => ({
 		slot: index + 1,
@@ -137,7 +140,7 @@ function pumpFrames(sessions: ViewSession[], state: MixedState, now: number) {
 
 function movePeers(
 	sessions: ViewSession[],
-	dots: { x: number; y: number }[],
+	dots: PeerDot[],
 	state: MixedState,
 	now: number,
 ) {
@@ -156,11 +159,7 @@ function rotate(sessions: ViewSession[], state: MixedState, tick: number) {
 	state.ops += sessions.length;
 }
 
-function simulate(
-	sessions: ViewSession[],
-	dots: { x: number; y: number }[],
-	state: MixedState,
-) {
+function simulate(sessions: ViewSession[], dots: PeerDot[], state: MixedState) {
 	for (let tick = 0; tick < TICKS; tick++) {
 		const now = tick * TICK_MS;
 		pumpFrames(sessions, state, now);

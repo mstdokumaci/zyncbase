@@ -726,9 +726,11 @@ try {
 			.find((dot) => dot.slot === aliceSlot);
 	const rosterOf = async (client: ZyncBaseClient) =>
 		new Map(
-			((await client.store.query("users", { limit: 2048 })) as PlayerRow[]).map(
-				(row) => [row.id, row],
-			),
+			(
+				(await client.store.query("users", {
+					limit: 2048,
+				})) as unknown as PlayerRow[]
+			).map((row) => [row.id, row]),
 		);
 	const first = await eventually(
 		async () => dot(),

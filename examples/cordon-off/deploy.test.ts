@@ -288,7 +288,7 @@ test("publishAssets surfaces API error messages", async () => {
 					errors: [{ message: "Authentication error" }],
 				}),
 				{ status: 403 },
-			)) as typeof fetch;
+			)) as unknown as typeof fetch;
 		await expect(
 			publishAssets(assets, {
 				accountId: "acct",

@@ -341,7 +341,8 @@ export function sendPlayerMove(
 }
 
 export type ViewSessionOptions = {
-	store: ZyncBaseClient["store"];
+	// Lazy: no client exists before admission.
+	store: () => ZyncBaseClient["store"] | undefined;
 	sinks: { country: ChunkSink; user: ChunkSink };
 	// Current viewport pixel size and zoom; update with setViewport on
 	// resize/zoom so the frame path never re-reads browser globals.
