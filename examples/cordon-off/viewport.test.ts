@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ZyncBaseClient } from "@zyncbase/client";
 import {
+	COUNTRY_CHUNK_WIDTH,
 	COUNTRY_COLUMNS,
 	type Direction,
 	HEIGHT,
@@ -43,9 +44,13 @@ type FakeListen = { index: number; callback: (row: unknown) => void };
 function fakeStore() {
 	const listens: FakeListen[] = [];
 	const unlistened: number[] = [];
+	// Every listen call including rejected ones, in order: path joined as
+	// "table/id". Lets a test name the chunk that a one-shot rejection hit.
+	const attempts: string[] = [];
 	let rejectNext = false;
 	const store = {
 		listen(_path: unknown, callback: (row: unknown) => void) {
+			attempts.push(Array.isArray(_path) ? _path.join("/") : String(_path));
 			const index = listens.length;
 			if (rejectNext) {
 				rejectNext = false;
@@ -64,6 +69,7 @@ function fakeStore() {
 		store,
 		listens,
 		unlistened,
+		attempts,
 		rejectNext: () => {
 			rejectNext = true;
 		},
@@ -199,6 +205,35 @@ describe("ViewportSubscriptions", () => {
 		await Promise.resolve();
 		subs.update(view(100, 100));
 		expect(listens.length).toBe(afterFirst + 1);
+	});
+
+	test("a stale rejection does not drop a replacement listen", async () => {
+		const { store, attempts, rejectNext } = fakeStore();
+		const subs = new ViewportSubscriptions(() => store, {
+			country: { receive: () => {} },
+			user: { receive: () => {} },
+		});
+		rejectNext();
+		subs.update(view(100, 100));
+		// The country grid syncs first, so the rejected attempt names a
+		// country chunk; derive a view that excludes it.
+		const rejected = attempts[0];
+		expect(rejected.startsWith("country_chunks/")).toBe(true);
+		const chunkX =
+			(Number(rejected.split("/")[1]) % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH;
+		// Leave the ring and re-enter before the rejection handler can run.
+		subs.update(view(chunkX + 1200, 100));
+		subs.update(view(100, 100));
+		const registered = subs.count;
+		expect(attempts.filter((path) => path === rejected)).toHaveLength(2);
+		// Drain the microtask queue: the stale rejection must not remove the
+		// replacement subscription (registered) nor request a resync.
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(subs.count).toBe(registered);
+		expect(attempts.filter((path) => path === rejected)).toHaveLength(2);
+		subs.update(view(100, 100));
+		expect(attempts.filter((path) => path === rejected)).toHaveLength(2);
 	});
 });
 
