@@ -44,6 +44,7 @@ pub const StorageEngine = struct {
     pub const Options = struct {
         in_memory: bool = false,
         reader_pool_size: usize = 0,
+        max_query_response_size: usize = 0,
     };
 
     const PerformanceConfig = @import("config/state.zig").Config.PerformanceConfig;
@@ -482,6 +483,7 @@ pub const StorageEngine = struct {
             &self.write_worker.version,
             self.write_worker.notifier.callback,
             self.write_worker.notifier.ctx,
+            self.options.max_query_response_size,
         );
         errdefer {
             rp.stop();

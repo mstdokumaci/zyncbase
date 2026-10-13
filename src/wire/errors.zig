@@ -17,6 +17,8 @@ fn wireError(comptime code: []const u8, comptime message: []const u8) WireError 
 
 const internal_error = wireError("INTERNAL_ERROR", "Zig core failure");
 
+pub const response_too_large = wireError("RESPONSE_TOO_LARGE", "Query response exceeded the configured maximum size; reduce the query limit");
+
 const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "UnknownTable", wireError("COLLECTION_NOT_FOUND", "Collection missing in schema") },
     .{ "UnknownField", wireError("FIELD_NOT_FOUND", "Field missing in schema") },

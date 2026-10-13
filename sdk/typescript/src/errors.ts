@@ -27,6 +27,7 @@ export const ErrorCodes = {
 	ENGINE_UNHEALTHY: "ENGINE_UNHEALTHY",
 	INVALID_PATH: "INVALID_PATH",
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
+	RESPONSE_TOO_LARGE: "RESPONSE_TOO_LARGE",
 	REQUEST_SUPERSEDED: "REQUEST_SUPERSEDED",
 	NAMESPACE_SWITCH_REJECTED: "NAMESPACE_SWITCH_REJECTED",
 	IMMUTABLE_FIELD: "IMMUTABLE_FIELD",
@@ -114,6 +115,7 @@ function deriveCategory(code: string): {
 		case ErrorCodes.INVALID_PATH:
 		case ErrorCodes.BATCH_TOO_LARGE:
 		case ErrorCodes.MESSAGE_TOO_LARGE:
+		case ErrorCodes.RESPONSE_TOO_LARGE:
 			return { category: "client", retryable: false };
 
 		default:

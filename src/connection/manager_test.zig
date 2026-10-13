@@ -407,6 +407,93 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     try testing.expectEqualSlices(u8, "firstsecond", recorder_b.bytes());
 }
 
+test "ConnectionManager: drain delivers a lone entry larger than the pending byte cap" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-drain-lone-oversized", &.{});
+    defer app.deinit();
+
+    // The payload is delivered verbatim, so the recorder must be able to hold
+    // it to assert on what the client received. Heap-allocated: test stacks are
+    // far smaller than the payload.
+    const payload_len = max_pending_group_bytes + 1;
+    const sent_buf = try allocator.alloc(u8, payload_len);
+    defer allocator.free(sent_buf);
+    var recorder = helpers.SendRecorder.init(sent_buf);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws.test_send_observer = helpers.sendRecorderObserver;
+    ws.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws);
+    defer app.connection_manager.onClose(&ws, 1000, "");
+    recorder.reset();
+
+    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    defer queue.deinit();
+
+    // A single message larger than the cap is a large snapshot, not a
+    // backlog: it must reach the client instead of closing the connection.
+    const payload = try allocator.alloc(u8, payload_len);
+    defer allocator.free(payload);
+    @memset(payload, 0xAB);
+
+    const handle = try app.memory_strategy.acquireArenaDeferred();
+    handle.retain();
+    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    handle.release();
+
+    app.connection_manager.drainSendQueue(&queue);
+
+    try testing.expect(!queue.hasItems());
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    try testing.expectEqualSlices(u8, payload, recorder.bytes());
+}
+
+test "ConnectionManager: drain delivers an oversized entry that follows a small one" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-drain-oversized-after-small", &.{});
+    defer app.deinit();
+
+    const payload_len = max_pending_group_bytes + 1;
+    const sent_buf = try allocator.alloc(u8, payload_len + 8);
+    defer allocator.free(sent_buf);
+    var recorder = helpers.SendRecorder.init(sent_buf);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws.test_send_observer = helpers.sendRecorderObserver;
+    ws.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws);
+    defer app.connection_manager.onClose(&ws, 1000, "");
+    recorder.reset();
+
+    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    defer queue.deinit();
+
+    // A subscription delta can land before its snapshot in the same pass, so
+    // the oversized entry must be exempt even when it is not the first entry
+    // and a small one is counted alongside it.
+    const payload = try allocator.alloc(u8, payload_len);
+    defer allocator.free(payload);
+    @memset(payload, 0xAB);
+
+    const handle = try app.memory_strategy.acquireArenaDeferred();
+    const small = try handle.allocator().dupe(u8, "sm");
+    handle.retain();
+    try queue.push(.{ .conn_id = ws.getConnId(), .data = small, .arena = handle });
+    handle.retain();
+    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    handle.release();
+
+    app.connection_manager.drainSendQueue(&queue);
+
+    try testing.expect(!queue.hasItems());
+    // Both entries concatenate into one frame: "sm" then the payload.
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
+    const sent = recorder.bytes();
+    try testing.expectEqual(@as(usize, 2 + payload_len), sent.len);
+    try testing.expectEqualSlices(u8, "sm", sent[0..2]);
+    try testing.expectEqualSlices(u8, payload, sent[2..]);
+}
+
 test "ConnectionManager: token sweep expires JWT sessions but preserves anonymous sessions" {
     var app: AppTestContext = undefined;
     try app.init(std.heap.smp_allocator, "conn-mgr-token-expiry", &.{});

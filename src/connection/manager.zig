@@ -17,20 +17,14 @@ const Connection = @import("state.zig").Connection;
 const Allocator = std.mem.Allocator;
 
 /// Max bytes a single connection may accumulate in one drain pass before it is
-/// closed with BACKPRESSURE_LIMIT. Bounds per-pass copy memory, the retained
-/// drain arena, and the pending backlog.
-///
-/// The cap bounds *accumulation*, not single-message size: the entry that
-/// crosses it is kept so a legitimately large snapshot (a query result may be
-/// unbounded — the client supplies the limit) still reaches the client. Only
-/// the entries after it are dropped.
+/// closed with BACKPRESSURE_LIMIT. An entry larger than the cap is a single
+/// message, so it is delivered as-is and excluded from the byte budget.
 pub const max_pending_group_bytes: usize = 4 * 1024 * 1024;
 
 /// Per-connection drain accumulator for one drain pass.
 const Group = struct {
     entries: std.ArrayListUnmanaged(SendQueueEntry) = .empty,
     bytes: usize = 0,
-    /// Entries dropped after the byte cap was crossed.
     dropped: usize = 0,
     over: bool = false,
 };
@@ -288,8 +282,10 @@ pub const ConnectionManager = struct {
                 entry.deinit();
                 continue;
             };
-            g.value_ptr.bytes += entry.data.len;
-            if (g.value_ptr.bytes > max_pending_group_bytes) g.value_ptr.over = true;
+            if (entry.data.len <= max_pending_group_bytes) {
+                g.value_ptr.bytes += entry.data.len;
+                if (g.value_ptr.bytes > max_pending_group_bytes) g.value_ptr.over = true;
+            }
         }
 
         // Phase 2: per connection, concatenate the group into one frame and send.
