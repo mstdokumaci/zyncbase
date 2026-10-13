@@ -35,6 +35,7 @@ type Peer = {
 	height: number;
 	zoom: number;
 	moves: number;
+	lastRowAt: number;
 };
 type Command = {
 	type: "add" | "move" | "reset" | "stats" | "close";
@@ -51,6 +52,31 @@ type Command = {
 const peers: Peer[] = [];
 const errors: string[] = [];
 const land = terrain();
+// Wire bytes across every peer in this worker: the SDK owns the sockets, so
+// count at the global WebSocket the SDK constructs.
+let wireRxBytes = 0,
+	wireTxBytes = 0;
+const byteLength = (data: unknown): number => {
+	if (typeof data === "string")
+		return new TextEncoder().encode(data).byteLength;
+	if (data instanceof Blob) return data.size;
+	return (data as ArrayBuffer | ArrayBufferView).byteLength;
+};
+const NativeWebSocket = globalThis.WebSocket;
+globalThis.WebSocket = new Proxy(NativeWebSocket, {
+	construct(target, args) {
+		const socket = Reflect.construct(target, args) as WebSocket;
+		const send = socket.send.bind(socket);
+		socket.send = (data) => {
+			wireTxBytes += byteLength(data);
+			send(data);
+		};
+		socket.addEventListener("message", (event) => {
+			wireRxBytes += byteLength((event as MessageEvent).data);
+		});
+		return socket;
+	},
+});
 let lateDeltas = 0;
 const warn = console.warn;
 console.warn = (message, ...args) => {
@@ -66,6 +92,8 @@ let moving = false,
 	callbacks = 0,
 	lastBeat = performance.now();
 let heartbeatLag: number[] = [];
+let rowIntervals: number[] = [];
+const moveAcks: number[] = [];
 
 function receiveCountryChunk(peer: Peer, row: CountryChunkRow) {
 	const index = Number(row.id);
@@ -81,6 +109,11 @@ function receiveUserChunk(peer: Peer, row: UserChunkRow) {
 	// Slots, not arrays: only this peer's own dot matters here.
 	const self = findCoordinate(row.coordinates, peer.slot);
 	if (!self) return;
+	// Server responsiveness: cadence of own-dot rows, independent of terrain
+	// movement cost.
+	const arrived = performance.now();
+	if (peer.lastRowAt) rowIntervals.push(arrived - peer.lastRowAt);
+	peer.lastRowAt = arrived;
 	// Own dot: mirror the browser's updateSelfMotion + eased follow.
 	const dot = { ...self, colorIndex: peer.colorIndex };
 	if (peer.x !== self.x || peer.y !== self.y) peer.moves++;
@@ -159,6 +192,18 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				storeNamespace: NAMESPACE,
 				reconnect: false,
 			});
+			// Server responsiveness: time player_move action round trips.
+			const call = client.actions.call.bind(client.actions);
+			client.actions.call = (name, params, options) => {
+				if (name !== "player_move") return call(name, params, options);
+				const sent = performance.now();
+				const pending = call(name, params, options);
+				void pending.then(
+					() => moveAcks.push(performance.now() - sent),
+					() => {},
+				);
+				return pending;
+			};
 			client.on("error", (error) => errors.push(String(error)));
 			client.on("disconnected", () =>
 				errors.push(`Peer ${data.index} disconnected`),
@@ -184,6 +229,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 				height: data.height,
 				zoom: data.zoom,
 				moves: 0,
+				lastRowAt: 0,
 			};
 			peer.session = new ViewSession({
 				store: () => client.store,
@@ -262,6 +308,10 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			callbacks = 0;
 			lateDeltas = 0;
 			heartbeatLag = [];
+			rowIntervals = [];
+			moveAcks.length = 0;
+			wireRxBytes = 0;
+			wireTxBytes = 0;
 			for (const peer of peers) peer.moves = 0;
 		} else if (data.type === "close") {
 			clearInterval(heartbeat);
@@ -273,6 +323,10 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			callbacks,
 			heartbeatLag,
 			errors,
+			rxBytes: wireRxBytes,
+			txBytes: wireTxBytes,
+			moveAcks,
+			rowIntervals,
 			subscriptions: peers.reduce(
 				(n, p) => n + p.session.subscriptions.count + 2,
 				0,
