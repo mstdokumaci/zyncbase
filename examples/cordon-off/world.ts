@@ -20,7 +20,6 @@ import {
 	countryName,
 	type Direction,
 	type Dot,
-	encodeColorIndexes,
 	encodeCoordinates,
 	HEIGHT,
 	MAX_COUNTRIES,
@@ -98,6 +97,21 @@ const SPAWN_BUCKET_ROWS = Math.ceil(HEIGHT / (1 << SPAWN_BUCKET_SHIFT));
 const SPAWN_OWNED_CELL_BUDGET = 1 << 16;
 const SPAWN_OWN_RADIUS = 32;
 const GOLDEN_ANGLE = 2.399963229728653;
+
+// Reused RLE scratch for countryChunk: worst case one (count, index) pair per
+// cell. Synchronous reuse is safe because each call slices its exact result out.
+const countryChunkScratch = new Uint8Array(COUNTRY_CHUNK_CELLS * 2);
+
+/** Append one palette code to a live RLE stream; returns the new length. */
+function appendRle(encoded: Uint8Array, out: number, code: number) {
+	if (out > 0 && encoded[out - 1] === code && encoded[out - 2] < 255) {
+		encoded[out - 2]++;
+		return out;
+	}
+	encoded[out++] = 1;
+	encoded[out++] = code;
+	return out;
+}
 
 /** Bot country names stay reserved even before their country exists. */
 export function reservedBotCountry(value: unknown) {
@@ -1347,20 +1361,27 @@ export class World {
 			throw new RangeError("Chunk index is out of range");
 		const x = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH;
 		const y = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
-		const codes = new Uint8Array(COUNTRY_CHUNK_CELLS);
+		const encoded = countryChunkScratch;
+		const out = this.encodeChunk(x, y, encoded);
+		return { id: rowId(index), color_indexes: encoded.slice(0, out) };
+	}
+
+	/** Fused palette mapping and RLE for one chunk: one pass over the cells,
+	 * no intermediate code array. Returns the used length in the scratch. */
+	private encodeChunk(x: number, y: number, encoded: Uint8Array) {
 		const ownerCodes = this.ownerCodes;
+		let out = 0;
 		for (let dy = 0; dy < COUNTRY_CHUNK_HEIGHT; dy++) {
-			let target = dy * COUNTRY_CHUNK_WIDTH;
 			const start = (y + dy) * WIDTH + x;
-			for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++, target++) {
+			for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++) {
 				const countryId = this.owners[start + dx];
 				let code = ownerCodes[countryId];
 				// Directly injected country rows skip country(); resolve once.
 				if (!code && countryId) code = this.codeOf(countryId);
-				codes[target] = code;
+				out = appendRle(encoded, out, code);
 			}
 		}
-		return { id: rowId(index), color_indexes: encodeColorIndexes(codes) };
+		return out;
 	}
 
 	userChunk(index: number): UserChunkRow {

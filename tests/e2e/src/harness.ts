@@ -73,6 +73,8 @@ export type ServerOptions = {
 	idleTimeoutSeconds?: number;
 	/** Override `security.maxQueryResponseSize` (bytes). */
 	maxQueryResponseSize?: number;
+	/** Override `security.maxMessagesPerSecond` for unthrottled harnesses. */
+	maxMessagesPerSecond?: number;
 };
 
 export type ServerHandle = {
@@ -496,9 +498,12 @@ export async function withServer<T>(
 	if (options.authPath) {
 		config.authorization = options.authPath;
 	}
-	if (options.maxQueryResponseSize !== undefined) {
-		config.security = { maxQueryResponseSize: options.maxQueryResponseSize };
-	}
+	const security: Record<string, number> = {};
+	if (options.maxQueryResponseSize !== undefined)
+		security.maxQueryResponseSize = options.maxQueryResponseSize;
+	if (options.maxMessagesPerSecond !== undefined)
+		security.maxMessagesPerSecond = options.maxMessagesPerSecond;
+	if (Object.keys(security).length > 0) config.security = security;
 	fs.writeFileSync(configPath, JSON.stringify(config));
 
 	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);

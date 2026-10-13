@@ -394,6 +394,9 @@ if (values.publish) {
 			schemaPath: join(import.meta.dir, "schema.json"),
 			dataDir: ctx.dataDir,
 			authPath: "tests/e2e/auth-allow-all.json",
+			// Unpaced commits run far past the 100 msg/s production guard; lift
+			// it so the stress measures the commit path, not the rate limiter.
+			maxMessagesPerSecond: values.unpaced ? 1_000_000 : undefined,
 		},
 		async ({ port }) => {
 			const client = createClient({
