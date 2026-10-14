@@ -408,7 +408,7 @@ pub const PresenceManager = struct {
         source: msgpack.Payload,
     ) !void {
         if (target.* != .arr or source != .arr) return;
-        if (target.*.arr.len % 2 != 0 or source.arr.len % 2 != 0) return;
+        if (target.*.arr.len % 2 != 0 or source.arr.len % 2 != 0) return error.InvalidPayload;
 
         var new_items = std.ArrayListUnmanaged(msgpack.Payload).empty;
         defer {
