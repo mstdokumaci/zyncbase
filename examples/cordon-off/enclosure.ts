@@ -153,8 +153,9 @@ for (const px of [-1, 1])
 
 // Flat stamp maps replace Set storage: a visited cell costs one typed-array
 // write instead of a hash insert, which is what makes deeper dives affordable.
-let visited = new Int32Array(0);
-let outside = new Int32Array(0);
+// Visited and exterior-proven cells share one marks array (positive/negative
+// stamp), halving the random reads the neighbour loop pays per cell.
+let marks = new Int32Array(0);
 let stack = new Int32Array(1024);
 let component = new Int32Array(1024);
 let holeBuf = new Int32Array(1024);
@@ -178,39 +179,37 @@ export function localEnclosures(
 	width: number,
 ): number[] | undefined {
 	const { left, right, top, bottom } = bounds;
-	if (visited.length !== owners.length) {
-		visited = new Int32Array(owners.length);
-		outside = new Int32Array(owners.length);
-	}
+	if (marks.length !== owners.length) marks = new Int32Array(owners.length);
 	stamp++;
-	// Stamps never reset per call, so only an overflow has to clear the maps.
+	// Stamps never reset per call, so only an overflow has to clear the map.
 	if (stamp === 0x7fffffff) {
-		visited.fill(0);
-		outside.fill(0);
+		marks.fill(0);
 		stamp = 1;
 	}
+	const outsideMark = -stamp;
 	// Flat neighbour offsets, built once per call rather than once per pixel.
 	for (let i = 0; i < 8; i++) OFFSETS[i] = RING_X[i] + RING_Y[i] * width;
 	let remaining = LOCAL_SEARCH_BUDGET;
 	let holeCount = 0;
 	for (const start of starts) {
+		const startMark = marks[start];
 		if (
 			owners[start] === countryId ||
-			visited[start] === stamp ||
-			outside[start] === stamp
+			startMark === stamp ||
+			startMark === outsideMark
 		)
 			continue;
 		// Gains and bulk captures also queue exterior cells. Reuse the loss gate
 		// before a broad open component can exhaust the local flood budget.
 		if (hasStraightExit(owners, countryId, start, width, bounds)) {
-			outside[start] = stamp;
+			marks[start] = outsideMark;
 			continue;
 		}
 		if (!remaining--) return;
 		let depth = 0,
 			seen = 0,
 			open = false;
-		visited[start] = stamp;
+		marks[start] = stamp;
 		stack[depth++] = start;
 		component[seen++] = start;
 		while (depth > 0 && !open) {
@@ -227,13 +226,14 @@ export function localEnclosures(
 			for (let i = 0; i < 8; i++) {
 				const next = cell + OFFSETS[order[i]];
 				if (owners[next] === countryId) continue;
-				if (outside[next] === stamp) {
+				const mark = marks[next];
+				if (mark === outsideMark) {
 					open = true;
 					break;
 				}
-				if (visited[next] === stamp) continue;
+				if (mark === stamp) continue;
 				if (!remaining--) return;
-				visited[next] = stamp;
+				marks[next] = stamp;
 				if (seen === component.length) {
 					component = growInt32(component);
 					stack = growInt32(stack);
@@ -243,7 +243,7 @@ export function localEnclosures(
 			}
 		}
 		for (let i = 0; i < seen; i++) {
-			if (open) outside[component[i]] = stamp;
+			if (open) marks[component[i]] = outsideMark;
 			else {
 				if (holeCount === holeBuf.length) holeBuf = growInt32(holeBuf);
 				holeBuf[holeCount++] = component[i];
@@ -251,8 +251,11 @@ export function localEnclosures(
 		}
 	}
 	// Match the full fill's claim order, including which other countries it affects first.
+	// Sort the scratch view natively (no comparator, numeric order) and copy:
+	// the comparator form costs about a millisecond per six thousand holes.
+	const sorted = holeBuf.subarray(0, holeCount);
+	sorted.sort();
 	const holes = new Array<number>(holeCount);
-	for (let i = 0; i < holeCount; i++) holes[i] = holeBuf[i];
-	holes.sort((a, b) => a - b);
+	for (let i = 0; i < holeCount; i++) holes[i] = sorted[i];
 	return holes;
 }
