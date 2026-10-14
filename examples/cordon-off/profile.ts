@@ -37,6 +37,7 @@ const { values } = parseArgs({
 		shape: { type: "string", default: "fragmented" },
 		publish: { type: "boolean", default: false },
 		unpaced: { type: "boolean", default: false },
+		trace: { type: "boolean", default: false },
 		profile: { type: "boolean", default: false },
 		output: {
 			type: "string",
@@ -288,6 +289,18 @@ async function run(client?: ZyncBaseClient) {
 		serialization: number[] = [],
 		commit: number[] = [],
 		total: number[] = [];
+	// Diagnostic trace: spike tick indices and per-phase times, to separate
+	// deterministic events (same index across runs) from scheduling noise.
+	type TraceTick = {
+		tick: number;
+		at: number;
+		sim: number;
+		ser: number;
+		commit: number;
+		total: number;
+		ops: number;
+	};
+	const trace: TraceTick[] = [];
 	let countryChunkWrites = 0,
 		countryChunkBytes = 0,
 		userChunkWrites = 0,
@@ -300,6 +313,7 @@ async function run(client?: ZyncBaseClient) {
 	const measure = async () => {
 		for (let tick = 0; tick < ticks; tick++) {
 			steer(world, tick);
+			const traceAt = values.trace ? Date.now() : 0;
 			const t0 = performance.now();
 			world.tick(tick * RULES.tickMs);
 			const t1 = performance.now();
@@ -314,6 +328,16 @@ async function run(client?: ZyncBaseClient) {
 				flushes++;
 			}
 			const t3 = performance.now();
+			if (values.trace)
+				trace.push({
+					tick,
+					at: traceAt,
+					sim: t1 - t0,
+					ser: t2 - t1,
+					commit: t3 - t2,
+					total: t3 - t0,
+					ops: batch.operations.length,
+				});
 			simulation.push(t1 - t0);
 			serialization.push(t2 - t1);
 			commit.push(t3 - t2);
@@ -368,6 +392,17 @@ async function run(client?: ZyncBaseClient) {
 		userChunkWrites,
 		userChunkBytes,
 		flushes,
+		...(values.trace
+			? {
+					spikes: {
+						topTotal: trace.toSorted((a, b) => b.total - a.total).slice(0, 10),
+						topSim: trace.toSorted((a, b) => b.sim - a.sim).slice(0, 10),
+						topCommit: trace
+							.toSorted((a, b) => b.commit - a.commit)
+							.slice(0, 10),
+					},
+				}
+			: {}),
 	};
 	verify(world);
 	const label = `${countryCount}-${values.shape}-${values.mode}-${client ? "database" : "local"}${values.profile ? "-profile" : ""}`;

@@ -81,6 +81,10 @@ type PeerStats = {
 	subscriptions: number;
 	movingPeers: number;
 	positioned: number;
+	rxBytes: number;
+	txBytes: number;
+	moveAcks: number[];
+	rowIntervals: number[];
 	failure?: string;
 };
 const workers: Worker[] = [];
@@ -317,15 +321,29 @@ try {
 	await cdp.send("Network.enable");
 	await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
 	let rxBytes = 0,
-		rxFrames = 0;
+		rxFrames = 0,
+		txBytes = 0,
+		txFrames = 0;
+	const countFrame = ({
+		response,
+	}: {
+		response: { opcode: number; payloadData: string };
+	}) =>
+		response.opcode === 2
+			? Buffer.byteLength(response.payloadData, "base64")
+			: Buffer.byteLength(response.payloadData);
 	cdp.on(
 		"Network.webSocketFrameReceived",
-		({ response }: { response: { opcode: number; payloadData: string } }) => {
+		(frame: { response: { opcode: number; payloadData: string } }) => {
 			rxFrames++;
-			rxBytes +=
-				response.opcode === 2
-					? Buffer.byteLength(response.payloadData, "base64")
-					: Buffer.byteLength(response.payloadData);
+			rxBytes += countFrame(frame);
+		},
+	);
+	cdp.on(
+		"Network.webSocketFrameSent",
+		(frame: { response: { opcode: number; payloadData: string } }) => {
+			txFrames++;
+			txBytes += countFrame(frame);
 		},
 	);
 	const navigationStart = performance.now();
@@ -382,7 +400,7 @@ try {
 			await cdp.send("Profiler.enable");
 			await cdp.send("Profiler.start");
 		}
-		rxBytes = rxFrames = 0;
+		rxBytes = rxFrames = txBytes = txFrames = 0;
 		await broadcast({ type: "reset" });
 		await page.evaluate("window.__resetGamePerf()");
 		const started = Date.now();
@@ -442,6 +460,8 @@ try {
 			scoreboardUpdates: perf.scoreboard,
 			rxBytes,
 			rxFrames,
+			txBytes,
+			txFrames,
 			callbacks: peerStats.reduce((n, s) => n + s.callbacks, 0),
 			browser: {
 				taskMs: (b.TaskDuration - a.TaskDuration) * 1000,
@@ -460,6 +480,10 @@ try {
 				positioned: peerStats.reduce((n, s) => n + s.positioned, 0),
 				workers: workers.length,
 				lateDeltas: peerStats.reduce((n, s) => n + s.lateDeltas, 0),
+				rxBytes: peerStats.reduce((n, s) => n + s.rxBytes, 0),
+				txBytes: peerStats.reduce((n, s) => n + s.txBytes, 0),
+				moveAckMs: summary(peerStats.flatMap((s) => s.moveAcks)),
+				rowIntervalMs: summary(peerStats.flatMap((s) => s.rowIntervals)),
 			},
 			serverBefore,
 			serverAfter,
@@ -490,6 +514,12 @@ try {
 				fps: result.fps,
 				drawP95Ms: result.drawMs.p95,
 				rxKiBs: rxBytes / (ended - started) / 1.024,
+				txKiBs: txBytes / (ended - started) / 1.024,
+				farmRxKiBs: result.driver.rxBytes / (ended - started) / 1.024,
+				farmTxKiBs: result.driver.txBytes / (ended - started) / 1.024,
+				ackP95Ms: result.driver.moveAckMs.p95,
+				rowP50Ms: result.driver.rowIntervalMs.p50,
+				rowP95Ms: result.driver.rowIntervalMs.p95,
 				driverCpuCores: result.driver.cpuMs / (ended - started),
 				errors: result.errors.length,
 			}),

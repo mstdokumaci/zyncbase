@@ -39,7 +39,7 @@ bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-
 bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/repeat-1
 ```
 
-Repeat into separate directories. For a baseline, use the same harness in a separate checkout of the baseline commit. `--ticks`, `--warmup`, and `--output` control run length and artifact placement; `--profile` saves sampling traces; `--publish` runs against an isolated real ZyncBase database at 20 Hz. Artifacts under `test-artifacts/` are generated and gitignored.
+Repeat into separate directories. For a baseline, use the same harness in a separate checkout of the baseline commit. `--ticks`, `--warmup`, `--output`, and `--publish` control run length, artifact placement, and whether writes go to a real database; `--unpaced` removes the 20 Hz pacing, `--trace` records the top-ten spike records per category, including phase times and tick indices, in the result JSON, and `--profile` saves sampling traces. Artifacts under `test-artifacts/` are generated and gitignored.
 
 ## Validation
 
@@ -61,3 +61,4 @@ One line per iteration; per-run tables, diagnostics, and reproduction blocks for
 - **2026-10-12** — Targeted cue rows replace the forced roster flush; client renders the scoreboard once per frame with a reused number formatter: browser rx 16.0 → 9.8 MiB and script/tick −33% at 1,024. Baseline `5eb57fc`.
 - **2026-10-13** — Country chunk encoding fuses palette mapping and RLE into one pass over reused scratch (drops the 4 KiB code array, the 8 KiB encode buffer, and the second pass): local serialization −22.2% scripted fragmented, −13.2% bots fragmented, −14.7% bots compact; publish serialization −11.8% unpaced; checksums match. Unpaced publish no longer stalls on the 100 msg/s guard (522 ticks/s, commit p50 1.4 ms). Baseline `c1c3c1a`.
 - **2026-10-13** — Peer farm runs the browser's shared data plane (`viewport.ts`: decoded chunk caches, LocalMotion, eased camera, heading-prefetch/seam subscriptions, change-only moves) plus a fast RLE decode path. At 1,024: subscriptions 47,848 → 31,850 (−33%), commit p50 111 → 95 ms, action traffic −87%, heartbeat p95 64–73 → 26 ms, and stable ramps (without the decode fix peers drop: 33 errors, hb p95 111 ms). Baseline `dc49520`.
+- **2026-10-14** — Enclosure dive keeps visited and exterior-proven cells in one marks array (positive/negative stamp) and sorts hole output with the native typed-array sort instead of a comparator copy. Interleaved paced A/B on scripted fragmented: worst tick 32 → 24 ms, simulation total 436–440 → 391–412 ms, p95 1.2–1.3 → 1.2 ms; local worst tick 32 → 22 ms. Bots workloads unchanged; checksums match. Baseline `de992b0`.
