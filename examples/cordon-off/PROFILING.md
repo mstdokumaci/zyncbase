@@ -39,7 +39,7 @@ bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-
 bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/repeat-1
 ```
 
-Repeat into separate directories. For a baseline, use the same harness in a separate checkout of the baseline commit. `--ticks`, `--warmup`, `--output`, and `--publish` control run length, artifact placement, and whether writes go to a real database; `--unpaced` removes the 20 Hz pacing, `--trace` records per-tick phase times and the top spike tick indices in the result JSON, and `--profile` saves sampling traces. Artifacts under `test-artifacts/` are generated and gitignored.
+Repeat into separate directories. For a baseline, use the same harness in a separate checkout of the baseline commit. `--ticks`, `--warmup`, `--output`, and `--publish` control run length, artifact placement, and whether writes go to a real database; `--unpaced` removes the 20 Hz pacing, `--trace` records the top-ten spike records per category, including phase times and tick indices, in the result JSON, and `--profile` saves sampling traces. Artifacts under `test-artifacts/` are generated and gitignored.
 
 ## Validation
 

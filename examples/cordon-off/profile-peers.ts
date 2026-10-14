@@ -313,6 +313,7 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			callbacks = 0;
 			lateDeltas = 0;
 			heartbeatLag = [];
+			lastBeat = performance.now();
 			rowIntervals = [];
 			moveAcks.length = 0;
 			moveAckGeneration++;
