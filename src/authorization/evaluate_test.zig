@@ -281,12 +281,10 @@ test "evaluateConditionWithDoc allows $doc.status == draft when status is draft"
     defer condition.deinit(allocator);
 
     const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(status_idx);
-    pair[1] = try msgpack.Payload.strToPayload("draft", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var payload = msgpack.Payload{ .arr = pairs };
+    var items = try allocator.alloc(msgpack.Payload, 2);
+    items[0] = msgpack.Payload.uintToPayload(status_idx);
+    items[1] = try msgpack.Payload.strToPayload("draft", allocator);
+    var payload = msgpack.Payload{ .arr = items };
     defer payload.free(allocator);
 
     const ctx = EvalContext{
@@ -319,12 +317,10 @@ test "evaluateConditionWithDoc denies $doc.status == draft when status is publis
     defer condition.deinit(allocator);
 
     const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(status_idx);
-    pair[1] = try msgpack.Payload.strToPayload("published", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var payload = msgpack.Payload{ .arr = pairs };
+    var items = try allocator.alloc(msgpack.Payload, 2);
+    items[0] = msgpack.Payload.uintToPayload(status_idx);
+    items[1] = try msgpack.Payload.strToPayload("published", allocator);
+    var payload = msgpack.Payload{ .arr = items };
     defer payload.free(allocator);
 
     const ctx = EvalContext{
@@ -350,17 +346,14 @@ test "duplicate field index in value pair-array resolves to last-wins" {
 
     const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
 
-    // Build pair-array with duplicate field index: [[idx, "first"], [idx, "second"]]
-    var pair1 = try allocator.alloc(msgpack.Payload, 2);
-    pair1[0] = msgpack.Payload.uintToPayload(status_idx);
-    pair1[1] = try msgpack.Payload.strToPayload("first", allocator);
-    var pair2 = try allocator.alloc(msgpack.Payload, 2);
-    pair2[0] = msgpack.Payload.uintToPayload(status_idx);
-    pair2[1] = try msgpack.Payload.strToPayload("second", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 2);
-    pairs[0] = .{ .arr = pair1 };
-    pairs[1] = .{ .arr = pair2 };
-    var payload = msgpack.Payload{ .arr = pairs };
+    // Build a flat sparse field array with a duplicate field index:
+    // [idx, "first", idx, "second"]
+    var items = try allocator.alloc(msgpack.Payload, 4);
+    items[0] = msgpack.Payload.uintToPayload(status_idx);
+    items[1] = try msgpack.Payload.strToPayload("first", allocator);
+    items[2] = msgpack.Payload.uintToPayload(status_idx);
+    items[3] = try msgpack.Payload.strToPayload("second", allocator);
+    var payload = msgpack.Payload{ .arr = items };
     defer payload.free(allocator);
 
     // Condition: $value.status == "second" (should pass with last-wins)

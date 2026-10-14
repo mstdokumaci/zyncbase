@@ -13,7 +13,17 @@ import {
 	setDeepProperty,
 	splitFieldPath,
 } from "./path.js";
-import type { JsonValue } from "./types.js";
+import type { JsonValue, SparseFieldArray } from "./types.js";
+
+/** Guards flat sparse field arrays: the wire format requires an even element count. */
+function assertSparseLength(wireData: SparseFieldArray, label: string): void {
+	if (wireData.length % 2 !== 0) {
+		throw new SchemaError(
+			`SchemaDictionary: odd-length sparse field array for ${label} (${wireData.length})`,
+			"INVALID_MESSAGE_FORMAT",
+		);
+	}
+}
 
 /** Dense per-action dictionary entry built from SchemaSync. */
 export interface ActionSchemaEntry {
@@ -424,14 +434,14 @@ export class SchemaDictionary {
 	encodeValue(
 		tableIndex: number,
 		value: Record<string, unknown>,
-	): Array<[number, unknown]> {
-		const result: Array<[number, unknown]> = [];
+	): SparseFieldArray {
+		const result: SparseFieldArray = [];
 		for (const [key, val] of Object.entries(value)) {
 			const fieldIndex = this.getFieldIndex(tableIndex, key);
-			result.push([
+			result.push(
 				fieldIndex,
 				this.encodeFieldValue(tableIndex, fieldIndex, val),
-			]);
+			);
 		}
 		return result;
 	}
@@ -544,15 +554,13 @@ export class SchemaDictionary {
 	// ─── Presence Encoding / Decoding ─────────────────────────────────────
 
 	/**
-	 * Encode a nested presence data object into an integer-keyed wire map for user presence.
+	 * Encode a nested presence data object into a flat sparse field array for user presence.
 	 * Flattens nested objects (e.g., { cursor: { x: 1, y: 2 } } → { "cursor__x": 1, "cursor__y": 2 })
 	 * then maps field names to their integer indices.
 	 */
-	encodePresenceUserValue(
-		data: Record<string, JsonValue>,
-	): Array<[number, unknown]> {
+	encodePresenceUserValue(data: Record<string, JsonValue>): SparseFieldArray {
 		const flat = flatten(data);
-		const result: Array<[number, unknown]> = [];
+		const result: SparseFieldArray = [];
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceUserFieldToIndex.get(key);
 			if (index === undefined) {
@@ -561,19 +569,17 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			result.push([index, value]);
+			result.push(index, value);
 		}
 		return result;
 	}
 
 	/**
-	 * Encode a nested presence data object into a pair-array for shared state.
+	 * Encode a nested presence data object into a flat sparse field array for shared state.
 	 */
-	encodePresenceSharedValue(
-		data: Record<string, JsonValue>,
-	): Array<[number, unknown]> {
+	encodePresenceSharedValue(data: Record<string, JsonValue>): SparseFieldArray {
 		const flat = flatten(data);
-		const result: Array<[number, unknown]> = [];
+		const result: SparseFieldArray = [];
 		for (const [key, value] of Object.entries(flat)) {
 			const index = this.presenceSharedFieldToIndex.get(key);
 			if (index === undefined) {
@@ -582,19 +588,21 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			result.push([index, value]);
+			result.push(index, value);
 		}
 		return result;
 	}
 
 	/**
-	 * Decode a pair-array into a nested string-keyed object for user presence.
+	 * Decode a flat sparse field array into a nested string-keyed object for user presence.
 	 */
 	decodePresenceUserValue(
-		wireData: Array<[number, unknown]>,
+		wireData: SparseFieldArray,
 	): Record<string, JsonValue> {
+		assertSparseLength(wireData, "presence user data");
 		const result: Record<string, JsonValue> = {};
-		for (const [index, value] of wireData) {
+		for (let i = 0; i < wireData.length; i += 2) {
+			const index = wireData[i] as number;
 			const fieldName = this.presenceUserFields[index];
 			if (fieldName === undefined) {
 				throw new SchemaError(
@@ -602,21 +610,24 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
+			const value = wireData[i + 1] as JsonValue;
 			const fieldPath = this.presenceUserFieldPaths[index];
-			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
-			else result[fieldName] = value as JsonValue;
+			if (fieldPath) setDeepProperty(result, fieldPath, value);
+			else result[fieldName] = value;
 		}
 		return result;
 	}
 
 	/**
-	 * Decode a pair-array into a nested string-keyed object for shared state.
+	 * Decode a flat sparse field array into a nested string-keyed object for shared state.
 	 */
 	decodePresenceSharedValue(
-		wireData: Array<[number, unknown]>,
+		wireData: SparseFieldArray,
 	): Record<string, JsonValue> {
+		assertSparseLength(wireData, "presence shared data");
 		const result: Record<string, JsonValue> = {};
-		for (const [index, value] of wireData) {
+		for (let i = 0; i < wireData.length; i += 2) {
+			const index = wireData[i] as number;
 			const fieldName = this.presenceSharedFields[index];
 			if (fieldName === undefined) {
 				throw new SchemaError(
@@ -624,9 +635,10 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
+			const value = wireData[i + 1] as JsonValue;
 			const fieldPath = this.presenceSharedFieldPaths[index];
-			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
-			else result[fieldName] = value as JsonValue;
+			if (fieldPath) setDeepProperty(result, fieldPath, value);
+			else result[fieldName] = value;
 		}
 		return result;
 	}
@@ -683,11 +695,11 @@ export class SchemaDictionary {
 		return action.name;
 	}
 
-	/** Encode a params object into an integer-keyed pair-array. */
+	/** Encode a params object into an integer-keyed sparse field array. */
 	encodeActionParams(
 		action: ActionSchemaEntry,
 		data: Record<string, JsonValue>,
-	): Array<[number, unknown]> {
+	): SparseFieldArray {
 		return this.encodeActionFields(
 			data,
 			action.paramFieldToIndex,
@@ -695,11 +707,11 @@ export class SchemaDictionary {
 		);
 	}
 
-	/** Encode a returns object into an integer-keyed pair-array. */
+	/** Encode a returns object into an integer-keyed sparse field array. */
 	encodeActionReturns(
 		action: ActionSchemaEntry,
 		data: Record<string, JsonValue>,
-	): Array<[number, unknown]> {
+	): SparseFieldArray {
 		return this.encodeActionFields(
 			data,
 			action.returnFieldToIndex,
@@ -707,10 +719,10 @@ export class SchemaDictionary {
 		);
 	}
 
-	/** Decode a params pair-array into a nested string-keyed object. */
+	/** Decode a params sparse field array into a nested string-keyed object. */
 	decodeActionParams(
 		action: ActionSchemaEntry,
-		wireData: Array<[number, unknown]>,
+		wireData: SparseFieldArray,
 	): Record<string, JsonValue> {
 		return this.decodeActionFields(
 			wireData,
@@ -720,10 +732,10 @@ export class SchemaDictionary {
 		);
 	}
 
-	/** Decode a returns pair-array into a nested string-keyed object. */
+	/** Decode a returns sparse field array into a nested string-keyed object. */
 	decodeActionReturns(
 		action: ActionSchemaEntry,
-		wireData: Array<[number, unknown]>,
+		wireData: SparseFieldArray,
 	): Record<string, JsonValue> {
 		return this.decodeActionFields(
 			wireData,
@@ -737,9 +749,9 @@ export class SchemaDictionary {
 		data: Record<string, JsonValue>,
 		indexMap: Map<string, number>,
 		label: string,
-	): Array<[number, unknown]> {
+	): SparseFieldArray {
 		const flat = flatten(data);
-		const result: Array<[number, unknown]> = [];
+		const result: SparseFieldArray = [];
 		for (const [key, value] of Object.entries(flat)) {
 			const index = indexMap.get(key);
 			if (index === undefined) {
@@ -748,19 +760,21 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
-			result.push([index, value]);
+			result.push(index, value);
 		}
 		return result;
 	}
 
 	private decodeActionFields(
-		wireData: Array<[number, unknown]>,
+		wireData: SparseFieldArray,
 		fields: string[],
 		paths: Array<string[] | undefined>,
 		label: string,
 	): Record<string, JsonValue> {
+		assertSparseLength(wireData, label);
 		const result: Record<string, JsonValue> = {};
-		for (const [index, value] of wireData) {
+		for (let i = 0; i < wireData.length; i += 2) {
+			const index = wireData[i] as number;
 			const fieldName = fields[index];
 			if (fieldName === undefined) {
 				throw new SchemaError(
@@ -768,9 +782,10 @@ export class SchemaDictionary {
 					"FIELD_NOT_FOUND",
 				);
 			}
+			const value = wireData[i + 1] as JsonValue;
 			const fieldPath = paths[index];
-			if (fieldPath) setDeepProperty(result, fieldPath, value as JsonValue);
-			else result[fieldName] = value as JsonValue;
+			if (fieldPath) setDeepProperty(result, fieldPath, value);
+			else result[fieldName] = value;
 		}
 		return result;
 	}

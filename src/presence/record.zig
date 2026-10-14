@@ -21,13 +21,14 @@ pub const PresenceRecord = struct {
         allocator: Allocator,
     ) !void {
         if (patch != .arr) return error.InvalidPayload;
+        if (patch.arr.len % 2 != 0) return error.InvalidPayload;
 
-        for (patch.arr) |pair_payload| {
-            if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
+        var i: usize = 0;
+        while (i < patch.arr.len) : (i += 2) {
+            const f_idx = msgpack.extractPayloadUsize(patch.arr[i]) orelse return error.InvalidPayload;
             if (f_idx >= fields.len) return error.InvalidFieldIndex;
 
-            const value = pair_payload.arr[1];
+            const value = patch.arr[i + 1];
             if (value == .nil) continue;
 
             const field = fields[f_idx];
@@ -92,12 +93,13 @@ pub const PresenceRecord = struct {
             temp_updates.deinit(allocator);
         }
 
-        for (patch.arr) |pair_payload| {
-            const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
+        var i: usize = 0;
+        while (i < patch.arr.len) : (i += 2) {
+            const f_idx = msgpack.extractPayloadUsize(patch.arr[i]) orelse return error.InvalidPayload;
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
-            const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, pair_payload.arr[1]) catch |err| switch (err) {
+            const new_value = typed_codec.fromPayload(allocator, field.declared_type, null, patch.arr[i + 1]) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.SchemaValidationFailed,
             };

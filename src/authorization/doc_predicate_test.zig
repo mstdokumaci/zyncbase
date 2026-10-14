@@ -152,12 +152,10 @@ test "buildDocPredicate resolves value RHS from incoming payload" {
     defer table.deinit(allocator);
 
     const visibility_idx = table.fieldIndex("visibility").?; // zwanzig-disable-line: optional-unwrap
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(visibility_idx);
-    pair[1] = try msgpack.Payload.strToPayload("private", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var payload = msgpack.Payload{ .arr = pairs };
+    var items = try allocator.alloc(msgpack.Payload, 2);
+    items[0] = msgpack.Payload.uintToPayload(visibility_idx);
+    items[1] = try msgpack.Payload.strToPayload("private", allocator);
+    var payload = msgpack.Payload{ .arr = items };
     defer payload.free(allocator);
 
     const eval_ctx = EvalContext{
@@ -392,12 +390,10 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
     defer condition.deinit(allocator);
 
     const status_idx = table.fieldIndex("status").?; // zwanzig-disable-line: optional-unwrap
-    var pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(status_idx);
-    pair[1] = try msgpack.Payload.strToPayload("published", allocator);
-    var pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    var payload = msgpack.Payload{ .arr = pairs };
+    var items = try allocator.alloc(msgpack.Payload, 2);
+    items[0] = msgpack.Payload.uintToPayload(status_idx);
+    items[1] = try msgpack.Payload.strToPayload("published", allocator);
+    var payload = msgpack.Payload{ .arr = items };
     defer payload.free(allocator);
 
     const ctx = EvalContext{

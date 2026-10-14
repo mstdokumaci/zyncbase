@@ -73,10 +73,7 @@ describe("PresenceImpl", () => {
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceSet");
-		const data = conn.dispatched[0].data as Array<[number, unknown]>;
-		const statusPair = data.find((pair) => pair[0] === 2);
-		expect(statusPair).toBeDefined();
-		expect(statusPair?.[1]).toBe("active");
+		expect(conn.dispatched[0].data).toEqual([2, "active"]);
 	});
 
 	test("set() throttles to ~60fps", async () => {
@@ -110,8 +107,9 @@ describe("PresenceImpl", () => {
 			jest.advanceTimersByTime(1);
 
 			expect(conn.dispatched.length).toBe(2);
-			const data = conn.dispatched.at(-1)?.data as Array<[number, unknown]>;
-			expect(data.find(([index]) => index === 1)?.[1]).toBe(3);
+			const data = conn.dispatched.at(-1)?.data as unknown[];
+			const xIndex = data.indexOf(1);
+			expect(data[xIndex + 1]).toBe(3);
 		} finally {
 			jest.useRealTimers();
 		}
@@ -126,10 +124,7 @@ describe("PresenceImpl", () => {
 
 		expect(conn.dispatched.length).toBe(1);
 		expect(conn.dispatched[0].type).toBe("PresenceSetShared");
-		const data = conn.dispatched[0].data as Array<[number, unknown]>;
-		const slidePair = data.find((pair) => pair[0] === 0);
-		expect(slidePair).toBeDefined();
-		expect(slidePair?.[1]).toBe(5);
+		expect(conn.dispatched[0].data).toEqual([0, 5]);
 	});
 
 	test("remove() awaits PresenceRemove", async () => {
@@ -180,9 +175,12 @@ describe("PresenceImpl", () => {
 						{
 							userId: packDocId("user_1"),
 							data: conn.schema.decodePresenceUserValue([
-								[0, 100],
-								[1, 200],
-								[2, "active"],
+								0,
+								100,
+								1,
+								200,
+								2,
+								"active",
 							]),
 							joinedAt: 1234567890,
 						},
@@ -249,7 +247,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_1"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1234567890,
 						},
 					],
@@ -284,7 +282,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_1"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1234567890,
 						},
 					],
@@ -333,10 +331,7 @@ describe("PresenceImpl", () => {
 				{
 					userId: packDocId("user_2"),
 					event: "join",
-					data: conn.schema.decodePresenceUserValue([
-						[0, 50],
-						[1, 75],
-					]),
+					data: conn.schema.decodePresenceUserValue([0, 50, 1, 75]),
 					joinedAt: 9999,
 				},
 			],
@@ -362,12 +357,12 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_3"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1111,
 						},
 						{
 							userId: packDocId("user_4"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 2222,
 						},
 					],
@@ -412,7 +407,7 @@ describe("PresenceImpl", () => {
 				{
 					userId: packDocId("user_4"),
 					event: "update",
-					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+					data: conn.schema.decodePresenceUserValue([2, "idle"]),
 				},
 			],
 		} as PresenceBroadcast);
@@ -448,7 +443,7 @@ describe("PresenceImpl", () => {
 				{
 					userId: packDocId("user_5"),
 					event: "update",
-					data: conn.schema.decodePresenceUserValue([[2, "online"]]),
+					data: conn.schema.decodePresenceUserValue([2, "online"]),
 				},
 			],
 		} as PresenceBroadcast);
@@ -472,10 +467,7 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue([
-						[0, 5],
-						[1, true],
-					]),
+					shared: conn.schema.decodePresenceSharedValue([0, 5, 1, true]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -503,7 +495,7 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue([[0, 10]]),
+					shared: conn.schema.decodePresenceSharedValue([0, 10]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -526,7 +518,7 @@ describe("PresenceImpl", () => {
 					type: "ok",
 					id: 0,
 					subId: 200,
-					shared: conn.schema.decodePresenceSharedValue([[0, 1]]),
+					shared: conn.schema.decodePresenceSharedValue([0, 1]),
 				} as OkResponse);
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
@@ -541,7 +533,7 @@ describe("PresenceImpl", () => {
 		conn.fireBroadcast({
 			type: "SharedStateBroadcast",
 			subId: 200,
-			data: [conn.schema.decodePresenceSharedValue([[1, false]])],
+			data: [conn.schema.decodePresenceSharedValue([1, false])],
 		} as SharedStateBroadcast);
 
 		expect(receivedShared).toEqual({ slide: 1, playing: false });
@@ -563,7 +555,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_1"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1234,
 						},
 					],
@@ -645,7 +637,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_2"),
-							data: conn.schema.decodePresenceUserValue([[2, "new_status"]]),
+							data: conn.schema.decodePresenceUserValue([2, "new_status"]),
 							joinedAt: 5678,
 						},
 					],
@@ -673,7 +665,7 @@ describe("PresenceImpl", () => {
 			users: [
 				{
 					userId: packDocId("user_1"),
-					data: conn.schema.decodePresenceUserValue([[2, "stale_status"]]),
+					data: conn.schema.decodePresenceUserValue([2, "stale_status"]),
 					joinedAt: 1234,
 				},
 			],
@@ -846,12 +838,12 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_self"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1000,
 						},
 						{
 							userId: packDocId("user_other"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 2000,
 						},
 					],
@@ -879,7 +871,7 @@ describe("PresenceImpl", () => {
 				{
 					userId: packDocId("user_self"),
 					event: "update",
-					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+					data: conn.schema.decodePresenceUserValue([2, "idle"]),
 				},
 			],
 		} as PresenceBroadcast);
@@ -894,12 +886,12 @@ describe("PresenceImpl", () => {
 				{
 					userId: packDocId("user_self"),
 					event: "update",
-					data: conn.schema.decodePresenceUserValue([[2, "away"]]),
+					data: conn.schema.decodePresenceUserValue([2, "away"]),
 				},
 				{
 					userId: packDocId("user_other"),
 					event: "update",
-					data: conn.schema.decodePresenceUserValue([[2, "idle"]]),
+					data: conn.schema.decodePresenceUserValue([2, "idle"]),
 				},
 			],
 		} as PresenceBroadcast);
@@ -925,7 +917,7 @@ describe("PresenceImpl", () => {
 					users: [
 						{
 							userId: packDocId("user_1"),
-							data: conn.schema.decodePresenceUserValue([[2, "active"]]),
+							data: conn.schema.decodePresenceUserValue([2, "active"]),
 							joinedAt: 1000,
 						},
 					],
@@ -968,11 +960,7 @@ describe("SchemaDictionary presence encode/decode", () => {
 			status: "active",
 		});
 
-		expect(encoded).toEqual([
-			[0, 100],
-			[1, 200],
-			[2, "active"],
-		]);
+		expect(encoded).toEqual([0, 100, 1, 200, 2, "active"]);
 	});
 
 	test("decodePresenceUserValue unindexes and unflattens wire data", async () => {
@@ -980,9 +968,12 @@ describe("SchemaDictionary presence encode/decode", () => {
 		await setupSchema(schema);
 
 		const decoded = schema.decodePresenceUserValue([
-			[0, 100],
-			[1, 200],
-			[2, "active"],
+			0,
+			100,
+			1,
+			200,
+			2,
+			"active",
 		]);
 
 		expect(decoded).toEqual({
@@ -1000,22 +991,25 @@ describe("SchemaDictionary presence encode/decode", () => {
 			playing: true,
 		});
 
-		expect(encoded).toEqual([
-			[0, 5],
-			[1, true],
-		]);
+		expect(encoded).toEqual([0, 5, 1, true]);
 	});
 
 	test("decodePresenceSharedValue unindexes and unflattens wire data", async () => {
 		const schema = new SchemaDictionary();
 		await setupSchema(schema);
 
-		const decoded = schema.decodePresenceSharedValue([
-			[0, 5],
-			[1, true],
-		]);
+		const decoded = schema.decodePresenceSharedValue([0, 5, 1, true]);
 
 		expect(decoded).toEqual({ slide: 5, playing: true });
+	});
+
+	test("decodePresenceUserValue rejects odd-length sparse arrays", async () => {
+		const schema = new SchemaDictionary();
+		await setupSchema(schema);
+
+		expect(() => schema.decodePresenceUserValue([0])).toThrow(
+			"odd-length sparse field array",
+		);
 	});
 
 	test("decodePresenceUserId converts bin16 to UUID string", async () => {
@@ -1066,12 +1060,7 @@ describe("SchemaDictionary presence encode/decode", () => {
 		// Without the null check in path.ts's setDeepProperty, typeof null === "object"
 		// bypasses the initialization block and throws TypeError.
 		expect(() =>
-			schema.decodePresenceUserValue([
-				[0, null],
-				[1, 100],
-				[2, 200],
-				[3, "active"],
-			]),
+			schema.decodePresenceUserValue([0, null, 1, 100, 2, 200, 3, "active"]),
 		).not.toThrow();
 	});
 });

@@ -210,7 +210,7 @@ describe("ActionsImpl.handle", () => {
 			execId: 42,
 			userId: "user-1",
 			action_id: 1,
-			params: [[0, "cart-9"]],
+			params: [0, "cart-9"],
 			claims: { role: "member", corr: "trace-1" },
 		});
 		await nextTick();
@@ -226,7 +226,7 @@ describe("ActionsImpl.handle", () => {
 			type: "ActionReply",
 			execId: 42,
 			ok: true,
-			payload: [[0, "o-cart-9"]],
+			payload: [0, "o-cart-9"],
 		});
 		expect(conn.sentFrames).toHaveLength(1);
 	});
@@ -244,7 +244,7 @@ describe("ActionsImpl.handle", () => {
 			execId: 7,
 			userId: "user-1",
 			action_id: 1,
-			params: [[0, "cart-1"]],
+			params: [0, "cart-1"],
 			claims: {},
 		});
 		await nextTick();
@@ -271,7 +271,7 @@ describe("ActionsImpl.handle", () => {
 			execId: 8,
 			userId: "user-1",
 			action_id: 1,
-			params: [[0, "cart-1"]],
+			params: [0, "cart-1"],
 			claims: {},
 		});
 		await nextTick();
@@ -305,7 +305,7 @@ describe("ActionsImpl.handle", () => {
 			execId: 8,
 			userId: "user-1",
 			action_id: 0,
-			params: [[0, "up"]],
+			params: [0, "up"],
 			claims: {},
 		});
 		await nextTick();
@@ -325,7 +325,7 @@ describe("ActionsImpl.handle", () => {
 			execId: 9,
 			userId: "user-1",
 			action_id: 1,
-			params: [[0, "cart-1"]],
+			params: [0, "cart-1"],
 			claims: {},
 		});
 		await nextTick();

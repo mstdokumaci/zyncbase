@@ -76,6 +76,22 @@ test "PresenceRecord - mergeFromPayload rejects non-map payload" {
     try testing.expectError(error.InvalidPayload, record.mergeFromPayload(allocator, fields, bad_patch));
 }
 
+test "PresenceRecord - mergeFromPayload rejects odd-length sparse array" {
+    const allocator = std.testing.allocator;
+    const fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, fields);
+
+    var record = try PresenceRecord.init(allocator, fields.len);
+    defer record.deinit(allocator);
+
+    const items = try allocator.alloc(msgpack.Payload, 1);
+    items[0] = msgpack.Payload.uintToPayload(0);
+    var patch = msgpack.Payload{ .arr = items };
+    defer patch.free(allocator);
+
+    try testing.expectError(error.InvalidPayload, record.mergeFromPayload(allocator, fields, patch));
+}
+
 test "PresenceRecord - clone deep copies values" {
     const allocator = std.testing.allocator;
     const fields = try makeTestUserFields(allocator);

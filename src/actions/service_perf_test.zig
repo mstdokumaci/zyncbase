@@ -36,20 +36,13 @@ fn connectionContext(conn: anytype) RequestContext {
 const Pair = struct { index: usize, value: msgpack.Payload };
 
 fn makePairs(allocator: std.mem.Allocator, pairs: []const Pair) !msgpack.Payload {
-    const outer = try allocator.alloc(msgpack.Payload, pairs.len);
-    var built: usize = 0;
-    errdefer {
-        for (outer[0..built]) |p| p.free(allocator);
-        allocator.free(outer);
-    }
+    const flat = try allocator.alloc(msgpack.Payload, pairs.len * 2);
+    errdefer allocator.free(flat);
     for (pairs, 0..) |p, i| {
-        const inner = try allocator.alloc(msgpack.Payload, 2);
-        inner[0] = msgpack.Payload.uintToPayload(p.index);
-        inner[1] = p.value;
-        outer[i] = .{ .arr = inner };
-        built += 1;
+        flat[i * 2] = msgpack.Payload.uintToPayload(p.index);
+        flat[i * 2 + 1] = p.value;
     }
-    return .{ .arr = outer };
+    return .{ .arr = flat };
 }
 
 // Measures the staged async forward path with one registered worker, shaped as

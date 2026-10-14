@@ -23,13 +23,11 @@ fn makeActionSchema(allocator: std.mem.Allocator) !schema_types.Schema {
 
 fn makePairs(allocator: std.mem.Allocator, field_index: usize, value: msgpack.Payload) !msgpack.Payload {
     errdefer value.free(allocator);
-    const pair = try allocator.alloc(msgpack.Payload, 2);
-    errdefer allocator.free(pair);
-    pair[0] = msgpack.Payload.uintToPayload(field_index);
-    pair[1] = value;
-    const pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    return .{ .arr = pairs };
+    const flat = try allocator.alloc(msgpack.Payload, 2);
+    errdefer allocator.free(flat);
+    flat[0] = msgpack.Payload.uintToPayload(field_index);
+    flat[1] = value;
+    return .{ .arr = flat };
 }
 
 test "authorizeActionInvoke evaluates $value against params" {

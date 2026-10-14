@@ -21,7 +21,7 @@ const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const DocId = typed_doc_id.DocId;
 
-/// Decode a pair-array payload into a deduplicated list of column values.
+/// Decode a sparse field array payload into a deduplicated list of column values.
 /// Wire protocol: duplicate field index → last-wins (reverse scan, skip seen).
 fn decodeColumnsFromPairs(
     allocator: Allocator,
@@ -34,20 +34,21 @@ fn decodeColumnsFromPairs(
         columns.deinit(allocator);
     }
 
+    if (value.arr.len % 2 != 0) return error.InvalidPayload;
+
     var seen = std.StaticBitSet(schema_parse.max_store_fields).initEmpty();
-    var pair_i: usize = value.arr.len;
-    while (pair_i > 0) {
-        pair_i -= 1;
-        const pair_payload = value.arr[pair_i];
-        if (pair_payload != .arr or pair_payload.arr.len != 2) return error.InvalidPayload;
-        const f_idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse return error.InvalidPayload;
+    var i: usize = value.arr.len;
+    while (i >= 2) {
+        i -= 2;
+        const f_idx = msgpack.extractPayloadUsize(value.arr[i]) orelse return error.InvalidPayload;
         if (f_idx < schema_parse.max_store_fields) {
             if (seen.isSet(f_idx)) continue;
             seen.set(f_idx);
         }
 
-        const field = try validateFieldWrite(allocator, table, f_idx, pair_payload.arr[1]);
-        const typed_value = try typed_codec.fromPayload(allocator, field.storage_type, field.items_type, pair_payload.arr[1]);
+        const raw_value = value.arr[i + 1];
+        const field = try validateFieldWrite(allocator, table, f_idx, raw_value);
+        const typed_value = try typed_codec.fromPayload(allocator, field.storage_type, field.items_type, raw_value);
 
         columns.append(allocator, .{
             .index = f_idx,

@@ -234,7 +234,7 @@ pub fn encodeOkWithSession(
     return output.toOwnedSlice();
 }
 
-/// Synchronous action success: `{type: "ok", id, value: <returns pair-array>}`.
+/// Synchronous action success: `{type: "ok", id, value: <returns sparse field array>}`.
 pub fn encodeActionOkWithValue(
     msgpack_allocator: Allocator,
     msg_id: u64,
@@ -763,18 +763,17 @@ pub fn encodePresenceSharedSnapshot(
     return output.toOwnedSlice();
 }
 
-/// Encode a PresenceRecord as a pair-array of [field_index, value].
+/// Encode a PresenceRecord as a flat sparse field array of `[field_index, value, ...]`.
 fn encodePresenceRecord(writer: anytype, record: PresenceRecord) !void {
     var count: usize = 0;
     for (record.values) |slot| {
         if (slot != null) count += 1;
     }
 
-    try msgpack.encodeArrayHeader(writer, count);
+    try msgpack.encodeArrayHeader(writer, count * 2);
 
     for (record.values, 0..) |slot, idx| {
         if (slot) |value| {
-            try msgpack.encodeArrayHeader(writer, 2);
             try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
             try typed_codec.writeMsgPack(value, writer);
         }

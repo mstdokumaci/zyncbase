@@ -352,19 +352,15 @@ fn assembleBroadcast(
 test "encodePresenceBroadcast - compact tuples preserve mixed entry order" {
     const allocator = std.heap.smp_allocator;
 
-    var join_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    var join_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 2) };
     defer join_patch.free(allocator);
-    var join_pair = try allocator.alloc(msgpack.Payload, 2);
-    join_pair[0] = msgpack.Payload.uintToPayload(0);
-    join_pair[1] = msgpack.Payload{ .float = 100.5 };
-    join_patch.arr[0] = .{ .arr = join_pair };
+    join_patch.arr[0] = msgpack.Payload.uintToPayload(0);
+    join_patch.arr[1] = msgpack.Payload{ .float = 100.5 };
 
-    var update_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    var update_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 2) };
     defer update_patch.free(allocator);
-    var update_pair = try allocator.alloc(msgpack.Payload, 2);
-    update_pair[0] = msgpack.Payload.uintToPayload(1);
-    update_pair[1] = msgpack.Payload.uintToPayload(7);
-    update_patch.arr[0] = .{ .arr = update_pair };
+    update_patch.arr[0] = msgpack.Payload.uintToPayload(1);
+    update_patch.arr[1] = msgpack.Payload.uintToPayload(7);
 
     const user_ids = [_]typed_doc_id.DocId{ 1, 2, 3 };
     const updates = [_]PendingUserUpdate{
@@ -398,9 +394,9 @@ test "encodePresenceBroadcast - compact tuples preserve mixed entry order" {
     const join_id = typed_doc_id.toBytes(user_ids[0]);
     try testing.expectEqualSlices(u8, &join_id, join.arr[0].bin.value());
     try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.PresenceEventTag.join)), join.arr[1].uint);
-    try testing.expectEqual(@as(usize, 1), join.arr[2].arr.len);
-    try testing.expectEqual(@as(u64, 0), join.arr[2].arr[0].arr[0].uint);
-    try testing.expectEqual(@as(f64, 100.5), join.arr[2].arr[0].arr[1].float);
+    try testing.expectEqual(@as(usize, 2), join.arr[2].arr.len);
+    try testing.expectEqual(@as(u64, 0), join.arr[2].arr[0].uint);
+    try testing.expectEqual(@as(f64, 100.5), join.arr[2].arr[1].float);
     try testing.expectEqual(@as(i64, 1_700_000_000_123), try msgpack.payloadToInt(join.arr[3]));
 
     const update = entries.arr[1];
@@ -411,8 +407,8 @@ test "encodePresenceBroadcast - compact tuples preserve mixed entry order" {
     const update_id = typed_doc_id.toBytes(user_ids[1]);
     try testing.expectEqualSlices(u8, &update_id, update.arr[0].bin.value());
     try testing.expectEqual(@as(u64, @intFromEnum(wire_encode.PresenceEventTag.update)), update.arr[1].uint);
-    try testing.expectEqual(@as(u64, 1), update.arr[2].arr[0].arr[0].uint);
-    try testing.expectEqual(@as(u64, 7), update.arr[2].arr[0].arr[1].uint);
+    try testing.expectEqual(@as(u64, 1), update.arr[2].arr[0].uint);
+    try testing.expectEqual(@as(u64, 7), update.arr[2].arr[1].uint);
 
     const leave = entries.arr[2];
     try testing.expect(leave == .arr);
@@ -427,19 +423,15 @@ test "encodePresenceBroadcast - compact tuples preserve mixed entry order" {
 test "encodeSharedStateBroadcast - compact tuple preserves patch order" {
     const allocator = std.heap.smp_allocator;
 
-    var first_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    var first_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 2) };
     defer first_patch.free(allocator);
-    var first_pair = try allocator.alloc(msgpack.Payload, 2);
-    first_pair[0] = msgpack.Payload.uintToPayload(0);
-    first_pair[1] = msgpack.Payload{ .float = 7.25 };
-    first_patch.arr[0] = .{ .arr = first_pair };
+    first_patch.arr[0] = msgpack.Payload.uintToPayload(0);
+    first_patch.arr[1] = msgpack.Payload{ .float = 7.25 };
 
-    var second_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    var second_patch = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 2) };
     defer second_patch.free(allocator);
-    var second_pair = try allocator.alloc(msgpack.Payload, 2);
-    second_pair[0] = msgpack.Payload.uintToPayload(1);
-    second_pair[1] = msgpack.Payload.uintToPayload(9);
-    second_patch.arr[0] = .{ .arr = second_pair };
+    second_patch.arr[0] = msgpack.Payload.uintToPayload(1);
+    second_patch.arr[1] = msgpack.Payload.uintToPayload(9);
 
     const updates = [_]PendingSharedUpdate{
         .{ .namespace_id = 1, .patch = first_patch, .source_conn = 999 },
@@ -462,10 +454,10 @@ test "encodeSharedStateBroadcast - compact tuple preserves patch order" {
     const patches = decoded.arr[2];
     try testing.expect(patches == .arr);
     try testing.expectEqual(@as(usize, 2), patches.arr.len);
-    try testing.expectEqual(@as(u64, 0), patches.arr[0].arr[0].arr[0].uint);
-    try testing.expectEqual(@as(f64, 7.25), patches.arr[0].arr[0].arr[1].float);
-    try testing.expectEqual(@as(u64, 1), patches.arr[1].arr[0].arr[0].uint);
-    try testing.expectEqual(@as(u64, 9), patches.arr[1].arr[0].arr[1].uint);
+    try testing.expectEqual(@as(u64, 0), patches.arr[0].arr[0].uint);
+    try testing.expectEqual(@as(f64, 7.25), patches.arr[0].arr[1].float);
+    try testing.expectEqual(@as(u64, 1), patches.arr[1].arr[0].uint);
+    try testing.expectEqual(@as(u64, 9), patches.arr[1].arr[1].uint);
 }
 
 test "encodeSchemaSync: fieldFlags match bit encoding rules" {
@@ -639,12 +631,10 @@ test "encodeActionForward: projects declared session claims, omits absent ones" 
 test "encodeActionOkWithValue: ok response carries returns value" {
     const allocator = std.heap.smp_allocator;
 
-    var pairs = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 1) };
+    var pairs = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 2) };
     defer pairs.free(allocator);
-    const pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(0);
-    pair[1] = msgpack.Payload.uintToPayload(99);
-    pairs.arr[0] = .{ .arr = pair };
+    pairs.arr[0] = msgpack.Payload.uintToPayload(0);
+    pairs.arr[1] = msgpack.Payload.uintToPayload(99);
 
     const bytes = try wire_encode.encodeActionOkWithValue(allocator, 12, &pairs);
     defer allocator.free(bytes);
@@ -656,8 +646,8 @@ test "encodeActionOkWithValue: ok response carries returns value" {
     try testing.expectEqual(@as(u64, 0x00), (try parsed.mapGet("type")).?.uint);
     try testing.expectEqual(@as(u64, 12), (try parsed.mapGet("id")).?.uint);
     const value = (try parsed.mapGet("value")) orelse return error.MissingValue;
-    try testing.expectEqual(@as(usize, 1), value.arr.len);
-    try testing.expectEqual(@as(u64, 99), value.arr[0].arr[1].uint);
+    try testing.expectEqual(@as(usize, 2), value.arr.len);
+    try testing.expectEqual(@as(u64, 99), value.arr[1].uint);
 }
 
 test "encodeErrorWithStrings: dynamic worker codes encode as valid msgpack strings" {

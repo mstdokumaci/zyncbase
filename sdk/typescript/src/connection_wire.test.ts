@@ -159,17 +159,8 @@ describe("ConnectionWireCodec", () => {
 					WireMessageType.PresenceBroadcast,
 					7,
 					[
-						[
-							joinId,
-							0,
-							[
-								[0, 10],
-								[1, 20],
-								[2, "active"],
-							],
-							1234,
-						],
-						[updateId, 1, [[0, 11]]],
+						[joinId, 0, [0, 10, 1, 20, 2, "active"], 1234],
+						[updateId, 1, [0, 11]],
 						[leaveId, 2],
 					],
 				]),
@@ -199,7 +190,10 @@ describe("ConnectionWireCodec", () => {
 				encode([
 					WireMessageType.SharedStateBroadcast,
 					8,
-					[[[0, 4]], [[1, true]]],
+					[
+						[0, 4],
+						[1, true],
+					],
 				]),
 			),
 		).toEqual({
@@ -232,10 +226,10 @@ describe("ConnectionWireCodec", () => {
 			["non-binary userId", [presence, 1, [["id", 2]]]],
 			["wrong userId length", [presence, 1, [[new Uint8Array(15), 2]]]],
 			["non-array data", [presence, 1, [[id, 1, null]]]],
-			["malformed data pair", [presence, 1, [[id, 1, [[0]]]]]],
-			["negative field index", [presence, 1, [[id, 1, [[-1, 1]]]]]],
-			["fractional field index", [presence, 1, [[id, 1, [[0.5, 1]]]]]],
-			["unknown user field", [presence, 1, [[id, 1, [[99, 1]]]]]],
+			["odd-length data", [presence, 1, [[id, 1, [0]]]]],
+			["negative field index", [presence, 1, [[id, 1, [-1, 1]]]]],
+			["fractional field index", [presence, 1, [[id, 1, [0.5, 1]]]]],
+			["unknown user field", [presence, 1, [[id, 1, [99, 1]]]]],
 			["negative joinedAt", [presence, 1, [[id, 0, [], -1]]]],
 			["fractional joinedAt", [presence, 1, [[id, 0, [], 1.5]]]],
 			[
@@ -245,8 +239,8 @@ describe("ConnectionWireCodec", () => {
 			["shared top-level arity", [shared, 1, [], null]],
 			["shared non-array payload", [shared, 1, null]],
 			["shared non-array patch", [shared, 1, [null]]],
-			["shared malformed pair", [shared, 1, [[[0]]]]],
-			["shared invalid field index", [shared, 1, [[[99, 1]]]]],
+			["shared odd-length patch", [shared, 1, [[0]]]],
+			["shared invalid field index", [shared, 1, [[99, 1]]]],
 		];
 
 		for (const [name, raw] of malformed) {
@@ -265,7 +259,7 @@ describe("ConnectionWireCodec", () => {
 		const id = new Uint8Array(16);
 		const frame = new Uint8Array([
 			...encode([WireMessageType.PresenceBroadcast, 1, [[id, 2]]]),
-			...encode([WireMessageType.SharedStateBroadcast, 2, [[[0, 3]]]]),
+			...encode([WireMessageType.SharedStateBroadcast, 2, [[0, 3]]]),
 			...new Uint8Array(encodeToBuffer({ type: "ok", id: 7 })),
 		]);
 
@@ -429,10 +423,7 @@ describe("ConnectionWireCodec actions", () => {
 			id: 9,
 			action_id: 0,
 			timeoutMs: 500,
-			params: [
-				[0, "c1"],
-				[1, 2],
-			],
+			params: [0, "c1", 1, 2],
 		});
 	});
 
@@ -446,7 +437,7 @@ describe("ConnectionWireCodec actions", () => {
 			type: WireMessageType.ActionCall,
 			id: 10,
 			action_id: 0,
-			params: [[0, "c1"]],
+			params: [0, "c1"],
 		});
 	});
 
@@ -491,7 +482,7 @@ describe("ConnectionWireCodec actions", () => {
 			5,
 			packDocId(userId, "INVALID_MESSAGE"),
 			2,
-			[[0, "up"]],
+			[0, "up"],
 			{ role: "member", tenant_id: 42 },
 		]);
 
@@ -500,7 +491,7 @@ describe("ConnectionWireCodec actions", () => {
 			execId: 5,
 			userId,
 			action_id: 2,
-			params: [[0, "up"]],
+			params: [0, "up"],
 			claims: { role: "member", tenant_id: 42 },
 		});
 	});
@@ -516,7 +507,18 @@ describe("ConnectionWireCodec actions", () => {
 				5,
 				packDocId(userId, "INVALID_MESSAGE"),
 				2,
-				[[0, "up"]],
+				[0, "up"],
+			]),
+		).toBeNull();
+		// Params must be an even-length sparse field array.
+		expect(
+			codec.decodeMessage([
+				WireMessageType.ActionForward,
+				5,
+				packDocId(userId, "INVALID_MESSAGE"),
+				2,
+				[0],
+				{ role: "member" },
 			]),
 		).toBeNull();
 		// Claims must be a plain map, not an array or null.
@@ -526,7 +528,7 @@ describe("ConnectionWireCodec actions", () => {
 				5,
 				packDocId(userId, "INVALID_MESSAGE"),
 				2,
-				[[0, "up"]],
+				[0, "up"],
 				[],
 			]),
 		).toBeNull();
@@ -536,7 +538,7 @@ describe("ConnectionWireCodec actions", () => {
 				5,
 				packDocId(userId, "INVALID_MESSAGE"),
 				2,
-				[[0, "up"]],
+				[0, "up"],
 				null,
 			]),
 		).toBeNull();
@@ -547,7 +549,7 @@ describe("ConnectionWireCodec actions", () => {
 				5,
 				packDocId(userId, "INVALID_MESSAGE"),
 				2,
-				[[0, "up"]],
+				[0, "up"],
 				new Uint8Array([1]),
 			]),
 		).toBeNull();
@@ -559,7 +561,7 @@ describe("ConnectionWireCodec actions", () => {
 				5,
 				packDocId(userId, "INVALID_MESSAGE"),
 				2,
-				[[0, "up"]],
+				[0, "up"],
 				new Date(0),
 			]),
 		).toBeNull();
@@ -568,7 +570,7 @@ describe("ConnectionWireCodec actions", () => {
 	test("decodes sync ActionCall ok responses into actionResult", async () => {
 		const codec = await makeCodec();
 		const ok = codec.decodeOkResponse(
-			{ type: "ok", id: 1, value: [[0, "order-9"]] },
+			{ type: "ok", id: 1, value: [0, "order-9"] },
 			{ type: "ActionCall", actionName: "checkout" },
 		);
 		expect(ok.actionResult).toEqual({ order_id: "order-9" });

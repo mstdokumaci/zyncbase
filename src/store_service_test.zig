@@ -221,6 +221,26 @@ test "StoreService: setPath path validation" {
     }
 }
 
+test "StoreService: setPath rejects odd-length sparse value" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-service-odd-sparse-value", &.{
+        .{ .name = "items", .fields = &.{"status"} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const path = try storePath(allocator, app.tableIndex("items"), 1);
+    defer path.free(allocator);
+
+    const items = try allocator.alloc(msgpack.Payload, 1);
+    items[0] = msgpack.Payload.uintToPayload(1);
+    var odd = msgpack.Payload{ .arr = items };
+    defer odd.free(allocator);
+
+    try testing.expectError(error.InvalidPayload, service.setPath(writeCtx(1), path, odd));
+}
+
 test "StoreService: remove" {
     const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;

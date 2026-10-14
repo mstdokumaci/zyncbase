@@ -339,12 +339,10 @@ test "readSubtree decodes a large batch-style array payload in a single pass" {
 // === Action Message Extractor Tests ===
 
 fn makeParamsPair(allocator: std.mem.Allocator, field_index: usize, value: msgpack.Payload) !msgpack.Payload {
-    const pair = try allocator.alloc(msgpack.Payload, 2);
-    pair[0] = msgpack.Payload.uintToPayload(field_index);
-    pair[1] = value;
-    const pairs = try allocator.alloc(msgpack.Payload, 1);
-    pairs[0] = .{ .arr = pair };
-    return .{ .arr = pairs };
+    const flat = try allocator.alloc(msgpack.Payload, 2);
+    flat[0] = msgpack.Payload.uintToPayload(field_index);
+    flat[1] = value;
+    return .{ .arr = flat };
 }
 
 test "extractActionCallFast: parses action_id, timeoutMs, and params" {
@@ -363,7 +361,7 @@ test "extractActionCallFast: parses action_id, timeoutMs, and params" {
     defer req.params.free(allocator);
     try testing.expectEqual(@as(u64, 3), req.action_id);
     try testing.expectEqual(@as(?u64, 250), req.timeoutMs);
-    try testing.expectEqual(@as(usize, 1), req.params.arr.len);
+    try testing.expectEqual(@as(usize, 2), req.params.arr.len);
 }
 
 test "extractActionCallFast: optional timeoutMs defaults to null" {
@@ -431,7 +429,7 @@ test "extractActionReplyFast: parses execId, ok, and payload" {
     defer req.payload.free(allocator);
     try testing.expectEqual(@as(u64, 9), req.execId);
     try testing.expect(req.ok);
-    try testing.expectEqual(@as(usize, 1), req.payload.arr.len);
+    try testing.expectEqual(@as(usize, 2), req.payload.arr.len);
 }
 
 test "extractActionReplyFast: non-bool ok is rejected" {
