@@ -20,7 +20,6 @@ HoleFiller.prototype.fill = function (owners, countryId, bounds) {
 	return result;
 };
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: diagnostic-only snapshot asserts and log formatting surround the wrapped tick.
 World.prototype.tick = function (now) {
 	if (this.ticks === 0) {
 		times = [];

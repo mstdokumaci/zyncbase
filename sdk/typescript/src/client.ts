@@ -321,7 +321,6 @@ export class ZyncBaseClient {
 		await this.storeImpl.markSessionReady();
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: retry loop, response shaping, and transient classification are one replay story; splitting them scatters the retry conditions.
 	private async _replaySubscription(
 		params: Omit<StoreSubscribe, "id">,
 		oldId: number,

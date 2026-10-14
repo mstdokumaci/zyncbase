@@ -886,7 +886,6 @@ try {
 	client.on("disconnected", () => {
 		if (!stopping) failed("Database disconnected");
 	});
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session replacement stays with the lease and player setup.
 	await client.actions.handle("player_join", (ctx, params) => {
 		if (stopping || ending)
 			throw new ActionError("JOIN_REJECTED", "The world is restarting");

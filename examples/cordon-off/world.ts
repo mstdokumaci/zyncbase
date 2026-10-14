@@ -643,7 +643,6 @@ export class World {
 		return true;
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a bounded 5x5 bucket scan is clearer inline than split further.
 	private fitsSpacing(
 		buckets: Map<number, { x: number; y: number; radiusSq: number }[]>,
 		x: number,
@@ -1037,7 +1036,6 @@ export class World {
 		this.claim(to, player.country_id, false, player.id);
 	}
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each affected country fills and updates ownership at most once.
 	private fillEnclosures() {
 		if (!this.enclosureCountries.size) {
 			this.changedCountries.clear();

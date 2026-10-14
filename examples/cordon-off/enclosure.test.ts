@@ -391,7 +391,6 @@ function scenario(pixels: Pixel[], water: [number, number][] = []) {
 	};
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the fixture, capture checks, and restart comparison describe one complete enclosure.
 test("closing ordinary territory captures enclosed land, updates all chunks and scores, and survives restart", () => {
 	const pixels: Pixel[] = [
 		[32, 32, 2],
@@ -711,7 +710,6 @@ test("own-territory and water movement do not schedule enclosure scans", () => {
 	}
 });
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: two independent loop fixtures exercise batching in one tick.
 test("teammates closing two small loops in one tick resolve both without a scan", () => {
 	const pixels: Pixel[] = [];
 	for (const left of [30, 40])
@@ -744,7 +742,6 @@ test("teammates closing two small loops in one tick resolve both without a scan"
 	}
 });
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: both loops exceed the shared local budget and must resolve in one fallback scan.
 test("two large closures in one country trigger only one fallback scan", () => {
 	// Each interior alone fits the budget; together they cannot, so the second
 	// component's exhaustion must collapse both into one country-wide scan.
