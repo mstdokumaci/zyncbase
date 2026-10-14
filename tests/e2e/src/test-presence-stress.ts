@@ -51,6 +51,11 @@ type ClientState = {
 	sharedReady: boolean;
 	userCallbacks: number;
 	sharedCallbacks: number;
+	viewRevision: number;
+	scannedEpoch: number;
+	scannedRevision: number;
+	scannedExpectedCount: number;
+	cachedScanFailure: string | null;
 	errorCount: number;
 	errorSamples: string[];
 	disconnected: boolean;
@@ -62,6 +67,7 @@ type ProcessContext = {
 	roomIndex: number;
 	clients: ClientState[];
 	generation: number;
+	verifyEpoch: number;
 };
 
 type ProcessMetrics = {
@@ -153,6 +159,11 @@ function makeClientState(
 		sharedReady: false,
 		userCallbacks: 0,
 		sharedCallbacks: 0,
+		viewRevision: 0,
+		scannedEpoch: -1,
+		scannedRevision: -1,
+		scannedExpectedCount: -1,
+		cachedScanFailure: null,
 		errorCount: 0,
 		errorSamples: [],
 		disconnected: false,
@@ -236,11 +247,13 @@ async function prepareClients(
 					await Promise.all([
 						state.client.presence.subscribe(() => {
 							state.userCallbacks++;
+							state.viewRevision++;
 							state.userReady = true;
 							context.generation++;
 						}),
 						state.client.presence.subscribeShared(() => {
 							state.sharedCallbacks++;
+							state.viewRevision++;
 							state.sharedReady = true;
 							context.generation++;
 						}),
@@ -252,37 +265,6 @@ async function prepareClients(
 		})(),
 		CONNECT_TIMEOUT_MS,
 		`process ${context.processIndex} connection and subscription readiness`,
-	);
-}
-
-function parseGlobalId(entry: PresenceEntry): number | null {
-	const cursor = entry.data.cursor;
-	if (!isRecord(cursor)) return null;
-	const id = cursor.x;
-	if (
-		typeof id !== "number" ||
-		!Number.isInteger(id) ||
-		id < 0 ||
-		id >= TOTAL_CLIENTS
-	) {
-		return null;
-	}
-	return id;
-}
-
-function hasExpectedData(entry: PresenceEntry, globalId: number, y: number) {
-	const data = entry.data;
-	const cursor = data.cursor;
-	return (
-		data.name === EXPECTED_NAMES[globalId] &&
-		data.status === "active" &&
-		isRecord(cursor) &&
-		cursor.x === globalId &&
-		cursor.y === y &&
-		typeof entry.userId === "string" &&
-		entry.userId.length > 0 &&
-		Number.isFinite(entry.joinedAt) &&
-		entry.joinedAt > 0
 	);
 }
 
@@ -299,49 +281,66 @@ function addSample(scan: EntryScan, message: string) {
 	if (scan.samples.length < 5) scan.samples.push(message);
 }
 
-function scanEntry(
-	entry: PresenceEntry,
-	active: Uint8Array,
-	expectedY: Int32Array,
-	scan: EntryScan,
-) {
-	const globalId = parseGlobalId(entry);
-	if (globalId === null) {
-		scan.invalid++;
-		addSample(scan, `invalid cursor identity ${String(entry.data.cursor)}`);
-		return;
-	}
+const scanSeenScratch = new Uint8Array(TOTAL_CLIENTS);
 
-	scan.seen[globalId]++;
-	if (scan.seen[globalId] > 1) {
-		scan.duplicate++;
-		addSample(scan, `duplicate ${globalId}`);
-	}
-	if (active[globalId] === 0) {
-		scan.extra++;
-		addSample(scan, `extra ${globalId}`);
-	}
-	if (!hasExpectedData(entry, globalId, expectedY[globalId])) {
-		scan.stale++;
-		addSample(scan, `stale ${globalId}`);
-	}
-}
-
+/** One pass over an observer's entries: identity, duplicate, extra and data checks. Kept fused to avoid per-entry call overhead in the hot verify loop. */
 function scanEntries(
 	entries: PresenceEntry[],
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): EntryScan {
+	const seen = scanSeenScratch;
+	seen.fill(0);
 	const scan: EntryScan = {
-		seen: new Uint8Array(TOTAL_CLIENTS),
+		seen,
 		samples: [],
 		invalid: 0,
 		duplicate: 0,
 		extra: 0,
 		stale: 0,
 	};
-	for (const entry of entries) {
-		scanEntry(entry, active, expectedY, scan);
+
+	for (let i = 0; i < entries.length; i++) {
+		const entry = entries[i];
+		const data = entry.data;
+		const cursor = data.cursor;
+		if (!isRecord(cursor)) {
+			scan.invalid++;
+			addSample(scan, `invalid cursor identity ${String(cursor)}`);
+			continue;
+		}
+		const globalId = cursor.x;
+		if (
+			typeof globalId !== "number" ||
+			!Number.isInteger(globalId) ||
+			globalId < 0 ||
+			globalId >= TOTAL_CLIENTS
+		) {
+			scan.invalid++;
+			addSample(scan, `invalid cursor identity ${String(cursor)}`);
+			continue;
+		}
+
+		if (seen[globalId]++ > 0) {
+			scan.duplicate++;
+			addSample(scan, `duplicate ${globalId}`);
+		}
+		if (active[globalId] === 0) {
+			scan.extra++;
+			addSample(scan, `extra ${globalId}`);
+		}
+		if (
+			data.name !== EXPECTED_NAMES[globalId] ||
+			data.status !== "active" ||
+			cursor.y !== expectedY[globalId] ||
+			typeof entry.userId !== "string" ||
+			entry.userId.length === 0 ||
+			!Number.isFinite(entry.joinedAt) ||
+			entry.joinedAt <= 0
+		) {
+			scan.stale++;
+			addSample(scan, `stale ${globalId}`);
+		}
 	}
 	return scan;
 }
@@ -358,29 +357,46 @@ function countMissing(active: Uint8Array, scan: EntryScan): number {
 }
 
 function verifyObserver(
+	context: ProcessContext,
 	state: ClientState,
 	active: Uint8Array,
 	expectedCount: number,
 	expectedY: Int32Array,
 ): string | null {
+	// Within a phase the expectations are fixed, so an observer whose view did
+	// not change since its last scan cannot produce a different result. Cached
+	// failures are replayed instead of rescanning 1000 entries per retry.
+	if (
+		state.scannedEpoch === context.verifyEpoch &&
+		state.scannedRevision === state.viewRevision &&
+		state.scannedExpectedCount === expectedCount
+	) {
+		return state.cachedScanFailure;
+	}
+
 	const entries = state.client.presence.getAll({ includeSelf: true });
 	const scan = scanEntries(entries, active, expectedY);
 	const missing = countMissing(active, scan);
+	let failure: string | null = null;
 	if (
-		entries.length === expectedCount &&
-		scan.invalid === 0 &&
-		scan.duplicate === 0 &&
-		scan.extra === 0 &&
-		scan.stale === 0 &&
-		missing === 0
+		entries.length !== expectedCount ||
+		scan.invalid !== 0 ||
+		scan.duplicate !== 0 ||
+		scan.extra !== 0 ||
+		scan.stale !== 0 ||
+		missing !== 0
 	) {
-		return null;
+		failure =
+			`observer ${state.globalId}: expected ${expectedCount}, got ${entries.length}; ` +
+			`missing=${missing}, extra=${scan.extra}, duplicate=${scan.duplicate}, invalid=${scan.invalid}, stale=${scan.stale}` +
+			(scan.samples.length > 0 ? ` (${scan.samples.join(", ")})` : "");
 	}
-	return (
-		`observer ${state.globalId}: expected ${expectedCount}, got ${entries.length}; ` +
-		`missing=${missing}, extra=${scan.extra}, duplicate=${scan.duplicate}, invalid=${scan.invalid}, stale=${scan.stale}` +
-		(scan.samples.length > 0 ? ` (${scan.samples.join(", ")})` : "")
-	);
+
+	state.scannedEpoch = context.verifyEpoch;
+	state.scannedRevision = state.viewRevision;
+	state.scannedExpectedCount = expectedCount;
+	state.cachedScanFailure = failure;
+	return failure;
 }
 
 function verifyUsers(
@@ -392,7 +408,13 @@ function verifyUsers(
 	const failures: string[] = [];
 	for (const state of context.clients) {
 		if (state.expectedDisconnect) continue;
-		const failure = verifyObserver(state, active, expectedCount, expectedY);
+		const failure = verifyObserver(
+			context,
+			state,
+			active,
+			expectedCount,
+			expectedY,
+		);
 		if (failure) failures.push(failure);
 		if (failures.length === 5) break;
 	}
@@ -579,6 +601,7 @@ async function runJoinPhase(
 	expectedY: Int32Array,
 ): Promise<number> {
 	const started = performance.now();
+	context.verifyEpoch++;
 	await mutateAfterProcessStagger(context, context.clients, (state) =>
 		setFullPresence(state, 0),
 	);
@@ -596,6 +619,7 @@ async function runCursorPhase(
 	active: Uint8Array,
 	expectedY: Int32Array,
 ): Promise<{ writeMs: number; convergeMs: number }> {
+	context.verifyEpoch++;
 	const firstGroup = context.clients.slice(0, CURSOR_GROUP_SIZE);
 	const secondGroup = context.clients.slice(
 		CURSOR_GROUP_SIZE,
@@ -660,6 +684,7 @@ async function runRemovePhase(
 	expectedY: Int32Array,
 ): Promise<number> {
 	setActiveEvery(context, active, 2, 0);
+	context.verifyEpoch++;
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
@@ -682,6 +707,7 @@ async function runRejoinPhase(
 	expectedY: Int32Array,
 ): Promise<number> {
 	setActiveEvery(context, active, 2, 1);
+	context.verifyEpoch++;
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
@@ -704,6 +730,7 @@ async function runDisconnectPhase(
 	expectedY: Int32Array,
 ): Promise<number> {
 	setActiveEvery(context, active, 4, 0);
+	context.verifyEpoch++;
 	const started = performance.now();
 	await mutateAfterProcessStagger(
 		context,
@@ -739,6 +766,7 @@ async function runProcess(
 		roomIndex,
 		clients: [],
 		generation: 0,
+		verifyEpoch: 0,
 	};
 	const active = new Uint8Array(TOTAL_CLIENTS);
 	const firstRoomClient = roomIndex * CLIENTS_PER_ROOM;
