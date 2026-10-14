@@ -363,15 +363,17 @@ function verifyObserver(
 	expectedCount: number,
 	expectedY: Int32Array,
 ): string | null {
-	// Within a phase the expectations are fixed, so an observer whose view did
-	// not change since its last scan cannot produce a different result. Cached
-	// failures are replayed instead of rescanning 1000 entries per retry.
+	// Within a phase the expectations are fixed, so a successful scan is reused
+	// when the observer's view did not change since. Failures are always
+	// rescanned: self-entry updates do not bump viewRevision, so a cached
+	// failure could outlive the self update that would fix it.
 	if (
 		state.scannedEpoch === context.verifyEpoch &&
 		state.scannedRevision === state.viewRevision &&
-		state.scannedExpectedCount === expectedCount
+		state.scannedExpectedCount === expectedCount &&
+		state.cachedScanFailure === null
 	) {
-		return state.cachedScanFailure;
+		return null;
 	}
 
 	const entries = state.client.presence.getAll({ includeSelf: true });
