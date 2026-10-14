@@ -969,7 +969,6 @@ test("human spawns spread out instead of stacking on one chunk", () => {
 	expect(Math.max(...perChunk.values())).toBeLessThan(16);
 });
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the conquest fixture, the border step, and the fill check describe one spawn scenario.
 test("founders spawn on a border inside taken land so the first move paints", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const enemy = world.country("Enemy");
