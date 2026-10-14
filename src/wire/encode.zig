@@ -252,7 +252,7 @@ pub fn encodeActionOkWithValue(
     return output.toOwnedSlice();
 }
 
-/// `ActionForward` push tuple: `[0x31, execId, userId(bin16), actionId, paramsPairArray, claimsMap]`.
+/// `ActionForward` push tuple: `[0x31, execId, userId(bin16), actionId, paramsSparseFieldArray, claimsMap]`.
 /// `claimsMap` projects `claim_names` (the action's schema `claims`) from
 /// `session_claims` at forward time; names absent from the session are
 /// omitted. The map is always present, possibly empty.

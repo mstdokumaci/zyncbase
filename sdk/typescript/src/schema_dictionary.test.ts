@@ -36,7 +36,9 @@ describe("SchemaDictionary doc IDs", () => {
 			owner_id: "owner_1",
 		});
 		// Field index 5 sits at an even position; its value follows.
-		const ownerIndex = encoded.indexOf(5);
+		const ownerIndex = encoded.findIndex(
+			(entry, i) => i % 2 === 0 && entry === 5,
+		);
 		expect(ownerIndex).toBeGreaterThanOrEqual(0);
 		expect(encoded[ownerIndex + 1]).toBeInstanceOf(Uint8Array);
 
