@@ -205,7 +205,7 @@ pub const ActionsService = struct {
     // === Calls ===
 
     /// Authorize, validate, and forward one `ActionCall`.
-    /// `params` is the decoded pair-array payload from the caller frame.
+    /// `params` is the decoded sparse field array payload from the caller frame.
     pub fn call(
         self: *ActionsService,
         ctx: RequestContext,
@@ -583,22 +583,23 @@ fn errorPair(payload: *const Payload) ?ErrorPair {
     return .{ .code = payload.arr[0].str.value(), .message = payload.arr[1].str.value() };
 }
 
-/// Validate a params/returns pair-array against flattened action fields.
+/// Validate a params/returns sparse field array against flattened action fields.
 /// Every field flagged `required` must be present and non-nil.
 pub fn validatePayload(allocator: Allocator, fields: []const ActionField, payload: *const Payload) !void {
     if (payload.* != .arr) return error.SchemaValidationFailed;
+    if (payload.arr.len % 2 != 0) return error.SchemaValidationFailed;
 
     const seen = try allocator.alloc(bool, fields.len);
     defer allocator.free(seen);
     @memset(seen, false);
 
-    for (payload.arr) |pair| {
-        if (pair != .arr or pair.arr.len != 2) return error.SchemaValidationFailed;
-        const field_index = msgpack.extractPayloadUsize(pair.arr[0]) orelse return error.SchemaValidationFailed;
+    var i: usize = 0;
+    while (i < payload.arr.len) : (i += 2) {
+        const field_index = msgpack.extractPayloadUsize(payload.arr[i]) orelse return error.SchemaValidationFailed;
         if (field_index >= fields.len) return error.SchemaValidationFailed;
 
         const field = fields[field_index];
-        const value = pair.arr[1];
+        const value = payload.arr[i + 1];
         if (value == .nil) {
             if (field.required) return error.SchemaValidationFailed;
             seen[field_index] = true;

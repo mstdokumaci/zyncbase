@@ -394,9 +394,10 @@ pub const PresenceManager = struct {
         pairs: []msgpack.Payload,
         index: msgpack.Payload,
     ) ?*msgpack.Payload {
-        for (pairs) |*pair| {
-            if (pair.* != .arr or pair.*.arr.len != 2) continue;
-            if (payloadUintEqual(index, pair.*.arr[0])) return &pair.*.arr[1];
+        if (pairs.len % 2 != 0) return null;
+        var i: usize = 0;
+        while (i < pairs.len) : (i += 2) {
+            if (payloadUintEqual(index, pairs[i])) return &pairs[i + 1];
         }
         return null;
     }
@@ -407,33 +408,46 @@ pub const PresenceManager = struct {
         source: msgpack.Payload,
     ) !void {
         if (target.* != .arr or source != .arr) return;
+        if (target.*.arr.len % 2 != 0 or source.arr.len % 2 != 0) return error.InvalidPayload;
 
-        var new_pairs = std.ArrayListUnmanaged(msgpack.Payload).empty;
+        var new_items = std.ArrayListUnmanaged(msgpack.Payload).empty;
         defer {
-            for (new_pairs.items) |pair| pair.free(self.allocator);
-            new_pairs.deinit(self.allocator);
+            for (new_items.items) |item| item.free(self.allocator);
+            new_items.deinit(self.allocator);
         }
 
-        for (source.arr) |source_pair| {
-            if (source_pair != .arr or source_pair.arr.len != 2) continue;
-            const source_idx = source_pair.arr[0];
+        var i: usize = 0;
+        while (i < source.arr.len) : (i += 2) {
+            const source_idx = source.arr[i];
 
             if (findPayloadValue(target.*.arr, source_idx)) |target_value| {
-                const cloned_val = try source_pair.arr[1].deepClone(self.allocator);
+                const cloned_val = try source.arr[i + 1].deepClone(self.allocator);
                 target_value.free(self.allocator);
                 target_value.* = cloned_val;
             } else {
-                const cloned_pair = try source_pair.deepClone(self.allocator);
-                try new_pairs.append(self.allocator, cloned_pair);
+                const cloned_idx = try source.arr[i].deepClone(self.allocator);
+                const cloned_val = source.arr[i + 1].deepClone(self.allocator) catch |err| {
+                    cloned_idx.free(self.allocator);
+                    return err;
+                };
+                new_items.append(self.allocator, cloned_idx) catch |err| {
+                    cloned_idx.free(self.allocator);
+                    cloned_val.free(self.allocator);
+                    return err;
+                };
+                new_items.append(self.allocator, cloned_val) catch |err| {
+                    cloned_val.free(self.allocator);
+                    return err;
+                };
             }
         }
 
-        if (new_pairs.items.len > 0) {
+        if (new_items.items.len > 0) {
             const old_len = target.*.arr.len;
-            const new_slice = try self.allocator.realloc(target.*.arr, old_len + new_pairs.items.len);
-            @memcpy(new_slice[old_len..], new_pairs.items);
+            const new_slice = try self.allocator.realloc(target.*.arr, old_len + new_items.items.len);
+            @memcpy(new_slice[old_len..], new_items.items);
             target.*.arr = new_slice;
-            new_pairs.clearRetainingCapacity();
+            new_items.clearRetainingCapacity();
         }
     }
 

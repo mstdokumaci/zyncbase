@@ -52,20 +52,13 @@ const auth_json =
 const Pair = struct { index: usize, value: msgpack.Payload };
 
 fn makePairs(allocator: std.mem.Allocator, pairs: []const Pair) !msgpack.Payload {
-    const outer = try allocator.alloc(msgpack.Payload, pairs.len);
-    var built: usize = 0;
-    errdefer {
-        for (outer[0..built]) |p| p.free(allocator);
-        allocator.free(outer);
-    }
+    const flat = try allocator.alloc(msgpack.Payload, pairs.len * 2);
+    errdefer allocator.free(flat);
     for (pairs, 0..) |p, i| {
-        const inner = try allocator.alloc(msgpack.Payload, 2);
-        inner[0] = msgpack.Payload.uintToPayload(p.index);
-        inner[1] = p.value;
-        outer[i] = .{ .arr = inner };
-        built += 1;
+        flat[i * 2] = msgpack.Payload.uintToPayload(p.index);
+        flat[i * 2 + 1] = p.value;
     }
-    return .{ .arr = outer };
+    return .{ .arr = flat };
 }
 
 fn makeClaims(allocator: std.mem.Allocator, role: []const u8) !std.StringHashMapUnmanaged(typed.Value) {
@@ -466,6 +459,21 @@ test "actions service: validatePayload enforces required, arrays, and nil" {
     });
     defer bad_item.free(allocator);
     try testing.expectError(error.TypeMismatch, service_mod.validatePayload(allocator, &fields, &bad_item));
+}
+
+test "actions service: validatePayload rejects odd-length sparse arrays" {
+    const allocator = std.testing.allocator;
+
+    const fields = [_]schema_types.ActionField{
+        .{ .name = "cart_id", .declared_type = .text, .required = false },
+    };
+
+    const items = try allocator.alloc(msgpack.Payload, 1);
+    items[0] = msgpack.Payload.uintToPayload(0);
+    var odd = msgpack.Payload{ .arr = items };
+    defer odd.free(allocator);
+
+    try testing.expectError(error.SchemaValidationFailed, service_mod.validatePayload(allocator, &fields, &odd));
 }
 
 const async_schema_json =

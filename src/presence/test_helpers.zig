@@ -38,20 +38,11 @@ pub fn makeTestSharedSingleField(allocator: std.mem.Allocator) ![]const schema_t
 }
 
 pub fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
-    const pairs = try allocator.alloc(msgpack.Payload, entries.len);
-    errdefer allocator.free(pairs);
-    var i: usize = 0;
-    errdefer {
-        for (pairs[0..i]) |p| {
-            allocator.free(p.arr);
-        }
+    const flat = try allocator.alloc(msgpack.Payload, entries.len * 2);
+    errdefer allocator.free(flat);
+    for (entries, 0..) |entry, i| {
+        flat[i * 2] = msgpack.Payload.uintToPayload(entry.idx);
+        flat[i * 2 + 1] = entry.value;
     }
-    while (i < entries.len) : (i += 1) {
-        const entry = entries[i];
-        const pair = try allocator.alloc(msgpack.Payload, 2);
-        pair[0] = msgpack.Payload.uintToPayload(entry.idx);
-        pair[1] = entry.value;
-        pairs[i] = .{ .arr = pair };
-    }
-    return .{ .arr = pairs };
+    return .{ .arr = flat };
 }

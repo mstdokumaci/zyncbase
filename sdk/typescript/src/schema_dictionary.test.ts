@@ -35,10 +35,12 @@ describe("SchemaDictionary doc IDs", () => {
 			title: "hello",
 			owner_id: "owner_1",
 		});
-		// Find the pair with field index 5
-		const ownerPair = encoded.find((pair) => pair[0] === 5);
-		expect(ownerPair).toBeDefined();
-		expect(ownerPair?.[1]).toBeInstanceOf(Uint8Array);
+		// Field index 5 sits at an even position; its value follows.
+		const ownerIndex = encoded.findIndex(
+			(entry, i) => i % 2 === 0 && entry === 5,
+		);
+		expect(ownerIndex).toBeGreaterThanOrEqual(0);
+		expect(encoded[ownerIndex + 1]).toBeInstanceOf(Uint8Array);
 
 		const decoded = schema.decodeRecord(0, [
 			packDocId("task_1"),

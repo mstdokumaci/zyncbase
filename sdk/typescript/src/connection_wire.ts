@@ -24,6 +24,7 @@ import type {
 	PresenceUnsubscribeShared,
 	SchemaSync,
 	SharedStateBroadcast,
+	SparseFieldArray,
 	StoreBatch,
 	StoreDelta,
 	StoreLoadMore,
@@ -147,18 +148,12 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function isPresencePairArray(
-	value: unknown,
-): value is Array<[number, unknown]> {
-	return (
-		Array.isArray(value) &&
-		value.every(
-			(pair) =>
-				Array.isArray(pair) &&
-				pair.length === 2 &&
-				isNonNegativeSafeInteger(pair[0]),
-		)
-	);
+function isSparseFieldArray(value: unknown): value is SparseFieldArray {
+	if (!Array.isArray(value) || value.length % 2 !== 0) return false;
+	for (let i = 0; i < value.length; i += 2) {
+		if (!isNonNegativeSafeInteger(value[i])) return false;
+	}
+	return true;
 }
 
 /** Rejects `null`, arrays, and non-POJOs (`Date`, `Map`, `Set`, `Uint8Array`). */
@@ -339,7 +334,7 @@ export class ConnectionWireCodec {
 			return {
 				...ok,
 				shared: this.schema.decodePresenceSharedValue(
-					ok.shared as unknown as Array<[number, unknown]>,
+					ok.shared as unknown as SparseFieldArray,
 				),
 			};
 		}
@@ -368,7 +363,7 @@ export class ConnectionWireCodec {
 			users: ok.users.map((user) => ({
 				userId: user.userId,
 				data: this.schema.decodePresenceUserValue(
-					user.data as unknown as Array<[number, unknown]>,
+					user.data as unknown as SparseFieldArray,
 				),
 				joinedAt: user.joinedAt,
 			})),
@@ -387,7 +382,7 @@ export class ConnectionWireCodec {
 			value: undefined,
 			actionResult: this.schema.decodeActionReturns(
 				action,
-				ok.value as unknown as Array<[number, unknown]>,
+				ok.value as unknown as SparseFieldArray,
 			),
 		};
 	}
@@ -687,7 +682,7 @@ export class ConnectionWireCodec {
 		const event = PRESENCE_EVENT_NAMES[tag];
 		const decoded: PresenceBroadcast["users"][number] = { userId, event };
 		if (event !== "leave") {
-			if (!isPresencePairArray(entry[2])) return null;
+			if (!isSparseFieldArray(entry[2])) return null;
 			decoded.data = this.schema.decodePresenceUserValue(entry[2]);
 		}
 		if (event === "join") {
@@ -712,7 +707,7 @@ export class ConnectionWireCodec {
 		try {
 			const data: SharedStateBroadcast["data"] = [];
 			for (const patch of raw[2]) {
-				if (!isPresencePairArray(patch)) return null;
+				if (!isSparseFieldArray(patch)) return null;
 				data.push(this.schema.decodePresenceSharedValue(patch));
 			}
 			return { type: "SharedStateBroadcast", subId: raw[1], data };
@@ -729,7 +724,7 @@ export class ConnectionWireCodec {
 			!(raw[2] instanceof Uint8Array) ||
 			raw[2].length !== 16 ||
 			!isNonNegativeSafeInteger(raw[3]) ||
-			!isPresencePairArray(raw[4]) ||
+			!isSparseFieldArray(raw[4]) ||
 			!isPlainObject(raw[5])
 		) {
 			return null;
@@ -741,7 +736,7 @@ export class ConnectionWireCodec {
 				execId: raw[1],
 				userId: this.schema.decodePresenceUserId(raw[2]),
 				action_id: raw[3],
-				params: raw[4] as Array<[number, unknown]>,
+				params: raw[4] as SparseFieldArray,
 				claims: raw[5] as Record<string, JsonValue>,
 			};
 		} catch {

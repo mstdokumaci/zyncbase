@@ -137,7 +137,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
         try testing.expectEqual(@as(u64, 0), user.arr[1].uint);
         const data_val = user.arr[2];
         try testing.expect(data_val == .arr);
-        try testing.expectEqual(@as(f64, 100.0), data_val.arr[0].arr[1].float);
+        try testing.expectEqual(@as(f64, 100.0), data_val.arr[1].float);
 
         routed += 1;
     }
@@ -326,7 +326,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
         var reader: std.Io.Reader = .fixed(entry.data);
         const decoded = try msgpack.decode(allocator, &reader);
         defer decoded.free(allocator);
-        try testing.expectEqual(@as(f64, 4.0), decoded.arr[2].arr[0].arr[2].arr[0].arr[1].float);
+        try testing.expectEqual(@as(f64, 4.0), decoded.arr[2].arr[0].arr[2].arr[1].float);
         broadcast_count += 1;
     }
     try testing.expectEqual(@as(usize, 1), broadcast_count);
@@ -352,7 +352,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     var final_reader: std.Io.Reader = .fixed(final_entry.data);
     const final_decoded = try msgpack.decode(allocator, &final_reader);
     defer final_decoded.free(allocator);
-    try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[0].arr[1].float);
+    try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[1].float);
     try testing.expect(send_queue.pop() == null);
 }
 

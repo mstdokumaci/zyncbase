@@ -203,7 +203,8 @@ export class SchemaError extends Error {
 			| "TABLE_NOT_FOUND"
 			| "FIELD_NOT_FOUND"
 			| "ACTION_NOT_FOUND"
-			| "INVALID_PATH",
+			| "INVALID_PATH"
+			| "INVALID_MESSAGE_FORMAT",
 	) {
 		super(message);
 		this.name = "SchemaError";

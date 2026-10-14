@@ -151,16 +151,16 @@ pub fn createInvalidStoreSetMessageMissingId(
     return buf.toOwnedSlice();
 }
 
-/// Creates a MsgPack Payload representing a document as a pair-array based on schema.
+/// Creates a MsgPack Payload representing a document as a sparse field array based on schema.
 /// Translates string field names to numeric indices using table metadata.
-/// Returns a pair-array: [[field_index, value], ...]
+/// Returns a sparse field array: [field_index, value, ...]
 pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_types.Table, fields: anytype) !msgpack_utils.Payload {
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
     const writer = &buf.writer;
 
     const fields_info = @typeInfo(@TypeOf(fields)).@"struct".fields;
-    try msgpack_utils.encodeArrayHeader(writer, fields_info.len);
+    try msgpack_utils.encodeArrayHeader(writer, fields_info.len * 2);
 
     inline for (fields_info) |f| {
         const entry = @field(fields, f.name);
@@ -172,8 +172,6 @@ pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema
             else => tbl.fieldIndex(raw_field) orelse return error.UnknownField,
         };
 
-        // Encode pair: [field_index, value]
-        try msgpack_utils.encodeArrayHeader(writer, 2);
         try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(f_idx), writer);
         try msgpack_test_helpers.encodeAnyToPayload(allocator, writer, val);
     }

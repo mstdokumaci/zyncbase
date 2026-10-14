@@ -11,7 +11,7 @@ const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 /// Authorize an `ActionCall` before params validation and forwarding.
-/// `invoke` sees `$session`, `$namespace`, and `$value` (the params pair-array).
+/// `invoke` sees `$session`, `$namespace`, and `$value` (the params sparse field array).
 pub fn authorizeActionInvoke(
     allocator: Allocator,
     config: *const types.AuthConfig,

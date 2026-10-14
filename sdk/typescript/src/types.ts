@@ -316,7 +316,7 @@ export interface ActionReply {
 	id: number;
 	execId: number;
 	ok: boolean;
-	/** Pre-encoded pair-array (returns) or [code, message] error tuple. */
+	/** Pre-encoded sparse field array (returns) or [code, message] error tuple. */
 	payload: unknown;
 }
 
@@ -457,6 +457,9 @@ export interface SharedStateBroadcast {
 	data: Record<string, unknown>[]; // Array of decoded patches
 }
 
+/** Flat sparse field array: `[field_index, value, field_index, value, ...]`. */
+export type SparseFieldArray = unknown[];
+
 /** Server push — forward an action call to a registered worker. */
 export interface ActionForward {
 	type: "ActionForward";
@@ -464,7 +467,7 @@ export interface ActionForward {
 	/** Canonical UUIDv7 string decoded from the wire bin16 user id. */
 	userId: string;
 	action_id: number;
-	params: Array<[number, unknown]>;
+	params: SparseFieldArray;
 	/**
 	 * Session claims projected through the action's schema `claims` list at
 	 * forward time. Keys are session variable names; absent claims are omitted.

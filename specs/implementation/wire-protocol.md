@@ -50,17 +50,19 @@ This document is the canonical implementation contract for ZyncBase's WebSocket 
 | Unknown fields | Ignored by decoders unless the owning message requires a stricter shape. |
 | Document ids | SDK strings at the API boundary; 16-byte binary ids where the wire format carries typed document ids. |
 | Field/table routing | Integer ids from `SchemaSync`; see [Schema Grammar](./schema-grammar.md). |
-| Value encoding | Sparse field maps use pair-arrays; complete store records use positional arrays. See [Value Encoding](#value-encoding). |
+| Value encoding | Sparse field maps use sparse field arrays; complete store records use positional arrays. See [Value Encoding](#value-encoding). |
 
 ## Value Encoding
 
-Sparse field maps are encoded as **pair-arrays** so omitted fields retain their meaning.
+Sparse field maps are encoded as **sparse field arrays** so omitted fields retain their meaning.
 
-**Sparse format:** `[[field_index, value], ...]`
+**Sparse format:** `[field_index, value, field_index, value, ...]`
 
-- `field_index` — uint, the dense positional index within the table (from `SchemaSync`).
-- `value` — the typed MessagePack value, unchanged encoding.
-- Pairs are unordered, duplicate indices are processed in order with last-wins semantics, and empty `[]` means no fields.
+- `field_index` — uint, the dense positional index within the table (from `SchemaSync`); every even position (0-based) holds an index.
+- `value` — the typed MessagePack value, unchanged encoding; every odd position holds the value belonging to the preceding index.
+- The array length must be even; an odd-length array is invalid.
+- Indices are unordered, duplicate indices are processed in order with last-wins semantics, and empty `[]` means no fields.
+- Arrays whose elements are themselves tuples — query conditions, sort descriptors, error tuples — are not sparse field arrays.
 
 Complete server-to-client store records are encoded as **positional arrays**.
 
@@ -76,16 +78,16 @@ Complete server-to-client store records are encoded as **positional arrays**.
 
 | Location | Direction | Format |
 |----------|-----------|--------|
-| `StoreSet.value` | C→S | pair-array |
-| `StoreBatch` set-op `op[2]` | C→S | pair-array |
+| `StoreSet.value` | C→S | sparse field array |
+| `StoreBatch` set-op `op[2]` | C→S | sparse field array |
 | `StoreDelta` set payload | S→C | complete positional record |
 | Query/subscription/load-more result row (`ok.value[]`) | S→C | complete positional record |
-| `PresenceSet.data` | C→S | pair-array |
-| `PresenceSetShared.data` | C→S | pair-array |
-| `PresenceBroadcast` user `data` | S→C | pair-array |
-| `PresenceSubscribe` ok `users[].data` | S→C | pair-array |
-| `PresenceSubscribeShared` ok `shared` | S→C | pair-array |
-| `SharedStateBroadcast patches` | S→C | always array of pair-array patches |
+| `PresenceSet.data` | C→S | sparse field array |
+| `PresenceSetShared.data` | C→S | sparse field array |
+| `PresenceBroadcast` user `data` | S→C | sparse field array |
+| `PresenceSubscribe` ok `users[].data` | S→C | sparse field array |
+| `PresenceSubscribeShared` ok `shared` | S→C | sparse field array |
+| `SharedStateBroadcast patches` | S→C | always array of sparse field array patches |
 
 ## Message Type Registry
 
@@ -191,7 +193,7 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
 | `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
-| `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns pair-array. |
+| `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns sparse field array. |
 | `error` | `id` (omitted when uncorrelated), `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome, or a proactive uncorrelated server notification (see [Token Expiry Notification](#token-expiry-notification)). |
 
 Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
@@ -211,21 +213,21 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 ## Push Payload Notes
 
 - `StoreDelta` uses the fixed five-element tuple `[0x18, subId, opTag, tableIndex, payload]`. `opTag` is `0` for `set` and `1` for `remove`. A `set` payload is a complete positional record whose document ID is at position zero; a `remove` payload is the typed document ID. Each push carries exactly one record operation. The SDK expands the tuple to the public `{ type: "StoreDelta", subId, ops: [...] }` shape. Map-form messages, old six-element tuples, partial records, and records with the wrong field count are invalid.
-- `PresenceBroadcast` uses the exact three-element tuple `[0x28, subId, entries]`. Each entry is one exact variable-arity tuple: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, or leave `[userId, 2]`. Event tags `0`, `1`, and `2` are permanent protocol values. `userId` is MessagePack `bin16`; `data` is a pair-array; join `joinedAt` is a non-negative JavaScript-safe integer. Map-form presence broadcasts, string event names, extra fields, and tag/arity mismatches are invalid.
-- `SharedStateBroadcast` uses the exact three-element tuple `[0x29, subId, patches]`. Every element of `patches` is a pair-array patch, including when only one update is flushed. Map-form shared-state broadcasts are invalid.
+- `PresenceBroadcast` uses the exact three-element tuple `[0x28, subId, entries]`. Each entry is one exact variable-arity tuple: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, or leave `[userId, 2]`. Event tags `0`, `1`, and `2` are permanent protocol values. `userId` is MessagePack `bin16`; `data` is a sparse field array; join `joinedAt` is a non-negative JavaScript-safe integer. Map-form presence broadcasts, string event names, extra fields, and tag/arity mismatches are invalid.
+- `SharedStateBroadcast` uses the exact three-element tuple `[0x29, subId, patches]`. Every element of `patches` is a sparse field array patch, including when only one update is flushed. Map-form shared-state broadcasts are invalid.
 - Presence push `subId` values are non-negative JavaScript-safe integers. Empty `entries` and `patches` arrays are structurally valid.
 - `SchemaSync` dictionaries are the only source for table/field integer ids. Specs should not repeat generated dictionary contents.
 
 ## Action Messages
 
-- `ActionCall` is a map request `{type: 0x30, id, action_id, timeoutMs?, params}`. `id` is the client envelope id used for the correlated response; `timeoutMs` is a non-negative integer or omitted and may only shorten the server deadline; `params` is a pair-array of `[field_index, value]` pairs.
-- `ActionForward` uses the fixed six-element tuple `[0x31, execId, userId, actionId, paramsPairArray, claimsMap]`. `execId` is minted by the server for this execution and is the only cross-connection correlation key; `userId` is `bin16` from the action's bound scope. `claimsMap` is a MessagePack map of string keys to claim values: the caller's session claims projected through the action's schema `claims` list when each forward is encoded, so a claim added or replaced by `AuthRefresh` affects subsequent calls, not forwards already encoded. Keys absent from the caller's session are omitted; the map is present (possibly empty) on every forward. A five-element `ActionForward` is invalid.
-- `ActionReply` is a map message `{type: 0x32, id, execId, ok, payload}`. When `ok` is `true`, `payload` is a pair-array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. The `id` satisfies the standard client envelope but the server does not answer `ActionReply`. The server accepts a reply only from the worker the call was forwarded to; unknown or foreign replies are discarded. Workers send `ActionReply` only for synchronous actions; a reply received for an asynchronous execution id is discarded.
+- `ActionCall` is a map request `{type: 0x30, id, action_id, timeoutMs?, params}`. `id` is the client envelope id used for the correlated response; `timeoutMs` is a non-negative integer or omitted and may only shorten the server deadline; `params` is a sparse field array of `field_index, value` entries.
+- `ActionForward` uses the fixed six-element tuple `[0x31, execId, userId, actionId, params, claimsMap]`. `execId` is minted by the server for this execution and is the only cross-connection correlation key; `userId` is `bin16` from the action's bound scope; `params` is the caller's sparse field array. `claimsMap` is a MessagePack map of string keys to claim values: the caller's session claims projected through the action's schema `claims` list when each forward is encoded, so a claim added or replaced by `AuthRefresh` affects subsequent calls, not forwards already encoded. Keys absent from the caller's session are omitted; the map is present (possibly empty) on every forward. A five-element `ActionForward` is invalid.
+- `ActionReply` is a map message `{type: 0x32, id, execId, ok, payload}`. When `ok` is `true`, `payload` is a sparse field array of return fields. When `ok` is `false`, `payload` is an error tuple `[code, message]`. The `id` satisfies the standard client envelope but the server does not answer `ActionReply`. The server accepts a reply only from the worker the call was forwarded to; unknown or foreign replies are discarded. Workers send `ActionReply` only for synchronous actions; a reply received for an asynchronous execution id is discarded.
 - `ActionRegister` is a map request `{type: 0x33, id, action_ids}`. `action_ids` is an array of registered action ids. Registration is correlated with `id` and answers `ok` or `error` (for example `SESSION_NOT_READY` or `PERMISSION_DENIED`). The bound scope and namespace are derived from the schema and the worker's resolved scopes; they are not carried on the wire.
 - `0x31` is a server-only message type. Application clients sending it are rejected with `INVALID_MESSAGE_TYPE`.
 - `0x32` (`ActionReply`) is accepted only from the worker the call was forwarded to.
 - `0x33` (`ActionRegister`) is accepted from any client whose `$session` passes the action `register` rule.
-- A synchronous `ActionCall` success responds `ok` with `value` set to the validated returns pair-array. Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
+- A synchronous `ActionCall` success responds `ok` with `value` set to the validated returns sparse field array. Return-payload validation failures reject the caller's pending call with `SCHEMA_VALIDATION_FAILED`; a worker error tuple rejects it with the carried code.
 
 ## Scoped Session Rules
 

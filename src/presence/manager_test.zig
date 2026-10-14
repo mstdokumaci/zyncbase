@@ -86,7 +86,37 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
 
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     const merged_patch = manager.pending_user_updates.items[0].patch;
+    try testing.expectEqual(@as(usize, 4), merged_patch.arr.len);
+}
+
+test "PresenceManager - coalesced pending update replaces duplicate field last-wins" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 1.0 } },
+    });
+    defer patch1.free(allocator);
+    try manager.setUser(1, user_id, patch1);
+
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 2.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+
+    const merged_patch = manager.pending_user_updates.items[0].patch;
     try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
+    try testing.expectEqual(@as(u64, 0), merged_patch.arr[0].uint);
+    try testing.expectEqual(@as(f64, 2.0), merged_patch.arr[1].float);
 }
 
 test "PresenceManager - setShared coalesces pending shared updates for same namespace" {
@@ -114,7 +144,7 @@ test "PresenceManager - setShared coalesces pending shared updates for same name
 
     try testing.expectEqual(@as(usize, 1), manager.pending_shared_updates.items.len);
     const merged_patch = manager.pending_shared_updates.items[0].patch;
-    try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
+    try testing.expectEqual(@as(usize, 4), merged_patch.arr.len);
     try testing.expectEqual(@as(u64, 43), manager.pending_shared_updates.items[0].source_conn);
 }
 

@@ -262,7 +262,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
     const payload = ctx.value_payload orelse return null;
 
     if (payload.* != .arr) return null;
-    const pairs = payload.arr;
+    const sparse = payload.arr;
 
     if (ctx.presence_fields) |fields| {
         const field_index = for (fields, 0..) |f, idx| {
@@ -270,9 +270,9 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         } else return null;
         const field_type = fields[field_index].declared_type;
 
-        // Wire protocol: duplicate field index in one pair-array → last-wins.
-        const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
-        const value = typed_codec.fromPayload(ctx.allocator, field_type, null, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+        // Wire protocol: duplicate field index in one sparse field array → last-wins.
+        const raw_value = findLastValue(sparse, field_index) orelse return .{ .borrowed = .nil };
+        const value = typed_codec.fromPayload(ctx.allocator, field_type, null, raw_value) catch return null; // zwanzig-disable-line: swallowed-error
         return .{ .owned = value };
     }
 
@@ -282,9 +282,9 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         } else return null;
         const field_meta = fields[field_index];
 
-        // Wire protocol: duplicate field index in one pair-array → last-wins.
-        const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
-        const value = typed_codec.fromPayload(ctx.allocator, field_meta.declared_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+        // Wire protocol: duplicate field index in one sparse field array → last-wins.
+        const raw_value = findLastValue(sparse, field_index) orelse return .{ .borrowed = .nil };
+        const value = typed_codec.fromPayload(ctx.allocator, field_meta.declared_type, field_meta.items_type, raw_value) catch return null; // zwanzig-disable-line: swallowed-error
         return .{ .owned = value };
     }
 
@@ -293,26 +293,26 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
     const field_index = table.fieldIndex(field) orelse return null;
     const field_meta = table.fields[field_index];
 
-    // Wire protocol: duplicate field index in one pair-array → last-wins.
-    const pair = findLastValuePair(pairs, field_index) orelse return .{ .borrowed = .nil };
-    const value = typed_codec.fromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, pair.arr[1]) catch return null; // zwanzig-disable-line: swallowed-error
+    // Wire protocol: duplicate field index in one sparse field array → last-wins.
+    const raw_value = findLastValue(sparse, field_index) orelse return .{ .borrowed = .nil };
+    const value = typed_codec.fromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, raw_value) catch return null; // zwanzig-disable-line: swallowed-error
     return .{ .owned = value };
 }
 
-/// Scan a pair-array payload in reverse and return the last pair whose
-/// first element matches `field_index`.  Returns null if no match is found.
+/// Scan a sparse field array in reverse and return the value whose field index
+/// matches.  Returns null if no match is found.  The flat layout is
+/// `[field_index, value, field_index, value, ...]`.
 ///
-/// Wire protocol rule: when a pair-array contains duplicate field indices,
-/// the last occurrence wins.  Reverse scanning satisfies this with O(n)
-/// worst-case but early exit on the first match.
-fn findLastValuePair(pairs: []const msgpack.Payload, field_index: usize) ?msgpack.Payload {
-    var i: usize = pairs.len;
-    while (i > 0) {
-        i -= 1;
-        const pair_payload = pairs[i];
-        if (pair_payload != .arr or pair_payload.arr.len != 2) continue;
-        const idx = msgpack.extractPayloadUsize(pair_payload.arr[0]) orelse continue;
-        if (idx == field_index) return pair_payload;
+/// Wire protocol rule: when a sparse field array contains duplicate field
+/// indices, the last occurrence wins.  Reverse scanning satisfies this with
+/// O(n) worst-case but early exit on the first match.
+fn findLastValue(sparse: []const msgpack.Payload, field_index: usize) ?msgpack.Payload {
+    if (sparse.len % 2 != 0) return null;
+    var i: usize = sparse.len;
+    while (i >= 2) {
+        i -= 2;
+        const idx = msgpack.extractPayloadUsize(sparse[i]) orelse continue;
+        if (idx == field_index) return sparse[i + 1];
     }
     return null;
 }

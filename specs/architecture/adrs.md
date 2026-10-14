@@ -262,7 +262,7 @@ Immediately after connection, the server pushes a `SchemaSync` message containin
 From this point, all store operations over the wire use:
 - Collection names → integer table indices
 - Field names → integer field indices
-- Sparse operation values → pair-arrays of `[field_index, value]` (e.g., `[[2, "Alice"]]` to update field index 2)
+- Sparse operation values → sparse field arrays of `[field_index, value, ...]` (e.g., `[2, "Alice"]` to update field index 2)
 - Complete server-to-client store records → positional value arrays in `SchemaSync` field order
 
 The SDK hashes the `SchemaSync` payload to detect schema changes across reconnects, guarding against catastrophic index shifting for any locally queued offline operations.
@@ -787,7 +787,7 @@ Nested presence fields are flattened using the `__` separator convention, consis
 - `presenceUserFields: string[]` — flattened user field names in index order
 - `presenceSharedFields: string[]` — flattened shared field names in index order
 
-`PresenceSet` and `PresenceSetShared` send pair-arrays of `[field_index, value]`. Server pushes use compact top-level tuples: `PresenceBroadcast` is `[0x28, subId, entries]` and `SharedStateBroadcast` is `[0x29, subId, patches]`. User entries use permanent integer event tags and exact variable arities: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, and leave `[userId, 2]`. `userId` remains `bin16`; user data and every shared patch remain pair-arrays. A hard limit of 500 flat fields per presence tier is enforced at server startup.
+`PresenceSet` and `PresenceSetShared` send sparse field arrays of `[field_index, value, ...]`. Server pushes use compact top-level tuples: `PresenceBroadcast` is `[0x28, subId, entries]` and `SharedStateBroadcast` is `[0x29, subId, patches]`. User entries use permanent integer event tags and exact variable arities: join `[userId, 0, data, joinedAt]`, update `[userId, 1, data]`, and leave `[userId, 2]`. `userId` remains `bin16`; user data and every shared patch remain sparse field arrays. A hard limit of 500 flat fields per presence tier is enforced at server startup.
 
 Payload savings are substantial at high frequency: a cursor update with status shrinks from ~50 bytes to ~22 bytes. At 60fps from many users fan-outing to many subscribers, this difference compounds dramatically across the broadcast path.
 
@@ -822,11 +822,11 @@ Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presen
 | Message | Description |
 | :--- | :--- |
 | `SchemaSync` | Includes `presenceUserFields: string[]` and `presenceSharedFields: string[]` |
-| `PresenceSet` | C→S; `data` is pair-array merge delta for user fields |
-| `PresenceSetShared` | C→S; pair-array merge delta for shared fields |
+| `PresenceSet` | C→S; `data` is sparse field array merge delta for user fields |
+| `PresenceSetShared` | C→S; sparse field array merge delta for shared fields |
 | `PresenceSubscribe` ok | Returns current user presence snapshot for the namespace |
-| `PresenceBroadcast` | S→C; `[0x28, subId, entries]`; entries use join/update/leave tags `0`/`1`/`2`, pair-array data, and `bin16` user IDs |
-| `SharedStateBroadcast` | S→C; `[0x29, subId, patches]`; every patch is a pair-array |
+| `PresenceBroadcast` | S→C; `[0x28, subId, entries]`; entries use join/update/leave tags `0`/`1`/`2`, sparse field array data, and `bin16` user IDs |
+| `SharedStateBroadcast` | S→C; `[0x29, subId, patches]`; every patch is a sparse field array |
 
 **Consequences**:
 - Full integer wire compression for all presence messages — same performance profile as store operations.
@@ -981,7 +981,7 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 
 ### Wire Protocol Integration
 
-- **Integer Routing**: `SchemaSync` assigns dense integer action ids plus per-action flattened `params`/`returns` field dictionaries, a sync bitset, and per-action scope flags. `params` and `returns` travel over the wire as compact pair-arrays `[[field_index, value], ...]`.
+- **Integer Routing**: `SchemaSync` assigns dense integer action ids plus per-action flattened `params`/`returns` field dictionaries, a sync bitset, and per-action scope flags. `params` and `returns` travel over the wire as compact sparse field arrays `[field_index, value, ...]`.
 - **Message Types**:
   - `0x30 ActionCall` (Client → Server)
   - `0x31 ActionForward` (Server → Worker)

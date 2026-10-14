@@ -192,8 +192,7 @@ test "MessageHandler: invalid constrained presence value fails before acknowledg
     try msgpack.writeMsgPackStr(writer, "id");
     try writer.writeByte(1);
     try msgpack.writeMsgPackStr(writer, "data");
-    try writer.writeByte(0x91); // fixarray(1)
-    try writer.writeByte(0x92); // fixarray(2)
+    try writer.writeByte(0x92); // fixarray(2): flat sparse field array [index, value]
     try writer.writeByte(0); // status field index
     try msgpack.writeMsgPackStr(writer, "banned");
 
@@ -950,11 +949,9 @@ test "MessageHandler: action register, call, and reply route through the service
     try call_map.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.action_call)));
     try call_map.mapPut("id", msgpack.Payload.uintToPayload(6));
     try call_map.mapPut("action_id", msgpack.Payload.uintToPayload(0));
-    const params = try allocator.alloc(msgpack.Payload, 1);
-    const param_pair = try allocator.alloc(msgpack.Payload, 2);
-    param_pair[0] = msgpack.Payload.uintToPayload(0);
-    param_pair[1] = try msgpack.Payload.strToPayload("cart-1", allocator);
-    params[0] = .{ .arr = param_pair };
+    const params = try allocator.alloc(msgpack.Payload, 2);
+    params[0] = msgpack.Payload.uintToPayload(0);
+    params[1] = try msgpack.Payload.strToPayload("cart-1", allocator);
     try call_map.mapPut("params", .{ .arr = params });
 
     const call_bytes = try helpers.encodePayloadToBytes(allocator, call_map);
@@ -970,11 +967,9 @@ test "MessageHandler: action register, call, and reply route through the service
     try reply_map.mapPut("id", msgpack.Payload.uintToPayload(7));
     try reply_map.mapPut("execId", msgpack.Payload.uintToPayload(1));
     try reply_map.mapPut("ok", .{ .bool = true });
-    const returns = try allocator.alloc(msgpack.Payload, 1);
-    const return_pair = try allocator.alloc(msgpack.Payload, 2);
-    return_pair[0] = msgpack.Payload.uintToPayload(0);
-    return_pair[1] = try msgpack.Payload.strToPayload("order-1", allocator);
-    returns[0] = .{ .arr = return_pair };
+    const returns = try allocator.alloc(msgpack.Payload, 2);
+    returns[0] = msgpack.Payload.uintToPayload(0);
+    returns[1] = try msgpack.Payload.strToPayload("order-1", allocator);
     try reply_map.mapPut("payload", .{ .arr = returns });
 
     const reply_bytes = try helpers.encodePayloadToBytes(allocator, reply_map);
