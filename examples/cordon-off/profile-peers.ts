@@ -94,6 +94,7 @@ let moving = false,
 let heartbeatLag: number[] = [];
 let rowIntervals: number[] = [];
 const moveAcks: number[] = [];
+let moveAckGeneration = 0;
 
 function receiveCountryChunk(peer: Peer, row: CountryChunkRow) {
 	const index = Number(row.id);
@@ -197,9 +198,13 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			client.actions.call = (name, params, options) => {
 				if (name !== "player_move") return call(name, params, options);
 				const sent = performance.now();
+				const generation = moveAckGeneration;
 				const pending = call(name, params, options);
 				void pending.then(
-					() => moveAcks.push(performance.now() - sent),
+					() => {
+						if (generation === moveAckGeneration)
+							moveAcks.push(performance.now() - sent);
+					},
 					() => {},
 				);
 				return pending;
@@ -310,9 +315,13 @@ self.onmessage = async ({ data }: MessageEvent<Command>) => {
 			heartbeatLag = [];
 			rowIntervals = [];
 			moveAcks.length = 0;
+			moveAckGeneration++;
 			wireRxBytes = 0;
 			wireTxBytes = 0;
-			for (const peer of peers) peer.moves = 0;
+			for (const peer of peers) {
+				peer.moves = 0;
+				peer.lastRowAt = 0;
+			}
 		} else if (data.type === "close") {
 			clearInterval(heartbeat);
 			clearInterval(frame);

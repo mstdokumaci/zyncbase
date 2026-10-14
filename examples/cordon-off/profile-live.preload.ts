@@ -27,8 +27,8 @@ World.prototype.tick = function (now) {
 		pending.length = 0;
 	}
 	const at = Date.now();
-	if (lastTickAt) tickIntervals.push(at - lastTickAt);
-	lastTickAt = at;
+	if (lastTickAt) tickIntervals.push(started - lastTickAt);
+	lastTickAt = started;
 	tick.call(this, now);
 	ticks.push({ at, ms: performance.now() - started });
 };
