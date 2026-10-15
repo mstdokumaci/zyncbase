@@ -22,6 +22,11 @@ const CURSOR_INTERVAL_MS = 8;
 const SHARED_INTERVAL_MS = 20;
 
 const QUIET_WINDOW_MS = 100;
+// Once the quiet window passes, verification is retried on this cadence even
+// when no new generation change arrived: the previous attempt may have raced
+// with deliveries still landing, and waiting for the next change would
+// overstate convergence time under a slow delivery tail.
+const VERIFY_RETRY_INTERVAL_MS = 250;
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-stress";
@@ -467,7 +472,7 @@ function verifyShared(context: ProcessContext, round: number): string | null {
 type GenerationState = {
 	lastGeneration: number;
 	lastChanged: number;
-	checkedGeneration: number;
+	lastVerified: number;
 };
 
 function observeGeneration(
@@ -477,7 +482,6 @@ function observeGeneration(
 	if (context.generation === state.lastGeneration) return false;
 	state.lastGeneration = context.generation;
 	state.lastChanged = performance.now();
-	state.checkedGeneration = -1;
 	return true;
 }
 
@@ -494,10 +498,8 @@ function shouldWaitForQuiet(
 	now: number,
 ): boolean {
 	if (observeGeneration(context, state)) return true;
-	return (
-		now - state.lastChanged < QUIET_WINDOW_MS ||
-		state.checkedGeneration === context.generation
-	);
+	if (now - state.lastChanged < QUIET_WINDOW_MS) return true;
+	return now - state.lastVerified < VERIFY_RETRY_INTERVAL_MS;
 }
 
 async function waitForConvergence(
@@ -510,7 +512,7 @@ async function waitForConvergence(
 	const generation: GenerationState = {
 		lastGeneration: context.generation,
 		lastChanged: performance.now(),
-		checkedGeneration: -1,
+		lastVerified: 0,
 	};
 	let lastFailure = "no quiet window";
 
@@ -523,13 +525,13 @@ async function waitForConvergence(
 		}
 
 		const generationBeforeCheck = context.generation;
+		generation.lastVerified = performance.now();
 		const failure = verify();
 		if (context.generation !== generationBeforeCheck) {
 			observeGeneration(context, generation);
 			await delay(10);
 			continue;
 		}
-		generation.checkedGeneration = context.generation;
 		if (failure === null) return performance.now() - started;
 		lastFailure = failure;
 

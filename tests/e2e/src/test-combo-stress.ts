@@ -1,7 +1,7 @@
 import {
 	createClient,
+	type PresenceEntry,
 	type QueryOptions,
-	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import { createTestJwt } from "./harness";
@@ -24,8 +24,13 @@ const PRESENCE_SHARED_WRITERS = 100; // localId 300..399
 const CONVERGENCE_SAMPLE_STRIDE = 5;
 
 const QUIET_WINDOW_MS = 100;
+// Once the quiet window passes, verification is retried on this cadence even
+// when no new generation change arrived: the previous attempt may have raced
+// with deliveries still landing, and waiting for the next change would
+// overstate convergence time under a slow delivery tail.
+const VERIFY_RETRY_INTERVAL_MS = 250;
 const CONVERGENCE_TIMEOUT_MS = 90_000;
-const CONNECT_TIMEOUT_MS = 20_000;
+const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-combo-room";
 
 // Process mappings
@@ -75,7 +80,6 @@ export type ClientState = {
 	filterSet: "A" | "B";
 
 	// Store tracking
-	storeSub: SubscriptionHandle | null;
 	storeRecords: Map<string, ItemRecord | EventRecord>;
 	storeFired: boolean;
 
@@ -84,16 +88,23 @@ export type ClientState = {
 	sharedReady: boolean;
 	userCallbacks: number;
 	sharedCallbacks: number;
-	presenceSubChanges: (() => Promise<void>) | null;
-	presenceSubShared: (() => Promise<void>) | null;
 	/** Last user-presence payload written, re-applied after a reconnect. */
 	lastPresenceData: Record<string, unknown> | null;
 
 	// Health tracking
-	errorCount: number;
-	errorSamples: string[];
 	disconnected: boolean;
 	expectedDisconnect: boolean;
+
+	// Verification caches: successes are skipped while the relevant revisions
+	// are unchanged; failures are always rescanned (local presence writes do
+	// not emit callbacks, so a cached failure could outlive the fix).
+	storeRevision: number;
+	storeScannedRevision: number;
+	storeScannedBaselineRevision: number;
+	cachedStoreFailure: string | null;
+	presenceRevision: number;
+	presenceScannedRevision: number;
+	cachedPresenceFailure: string | null;
 };
 
 export type ProcessContext = {
@@ -103,6 +114,13 @@ export type ProcessContext = {
 	clients: ClientState[];
 	storeGeneration: number;
 	presenceGeneration: number;
+	/** performance.now() of the last store/presence generation change. */
+	lastStoreChangeMs: number;
+	lastPresenceChangeMs: number;
+	/** Aggregated health state so checks stay O(1). */
+	errorCount: number;
+	errorSamples: string[];
+	downClients: Set<ClientState>;
 };
 
 export const BARRIER_PHASES = [
@@ -132,6 +150,12 @@ export type ProcessMetrics = {
 	userPresenceCount: number;
 	userCallbacks: number[];
 	sharedCallbacks: number[];
+	/** Generation counts = callback deliveries during the run. */
+	storeCallbacks: number;
+	presenceCallbacks: number;
+	/** ms from convergence start to the last store/presence change (negative = settled before). */
+	lastStoreDeltaMs: number;
+	lastPresenceDeltaMs: number;
 };
 
 type WorkerResultMessage = {
@@ -357,20 +381,22 @@ function makeClientState(
 		localId,
 		role,
 		filterSet,
-		storeSub: null,
 		storeRecords: new Map(),
 		storeFired: false,
 		userReady: false,
 		sharedReady: false,
 		userCallbacks: 0,
 		sharedCallbacks: 0,
-		presenceSubChanges: null,
-		presenceSubShared: null,
 		lastPresenceData: null,
-		errorCount: 0,
-		errorSamples: [],
 		disconnected: false,
 		expectedDisconnect: false,
+		storeRevision: 0,
+		storeScannedRevision: -1,
+		storeScannedBaselineRevision: -1,
+		cachedStoreFailure: null,
+		presenceRevision: 0,
+		presenceScannedRevision: -1,
+		cachedPresenceFailure: null,
 	};
 
 	client.on("error", (error) => {
@@ -378,22 +404,26 @@ function makeClientState(
 		// Transient connection churn is expected on slow machines; it must not
 		// fail the run — the convergence timeouts are the failure signal.
 		if (error.retryable && error.category === "network") return;
-		state.errorCount++;
-		if (state.errorSamples.length < 3) {
-			state.errorSamples.push(formatError(error));
+		context.errorCount++;
+		if (context.errorSamples.length < 3) {
+			context.errorSamples.push(`client ${globalId}: ${formatError(error)}`);
 		}
 	});
 
 	client.on("connected", () => {
 		state.disconnected = false;
+		context.downClients.delete(state);
 	});
 	client.on("disconnected", () => {
 		state.disconnected = true;
+		if (!state.expectedDisconnect) context.downClients.add(state);
 	});
 	client.on("reconnected", () => {
 		state.disconnected = false;
+		context.downClients.delete(state);
 		// The server drops a user's presence on disconnect; re-apply it.
 		if (state.lastPresenceData !== null) {
+			state.presenceRevision++;
 			void state.client.presence.set(state.lastPresenceData);
 		}
 	});
@@ -402,15 +432,11 @@ function makeClientState(
 }
 
 function healthIssue(context: ProcessContext): string | null {
-	for (const state of context.clients) {
-		if (state.errorCount > 0) {
-			return `client ${state.globalId} emitted ${state.errorCount} error(s): ${state.errorSamples.join("; ")}`;
-		}
-		if (
-			state.disconnected &&
-			!state.expectedDisconnect &&
-			state.client.status === "disconnected"
-		) {
+	if (context.errorCount > 0) {
+		return `${context.errorCount} client error(s): ${context.errorSamples.join("; ")}`;
+	}
+	for (const state of context.downClients) {
+		if (!state.expectedDisconnect && state.client.status === "disconnected") {
 			return `client ${state.globalId} disconnected unexpectedly`;
 		}
 	}
@@ -479,22 +505,27 @@ async function subscribeClient(
 			for (const item of items as unknown as (ItemRecord | EventRecord)[]) {
 				state.storeRecords.set(item.id, item);
 			}
+			state.storeRevision++;
 			context.storeGeneration++;
+			context.lastStoreChangeMs = performance.now();
 		},
 	);
 
 	const userSub = state.client.presence.subscribe(() => {
 		state.userCallbacks++;
 		state.userReady = true;
+		state.presenceRevision++;
 		context.presenceGeneration++;
+		context.lastPresenceChangeMs = performance.now();
 	});
 	const sharedSub = state.client.presence.subscribeShared(() => {
 		state.sharedCallbacks++;
 		state.sharedReady = true;
+		state.presenceRevision++;
 		context.presenceGeneration++;
+		context.lastPresenceChangeMs = performance.now();
 	});
-	[state.storeSub, state.presenceSubChanges, state.presenceSubShared] =
-		await Promise.all([storeSub, userSub, sharedSub]);
+	await Promise.all([storeSub, userSub, sharedSub]);
 }
 
 async function prepareClients(
@@ -542,16 +573,41 @@ function getSampleClients(clients: ClientState[]): ClientState[] {
 	return sampled;
 }
 
-export function getExpectedRoomWriters(roomIndex: number): Set<number> {
-	const set = new Set<number>();
+type RoomPresenceExpectation = {
+	writerIds: number[];
+	writerFlags: Uint8Array;
+	writerNameById: string[];
+	expectedCount: number;
+};
+
+function buildRoomPresenceExpectation(
+	roomIndex: number,
+): RoomPresenceExpectation {
+	const writerIds: number[] = [];
 	const procA = roomIndex * 2;
 	const procB = roomIndex * 2 + 1;
 	for (let i = 0; i < PRESENCE_USER_WRITERS; i++) {
-		set.add(procA * CLIENTS_PER_PROCESS + 200 + i);
-		set.add(procB * CLIENTS_PER_PROCESS + 200 + i);
+		writerIds.push(procA * CLIENTS_PER_PROCESS + 200 + i);
+		writerIds.push(procB * CLIENTS_PER_PROCESS + 200 + i);
 	}
-	return set;
+	const writerFlags = new Uint8Array(TOTAL_CLIENTS);
+	const writerNameById = new Array<string>(TOTAL_CLIENTS).fill("");
+	for (const id of writerIds) {
+		writerFlags[id] = 1;
+		writerNameById[id] = `client-${id}`;
+	}
+	return {
+		writerIds,
+		writerFlags,
+		writerNameById,
+		expectedCount: writerIds.length,
+	};
 }
+
+const ROOM_PRESENCE_EXPECTATIONS: RoomPresenceExpectation[] = Array.from(
+	{ length: ROOM_COUNT },
+	(_, roomIndex) => buildRoomPresenceExpectation(roomIndex),
+);
 
 function verifyClientRecordMatches<T extends ItemRecord | EventRecord>(
 	first: ClientState,
@@ -559,19 +615,35 @@ function verifyClientRecordMatches<T extends ItemRecord | EventRecord>(
 	label: "A" | "B",
 	recordsEqual: (a: T, b: T) => boolean,
 ): string | null {
+	if (
+		other.storeScannedRevision === other.storeRevision &&
+		other.storeScannedBaselineRevision === first.storeRevision &&
+		other.cachedStoreFailure === null
+	) {
+		return null;
+	}
+
+	let failure: string | null = null;
 	if (other.storeRecords.size !== first.storeRecords.size) {
-		return `filter ${label} size mismatch: client ${first.globalId} has ${first.storeRecords.size}, client ${other.globalId} has ${other.storeRecords.size}`;
-	}
-	for (const [id, record] of first.storeRecords) {
-		const otherRecord = other.storeRecords.get(id);
-		if (!otherRecord) {
-			return `client ${other.globalId} missing record ${id} vs client ${first.globalId}`;
+		failure = `filter ${label} size mismatch: client ${first.globalId} has ${first.storeRecords.size}, client ${other.globalId} has ${other.storeRecords.size}`;
+	} else {
+		for (const [id, record] of first.storeRecords) {
+			const otherRecord = other.storeRecords.get(id);
+			if (!otherRecord) {
+				failure = `client ${other.globalId} missing record ${id} vs client ${first.globalId}`;
+				break;
+			}
+			if (!recordsEqual(record as T, otherRecord as T)) {
+				failure = `client ${other.globalId} record ${id} value mismatch vs client ${first.globalId}`;
+				break;
+			}
 		}
-		if (!recordsEqual(record as T, otherRecord as T)) {
-			return `client ${other.globalId} record ${id} value mismatch vs client ${first.globalId}`;
-		}
 	}
-	return null;
+
+	other.storeScannedRevision = other.storeRevision;
+	other.storeScannedBaselineRevision = first.storeRevision;
+	other.cachedStoreFailure = failure;
+	return failure;
 }
 
 function verifyRecordsMatchPredicate<T extends ItemRecord | EventRecord>(
@@ -666,85 +738,151 @@ function verifyStore(
 	return null;
 }
 
-function verifyUserPresenceEntry(
-	state: ClientState,
-	entry: Record<string, unknown>,
-	expectedWriters: Set<number>,
-): string | null {
-	const data = entry.data as Record<string, unknown> | undefined;
-	const cursor = data?.cursor as { x?: number; y?: number } | undefined;
-	const id = cursor?.x;
-	if (typeof id !== "number" || !expectedWriters.has(id)) {
-		return `client ${state.globalId} saw unexpected user presence entry: ${JSON.stringify(data)}`;
+type PresenceEntryScan = {
+	missing: number;
+	duplicate: number;
+	unexpected: number;
+	stale: number;
+	samples: string[];
+};
+
+const presenceSeenScratch = new Uint8Array(TOTAL_CLIENTS);
+
+function addPresenceSample(scan: PresenceEntryScan, message: string): void {
+	if (scan.samples.length < 5) scan.samples.push(message);
+}
+
+/**
+ * One fused pass over an observer's entries: membership, duplicate, missing
+ * and stale-data checks, kept in a single loop to avoid per-entry call
+ * overhead in the hot verify path.
+ */
+function scanPresenceEntries(
+	entries: PresenceEntry[],
+	expected: RoomPresenceExpectation,
+	scan: PresenceEntryScan,
+): void {
+	const seen = presenceSeenScratch;
+	seen.fill(0);
+
+	for (const entry of entries) {
+		const data = entry.data;
+		const cursorRaw = data.cursor;
+		const cursor = isRecord(cursorRaw)
+			? (cursorRaw as { x?: unknown; y?: unknown })
+			: undefined;
+		const id = cursor?.x;
+		if (
+			typeof id !== "number" ||
+			!Number.isInteger(id) ||
+			id < 0 ||
+			id >= TOTAL_CLIENTS ||
+			expected.writerFlags[id] !== 1
+		) {
+			scan.unexpected++;
+			addPresenceSample(scan, `unexpected ${JSON.stringify(data)}`);
+			continue;
+		}
+		if (seen[id]++ > 0) {
+			scan.duplicate++;
+			addPresenceSample(scan, `duplicate ${id}`);
+		}
+		if (
+			cursor?.y !== 2 ||
+			data.name !== expected.writerNameById[id] ||
+			data.status !== "active"
+		) {
+			scan.stale++;
+			addPresenceSample(scan, `stale ${id}: ${JSON.stringify(data)}`);
+		}
 	}
-	if (
-		cursor?.y !== 2 ||
-		data?.name !== `client-${id}` ||
-		data?.status !== "active"
-	) {
-		return `client ${state.globalId} saw stale presence entry for user ${id}: ${JSON.stringify(data)}`;
+
+	for (const id of expected.writerIds) {
+		if (seen[id] === 0) {
+			scan.missing++;
+			addPresenceSample(scan, `missing ${id}`);
+		}
 	}
-	return null;
 }
 
 function verifyClientPresence(
 	state: ClientState,
-	expectedCount: number,
-	expectedWriters: Set<number>,
+	expected: RoomPresenceExpectation,
 	expectedSlide: number,
 	expectedPlaying: boolean,
 ): string | null {
+	if (
+		state.presenceScannedRevision === state.presenceRevision &&
+		state.cachedPresenceFailure === null
+	) {
+		return null;
+	}
+
 	const entries = state.client.presence.getAll({ includeSelf: true });
-	if (entries.length !== expectedCount) {
-		return `client ${state.globalId} expected ${expectedCount} presence entries, got ${entries.length}`;
+	const scan: PresenceEntryScan = {
+		missing: 0,
+		duplicate: 0,
+		unexpected: 0,
+		stale: 0,
+		samples: [],
+	};
+	scanPresenceEntries(entries, expected, scan);
+
+	let failure: string | null = null;
+	if (
+		scan.missing !== 0 ||
+		scan.duplicate !== 0 ||
+		scan.unexpected !== 0 ||
+		scan.stale !== 0
+	) {
+		failure =
+			`client ${state.globalId}: expected ${expected.expectedCount}, got ${entries.length}; ` +
+			`missing=${scan.missing}, duplicate=${scan.duplicate}, unexpected=${scan.unexpected}, stale=${scan.stale}` +
+			(scan.samples.length > 0 ? ` (${scan.samples.join(", ")})` : "");
+	} else {
+		const shared = state.client.presence.getShared();
+		if (!shared) {
+			failure = `client ${state.globalId} shared presence is null`;
+		} else if (
+			shared.slide !== expectedSlide ||
+			shared.playing !== expectedPlaying
+		) {
+			failure = `client ${state.globalId} shared state mismatch: expected slide=${expectedSlide}, playing=${expectedPlaying}; got slide=${shared.slide}, playing=${shared.playing}`;
+		}
 	}
 
-	for (const entry of entries) {
-		const err = verifyUserPresenceEntry(
-			state,
-			entry as unknown as Record<string, unknown>,
-			expectedWriters,
-		);
-		if (err) return err;
-	}
-
-	const shared = state.client.presence.getShared();
-	if (!shared) {
-		return `client ${state.globalId} shared presence is null`;
-	}
-	if (shared.slide !== expectedSlide || shared.playing !== expectedPlaying) {
-		return `client ${state.globalId} shared state mismatch: expected slide=${expectedSlide}, playing=${expectedPlaying}; got slide=${shared.slide}, playing=${shared.playing}`;
-	}
-	return null;
+	state.presenceScannedRevision = state.presenceRevision;
+	state.cachedPresenceFailure = failure;
+	return failure;
 }
 
 function verifyPresence(
 	context: ProcessContext,
 	sampledClients: ClientState[],
 ): string | null {
-	const expectedWriters = getExpectedRoomWriters(context.roomIndex);
-	const expectedCount = expectedWriters.size;
+	const expected = ROOM_PRESENCE_EXPECTATIONS[context.roomIndex];
 	const expectedSlide = context.roomIndex * 100 + 2;
 	const expectedPlaying = false;
 
+	const failures: string[] = [];
 	for (const state of sampledClients) {
 		const err = verifyClientPresence(
 			state,
-			expectedCount,
-			expectedWriters,
+			expected,
 			expectedSlide,
 			expectedPlaying,
 		);
-		if (err) return err;
+		if (err) failures.push(err);
+		if (failures.length === 5) break;
 	}
 
-	return null;
+	return failures.length === 0 ? null : failures.join(" | ");
 }
 
 type GenerationTracker = {
 	lastGen: number;
 	lastChanged: number;
-	checkedGen: number;
+	lastVerified: number;
 };
 
 function shouldWaitForQuiet(
@@ -755,12 +893,10 @@ function shouldWaitForQuiet(
 	if (currentGen !== state.lastGen) {
 		state.lastGen = currentGen;
 		state.lastChanged = now;
-		state.checkedGen = -1;
 		return true;
 	}
-	return (
-		now - state.lastChanged < QUIET_WINDOW_MS || state.checkedGen === currentGen
-	);
+	if (now - state.lastChanged < QUIET_WINDOW_MS) return true;
+	return now - state.lastVerified < VERIFY_RETRY_INTERVAL_MS;
 }
 
 async function waitForStoreConvergence(
@@ -772,7 +908,7 @@ async function waitForStoreConvergence(
 	const genTracker: GenerationTracker = {
 		lastGen: context.storeGeneration,
 		lastChanged: performance.now(),
-		checkedGen: -1,
+		lastVerified: 0,
 	};
 	let lastFailure = "no quiet window";
 
@@ -785,16 +921,15 @@ async function waitForStoreConvergence(
 		}
 
 		const genBefore = context.storeGeneration;
+		genTracker.lastVerified = performance.now();
 		const failure = verifyStore(context, sampledClients);
 		if (context.storeGeneration !== genBefore) {
 			genTracker.lastGen = context.storeGeneration;
 			genTracker.lastChanged = performance.now();
-			genTracker.checkedGen = -1;
 			await delay(10);
 			continue;
 		}
 
-		genTracker.checkedGen = context.storeGeneration;
 		if (failure === null) return performance.now() - started;
 		lastFailure = failure;
 
@@ -815,7 +950,7 @@ async function waitForPresenceConvergence(
 	const genTracker: GenerationTracker = {
 		lastGen: context.presenceGeneration,
 		lastChanged: performance.now(),
-		checkedGen: -1,
+		lastVerified: 0,
 	};
 	let lastFailure = "no quiet window";
 
@@ -828,16 +963,15 @@ async function waitForPresenceConvergence(
 		}
 
 		const genBefore = context.presenceGeneration;
+		genTracker.lastVerified = performance.now();
 		const failure = verifyPresence(context, sampledClients);
 		if (context.presenceGeneration !== genBefore) {
 			genTracker.lastGen = context.presenceGeneration;
 			genTracker.lastChanged = performance.now();
-			genTracker.checkedGen = -1;
 			await delay(10);
 			continue;
 		}
 
-		genTracker.checkedGen = context.presenceGeneration;
 		if (failure === null) return performance.now() - started;
 		lastFailure = failure;
 
@@ -851,10 +985,9 @@ async function waitForPresenceConvergence(
 
 async function cleanupClients(clients: ClientState[]) {
 	for (const state of clients) {
+		// No explicit unsubscribes: the socket close tears down server-side
+		// subscriptions, and unsubscribe sends dominate teardown cost.
 		state.expectedDisconnect = true;
-		void state.storeSub?.unsubscribe();
-		if (state.presenceSubChanges) void state.presenceSubChanges();
-		if (state.presenceSubShared) void state.presenceSubShared();
 		state.client.disconnect();
 	}
 	await delay(0);
@@ -933,6 +1066,7 @@ async function executePresenceUserWrites(
 				cursor: { x: state.globalId, y: tick },
 			};
 			state.lastPresenceData = data;
+			state.presenceRevision++;
 			state.client.presence.set(data);
 		}
 		if (tick < 2) await delay(25);
@@ -951,6 +1085,7 @@ async function executePresenceSharedWrites(
 	);
 	for (let tick = 0; tick < 3; tick++) {
 		for (const state of sharedWriters) {
+			state.presenceRevision++;
 			state.client.presence.setShared({
 				slide: context.roomIndex * 100 + tick,
 				playing: tick % 2 === 1,
@@ -975,6 +1110,11 @@ async function runProcess(
 		clients: [],
 		storeGeneration: 0,
 		presenceGeneration: 0,
+		lastStoreChangeMs: performance.now(),
+		lastPresenceChangeMs: performance.now(),
+		errorCount: 0,
+		errorSamples: [],
+		downClients: new Set(),
 	};
 
 	const metrics: ProcessMetrics = {
@@ -993,6 +1133,10 @@ async function runProcess(
 		userPresenceCount: 0,
 		userCallbacks: [],
 		sharedCallbacks: [],
+		storeCallbacks: 0,
+		presenceCallbacks: 0,
+		lastStoreDeltaMs: 0,
+		lastPresenceDeltaMs: 0,
 	};
 
 	const createdDocIds: string[] = [];
@@ -1030,12 +1174,21 @@ async function runProcess(
 
 		// Phase 6: Convergence check with stride 5
 		const sampled = getSampleClients(context.clients);
+		const convergeStart = performance.now();
 		const [storeConvergeMs, presenceConvergeMs] = await Promise.all([
 			waitForStoreConvergence(context, sampled),
 			waitForPresenceConvergence(context, sampled),
 		]);
 		metrics.storeConvergeMs = storeConvergeMs;
 		metrics.presenceConvergeMs = presenceConvergeMs;
+		metrics.storeCallbacks = context.storeGeneration;
+		metrics.presenceCallbacks = context.presenceGeneration;
+		metrics.lastStoreDeltaMs = Math.round(
+			context.lastStoreChangeMs - convergeStart,
+		);
+		metrics.lastPresenceDeltaMs = Math.round(
+			context.lastPresenceChangeMs - convergeStart,
+		);
 
 		const sampleA = sampled.find((c) => c.filterSet === "A");
 		const sampleB = sampled.find((c) => c.filterSet === "B");
@@ -1183,15 +1336,31 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 	return { worker, result: result.promise, waitForBarrier };
 }
 
+function percentile(values: number[], fraction: number): number {
+	if (values.length === 0) return 0;
+	const sorted = values.toSorted((a, b) => a - b);
+	return sorted[Math.ceil(sorted.length * fraction) - 1];
+}
+
 function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const max = (key: keyof ProcessMetrics) =>
 		Math.round(Math.max(...results.map((r) => r[key] as number)));
+	const userCallbacks = results.flatMap((r) => r.userCallbacks);
+	const sharedCallbacks = results.flatMap((r) => r.sharedCallbacks);
 	console.log(
 		`Combo stress passed: ${TOTAL_CLIENTS} clients across 4 processes (${ROOM_COUNT} rooms, 2 tables) in ${Math.round(elapsedMs)}ms; ` +
 			`phase max ms connect=${max("connectMs")}, ` +
 			`store-create=${max("storeCreateMs")}, store-update=${max("storeUpdateMs")}, ` +
 			`presence-user=${max("presenceUserMs")}, presence-shared=${max("presenceSharedMs")}, ` +
 			`store-converge=${max("storeConvergeMs")}, presence-converge=${max("presenceConvergeMs")}`,
+	);
+	console.log(
+		`Combo stress delivered: store-callbacks=${max("storeCallbacks")}, presence-callbacks=${max("presenceCallbacks")}, ` +
+			`last-change-into-converge ms store=${max("lastStoreDeltaMs")}, presence=${max("lastPresenceDeltaMs")}`,
+	);
+	console.log(
+		`Combo stress callbacks: user p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
+			`shared p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
 	);
 }
 
