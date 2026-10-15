@@ -22,10 +22,6 @@ const CURSOR_INTERVAL_MS = 8;
 const SHARED_INTERVAL_MS = 20;
 
 const QUIET_WINDOW_MS = 100;
-// Once the quiet window passes, verification is retried on this cadence even
-// when no new generation change arrived: the previous attempt may have raced
-// with deliveries still landing, and waiting for the next change would
-// overstate convergence time under a slow delivery tail.
 const VERIFY_RETRY_INTERVAL_MS = 250;
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
@@ -274,7 +270,9 @@ async function prepareClients(
 }
 
 type EntryScan = {
-	seen: Uint8Array;
+	/** Generation-stamped seen-set shared across scans; read it only against `generation`. */
+	seen: Uint32Array;
+	generation: number;
 	samples: string[];
 	invalid: number;
 	duplicate: number;
@@ -286,7 +284,8 @@ function addSample(scan: EntryScan, message: string) {
 	if (scan.samples.length < 5) scan.samples.push(message);
 }
 
-const scanSeenScratch = new Uint8Array(TOTAL_CLIENTS);
+const scanSeenScratch = new Uint32Array(TOTAL_CLIENTS);
+let scanGeneration = 0;
 
 /** One pass over an observer's entries: identity, duplicate, extra and data checks. Kept fused to avoid per-entry call overhead in the hot verify loop. */
 function scanEntries(
@@ -295,9 +294,13 @@ function scanEntries(
 	expectedY: Int32Array,
 ): EntryScan {
 	const seen = scanSeenScratch;
-	seen.fill(0);
+	// Wrapping back to 0 is harmless: a stale stamp only has to differ from
+	// the current generation, and wrap-around needs 2^32 scans to collide.
+	scanGeneration = (scanGeneration + 1) >>> 0;
+	const generation = scanGeneration;
 	const scan: EntryScan = {
 		seen,
+		generation,
 		samples: [],
 		invalid: 0,
 		duplicate: 0,
@@ -326,9 +329,11 @@ function scanEntries(
 			continue;
 		}
 
-		if (seen[globalId]++ > 0) {
+		if (seen[globalId] === generation) {
 			scan.duplicate++;
 			addSample(scan, `duplicate ${globalId}`);
+		} else {
+			seen[globalId] = generation;
 		}
 		if (active[globalId] === 0) {
 			scan.extra++;
@@ -353,7 +358,7 @@ function scanEntries(
 function countMissing(active: Uint8Array, scan: EntryScan): number {
 	let missing = 0;
 	for (let globalId = 0; globalId < TOTAL_CLIENTS; globalId++) {
-		if (active[globalId] === 1 && scan.seen[globalId] === 0) {
+		if (active[globalId] === 1 && scan.seen[globalId] !== scan.generation) {
 			missing++;
 			addSample(scan, `missing ${globalId}`);
 		}
@@ -368,10 +373,6 @@ function verifyObserver(
 	expectedCount: number,
 	expectedY: Int32Array,
 ): string | null {
-	// Within a phase the expectations are fixed, so a successful scan is reused
-	// when the observer's view did not change since. Failures are always
-	// rescanned: self-entry updates do not bump viewRevision, so a cached
-	// failure could outlive the self update that would fix it.
 	if (
 		state.scannedEpoch === context.verifyEpoch &&
 		state.scannedRevision === state.viewRevision &&
@@ -981,12 +982,12 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const sharedCallbacks = results.flatMap((result) => result.sharedCallbacks);
 	console.log(
 		`Presence stress passed: ${TOTAL_CLIENTS} clients across ${ROOM_COUNT} rooms in ${Math.round(elapsedMs)}ms; ` +
-			`phase max ms connect=${max("connectMs")}, join=${max("joinMs")}, ` +
-			`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
-			`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
-			`remove=${max("removeMs")}, rejoin=${max("rejoinMs")}, disconnect=${max("disconnectMs")}; ` +
-			`user callbacks p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
-			`shared callbacks p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
+		`phase max ms connect=${max("connectMs")}, join=${max("joinMs")}, ` +
+		`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
+		`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
+		`remove=${max("removeMs")}, rejoin=${max("rejoinMs")}, disconnect=${max("disconnectMs")}; ` +
+		`user callbacks p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
+		`shared callbacks p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
 	);
 }
 
@@ -1031,7 +1032,7 @@ export async function run(port: number, jwtSecret: string) {
 	} finally {
 		for (const { worker } of workers) worker.kill();
 		await Promise.all(
-			workers.map(({ worker }) => worker.exited.catch(() => {})),
+			workers.map(({ worker }) => worker.exited.catch(() => { })),
 		);
 	}
 }
