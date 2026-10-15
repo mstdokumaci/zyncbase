@@ -982,12 +982,12 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const sharedCallbacks = results.flatMap((result) => result.sharedCallbacks);
 	console.log(
 		`Presence stress passed: ${TOTAL_CLIENTS} clients across ${ROOM_COUNT} rooms in ${Math.round(elapsedMs)}ms; ` +
-		`phase max ms connect=${max("connectMs")}, join=${max("joinMs")}, ` +
-		`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
-		`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
-		`remove=${max("removeMs")}, rejoin=${max("rejoinMs")}, disconnect=${max("disconnectMs")}; ` +
-		`user callbacks p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
-		`shared callbacks p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
+			`phase max ms connect=${max("connectMs")}, join=${max("joinMs")}, ` +
+			`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
+			`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
+			`remove=${max("removeMs")}, rejoin=${max("rejoinMs")}, disconnect=${max("disconnectMs")}; ` +
+			`user callbacks p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
+			`shared callbacks p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
 	);
 }
 
@@ -1032,7 +1032,7 @@ export async function run(port: number, jwtSecret: string) {
 	} finally {
 		for (const { worker } of workers) worker.kill();
 		await Promise.all(
-			workers.map(({ worker }) => worker.exited.catch(() => { })),
+			workers.map(({ worker }) => worker.exited.catch(() => {})),
 		);
 	}
 }
