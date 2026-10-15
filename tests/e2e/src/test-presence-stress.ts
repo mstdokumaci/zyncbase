@@ -355,9 +355,15 @@ function scanEntries(
 	return scan;
 }
 
-function countMissing(active: Uint8Array, scan: EntryScan): number {
+function countMissing(
+	context: ProcessContext,
+	active: Uint8Array,
+	scan: EntryScan,
+): number {
+	const firstClient = context.roomIndex * CLIENTS_PER_ROOM;
+	const end = firstClient + CLIENTS_PER_ROOM;
 	let missing = 0;
-	for (let globalId = 0; globalId < TOTAL_CLIENTS; globalId++) {
+	for (let globalId = firstClient; globalId < end; globalId++) {
 		if (active[globalId] === 1 && scan.seen[globalId] !== scan.generation) {
 			missing++;
 			addSample(scan, `missing ${globalId}`);
@@ -384,7 +390,7 @@ function verifyObserver(
 
 	const entries = state.client.presence.getAll({ includeSelf: true });
 	const scan = scanEntries(entries, active, expectedY);
-	const missing = countMissing(active, scan);
+	const missing = countMissing(context, active, scan);
 	let failure: string | null = null;
 	if (
 		entries.length !== expectedCount ||
