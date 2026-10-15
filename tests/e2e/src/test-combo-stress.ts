@@ -24,10 +24,6 @@ const PRESENCE_SHARED_WRITERS = 100; // localId 300..399
 const CONVERGENCE_SAMPLE_STRIDE = 5;
 
 const QUIET_WINDOW_MS = 100;
-// Once the quiet window passes, verification is retried on this cadence even
-// when no new generation change arrived: the previous attempt may have raced
-// with deliveries still landing, and waiting for the next change would
-// overstate convergence time under a slow delivery tail.
 const VERIFY_RETRY_INTERVAL_MS = 250;
 const CONVERGENCE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
@@ -746,24 +742,23 @@ type PresenceEntryScan = {
 	samples: string[];
 };
 
-const presenceSeenScratch = new Uint8Array(TOTAL_CLIENTS);
+const presenceSeenScratch = new Uint32Array(TOTAL_CLIENTS);
+let presenceScanGeneration = 0;
 
 function addPresenceSample(scan: PresenceEntryScan, message: string): void {
 	if (scan.samples.length < 5) scan.samples.push(message);
 }
 
-/**
- * One fused pass over an observer's entries: membership, duplicate, missing
- * and stale-data checks, kept in a single loop to avoid per-entry call
- * overhead in the hot verify path.
- */
 function scanPresenceEntries(
 	entries: PresenceEntry[],
 	expected: RoomPresenceExpectation,
 	scan: PresenceEntryScan,
 ): void {
 	const seen = presenceSeenScratch;
-	seen.fill(0);
+	// Wrapping back to 0 is harmless: a stale stamp only has to differ from
+	// the current generation, and wrap-around needs 2^32 scans to collide.
+	presenceScanGeneration = (presenceScanGeneration + 1) >>> 0;
+	const generation = presenceScanGeneration;
 
 	for (const entry of entries) {
 		const data = entry.data;
@@ -783,9 +778,11 @@ function scanPresenceEntries(
 			addPresenceSample(scan, `unexpected ${JSON.stringify(data)}`);
 			continue;
 		}
-		if (seen[id]++ > 0) {
+		if (seen[id] === generation) {
 			scan.duplicate++;
 			addPresenceSample(scan, `duplicate ${id}`);
+		} else {
+			seen[id] = generation;
 		}
 		if (
 			cursor?.y !== 2 ||
@@ -798,7 +795,7 @@ function scanPresenceEntries(
 	}
 
 	for (const id of expected.writerIds) {
-		if (seen[id] === 0) {
+		if (seen[id] !== generation) {
 			scan.missing++;
 			addPresenceSample(scan, `missing ${id}`);
 		}
