@@ -43,9 +43,13 @@ function element<T extends HTMLElement>(id: string): T {
 	if (!result) throw new Error(`Missing element: ${id}`);
 	return result as T;
 }
+const fail = (message: string): never => {
+	throw new Error(message);
+};
 const canvas = element<HTMLCanvasElement>("map");
-const ctx = canvas.getContext("2d", { alpha: false });
-if (!ctx) throw new Error("Your browser needs Canvas support");
+const ctx =
+	canvas.getContext("2d", { alpha: false }) ??
+	fail("Your browser needs Canvas support");
 const connection = element("connection");
 const controlsHint = element("controls-hint");
 const countriesList = element("countries");
