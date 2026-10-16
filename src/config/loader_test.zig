@@ -39,6 +39,8 @@ test "ConfigLoader loads defaults when file not found" {
     try std.testing.expectEqual(@as(u16, 15), config.server.idle_timeout_seconds);
     try std.testing.expectEqualStrings("./data", config.data_dir);
     try std.testing.expectEqual(@as(usize, 500), config.performance.batch_size);
+    try std.testing.expectEqual(@as(u32, 8), config.performance.presence_batch_timeout);
+    try std.testing.expectEqual(@as(usize, 512), config.performance.presence_batch_max_updates);
 }
 
 test "ConfigLoader parses valid JSON config" {
@@ -54,7 +56,7 @@ test "ConfigLoader parses valid JSON config" {
     const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-schema.json" });
     defer allocator.free(schema_file);
 
-    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{ \"server\": { \"port\": 8080, \"host\": \"127.0.0.1\" }, \"dataDir\": \"", context.test_dir, "\", \"logging\": { \"level\": \"debug\", \"format\": \"text\" }, \"performance\": { \"messageBufferSize\": 2000, \"batchWrites\": false, \"batchSize\": 50, \"batchTimeout\": 20 }, \"schema\": \"", context.test_dir, "/test-config-schema.json\" }" });
+    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{ \"server\": { \"port\": 8080, \"host\": \"127.0.0.1\" }, \"dataDir\": \"", context.test_dir, "\", \"logging\": { \"level\": \"debug\", \"format\": \"text\" }, \"performance\": { \"messageBufferSize\": 2000, \"batchWrites\": false, \"batchSize\": 50, \"batchTimeout\": 20, \"presenceBatchTimeoutMs\": 16, \"presenceBatchMaxUpdates\": 64 }, \"schema\": \"", context.test_dir, "/test-config-schema.json\" }" });
     defer allocator.free(final_config_content);
 
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = temp_file, .data = final_config_content });
@@ -73,6 +75,8 @@ test "ConfigLoader parses valid JSON config" {
     try std.testing.expectEqual(false, config.performance.batch_writes);
     try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
+    try std.testing.expectEqual(@as(u32, 16), config.performance.presence_batch_timeout);
+    try std.testing.expectEqual(@as(usize, 64), config.performance.presence_batch_max_updates);
 }
 
 test "ConfigLoader validates port range" {

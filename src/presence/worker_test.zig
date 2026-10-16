@@ -7,6 +7,7 @@ const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const PresenceManager = @import("manager.zig").PresenceManager;
+const BatchConfig = @import("worker.zig").BatchConfig;
 const PresenceOp = @import("worker.zig").PresenceOp;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
 
@@ -36,10 +37,31 @@ fn setupWorker(
     send_queue: *send_queue_type,
     notifier: *TestNotifier,
 ) !*PresenceWorker {
+    return setupWorkerWithBatch(allocator, memory_strategy, presence_manager, send_queue, notifier, .{});
+}
+
+fn setupWorkerWithBatch(
+    allocator: std.mem.Allocator,
+    memory_strategy: *MemoryStrategy,
+    presence_manager: *PresenceManager,
+    send_queue: *send_queue_type,
+    notifier: *TestNotifier,
+    batch: BatchConfig,
+) !*PresenceWorker {
     const worker = try allocator.create(PresenceWorker);
-    try worker.init(allocator, memory_strategy, presence_manager, send_queue, TestNotifier.notify, notifier);
+    try worker.init(allocator, memory_strategy, presence_manager, send_queue, batch, TestNotifier.notify, notifier);
     try worker.spawn();
     return worker;
+}
+
+/// Waits until the notifier callback count reaches `count` (one call per flush
+/// that pushed at least one message), polling up to ~5s.
+fn waitForNotifierCalls(notifier: *TestNotifier, count: u32) !void {
+    for (0..5000) |_| {
+        if (notifier.called.load(.monotonic) >= count) return;
+        try testing.io.sleep(.fromNanoseconds(std.time.ns_per_ms), .awake);
+    }
+    return error.NotifierTimeout;
 }
 
 test "PresenceWorker: set_user op produces broadcast to send_queue" {
@@ -283,15 +305,15 @@ test "PresenceWorker: multiple ops batched into single flush" {
     defer snapshot.deinit(allocator);
 
     const worker = try allocator.create(PresenceWorker);
-    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, TestNotifier.notify, &notifier);
+    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, .{}, TestNotifier.notify, &notifier);
     defer {
         worker.stop();
         worker.deinit();
         allocator.destroy(worker);
     }
 
-    // Build first so enqueueing into the running worker stays well inside the
-    // fixed 2 ms window.
+    // Build first so enqueueing into the running worker happens after spawn and
+    // the whole set is drained in the first batch window.
     var ops: [5]PresenceOp = undefined;
     var built: usize = 0;
     var enqueued: usize = 0;
@@ -354,6 +376,239 @@ test "PresenceWorker: multiple ops batched into single flush" {
     defer final_decoded.free(allocator);
     try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[1].float);
     try testing.expect(send_queue.pop() == null);
+}
+
+test "PresenceWorker: pending-update cap splits broadcasts" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedSingleField(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+
+    var send_queue = try send_queue_type.init(allocator);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
+
+    var notifier: TestNotifier = .{};
+    const conn_id: u64 = 100;
+    const sub_id: u64 = 200;
+    const namespace_id: i64 = 1;
+
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    defer snapshot.deinit(allocator);
+
+    // Only the count cap and age window can flush; every op targets a distinct
+    // user, so none of them merge.
+    const worker = try allocator.create(PresenceWorker);
+    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, .{
+        .timeout_ms = 30,
+        .max_updates = 2,
+    }, TestNotifier.notify, &notifier);
+    defer {
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
+    }
+
+    var ops: [5]PresenceOp = undefined;
+    var enqueued: usize = 0;
+    defer for (ops[enqueued..]) |*op| op.deinit();
+
+    for (0..5) |i| {
+        const patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = .{ .float = @floatFromInt(i) } },
+        });
+        defer patch.free(allocator);
+        ops[i] = .{
+            .op = .{ .set_user = .{
+                .namespace_id = namespace_id,
+                .user_id = @intCast(100 + i),
+                .patch = try patch.deepClone(allocator),
+            } },
+            .allocator = allocator,
+        };
+        enqueued += 1;
+    }
+
+    for (ops[0..5]) |op| try worker.enqueue(op);
+    try worker.spawn();
+    // 5 distinct users at a cap of 2 flush as [2, 2, 1]: the final one when the
+    // 30 ms age window elapses.
+    try waitForNotifierCalls(&notifier, 3);
+
+    var broadcasts: [8]usize = undefined;
+    var broadcast_count: usize = 0;
+    while (send_queue.pop()) |entry| {
+        defer entry.deinit();
+        var reader: std.Io.Reader = .fixed(entry.data);
+        const decoded = try msgpack.decode(allocator, &reader);
+        defer decoded.free(allocator);
+        try testing.expectEqual(@as(u64, sub_id), decoded.arr[1].uint);
+        try testing.expect(broadcast_count < broadcasts.len);
+        broadcasts[broadcast_count] = decoded.arr[2].arr.len;
+        broadcast_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 3), broadcast_count);
+    try testing.expectEqual(@as(usize, 2), broadcasts[0]);
+    try testing.expectEqual(@as(usize, 2), broadcasts[1]);
+    try testing.expectEqual(@as(usize, 1), broadcasts[2]);
+}
+
+test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedSingleField(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+
+    var send_queue = try send_queue_type.init(allocator);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
+
+    var notifier: TestNotifier = .{};
+    const conn_id: u64 = 100;
+    const sub_id: u64 = 200;
+    const namespace_id: i64 = 1;
+
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    defer snapshot.deinit(allocator);
+
+    // A generous window makes the 5 ms producer gaps land well inside it.
+    const worker = try setupWorkerWithBatch(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier, .{
+        .timeout_ms = 200,
+        .max_updates = 0,
+    });
+    defer {
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
+    }
+
+    // Enqueue three distinct users with gaps between them: the queue drains
+    // between ops, but the window must absorb all of them into one broadcast.
+    for (0..3) |i| {
+        const patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = .{ .float = @floatFromInt(i) } },
+        });
+        defer patch.free(allocator);
+        try worker.enqueue(.{
+            .op = .{ .set_user = .{
+                .namespace_id = namespace_id,
+                .user_id = @intCast(500 + i),
+                .patch = try patch.deepClone(allocator),
+            } },
+            .allocator = allocator,
+        });
+        if (i < 2) try testing.io.sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake);
+    }
+
+    try waitForNotifierCalls(&notifier, 1);
+
+    var broadcast_count: usize = 0;
+    while (send_queue.pop()) |entry| {
+        defer entry.deinit();
+        var reader: std.Io.Reader = .fixed(entry.data);
+        const decoded = try msgpack.decode(allocator, &reader);
+        defer decoded.free(allocator);
+        try testing.expectEqual(@as(usize, 3), decoded.arr[2].arr.len);
+        broadcast_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), broadcast_count);
+}
+
+test "PresenceWorker: zero timeout flushes after every op" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedSingleField(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var presence_manager: PresenceManager = undefined;
+    presence_manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer presence_manager.deinit();
+
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init();
+    defer memory_strategy.deinit();
+
+    var send_queue = try send_queue_type.init(allocator);
+    defer {
+        while (send_queue.pop()) |entry| entry.deinit();
+        send_queue.deinit();
+    }
+
+    var notifier: TestNotifier = .{};
+    const namespace_id: i64 = 1;
+
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, 100, 200);
+    defer snapshot.deinit(allocator);
+
+    const worker = try allocator.create(PresenceWorker);
+    try worker.init(allocator, &memory_strategy, &presence_manager, &send_queue, .{
+        .timeout_ms = 0,
+        .max_updates = 512,
+    }, TestNotifier.notify, &notifier);
+    defer {
+        worker.stop();
+        worker.deinit();
+        allocator.destroy(worker);
+    }
+
+    var ops: [3]PresenceOp = undefined;
+    var enqueued: usize = 0;
+    defer for (ops[enqueued..]) |*op| op.deinit();
+
+    for (0..3) |i| {
+        const patch = try makePresencePatch(allocator, &.{
+            .{ .idx = 0, .value = .{ .float = @floatFromInt(i) } },
+        });
+        defer patch.free(allocator);
+        ops[i] = .{
+            .op = .{ .set_user = .{
+                .namespace_id = namespace_id,
+                .user_id = @intCast(300 + i),
+                .patch = try patch.deepClone(allocator),
+            } },
+            .allocator = allocator,
+        };
+        enqueued += 1;
+    }
+
+    for (ops[0..3]) |op| try worker.enqueue(op);
+    try worker.spawn();
+    try waitForNotifierCalls(&notifier, 3);
+
+    var broadcast_count: usize = 0;
+    while (send_queue.pop()) |entry| {
+        defer entry.deinit();
+        var reader: std.Io.Reader = .fixed(entry.data);
+        const decoded = try msgpack.decode(allocator, &reader);
+        defer decoded.free(allocator);
+        try testing.expectEqual(@as(usize, 1), decoded.arr[2].arr.len);
+        broadcast_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 3), broadcast_count);
 }
 
 test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {

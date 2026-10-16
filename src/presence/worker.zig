@@ -13,7 +13,18 @@ const PresenceManager = @import("manager.zig").PresenceManager;
 
 const Allocator = std.mem.Allocator;
 
-const batch_window_ns = 2 * std.time.ns_per_ms;
+/// Flush policy for outgoing presence broadcasts. A broadcast fans out one
+/// message per subscriber, so flushes follow the write path's count-or-time
+/// batching shape.
+pub const BatchConfig = struct {
+    /// Max age of a batch before it is flushed, in milliseconds. While ops are
+    /// pending, the worker waits out the remaining window so gaps in the
+    /// producer feed coalesce into one broadcast instead of forcing a flush.
+    /// `0` flushes after every processed op (batching disabled).
+    timeout_ms: u32 = 8,
+    /// Max pending updates per broadcast. `0` disables the cap.
+    max_updates: usize = 512,
+};
 
 /// A presence operation enqueued by the event loop for the dispatcher thread.
 /// The `allocator` field owns any heap-allocated data inside `op` (e.g. cloned
@@ -84,6 +95,8 @@ pub const PresenceWorker = struct {
     thread: managedThread(PresenceWorker),
     pool: MemoryStrategy.AllocPool(work_queue_type.Node),
     work_queue: work_queue_type,
+    batch_timeout_ns: u64,
+    batch_max_updates: usize,
 
     pub fn init(
         self: *PresenceWorker,
@@ -91,6 +104,7 @@ pub const PresenceWorker = struct {
         memory_strategy: *MemoryStrategy,
         presence_manager: *PresenceManager,
         send_queue: *send_queue_type,
+        batch: BatchConfig,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) !void {
@@ -102,6 +116,8 @@ pub const PresenceWorker = struct {
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
             .thread = managedThread(PresenceWorker).init(presence_manager.io),
             .pool = MemoryStrategy.AllocPool(work_queue_type.Node).init(allocator),
+            .batch_timeout_ns = @as(u64, batch.timeout_ms) * std.time.ns_per_ms,
+            .batch_max_updates = batch.max_updates,
             // SAFETY: work_queue is initialized inline below via init()
             .work_queue = undefined,
         };
@@ -133,8 +149,6 @@ pub const PresenceWorker = struct {
     }
 
     fn workerLoop(self: *PresenceWorker) void {
-        var pending = false;
-
         while (!self.thread.isRequested()) {
             const first = self.work_queue.pop() orelse {
                 self.thread.lockWork();
@@ -145,43 +159,45 @@ pub const PresenceWorker = struct {
                 continue;
             };
 
-            // Fixed, non-sliding window: later arrivals wake the worker but never
-            // extend this deadline. Checking it after every op also guarantees a
-            // flush under sustained input instead of waiting for the queue to empty.
-            const deadline_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds() + batch_window_ns;
+            // Batch window anchored at the first op of the flush. Flush when the
+            // pending-update cap is reached or when the age window elapses,
+            // whichever comes first (the write path's count-or-time shape). A
+            // broadcast fans out one message per subscriber, so a gap in the
+            // producer feed must not force an early flush: while ops are pending,
+            // the worker waits out the remaining window and absorbs late arrivals.
+            const deadline_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds() + self.batch_timeout_ns;
             self.processOp(first);
-            pending = true;
 
-            while (!self.thread.isRequested()) {
-                const now_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds();
-                if (now_ns >= deadline_ns) break;
+            if (self.batch_timeout_ns != 0) {
+                while (!self.thread.isRequested()) {
+                    if (self.batch_max_updates != 0 and self.presence_manager.pendingUpdateCount() >= self.batch_max_updates) break;
+                    if (std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds() >= deadline_ns) break;
 
-                if (self.work_queue.pop()) |op| {
-                    self.processOp(op);
-                    continue;
-                }
-
-                self.thread.lockWork();
-                if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
-                    const wait_now_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds();
-                    if (wait_now_ns < deadline_ns) {
-                        _ = self.thread.waitForWorkTimed(@intCast(deadline_ns - wait_now_ns));
+                    if (self.work_queue.pop()) |op| {
+                        self.processOp(op);
+                        continue;
                     }
+
+                    self.thread.lockWork();
+                    if (!self.thread.isRequested() and !self.work_queue.hasItems()) {
+                        const wait_now_ns = std.Io.Clock.awake.now(self.presence_manager.io).toNanoseconds();
+                        if (wait_now_ns < deadline_ns) {
+                            _ = self.thread.waitForWorkTimed(@intCast(deadline_ns - wait_now_ns));
+                        }
+                    }
+                    self.thread.unlockWork();
                 }
-                self.thread.unlockWork();
             }
 
             if (self.thread.isRequested()) break;
             self.flush();
-            pending = false;
         }
 
         // Shutdown bypasses the window and publishes everything still pending.
         while (self.work_queue.pop()) |op| {
             self.processOp(op);
-            pending = true;
         }
-        if (pending) self.flush();
+        self.flush();
     }
 
     fn processOp(self: *PresenceWorker, op: PresenceOp) void {

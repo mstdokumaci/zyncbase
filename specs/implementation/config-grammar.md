@@ -119,6 +119,8 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | `batchWrites` | `boolean` | `true` | Enables grouping multiple writes into single database transactions. |
 | `batchSize` | `number` | `200` | Max number of writes processed in a single transaction. |
 | `batchTimeout` | `number` | `10` | Write batch window collection delay timeout (in ms). |
+| `presenceBatchTimeoutMs` | `number` | `8` | Max age of a pending presence broadcast before it is flushed (in ms). `0` flushes after every processed presence op. |
+| `presenceBatchMaxUpdates` | `number` | `512` | Max pending presence updates coalesced into a single broadcast. `0` disables the cap; the age window still applies. |
 | `statementCacheSize` | `number` | `100` | Max number of prepared statements cached per SQLite connection. |
 
 ---

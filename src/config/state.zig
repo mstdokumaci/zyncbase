@@ -73,6 +73,12 @@ pub const Config = struct {
         batch_writes: bool = true,
         batch_size: usize = 500,
         batch_timeout: u32 = 8,
+        /// Max age of a pending presence broadcast before it is flushed (ms).
+        /// `0` flushes after every processed presence op.
+        presence_batch_timeout: u32 = 8,
+        /// Max pending presence updates per broadcast. `0` disables the cap;
+        /// the age window still applies.
+        presence_batch_max_updates: usize = 512,
         statement_cache_size: usize = 100,
     };
 
