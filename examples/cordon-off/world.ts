@@ -102,6 +102,20 @@ const GOLDEN_ANGLE = 2.399963229728653;
 // cell. Synchronous reuse is safe because each call slices its exact result out.
 const countryChunkScratch = new Uint8Array(COUNTRY_CHUNK_CELLS * 2);
 
+/** Append one completed RLE run to the encoded scratch; returns the new length. */
+function flushRun(
+	encoded: Uint8Array,
+	out: number,
+	run: number,
+	code: number,
+): number {
+	if (run > 0) {
+		encoded[out++] = run;
+		encoded[out++] = code;
+	}
+	return out;
+}
+
 /** Bot country names stay reserved even before their country exists. */
 export function reservedBotCountry(value: unknown) {
 	try {
@@ -1355,7 +1369,6 @@ export class World {
 
 	/** Fused palette mapping and RLE for one chunk: one pass over the cells,
 	 * no intermediate code array. Returns the used length in the scratch. */
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: in-loop RLE run tracking avoids helper function calls per pixel.
 	private encodeChunk(x: number, y: number, encoded: Uint8Array) {
 		const ownerCodes = this.ownerCodes;
 		let out = 0;
@@ -1370,21 +1383,14 @@ export class World {
 				if (!code && countryId) code = this.codeOf(countryId);
 				if (code === currentCode && currentRun < 255) {
 					currentRun++;
-				} else {
-					if (currentRun > 0) {
-						encoded[out++] = currentRun;
-						encoded[out++] = currentCode;
-					}
-					currentCode = code;
-					currentRun = 1;
+					continue;
 				}
+				out = flushRun(encoded, out, currentRun, currentCode);
+				currentCode = code;
+				currentRun = 1;
 			}
 		}
-		if (currentRun > 0) {
-			encoded[out++] = currentRun;
-			encoded[out++] = currentCode;
-		}
-		return out;
+		return flushRun(encoded, out, currentRun, currentCode);
 	}
 
 	userChunk(index: number): UserChunkRow {
