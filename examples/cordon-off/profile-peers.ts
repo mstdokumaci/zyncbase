@@ -181,131 +181,133 @@ const frame = setInterval(() => {
 	for (const peer of peers) peer.session.frame(now);
 }, FRAME_MS);
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep validation next to the worker message it protects.
+/** Builds one peer end to end: connect, join, subscribe, admit, locate. */
+async function addPeer(data: Command, sessionId: string): Promise<void> {
+	const client = createClient({
+		url: data.url,
+		auth: { tokenProvider: async () => data.token },
+		storeNamespace: NAMESPACE,
+		reconnect: false,
+	});
+	// Server responsiveness: time player_move action round trips.
+	const call = client.actions.call.bind(client.actions);
+	client.actions.call = (name, params, options) => {
+		if (name !== "player_move") return call(name, params, options);
+		const sent = performance.now();
+		const generation = moveAckGeneration;
+		const pending = call(name, params, options);
+		void pending.then(
+			() => {
+				if (generation === moveAckGeneration)
+					moveAcks.push(performance.now() - sent);
+			},
+			() => {},
+		);
+		return pending;
+	};
+	client.on("error", (error) => errors.push(String(error)));
+	client.on("disconnected", () =>
+		errors.push(`Peer ${data.index} disconnected`),
+	);
+	await client.connect().catch((error) => {
+		client.disconnect();
+		throw error;
+	});
+	const peer: Peer = {
+		client,
+		id: "",
+		slot: 0,
+		name: `Player ${data.index + 1}`,
+		countryId: data.country_id,
+		colorIndex: 0,
+		chunks: new Map(),
+		session: undefined as unknown as ViewSession,
+		x: 933,
+		y: 276,
+		positioned: false,
+		index: data.index,
+		width: data.width,
+		height: data.height,
+		zoom: data.zoom,
+		moves: 0,
+		lastRowAt: 0,
+	};
+	peer.session = new ViewSession({
+		store: () => client.store,
+		width: peer.width,
+		height: peer.height,
+		scale: peer.zoom,
+		land,
+		ownerAt: (x, y) => ownerAt(peer.chunks, land, x, y),
+		isOnline: () => true,
+		client: () => client,
+		sinks: {
+			country: {
+				receive: (row) => {
+					callbacks++;
+					receiveCountryChunk(peer, row as unknown as CountryChunkRow);
+				},
+				removed: (index) => {
+					callbacks++;
+					peer.chunks.delete(index);
+					peer.session.dirty = true;
+				},
+			},
+			user: {
+				receive: (row) => {
+					callbacks++;
+					receiveUserChunk(peer, row as unknown as UserChunkRow);
+				},
+				removed: () => callbacks++,
+			},
+		},
+	});
+	try {
+		const joined = (await client.actions.call("player_join", {
+			name: peer.name,
+			country_id: peer.countryId,
+			session_id: sessionId,
+		})) as {
+			user_id?: unknown;
+			slot?: unknown;
+			x?: unknown;
+			y?: unknown;
+		};
+		peer.id = typeof joined.user_id === "string" ? joined.user_id : "";
+		peer.slot = Number.isSafeInteger(joined.slot) ? (joined.slot as number) : 0;
+		await client.presence.set({});
+		// Browser order: publish the initial move, subscribe the cold
+		// stores, then snap the camera to the admitted cell.
+		peer.session.publishDirection();
+		await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
+			callbacks++;
+			const mine = (rows as Country[]).find(
+				(row) => row.country_id === peer.countryId,
+			);
+			if (mine) peer.colorIndex = COUNTRY_COLOR_INDEX.get(mine.color) ?? 0;
+		});
+		await client.store.subscribe("users", { limit: 2048 }, () => {
+			callbacks++;
+		});
+		peer.session.admit(
+			Number.isSafeInteger(joined.x) && Number.isSafeInteger(joined.y)
+				? { x: joined.x as number, y: joined.y as number }
+				: undefined,
+		);
+		peers.push(peer);
+		void locate(peer);
+	} catch (error) {
+		client.disconnect();
+		throw error;
+	}
+}
+
 self.onmessage = async ({ data }: MessageEvent<Command>) => {
 	try {
 		if (data.type === "add") {
 			const sessionId = data.session_id;
 			if (!sessionId) throw new Error("Player session lease is missing");
-			const client = createClient({
-				url: data.url,
-				auth: { tokenProvider: async () => data.token },
-				storeNamespace: NAMESPACE,
-				reconnect: false,
-			});
-			// Server responsiveness: time player_move action round trips.
-			const call = client.actions.call.bind(client.actions);
-			client.actions.call = (name, params, options) => {
-				if (name !== "player_move") return call(name, params, options);
-				const sent = performance.now();
-				const generation = moveAckGeneration;
-				const pending = call(name, params, options);
-				void pending.then(
-					() => {
-						if (generation === moveAckGeneration)
-							moveAcks.push(performance.now() - sent);
-					},
-					() => {},
-				);
-				return pending;
-			};
-			client.on("error", (error) => errors.push(String(error)));
-			client.on("disconnected", () =>
-				errors.push(`Peer ${data.index} disconnected`),
-			);
-			await client.connect().catch((error) => {
-				client.disconnect();
-				throw error;
-			});
-			const peer: Peer = {
-				client,
-				id: "",
-				slot: 0,
-				name: `Player ${data.index + 1}`,
-				countryId: data.country_id,
-				colorIndex: 0,
-				chunks: new Map(),
-				session: undefined as unknown as ViewSession,
-				x: 933,
-				y: 276,
-				positioned: false,
-				index: data.index,
-				width: data.width,
-				height: data.height,
-				zoom: data.zoom,
-				moves: 0,
-				lastRowAt: 0,
-			};
-			peer.session = new ViewSession({
-				store: () => client.store,
-				width: peer.width,
-				height: peer.height,
-				scale: peer.zoom,
-				land,
-				ownerAt: (x, y) => ownerAt(peer.chunks, land, x, y),
-				isOnline: () => true,
-				client: () => client,
-				sinks: {
-					country: {
-						receive: (row) => {
-							callbacks++;
-							receiveCountryChunk(peer, row as unknown as CountryChunkRow);
-						},
-						removed: (index) => {
-							callbacks++;
-							peer.chunks.delete(index);
-							peer.session.dirty = true;
-						},
-					},
-					user: {
-						receive: (row) => {
-							callbacks++;
-							receiveUserChunk(peer, row as unknown as UserChunkRow);
-						},
-						removed: () => callbacks++,
-					},
-				},
-			});
-			try {
-				const joined = (await client.actions.call("player_join", {
-					name: peer.name,
-					country_id: peer.countryId,
-					session_id: sessionId,
-				})) as {
-					user_id?: unknown;
-					slot?: unknown;
-					x?: unknown;
-					y?: unknown;
-				};
-				peer.id = typeof joined.user_id === "string" ? joined.user_id : "";
-				peer.slot = Number.isSafeInteger(joined.slot)
-					? (joined.slot as number)
-					: 0;
-				await client.presence.set({});
-				// Browser order: publish the initial move, subscribe the cold
-				// stores, then snap the camera to the admitted cell.
-				peer.session.publishDirection();
-				await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
-					callbacks++;
-					const mine = (rows as Country[]).find(
-						(row) => row.country_id === peer.countryId,
-					);
-					if (mine) peer.colorIndex = COUNTRY_COLOR_INDEX.get(mine.color) ?? 0;
-				});
-				await client.store.subscribe("users", { limit: 2048 }, () => {
-					callbacks++;
-				});
-				peer.session.admit(
-					Number.isSafeInteger(joined.x) && Number.isSafeInteger(joined.y)
-						? { x: joined.x as number, y: joined.y as number }
-						: undefined,
-				);
-				peers.push(peer);
-				void locate(peer);
-			} catch (error) {
-				client.disconnect();
-				throw error;
-			}
+			await addPeer(data, sessionId);
 		} else if (data.type === "move") {
 			moving = data.moving;
 			started = Date.now();

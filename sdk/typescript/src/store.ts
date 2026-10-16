@@ -43,6 +43,20 @@ import { generateUUIDv7 } from "./uuid.js";
 /** How long a keyed subscription outlives its last consumer before teardown. */
 const GRACE_TEARDOWN_MS = 300;
 
+/** Builds the invalid-message error for an ack without a subscription id. */
+function missingSubIdError(kind: RegistrationKey["kind"]): ZyncBaseError {
+	return new ZyncBaseError(
+		kind === "listen"
+			? "Listen response missing subId"
+			: "Subscribe response missing subId",
+		{
+			code: ErrorCodes.INVALID_MESSAGE,
+			category: "client",
+			retryable: false,
+		},
+	);
+}
+
 /** The subset of ConnectionManager that StoreImpl depends on. */
 export interface StoreConnection {
 	dispatch(
@@ -389,9 +403,10 @@ export class StoreImpl {
 	 * retries across connection gaps and scope switches until the
 	 * subscription is accepted or the key fails for good.
 	 */
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: readiness wait, dispatch, and failure handling are one retry story — splitting them obscures the retry conditions.
 	private async establishLoop(state: RegistrationKey): Promise<void> {
 		while (!state.closed) {
+			// Keep this check synchronous: an already-ready session must dispatch
+			// in the caller's tick, not one microtask later.
 			if (!this.sessionReady || this.switchPending > 0) {
 				await this.readySignal();
 				continue;
@@ -401,48 +416,42 @@ export class StoreImpl {
 				const retry = await this.attemptEstablish(state, gen);
 				if (!retry) return;
 			} catch (err) {
-				if (state.closed) return;
-				if (state.callbacks.length === 0) {
-					this.dropKey(state);
-					return;
-				}
-				if (
-					gen !== this.scopeGen ||
-					!this.sessionReady ||
-					this.switchPending > 0
-				) {
-					continue;
-				}
-				this.dropKey(state);
-				throw err;
+				if (!this.afterEstablishFailure(err, state, gen)) return;
 			}
 		}
 	}
 
+	/** Retries when the failure can outlive a scope switch; false gives up. */
+	private afterEstablishFailure(
+		err: unknown,
+		state: RegistrationKey,
+		gen: number,
+	): boolean {
+		if (state.closed) return false;
+		if (state.callbacks.length === 0) {
+			this.dropKey(state);
+			return false;
+		}
+		if (gen !== this.scopeGen || !this.sessionReady || this.switchPending > 0) {
+			return true;
+		}
+		this.dropKey(state);
+		throw err;
+	}
+
 	/** Returns true when the ack went stale and the loop should retry. */
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one dispatch-ack-validate path; guards would become hidden preconditions across helper boundaries.
 	private async attemptEstablish(
 		state: RegistrationKey,
 		gen: number,
 	): Promise<boolean> {
 		const ok = await this.conn.dispatch(state.message);
-		if (ok.subId === undefined) {
-			throw new ZyncBaseError(
-				state.kind === "listen"
-					? "Listen response missing subId"
-					: "Subscribe response missing subId",
-				{
-					code: ErrorCodes.INVALID_MESSAGE,
-					category: "client",
-					retryable: false,
-				},
-			);
-		}
+		const subId = ok.subId;
+		if (subId === undefined) throw missingSubIdError(state.kind);
 		if (state.closed || this.keys.get(state.key) !== state) {
 			// Everyone left (or the client shut down) while the ack was in
 			// flight — free the server subscription when the socket is live.
 			if (this.sessionReady && gen === this.scopeGen) {
-				this.dispatchUnsubscribe(ok.subId).catch(() => {});
+				this.dispatchUnsubscribe(subId).catch(() => {});
 			}
 			return false;
 		}
@@ -454,27 +463,34 @@ export class StoreImpl {
 		}
 		if (state.callbacks.length === 0) {
 			this.dropKey(state);
-			if (this.sessionReady) {
-				this.dispatchUnsubscribe(ok.subId).catch(() => {});
-			}
+			if (this.sessionReady) this.dispatchUnsubscribe(subId).catch(() => {});
 			return false;
 		}
-		state.subId = ok.subId;
+		this.acceptAck(state, ok, subId);
+		return false;
+	}
+
+	/** Adopts an accepted ack: subscription id, cursor, tracking and snapshot. */
+	private acceptAck(
+		state: RegistrationKey,
+		ok: OkResponse,
+		subId: number,
+	): void {
+		state.subId = subId;
 		if (state.kind === "subscribe") {
 			state.nextCursor = ok.nextCursor ?? null;
 			state.hasMore = ok.hasMore ?? false;
 		}
-		this.tracker.register(ok.subId, this.entryFor(state));
+		this.tracker.register(subId, this.entryFor(state));
 		if (ok.value !== undefined) {
 			this.tracker.dispatchInitialSnapshot(
-				ok.subId,
+				subId,
 				state.kind === "listen"
 					? (state.segments as string[])
 					: [state.collection as string],
 				ok.value as JsonValue,
 			);
 		}
-		return false;
 	}
 
 	private entryFor(state: RegistrationKey): SubscriptionEntry {
