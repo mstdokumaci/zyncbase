@@ -102,14 +102,17 @@ const GOLDEN_ANGLE = 2.399963229728653;
 // cell. Synchronous reuse is safe because each call slices its exact result out.
 const countryChunkScratch = new Uint8Array(COUNTRY_CHUNK_CELLS * 2);
 
-/** Append one palette code to a live RLE stream; returns the new length. */
-function appendRle(encoded: Uint8Array, out: number, code: number) {
-	if (out > 0 && encoded[out - 1] === code && encoded[out - 2] < 255) {
-		encoded[out - 2]++;
-		return out;
+/** Append one completed RLE run to the encoded scratch; returns the new length. */
+function flushRun(
+	encoded: Uint8Array,
+	out: number,
+	run: number,
+	code: number,
+): number {
+	if (run > 0) {
+		encoded[out++] = run;
+		encoded[out++] = code;
 	}
-	encoded[out++] = 1;
-	encoded[out++] = code;
 	return out;
 }
 
@@ -1369,6 +1372,8 @@ export class World {
 	private encodeChunk(x: number, y: number, encoded: Uint8Array) {
 		const ownerCodes = this.ownerCodes;
 		let out = 0;
+		let currentCode = -1;
+		let currentRun = 0;
 		for (let dy = 0; dy < COUNTRY_CHUNK_HEIGHT; dy++) {
 			const start = (y + dy) * WIDTH + x;
 			for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++) {
@@ -1376,18 +1381,27 @@ export class World {
 				let code = ownerCodes[countryId];
 				// Directly injected country rows skip country(); resolve once.
 				if (!code && countryId) code = this.codeOf(countryId);
-				out = appendRle(encoded, out, code);
+				if (code === currentCode && currentRun < 255) {
+					currentRun++;
+					continue;
+				}
+				out = flushRun(encoded, out, currentRun, currentCode);
+				currentCode = code;
+				currentRun = 1;
 			}
 		}
-		return out;
+		return flushRun(encoded, out, currentRun, currentCode);
 	}
 
 	userChunk(index: number): UserChunkRow {
 		if (!Number.isSafeInteger(index) || index < 0 || index >= USER_CHUNK_COUNT)
 			throw new RangeError("Chunk index is out of range");
-		const dots: Dot[] = [...this.players.values()]
-			.filter((player) => userChunkIndex(player.x, player.y) === index)
-			.map(({ slot, x, y }) => ({ slot, x, y }));
+		const dots: Dot[] = [];
+		for (const player of this.players.values()) {
+			if (userChunkIndex(player.x, player.y) === index) {
+				dots.push({ slot: player.slot, x: player.x, y: player.y });
+			}
+		}
 		// Grace tombstones keep their dot frozen in the chunk until the window
 		// expires, so a transient drop never blinks the player off the map.
 		for (const grave of this.graveyard.values()) {

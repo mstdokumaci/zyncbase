@@ -215,8 +215,13 @@ export function userChunkIndex(x: number, y: number) {
 	);
 }
 
+const ROW_IDS: string[] = Array.from(
+	{ length: Math.max(COUNTRY_COLUMNS * COUNTRY_ROWS, USER_CHUNK_COUNT) },
+	(_, i) => String(i),
+);
+
 export function rowId(index: number) {
-	return String(index);
+	return ROW_IDS[index] ?? String(index);
 }
 
 // Country chunks that hold no land can never change owner: no row exists for
