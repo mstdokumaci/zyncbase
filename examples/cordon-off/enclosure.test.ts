@@ -18,7 +18,6 @@ import { World } from "./world";
 type Pixel = [number, number, number];
 
 // Independent eight-neighbour boundary flood; deliberately no run logic.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the independent reference flood explicit for comparison with the run implementation.
 function referenceFill(owners: Uint16Array, width: number, countryId: number) {
 	const labels = Uint8Array.from(owners, (owner) =>
 		owner === countryId ? 2 : 0,
@@ -29,29 +28,40 @@ function referenceFill(owners: Uint16Array, width: number, countryId: number) {
 		labels[cell] = 1;
 		queue.push(cell);
 	};
-	for (let cell = 0; cell < labels.length; cell++)
-		if (
-			cell < width ||
-			cell >= labels.length - width ||
-			cell % width === 0 ||
-			cell % width === width - 1
-		)
-			visit(cell);
+	const height = labels.length / width;
+	for (let x = 0; x < width; x++) {
+		visit(x);
+		visit((height - 1) * width + x);
+	}
+	for (let y = 1; y < height - 1; y++) {
+		visit(y * width);
+		visit(y * width + width - 1);
+	}
 	for (let head = 0; head < queue.length; head++) {
 		const cell = queue[head],
 			x = cell % width,
 			y = (cell - x) / width;
-		for (let dy = -1; dy <= 1; dy++)
-			for (let dx = -1; dx <= 1; dx++) {
-				if (!dx && !dy) continue;
-				const nx = x + dx,
-					ny = y + dy;
-				if (nx < 0 || ny < 0 || nx >= width || ny >= labels.length / width)
-					continue;
-				visit(ny * width + nx);
-			}
+		spreadReference(x, y, width, height, visit);
 	}
 	return labels;
+}
+
+/** Visits every in-bounds neighbour of one cell; `visit` filters what it takes. */
+function spreadReference(
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	visit: (cell: number) => void,
+) {
+	for (let dy = -1; dy <= 1; dy++)
+		for (let dx = -1; dx <= 1; dx++) {
+			if (!dx && !dy) continue;
+			const nx = x + dx,
+				ny = y + dy;
+			if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+			visit(ny * width + nx);
+		}
 }
 
 /** The cells a reference flood could not reach, in the order a fill reports them. */
@@ -150,31 +160,34 @@ test("the local budget is shared across components and exhaustion leaves ownersh
 });
 
 test.each([
-	3,
-	4,
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: exhaust masks and possible paints after independently filling old holes.
+	3, 4,
 ])("gain gate never skips a new enclosure on filled masks of size %i", (size) => {
 	const owners = new Uint16Array(size * size);
 	for (let mask = 0; mask < 2 ** owners.length; mask++) {
 		for (let i = 0; i < owners.length; i++) owners[i] = (mask >> i) & 1;
-		const before = referenceFill(owners, size, 1);
-		for (let i = 0; i < owners.length; i++) if (before[i] === 0) owners[i] = 1;
-		for (const cell of size === 3 ? owners.keys() : [size + 1]) {
-			if (owners[cell]) continue;
-			owners[cell] = 1;
-			if (
-				!mayEnclose(owners, 1, cell, size, {
-					left: 0,
-					right: size - 1,
-					top: 0,
-					bottom: size - 1,
-				})
-			)
-				expect(referenceFill(owners, size, 1).includes(0)).toBe(false);
-			owners[cell] = 0;
-		}
+		expectNoSkippedEnclosure(owners, size);
 	}
 });
+
+/** Fills every independently-found hole, then checks each new claim's gate. */
+function expectNoSkippedEnclosure(owners: Uint16Array, size: number) {
+	const before = referenceFill(owners, size, 1);
+	for (let i = 0; i < owners.length; i++) if (before[i] === 0) owners[i] = 1;
+	for (const cell of size === 3 ? owners.keys() : [size + 1]) {
+		if (owners[cell]) continue;
+		owners[cell] = 1;
+		if (
+			!mayEnclose(owners, 1, cell, size, {
+				left: 0,
+				right: size - 1,
+				top: 0,
+				bottom: size - 1,
+			})
+		)
+			expect(referenceFill(owners, size, 1).includes(0)).toBe(false);
+		owners[cell] = 0;
+	}
+}
 
 test("straight exits never classify an enclosed pixel as exterior", () => {
 	const owners = new Uint16Array(16);

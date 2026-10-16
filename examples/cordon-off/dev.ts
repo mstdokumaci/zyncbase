@@ -1,6 +1,11 @@
 // Local development/test substitute for Cloudflare path routing. Not used on the VM.
 import { readFile } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import {
+	createServer,
+	request as httpRequest,
+	type IncomingMessage,
+	type ServerResponse,
+} from "node:http";
 import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -32,41 +37,10 @@ export async function startLocalEdge(options: {
 		["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
 		["/og.png", ["og.png", "image/png"]],
 	]);
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this development-only handler mirrors static and HTTP origin routing.
 	const server = createServer(async (req, res) => {
 		const path = new URL(req.url ?? "/", "http://localhost").pathname;
-		const asset = assets.get(path);
-		if (asset && req.method === "GET") {
-			try {
-				const bytes = await readFile(join(options.assets, asset[0]));
-				res.writeHead(200, { "Content-Type": asset[1] });
-				res.end(bytes);
-			} catch {
-				res.writeHead(500).end("Build browser assets first");
-			}
-			return;
-		}
-		// History is written into the assets directory by the game process and
-		// is a Worker asset in production; the local edge serves it from disk.
-		if (path.startsWith("/history/")) {
-			const name = path.slice("/history/".length);
-			if (!/^(?:\d+\.(?:json|png)|index\.json)$/.test(name)) {
-				res.writeHead(404).end();
-				return;
-			}
-			try {
-				const bytes = await readFile(join(options.assets, "history", name));
-				res.writeHead(200, {
-					"Content-Type": name.endsWith(".png")
-						? "image/png"
-						: "application/json",
-				});
-				res.end(bytes);
-			} catch {
-				res.writeHead(404).end();
-			}
-			return;
-		}
+		if (await serveAsset(req, res, path, assets, options.assets)) return;
+		if (await serveHistory(res, path, options.assets)) return;
 		if (!["/session", "/health", "/auth/ticket"].includes(path)) {
 			res.writeHead(404).end();
 			return;
@@ -150,6 +124,50 @@ export async function startLocalEdge(options: {
 			for (const socket of sockets) socket.destroy();
 		});
 	return { port: boundPort, stop };
+}
+
+/** Serves one prebuilt browser asset; true when the request was handled. */
+async function serveAsset(
+	req: IncomingMessage,
+	res: ServerResponse,
+	path: string,
+	assets: Map<string, string[]>,
+	dir: string,
+): Promise<boolean> {
+	const asset = assets.get(path);
+	if (!asset || req.method !== "GET") return false;
+	try {
+		const bytes = await readFile(join(dir, asset[0]));
+		res.writeHead(200, { "Content-Type": asset[1] });
+		res.end(bytes);
+	} catch {
+		res.writeHead(500).end("Build browser assets first");
+	}
+	return true;
+}
+
+/** Serves a history snapshot from disk; true when the path was a history request. */
+async function serveHistory(
+	res: ServerResponse,
+	path: string,
+	dir: string,
+): Promise<boolean> {
+	if (!path.startsWith("/history/")) return false;
+	const name = path.slice("/history/".length);
+	if (!/^(?:\d+\.(?:json|png)|index\.json)$/.test(name)) {
+		res.writeHead(404).end();
+		return true;
+	}
+	try {
+		const bytes = await readFile(join(dir, "history", name));
+		res.writeHead(200, {
+			"Content-Type": name.endsWith(".png") ? "image/png" : "application/json",
+		});
+		res.end(bytes);
+	} catch {
+		res.writeHead(404).end();
+	}
+	return true;
 }
 
 if (import.meta.main) {
