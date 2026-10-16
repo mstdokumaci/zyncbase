@@ -179,7 +179,7 @@ test "PresenceWorker: batched user update fanout throughput" {
 
     var notifier: TestNotifier = .{};
     var worker: PresenceWorker = undefined;
-    try worker.init(allocator, &memory_strategy, &manager, &send_queue, TestNotifier.notify, &notifier);
+    try worker.init(allocator, &memory_strategy, &manager, &send_queue, .{}, TestNotifier.notify, &notifier);
     defer worker.deinit();
 
     for (0..subscriber_count) |i| {
@@ -248,7 +248,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     try testing.expect(avg_total < target_total);
 }
 
-test "PresenceWorker: 2 ms coalescing window latency" {
+test "PresenceWorker: sparse update latency" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init();
     defer memory_strategy.deinit();
@@ -272,9 +272,14 @@ test "PresenceWorker: 2 ms coalescing window latency" {
     var snapshot = try manager.onSubscribeUser(namespace_id, 1, 1);
     defer snapshot.deinit(allocator);
 
+    // Sparse updates flush at the age-window boundary: the window (not the
+    // old fixed 2 ms tick) governs how long a lone update waits for company.
     var notifier: LatencyNotifier = .{};
     var worker: PresenceWorker = undefined;
-    try worker.init(allocator, &memory_strategy, &manager, &send_queue, LatencyNotifier.notify, &notifier);
+    try worker.init(allocator, &memory_strategy, &manager, &send_queue, .{
+        .timeout_ms = 40,
+        .max_updates = 512,
+    }, LatencyNotifier.notify, &notifier);
     try worker.spawn();
     defer {
         worker.stop();
@@ -320,6 +325,8 @@ test "PresenceWorker: 2 ms coalescing window latency" {
         @as(f64, @floatFromInt(p95_ns)) / 1e6,
     });
 
-    try testing.expect(median_ns >= std.time.ns_per_ms);
-    try testing.expect(p95_ns < 100 * std.time.ns_per_ms);
+    // A lone update waits for company at least half the window, and the window
+    // bounds it; the slack absorbs CI scheduling noise.
+    try testing.expect(median_ns >= 20 * std.time.ns_per_ms);
+    try testing.expect(p95_ns < 250 * std.time.ns_per_ms);
 }

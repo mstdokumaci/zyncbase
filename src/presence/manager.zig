@@ -33,7 +33,7 @@ pub const PresenceManager = struct {
     // Grace period tracking: namespace_id → timestamp_ms when it became empty
     namespace_empty_at: std.AutoHashMapUnmanaged(i64, i64),
 
-    // Batch pending: user presence updates queued for the 2ms flush
+    // Batch pending: presence updates queued for the next broadcast flush
     pending_user_updates: std.ArrayListUnmanaged(PendingUserUpdate),
     pending_shared_updates: std.ArrayListUnmanaged(PendingSharedUpdate),
 
@@ -574,6 +574,13 @@ pub const PresenceManager = struct {
         updates: std.ArrayListUnmanaged(PendingSharedUpdate),
         subscribers: std.ArrayListUnmanaged(Subscriber),
     };
+
+    /// Number of user + shared updates awaiting the next broadcast.
+    /// The pending lists are owned exclusively by the presence worker thread,
+    /// so this must only be called from there (no lock taken).
+    pub fn pendingUpdateCount(self: *const PresenceManager) usize {
+        return self.pending_user_updates.items.len + self.pending_shared_updates.items.len;
+    }
 
     /// Drains pending updates and returns them grouped by namespace with their subscribers.
     /// Caller owns the returned batches and must deinit them.

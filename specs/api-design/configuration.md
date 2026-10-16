@@ -117,6 +117,8 @@ Main server configuration file.
     "batchWrites": true,
     "batchSize": 200,
     "batchTimeout": 10,
+    "presenceBatchTimeoutMs": 8,
+    "presenceBatchMaxUpdates": 512,
     "statementCacheSize": 100
   }
 }
@@ -327,6 +329,8 @@ Performance tuning.
     "batchWrites": true,
     "batchSize": 200,
     "batchTimeout": 10,
+    "presenceBatchTimeoutMs": 8,
+    "presenceBatchMaxUpdates": 512,
     "statementCacheSize": 100
   }
 }

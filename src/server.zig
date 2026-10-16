@@ -338,6 +338,10 @@ pub const ZyncBaseServer = struct {
             &self.memory_strategy,
             &self.presence_manager,
             &self.send_queue,
+            .{
+                .timeout_ms = self.config.performance.presence_batch_timeout,
+                .max_updates = self.config.performance.presence_batch_max_updates,
+            },
             storageEngineWakeup,
             self,
         );

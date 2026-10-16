@@ -278,6 +278,8 @@ pub const ConfigLoader = struct {
         try json_read.setBool(&config.performance.batch_writes, perf_obj, "batchWrites");
         try json_read.setInt(usize, &config.performance.batch_size, perf_obj, "batchSize");
         try json_read.setInt(u32, &config.performance.batch_timeout, perf_obj, "batchTimeout");
+        try json_read.setInt(u32, &config.performance.presence_batch_timeout, perf_obj, "presenceBatchTimeoutMs");
+        try json_read.setInt(usize, &config.performance.presence_batch_max_updates, perf_obj, "presenceBatchMaxUpdates");
         try json_read.setInt(usize, &config.performance.statement_cache_size, perf_obj, "statementCacheSize");
     }
 
