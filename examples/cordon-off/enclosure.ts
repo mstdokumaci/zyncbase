@@ -21,8 +21,8 @@ export function mayEnclose(
 	bounds: Bounds,
 ): number[] | undefined {
 	const x = cell % width,
-		y = (cell - x) / width,
-		height = owners.length / width;
+		y = Math.floor(cell / width),
+		height = (owners.length / width) | 0;
 	let open = 0,
 		walled = false,
 		edge = false;
@@ -187,6 +187,12 @@ let holeCount = 0;
 let depth = 0;
 let seen = 0;
 const OFFSETS = new Int32Array(8);
+const QUADRANT_OFFSETS: Int32Array[] = [
+	new Int32Array(8),
+	new Int32Array(8),
+	new Int32Array(8),
+	new Int32Array(8),
+];
 
 function growInt32(buffer: Int32Array) {
 	const grown = new Int32Array(buffer.length * 2);
@@ -206,6 +212,8 @@ export function localEnclosures(
 	const outsideMark = nextStamp(owners);
 	// Flat neighbour offsets, built once per call rather than once per pixel.
 	buildOffsets(width);
+	const midX = (bounds.left + bounds.right) >> 1;
+	const midY = (bounds.top + bounds.bottom) >> 1;
 	budget = LOCAL_SEARCH_BUDGET;
 	holeCount = 0;
 	for (const start of starts) {
@@ -218,8 +226,16 @@ export function localEnclosures(
 		}
 		if (!budget--) return;
 		if (
-			floodComponent(owners, countryId, start, bounds, width, outsideMark) ===
-			"exhausted"
+			floodComponent(
+				owners,
+				countryId,
+				start,
+				bounds,
+				width,
+				midX,
+				midY,
+				outsideMark,
+			) === "exhausted"
 		)
 			return;
 	}
@@ -248,6 +264,11 @@ function nextStamp(owners: Uint16Array): number {
 /** Flat neighbour offsets for this width, reused for every pixel of the call. */
 function buildOffsets(width: number): void {
 	for (let i = 0; i < 8; i++) OFFSETS[i] = RING_X[i] + RING_Y[i] * width;
+	for (let q = 0; q < 4; q++) {
+		const order = PUSH_ORDER[q];
+		const qOffsets = QUADRANT_OFFSETS[q];
+		for (let i = 0; i < 8; i++) qOffsets[i] = OFFSETS[order[i]];
+	}
 }
 
 /** True for country pixels and for cells this search already resolved. */
@@ -280,6 +301,8 @@ function floodComponent(
 	start: number,
 	bounds: Bounds,
 	width: number,
+	midX: number,
+	midY: number,
 	outsideMark: number,
 ): "open" | "exhausted" | "hole" {
 	depth = 0;
@@ -290,7 +313,7 @@ function floodComponent(
 	while (depth > 0) {
 		const cell = stack[--depth],
 			x = cell % width,
-			y = (cell - x) / width;
+			y = Math.floor(cell / width);
 		if (atBoundary(x, y, bounds)) return settleComponent(true, outsideMark);
 		const open = spreadNeighbours(
 			owners,
@@ -298,7 +321,8 @@ function floodComponent(
 			cell,
 			x,
 			y,
-			bounds,
+			midX,
+			midY,
 			outsideMark,
 		);
 		if (open === undefined) return "exhausted";
@@ -317,14 +341,14 @@ function spreadNeighbours(
 	cell: number,
 	x: number,
 	y: number,
-	bounds: Bounds,
+	midX: number,
+	midY: number,
 	outsideMark: number,
 ): boolean | undefined {
-	const px = x - bounds.left <= bounds.right - x ? -1 : 1;
-	const py = y - bounds.top <= bounds.bottom - y ? -1 : 1;
-	const order = PUSH_ORDER[((px + 1) >> 1) * 2 + ((py + 1) >> 1)];
+	const quadrant = ((x <= midX ? 0 : 1) << 1) | (y <= midY ? 0 : 1);
+	const offsets = QUADRANT_OFFSETS[quadrant];
 	for (let i = 0; i < 8; i++) {
-		const next = cell + OFFSETS[order[i]];
+		const next = cell + offsets[i];
 		if (owners[next] === countryId) continue;
 		const mark = marks[next];
 		if (mark === outsideMark) return true;

@@ -166,16 +166,24 @@ export function planBot(
 	bot: { id: string; x: number; y: number; country_id: number },
 	side = SIDE,
 ): BotPlan | undefined {
-	const rival = [...world.countries.values()]
-		.filter((country) => country.country_id !== bot.country_id)
-		.sort((a, b) => b.count - a.count)[0]?.country_id;
-	const reserved = new Set(
-		[...world.players.values()]
-			.filter(
-				(other) => other.id !== bot.id && other.country_id === bot.country_id,
-			)
-			.map((other) => other.plan?.patch),
-	);
+	let rival: number | undefined;
+	let rivalCount = -1;
+	for (const country of world.countries.values()) {
+		if (country.country_id !== bot.country_id && country.count > rivalCount) {
+			rivalCount = country.count;
+			rival = country.country_id;
+		}
+	}
+	const reserved = new Set<number>();
+	for (const other of world.players.values()) {
+		if (
+			other.id !== bot.id &&
+			other.country_id === bot.country_id &&
+			other.plan?.patch !== undefined
+		) {
+			reserved.add(other.plan.patch);
+		}
+	}
 	const from = bot.y * WIDTH + bot.x;
 	let bestGain = 0;
 	let bestCost = 1;
@@ -184,24 +192,23 @@ export function planBot(
 		bestReverse = false,
 		bestHorizontalFirst = true,
 		bestLoop = false;
+	const baseLeft = Math.floor(bot.x / side) * side;
+	const baseTop = Math.floor(bot.y / side) * side;
 	for (let dy = -4; dy <= 4; dy++) {
+		const top = baseTop + dy * side;
+		if (top < 0 || top + side > HEIGHT) continue;
 		for (let dx = -4; dx <= 4; dx++) {
-			const left = (Math.floor(bot.x / side) + dx) * side;
-			const top = (Math.floor(bot.y / side) + dy) * side;
+			const left = baseLeft + dx * side;
+			if (left < 0 || left + side > WIDTH) continue;
 			const patch = top * WIDTH + left;
-			if (
-				left < 0 ||
-				top < 0 ||
-				left + side > WIDTH ||
-				top + side > HEIGHT ||
-				reserved.has(patch)
-			)
-				continue;
+			if (reserved.has(patch)) continue;
 			let gain = 0;
 			let i = 0;
 			for (let y = 0; y < side; y++) {
+				const rowBase = (top + y) * WIDTH + left;
+				const odd = y % 2 !== 0;
 				for (let x = 0; x < side; x++) {
-					const cell = (top + y) * WIDTH + left + (y % 2 ? side - 1 - x : x);
+					const cell = rowBase + (odd ? side - 1 - x : x);
 					areaScratch[i++] = cell;
 					if (!world.land[cell] || world.owners[cell] === bot.country_id)
 						continue;
@@ -214,13 +221,15 @@ export function planBot(
 			const route = loop
 				? fillPerimeter(edgeScratch, left, top, side)
 				: areaScratch;
+			const routeLen = route.length;
+			const lastIndex = routeLen - 1;
 			for (let r = 0; r < 2; r++) {
 				const reverse = r === 1;
-				const entry = reverse ? (route.at(-1) as number) : route[0];
+				const entry = reverse ? route[lastIndex] : route[0];
 				const lowerBound =
 					Math.abs((entry % WIDTH) - bot.x) +
 					Math.abs(Math.floor(entry / WIDTH) - bot.y) +
-					route.length -
+					routeLen -
 					1 +
 					(loop ? 1 : 0);
 				for (let h = 0; h < 2; h++) {
@@ -258,7 +267,9 @@ export function planBot(
 	if (bestLoop) cells.push(order[0]);
 	// A coastal sweep must enter its starting cell too; water cannot close a boundary.
 	else if (from === order[0])
-		cells.push(...approach(order.at(-1) as number, from, bestHorizontalFirst));
+		cells.push(
+			...approach(order[order.length - 1] as number, from, bestHorizontalFirst),
+		);
 	return { patch: bestPatch, cells };
 }
 
