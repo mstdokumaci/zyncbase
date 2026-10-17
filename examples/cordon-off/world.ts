@@ -102,20 +102,6 @@ const GOLDEN_ANGLE = 2.399963229728653;
 // cell. Synchronous reuse is safe because each call slices its exact result out.
 const countryChunkScratch = new Uint8Array(COUNTRY_CHUNK_CELLS * 2);
 
-/** Append one completed RLE run to the encoded scratch; returns the new length. */
-function flushRun(
-	encoded: Uint8Array,
-	out: number,
-	run: number,
-	code: number,
-): number {
-	if (run > 0) {
-		encoded[out++] = run;
-		encoded[out++] = code;
-	}
-	return out;
-}
-
 /** Bot country names stay reserved even before their country exists. */
 export function reservedBotCountry(value: unknown) {
 	try {
@@ -1334,9 +1320,9 @@ export class World {
 		this.extendBounds(countryId, cell);
 		this.changedCountries.add(countryId);
 		this.queueEnclosureCandidates(cell, countryId, by);
-		this.dirtyCountryChunks.add(
-			countryChunkIndex(cell % WIDTH, Math.floor(cell / WIDTH)),
-		);
+		const x = cell % WIDTH,
+			y = ((cell - x) / WIDTH) | 0;
+		this.dirtyCountryChunks.add(countryChunkIndex(x, y));
 		this.creditGain(countryId, fromFill, by);
 		this.dirtyCountries.add(countryId);
 		if (owner) this.settleLoss(owner, cell, fromFill, by);
@@ -1361,7 +1347,7 @@ export class World {
 		)
 			throw new RangeError("Chunk index is out of range");
 		const x = (index % COUNTRY_COLUMNS) * COUNTRY_CHUNK_WIDTH;
-		const y = Math.floor(index / COUNTRY_COLUMNS) * COUNTRY_CHUNK_HEIGHT;
+		const y = ((index / COUNTRY_COLUMNS) | 0) * COUNTRY_CHUNK_HEIGHT;
 		const encoded = countryChunkScratch;
 		const out = this.encodeChunk(x, y, encoded);
 		return { id: rowId(index), color_indexes: encoded.slice(0, out) };
@@ -1370,6 +1356,7 @@ export class World {
 	/** Fused palette mapping and RLE for one chunk: one pass over the cells,
 	 * no intermediate code array. Returns the used length in the scratch. */
 	private encodeChunk(x: number, y: number, encoded: Uint8Array) {
+		const owners = this.owners;
 		const ownerCodes = this.ownerCodes;
 		let out = 0;
 		let currentCode = -1;
@@ -1377,7 +1364,7 @@ export class World {
 		for (let dy = 0; dy < COUNTRY_CHUNK_HEIGHT; dy++) {
 			const start = (y + dy) * WIDTH + x;
 			for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++) {
-				const countryId = this.owners[start + dx];
+				const countryId = owners[start + dx];
 				let code = ownerCodes[countryId];
 				// Directly injected country rows skip country(); resolve once.
 				if (!code && countryId) code = this.codeOf(countryId);
@@ -1385,12 +1372,19 @@ export class World {
 					currentRun++;
 					continue;
 				}
-				out = flushRun(encoded, out, currentRun, currentCode);
+				if (currentRun > 0) {
+					encoded[out++] = currentRun;
+					encoded[out++] = currentCode;
+				}
 				currentCode = code;
 				currentRun = 1;
 			}
 		}
-		return flushRun(encoded, out, currentRun, currentCode);
+		if (currentRun > 0) {
+			encoded[out++] = currentRun;
+			encoded[out++] = currentCode;
+		}
+		return out;
 	}
 
 	userChunk(index: number): UserChunkRow {

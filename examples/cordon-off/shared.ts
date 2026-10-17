@@ -203,15 +203,14 @@ export function wrapX(x: number) {
 
 export function countryChunkIndex(x: number, y: number) {
 	return (
-		Math.floor(y / COUNTRY_CHUNK_HEIGHT) * COUNTRY_COLUMNS +
-		Math.floor(x / COUNTRY_CHUNK_WIDTH)
+		((y / COUNTRY_CHUNK_HEIGHT) | 0) * COUNTRY_COLUMNS +
+		((x / COUNTRY_CHUNK_WIDTH) | 0)
 	);
 }
 
 export function userChunkIndex(x: number, y: number) {
 	return (
-		Math.floor(y / USER_CHUNK_HEIGHT) * USER_COLUMNS +
-		Math.floor(x / USER_CHUNK_WIDTH)
+		((y / USER_CHUNK_HEIGHT) | 0) * USER_COLUMNS + ((x / USER_CHUNK_WIDTH) | 0)
 	);
 }
 
@@ -303,7 +302,7 @@ export function encodeCoordinates(chunkIndex: number, dots: Dot[]): Uint8Array {
 	bytes[3] = dots.length & 0xff;
 	bytes[4] = (dots.length >> 8) & 0xff;
 	const originX = (chunkIndex % USER_COLUMNS) * USER_CHUNK_WIDTH;
-	const originY = Math.floor(chunkIndex / USER_COLUMNS) * USER_CHUNK_HEIGHT;
+	const originY = ((chunkIndex / USER_COLUMNS) | 0) * USER_CHUNK_HEIGHT;
 	let at = COORDINATES_HEADER_BYTES;
 	for (const dot of dots) {
 		const lx = dot.x - originX;
