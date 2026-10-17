@@ -115,16 +115,27 @@ function scoreCells(
 		y = Math.floor(cur / WIDTH);
 	const tx = entry % WIDTH,
 		ty = Math.floor(entry / WIDTH);
+	const stepX = tx > x ? 1 : -1;
+	const stepY = ty > y ? 1 : -1;
 	for (let pass = 0; pass < 2; pass++) {
-		const horizontal = pass === 0 ? horizontalFirst : !horizontalFirst;
-		while (horizontal ? x !== tx : y !== ty) {
-			if (horizontal) x += tx > x ? 1 : -1;
-			else y += ty > y ? 1 : -1;
-			const next = y * WIDTH + x;
-			const owner = paintedFlags[next] === painted ? countryId : owners[next];
-			cost += world.stepCost(countryId, cur, next, owner);
-			if (land[next]) paintedFlags[next] = painted;
-			cur = next;
+		if (pass === 0 ? horizontalFirst : !horizontalFirst) {
+			while (x !== tx) {
+				x += stepX;
+				const next = y * WIDTH + x;
+				const owner = paintedFlags[next] === painted ? countryId : owners[next];
+				cost += world.stepCost(countryId, cur, next, owner);
+				if (land[next]) paintedFlags[next] = painted;
+				cur = next;
+			}
+		} else {
+			while (y !== ty) {
+				y += stepY;
+				const next = y * WIDTH + x;
+				const owner = paintedFlags[next] === painted ? countryId : owners[next];
+				cost += world.stepCost(countryId, cur, next, owner);
+				if (land[next]) paintedFlags[next] = painted;
+				cur = next;
+			}
 		}
 	}
 	for (let k = 1; k < route.length; k++) {
@@ -143,16 +154,29 @@ function scoreCells(
 			ry = Math.floor(exit / WIDTH);
 		const fx = from % WIDTH,
 			fy = Math.floor(from / WIDTH);
+		const stepRx = fx > rx ? 1 : -1;
+		const stepRy = fy > ry ? 1 : -1;
 		for (let pass = 0; pass < 2; pass++) {
-			const horizontal = pass === 0 ? horizontalFirst : !horizontalFirst;
-			while (horizontal ? rx !== fx : ry !== fy) {
-				if (horizontal) rx += fx > rx ? 1 : -1;
-				else ry += fy > ry ? 1 : -1;
-				const next = ry * WIDTH + rx;
-				const owner = paintedFlags[next] === painted ? countryId : owners[next];
-				cost += world.stepCost(countryId, cur, next, owner);
-				if (land[next]) paintedFlags[next] = painted;
-				cur = next;
+			if (pass === 0 ? horizontalFirst : !horizontalFirst) {
+				while (rx !== fx) {
+					rx += stepRx;
+					const next = ry * WIDTH + rx;
+					const owner =
+						paintedFlags[next] === painted ? countryId : owners[next];
+					cost += world.stepCost(countryId, cur, next, owner);
+					if (land[next]) paintedFlags[next] = painted;
+					cur = next;
+				}
+			} else {
+				while (ry !== fy) {
+					ry += stepRy;
+					const next = ry * WIDTH + rx;
+					const owner =
+						paintedFlags[next] === painted ? countryId : owners[next];
+					cost += world.stepCost(countryId, cur, next, owner);
+					if (land[next]) paintedFlags[next] = painted;
+					cur = next;
+				}
 			}
 		}
 	}
@@ -174,14 +198,24 @@ export function planBot(
 			rival = country.country_id;
 		}
 	}
-	const reserved = new Set<number>();
+	let reserved0 = -1;
+	let reserved1 = -1;
+	let reservedCount = 0;
+	let reservedMore: number[] | undefined;
 	for (const other of world.players.values()) {
 		if (
 			other.id !== bot.id &&
 			other.country_id === bot.country_id &&
 			other.plan?.patch !== undefined
 		) {
-			reserved.add(other.plan.patch);
+			const p = other.plan.patch;
+			if (reservedCount === 0) reserved0 = p;
+			else if (reservedCount === 1) reserved1 = p;
+			else {
+				if (!reservedMore) reservedMore = [];
+				reservedMore.push(p);
+			}
+			reservedCount++;
 		}
 	}
 	const from = bot.y * WIDTH + bot.x;
@@ -201,26 +235,38 @@ export function planBot(
 			const left = baseLeft + dx * side;
 			if (left < 0 || left + side > WIDTH) continue;
 			const patch = top * WIDTH + left;
-			if (reserved.has(patch)) continue;
+			if (reservedCount) {
+				if (patch === reserved0) continue;
+				if (reservedCount > 1 && patch === reserved1) continue;
+				if (reservedMore?.includes(patch)) continue;
+			}
 			let gain = 0;
-			let i = 0;
 			for (let y = 0; y < side; y++) {
 				const rowBase = (top + y) * WIDTH + left;
-				const odd = y % 2 !== 0;
 				for (let x = 0; x < side; x++) {
-					const cell = rowBase + (odd ? side - 1 - x : x);
-					areaScratch[i++] = cell;
+					const cell = rowBase + x;
 					if (!world.land[cell] || world.owners[cell] === bot.country_id)
 						continue;
 					gain += world.owners[cell] === rival ? 2 : 1;
 				}
 			}
 			if (!gain) continue;
-			areaScratch.length = i;
 			const loop = isAllLand(world, left, top, side);
-			const route = loop
-				? fillPerimeter(edgeScratch, left, top, side)
-				: areaScratch;
+			let route: number[];
+			if (loop) {
+				route = fillPerimeter(edgeScratch, left, top, side);
+			} else {
+				let i = 0;
+				for (let y = 0; y < side; y++) {
+					const rowBase = (top + y) * WIDTH + left;
+					const odd = y % 2 !== 0;
+					for (let x = 0; x < side; x++) {
+						areaScratch[i++] = rowBase + (odd ? side - 1 - x : x);
+					}
+				}
+				areaScratch.length = i;
+				route = areaScratch;
+			}
 			const routeLen = route.length;
 			const lastIndex = routeLen - 1;
 			for (let r = 0; r < 2; r++) {
