@@ -487,11 +487,11 @@ function makeClientState(
 		state.disconnected = false;
 		context.downClients.delete(state);
 	});
-	client.on("disconnected", () => {
+	client.on("disconnected", (detail) => {
 		state.disconnected = true;
 		if (!state.expectedDisconnect) {
 			context.downClients.add(state);
-			if (!state.ready) {
+			if (!state.ready && !detail.retryable) {
 				failReadiness(
 					context,
 					`client ${globalId} disconnected before readiness`,

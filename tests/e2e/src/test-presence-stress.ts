@@ -5,7 +5,7 @@ import {
 } from "@zyncbase/client";
 import { createTestJwt } from "./harness";
 
-function envInt(name: string, fallback: number, min = 0): number {
+function envInt(name: string, fallback: number, min = 1): number {
 	const raw = process.env[name];
 	if (raw === undefined || raw === "") return fallback;
 	const value = Number(raw);
@@ -31,6 +31,7 @@ const CONNECT_CONCURRENCY = envInt(
 const PROCESS_MUTATION_STAGGER_MS = envInt(
 	"ZYNCBASE_PRESENCE_MUTATION_STAGGER_MS",
 	50,
+	0,
 );
 
 const CURSOR_GROUP_SIZE = 10;
@@ -40,10 +41,11 @@ const CURSOR_INTERVAL_MS = 8;
 
 const SHARED_INTERVAL_MS = 20;
 
-const QUIET_WINDOW_MS = envInt("ZYNCBASE_PRESENCE_QUIET_WINDOW_MS", 25);
+const QUIET_WINDOW_MS = envInt("ZYNCBASE_PRESENCE_QUIET_WINDOW_MS", 25, 0);
 const VERIFY_RETRY_INTERVAL_MS = envInt(
 	"ZYNCBASE_PRESENCE_VERIFY_RETRY_MS",
 	250,
+	0,
 );
 const VERIFY_SAMPLE_STRIDE = envInt("ZYNCBASE_PRESENCE_VERIFY_STRIDE", 2);
 const CONVERGENCE_TIMEOUT_MS = 20_000;
