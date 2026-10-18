@@ -50,7 +50,7 @@ const VERIFY_RETRY_INTERVAL_MS = envInt(
 	250,
 	0,
 );
-const VERIFY_SAMPLE_STRIDE = envInt("ZYNCBASE_PRESENCE_VERIFY_STRIDE", 2);
+const VERIFY_SAMPLE_STRIDE = envInt("ZYNCBASE_PRESENCE_VERIFY_STRIDE", 1);
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-stress";
@@ -79,6 +79,8 @@ type ClientState = {
 	userReady: boolean;
 	sharedReady: boolean;
 	ready: boolean;
+	/** Latest user-presence payload, re-applied after a reconnect. */
+	lastPresenceData: Record<string, unknown> | null;
 	userCallbacks: number;
 	sharedCallbacks: number;
 	viewRevision: number;
@@ -223,6 +225,7 @@ function makeClientState(
 		userReady: false,
 		sharedReady: false,
 		ready: false,
+		lastPresenceData: null,
 		userCallbacks: 0,
 		sharedCallbacks: 0,
 		viewRevision: 0,
@@ -260,6 +263,9 @@ function makeClientState(
 		}
 	});
 	client.on("connected", () => {
+		if (state.lastPresenceData !== null) {
+			void state.client.presence.set(state.lastPresenceData);
+		}
 		state.disconnected = false;
 		context.downClients.delete(state);
 	});
@@ -698,11 +704,19 @@ async function waitForConvergence(
 }
 
 function setFullPresence(state: ClientState, y: number) {
-	state.client.presence.set({
+	const data = {
 		name: EXPECTED_NAMES[state.globalId],
 		status: "active",
 		cursor: { x: state.globalId, y },
-	});
+	};
+	state.lastPresenceData = data;
+	state.client.presence.set(data);
+}
+
+function setCursorPresence(state: ClientState, y: number) {
+	const cursor = { x: state.globalId, y };
+	state.lastPresenceData = { ...(state.lastPresenceData ?? {}), cursor };
+	state.client.presence.set({ cursor });
 }
 
 function markMovers(context: ProcessContext, expectedY: Int32Array) {
@@ -768,7 +782,7 @@ async function runJoinPhase(
 		context,
 		"join",
 		() =>
-			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1) ??
+			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY) ??
 			verifyFullJoinSelfFilter(context),
 	);
 	return performance.now() - started;
@@ -788,24 +802,16 @@ async function runCursorPhase(
 	const started = performance.now();
 	for (let tick = 0; tick < SECOND_CURSOR_TICKS; tick++) {
 		if (tick < FIRST_CURSOR_TICKS) {
-			for (const state of firstGroup) {
-				state.client.presence.set({
-					cursor: { x: state.globalId, y: tick },
-				});
-			}
+			for (const state of firstGroup) setCursorPresence(state, tick);
 		}
-		for (const state of secondGroup) {
-			state.client.presence.set({
-				cursor: { x: state.globalId, y: tick },
-			});
-		}
+		for (const state of secondGroup) setCursorPresence(state, tick);
 		if (tick + 1 < SECOND_CURSOR_TICKS) await delay(CURSOR_INTERVAL_MS);
 	}
 	const writeMs = performance.now() - started;
 	context.lastChangeMs = performance.now();
 	markMovers(context, expectedY);
 	const convergeMs = await waitForConvergence(context, "cursor flood", () =>
-		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1),
+		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
 	);
 	return { writeMs, convergeMs };
 }
@@ -851,13 +857,16 @@ async function runRemovePhase(
 	await mutateAfterProcessStagger(
 		context,
 		context.clients.filter((state) => state.globalId % 2 === 0),
-		(state) => state.client.presence.remove(),
+		(state) => {
+			state.lastPresenceData = null;
+			state.client.presence.remove();
+		},
 	);
 	await waitForConvergence(
 		context,
 		"remove half",
 		() =>
-			verifyUsers(context, active, CLIENTS_PER_ROOM / 2, expectedY, 1) ??
+			verifyUsers(context, active, CLIENTS_PER_ROOM / 2, expectedY) ??
 			verifyShared(context, 0),
 	);
 	return performance.now() - started;
@@ -880,7 +889,7 @@ async function runRejoinPhase(
 		context,
 		"rejoin half",
 		() =>
-			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1) ??
+			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY) ??
 			verifyShared(context, 0),
 	);
 	return performance.now() - started;
@@ -911,7 +920,6 @@ async function runDisconnectPhase(
 				active,
 				CLIENTS_PER_ROOM - CLIENTS_PER_ROOM / 4,
 				expectedY,
-				1,
 			) ?? verifyShared(context, 2),
 	);
 	return performance.now() - started;
