@@ -178,9 +178,9 @@ for (const px of [-1, 1])
 // Visited and exterior-proven cells share one marks array (positive/negative
 // stamp), halving the random reads the neighbour loop pays per cell.
 let marks = new Int32Array(0);
-let stack = new Int32Array(1024);
-let component = new Int32Array(1024);
-let holeBuf = new Int32Array(1024);
+const stack = new Int32Array(LOCAL_SEARCH_BUDGET + 1);
+const component = new Int32Array(LOCAL_SEARCH_BUDGET + 1);
+const holeBuf = new Int32Array(LOCAL_SEARCH_BUDGET * 2 + 1);
 let stamp = 0;
 let budget = 0;
 let holeCount = 0;
@@ -193,12 +193,6 @@ const QUADRANT_OFFSETS: Int32Array[] = [
 	new Int32Array(8),
 	new Int32Array(8),
 ];
-
-function growInt32(buffer: Int32Array) {
-	const grown = new Int32Array(buffer.length * 2);
-	grown.set(buffer);
-	return grown;
-}
 
 // Scratch storage is reused synchronously. Nothing is painted unless every
 // candidate is resolved within the shared budget; undefined requests a full fill.
@@ -291,6 +285,11 @@ function atBoundary(x: number, y: number, bounds: Bounds): boolean {
 	);
 }
 
+/** Neighbor order that dives toward the nearest bound. */
+function boundaryOffsets(x: number, y: number, midX: number, midY: number) {
+	return QUADRANT_OFFSETS[((x <= midX ? 0 : 1) << 1) | (y <= midY ? 0 : 1)];
+}
+
 /**
  * Floods one component from `start`. Returns "open" when it escapes,
  * "hole" when it is captured, "exhausted" when the shared budget ran out.
@@ -315,54 +314,19 @@ function floodComponent(
 			x = cell % width,
 			y = Math.floor(cell / width);
 		if (atBoundary(x, y, bounds)) return settleComponent(true, outsideMark);
-		const open = spreadNeighbours(
-			owners,
-			countryId,
-			cell,
-			x,
-			y,
-			midX,
-			midY,
-			outsideMark,
-		);
-		if (open === undefined) return "exhausted";
-		if (open) return settleComponent(true, outsideMark);
+		const offsets = boundaryOffsets(x, y, midX, midY);
+		for (let i = 0; i < 8; i++) {
+			const next = cell + offsets[i];
+			const mark = marks[next];
+			if (owners[next] === countryId || mark === stamp) continue;
+			if (mark === outsideMark) return settleComponent(true, outsideMark);
+			if (!budget--) return "exhausted";
+			marks[next] = stamp;
+			component[seen++] = next;
+			stack[depth++] = next;
+		}
 	}
 	return settleComponent(false, outsideMark);
-}
-
-/**
- * Pushes the unvisited open neighbours of one cell onto the component stack.
- * Returns true once any neighbour proves an exit, undefined when the budget dies.
- */
-function spreadNeighbours(
-	owners: Uint16Array,
-	countryId: number,
-	cell: number,
-	x: number,
-	y: number,
-	midX: number,
-	midY: number,
-	outsideMark: number,
-): boolean | undefined {
-	const quadrant = ((x <= midX ? 0 : 1) << 1) | (y <= midY ? 0 : 1);
-	const offsets = QUADRANT_OFFSETS[quadrant];
-	for (let i = 0; i < 8; i++) {
-		const next = cell + offsets[i];
-		if (owners[next] === countryId) continue;
-		const mark = marks[next];
-		if (mark === outsideMark) return true;
-		if (mark === stamp) continue;
-		if (!budget--) return undefined;
-		marks[next] = stamp;
-		if (seen === component.length) {
-			component = growInt32(component);
-			stack = growInt32(stack);
-		}
-		component[seen++] = next;
-		stack[depth++] = next;
-	}
-	return false;
 }
 
 /** Paints or reports the flushed component, then names its verdict. */
@@ -370,7 +334,6 @@ function settleComponent(open: boolean, outsideMark: number): "open" | "hole" {
 	for (let i = 0; i < seen; i++) {
 		if (open) marks[component[i]] = outsideMark;
 		else {
-			if (holeCount === holeBuf.length) holeBuf = growInt32(holeBuf);
 			holeBuf[holeCount++] = component[i];
 		}
 	}

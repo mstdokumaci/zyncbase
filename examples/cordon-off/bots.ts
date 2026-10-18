@@ -271,9 +271,7 @@ export function planBot(
 				? side > 1
 					? patch + WIDTH
 					: patch
-				: patch +
-					(side - 1) * WIDTH +
-					((side - 1) % 2 ? 0 : side - 1);
+				: patch + (side - 1) * WIDTH + ((side - 1) % 2 ? 0 : side - 1);
 			const lowerForward =
 				Math.abs((patch % WIDTH) - bot.x) +
 				Math.abs(Math.floor(patch / WIDTH) - bot.y) +
