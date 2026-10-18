@@ -17,10 +17,16 @@ function envInt(name: string, fallback: number, min = 1): number {
 
 const ROOM_COUNT = 2;
 const PROCESSES_PER_ROOM = 2;
+const CURSOR_GROUP_SIZE = 10;
 const CLIENTS_PER_PROCESS = envInt(
 	"ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS",
 	500,
 );
+if (CLIENTS_PER_PROCESS < CURSOR_GROUP_SIZE * 2) {
+	throw new Error(
+		`ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS must be at least ${CURSOR_GROUP_SIZE * 2}`,
+	);
+}
 if (CLIENTS_PER_PROCESS % 2 !== 0) {
 	throw new Error("ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS must be even");
 }
@@ -37,7 +43,6 @@ const PROCESS_MUTATION_STAGGER_MS = envInt(
 	0,
 );
 
-const CURSOR_GROUP_SIZE = 10;
 const FIRST_CURSOR_TICKS = 40;
 const SECOND_CURSOR_TICKS = 80;
 const CURSOR_INTERVAL_MS = 8;
