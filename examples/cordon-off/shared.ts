@@ -290,9 +290,11 @@ function surroundedByEnemy(
 	const owner = ownerAt(x, y);
 	if (!owner || owner === code) return false;
 	for (const [dx, dy] of RING_STEPS) {
-		const ny = y + dy;
-		if (ny < 0 || ny >= HEIGHT) return false;
-		if (ownerAt(wrapX(x + dx), ny) !== owner) return false;
+		const nx = x + dx,
+			ny = y + dy;
+		// Movement wraps, but enclosure treats the map edge as exterior.
+		if (nx < 0 || nx >= WIDTH || ny < 0 || ny >= HEIGHT) return false;
+		if (ownerAt(nx, ny) !== owner) return false;
 	}
 	return true;
 }

@@ -5,7 +5,6 @@ import {
 	HEIGHT,
 	movementPaints,
 	WIDTH,
-	wrapX,
 } from "./shared";
 
 const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
@@ -190,11 +189,15 @@ test("prediction skips a pixel fully surrounded by one enemy country", () => {
 	).toHaveLength(1);
 });
 
-test("the surround test wraps the seam but not the poles", () => {
+test("map edges and poles are exits, not walls", () => {
 	const y = 50;
-	const seam: [number, number][] = [
+	// Even with the wrapped column also enemy-owned, column 0 is a map edge:
+	// enclosure treats it as an exit, so the paint is predicted.
+	const westEdge: [number, number][] = [
 		[0, y],
-		...ring.map(([dx, dy]) => [wrapX(dx), y + dy] as [number, number]),
+		...ring.map(
+			([dx, dy]) => [dx < 0 ? WIDTH - 1 : dx, y + dy] as [number, number],
+		),
 	];
 	expect(
 		movementPaints(
@@ -202,9 +205,24 @@ test("the surround test wraps the seam but not the poles", () => {
 			[{ slot: 1, x: 0, y }],
 			land,
 			code,
-			cluster(seam, 9),
+			cluster(westEdge, 9),
 		),
-	).toEqual([]);
+	).toHaveLength(1);
+	const eastEdge: [number, number][] = [
+		[WIDTH - 1, y],
+		...ring.map(
+			([dx, dy]) => [dx > 0 ? 0 : WIDTH - 1 + dx, y + dy] as [number, number],
+		),
+	];
+	expect(
+		movementPaints(
+			new Map([[1, { x: WIDTH - 2, y }]]),
+			[{ slot: 1, x: WIDTH - 1, y }],
+			land,
+			code,
+			cluster(eastEdge, 9),
+		),
+	).toHaveLength(1);
 	const pole: [number, number][] = [
 		[100, 0],
 		[99, 0],
