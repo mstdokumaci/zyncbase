@@ -21,6 +21,9 @@ const CLIENTS_PER_PROCESS = envInt(
 	"ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS",
 	500,
 );
+if (CLIENTS_PER_PROCESS % 2 !== 0) {
+	throw new Error("ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS must be even");
+}
 const CLIENTS_PER_ROOM = PROCESSES_PER_ROOM * CLIENTS_PER_PROCESS;
 const PROCESS_COUNT = ROOM_COUNT * PROCESSES_PER_ROOM;
 const TOTAL_CLIENTS = PROCESS_COUNT * CLIENTS_PER_PROCESS;
@@ -243,11 +246,11 @@ function makeClientState(
 		if (context.errorSamples.length < 3) context.errorSamples.push(sample);
 		failReadiness(context, sample);
 	});
-	client.on("disconnected", () => {
+	client.on("disconnected", (detail) => {
 		state.disconnected = true;
 		if (!state.expectedDisconnect) {
 			context.downClients.add(state);
-			if (!state.ready) {
+			if (!state.ready && !detail.retryable) {
 				failReadiness(
 					context,
 					`client ${globalId} disconnected before readiness`,
