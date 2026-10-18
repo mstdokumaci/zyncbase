@@ -23,6 +23,8 @@ import {
 	LAND_RGB,
 	LITTLE_ENDIAN,
 	MAX_COUNTRIES,
+	type MovementPaint,
+	movementPaints,
 	NAMESPACE,
 	PLAYER_RESUME_GRACE_MS,
 	type PlayerRow,
@@ -84,6 +86,7 @@ const chunks = new Map<
 	{ image: HTMLCanvasElement; colorIndexes: Uint8Array }
 >();
 const userChunks = new Map<number, Dot[]>();
+const lastDotPositions = new Map<number, { x: number; y: number }>();
 const held = new Map<string, Direction>();
 let client: ZyncBaseClient | undefined;
 let online = false;
@@ -441,10 +444,40 @@ function receiveCountryChunk(row: CountryChunkRow) {
 	session.dirty = true;
 }
 
+function countryCodeForSlot(slot: number): number | undefined {
+	const player = rosterBySlot.get(slot);
+	if (!player) return undefined;
+	const color = countries.get(player.country_id)?.color;
+	return color ? COUNTRY_COLOR_INDEX.get(color) : undefined;
+}
+
+function applyMovementPaint(paint: MovementPaint) {
+	const chunk = chunks.get(paint.chunk);
+	if (!chunk) return;
+	const x = paint.cell % WIDTH;
+	const y = (paint.cell - x) / WIDTH;
+	const localX = x % COUNTRY_CHUNK_WIDTH;
+	const localY = y % COUNTRY_CHUNK_HEIGHT;
+	chunk.colorIndexes[localY * COUNTRY_CHUNK_WIDTH + localX] = paint.code;
+	const draw = chunk.image.getContext("2d");
+	if (!draw) return;
+	draw.fillStyle = COUNTRY_COLORS[paint.code - 1] ?? "#ffffff";
+	draw.fillRect(localX, localY, 1, 1);
+}
+
 function receiveUserChunk(row: UserChunkRow) {
 	const index = Number(row.id);
 	if (!Number.isSafeInteger(index)) return;
 	const dots = readCoordinates(row.coordinates);
+	for (const paint of movementPaints(
+		lastDotPositions,
+		dots,
+		land,
+		countryCodeForSlot,
+	))
+		applyMovementPaint(paint);
+	for (const dot of dots)
+		lastDotPositions.set(dot.slot, { x: dot.x, y: dot.y });
 	userChunks.set(index, dots);
 	session.dirty = true;
 	const self = dots.find((dot) => dot.slot === mySlot);
@@ -1027,6 +1060,7 @@ function returnToLobby(message: string) {
 	session.subscriptions.reset();
 	chunks.clear();
 	userChunks.clear();
+	lastDotPositions.clear();
 	if (countriesSubscription)
 		void countriesSubscription.unsubscribe().catch(() => {});
 	countriesSubscription = undefined;

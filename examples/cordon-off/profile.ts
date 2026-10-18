@@ -39,6 +39,7 @@ const { values } = parseArgs({
 		unpaced: { type: "boolean", default: false },
 		trace: { type: "boolean", default: false },
 		profile: { type: "boolean", default: false },
+		"chunk-interval": { type: "string", default: "1" },
 		output: {
 			type: "string",
 			default: "test-artifacts/cordon-off-profile",
@@ -48,6 +49,8 @@ const { values } = parseArgs({
 const countryCount = Number(values.countries);
 const ticks = Number(values.ticks);
 const warmup = Number(values.warmup);
+const chunkInterval = Number(values["chunk-interval"]);
+assert(Number.isInteger(chunkInterval) && chunkInterval >= 1);
 assert(
 	Number.isInteger(countryCount) && countryCount >= 2 && countryCount <= 20,
 );
@@ -164,10 +167,11 @@ function steer(world: World, tick: number) {
 }
 
 // Match server.ts: dirty chunk rows for both grids, country rows, player rows, then committed batches.
-function changes(world: World) {
-	const countryChunks = [...world.dirtyCountryChunks].map((index) =>
-		world.countryChunk(index),
-	);
+function changes(world: World, chunks = true) {
+	const countryChunks = chunks
+		? [...world.dirtyCountryChunks].map((index) => world.countryChunk(index))
+		: [];
+	if (chunks) world.dirtyCountryChunks.clear();
 	const userChunks = [...world.dirtyUserChunks].map((index) =>
 		world.userChunk(index),
 	);
@@ -191,7 +195,6 @@ function changes(world: World) {
 		operations.push({ op: "set", path: ["country_chunks", id], value });
 	for (const { id, ...value } of userChunks)
 		operations.push({ op: "set", path: ["user_chunks", id], value });
-	world.dirtyCountryChunks.clear();
 	world.dirtyUserChunks.clear();
 	world.dirtyCountries.clear();
 	world.dirtyPlayerRows.clear();
@@ -317,7 +320,8 @@ async function run(client?: ZyncBaseClient) {
 			const t0 = performance.now();
 			world.tick(tick * RULES.tickMs);
 			const t1 = performance.now();
-			const batch = changes(world);
+			const chunkDue = tick % chunkInterval === 0 || world.bulkCapturePending;
+			const batch = changes(world, chunkDue);
 			const t2 = performance.now();
 			if (client && batch.operations.length) {
 				await commitBatch(
@@ -327,6 +331,7 @@ async function run(client?: ZyncBaseClient) {
 				);
 				flushes++;
 			}
+			if (chunkDue) world.bulkCapturePending = false;
 			const t3 = performance.now();
 			if (values.trace)
 				trace.push({

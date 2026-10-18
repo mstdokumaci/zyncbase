@@ -261,6 +261,39 @@ export function encodeColorIndexes(codes: Uint8Array) {
 	return encoded.slice(0, out);
 }
 
+/** A predicted country-chunk paint from a confirmed one-cell move. */
+export type MovementPaint = {
+	chunk: number;
+	cell: number;
+	code: number;
+};
+
+/** Paints implied by confirmed one-cell cardinal moves. Prediction is only
+ * used for immediate visual feedback; full country chunks reconcile later. */
+export function movementPaints(
+	previous: ReadonlyMap<number, { x: number; y: number }>,
+	dots: readonly Dot[],
+	land: Uint8Array,
+	codeForSlot: (slot: number) => number | undefined,
+): MovementPaint[] {
+	const paints: MovementPaint[] = [];
+	for (const dot of dots) {
+		const before = previous.get(dot.slot);
+		if (!before) continue;
+		let dx = dot.x - before.x;
+		if (dx > WIDTH / 2) dx -= WIDTH;
+		else if (dx < -WIDTH / 2) dx += WIDTH;
+		const dy = dot.y - before.y;
+		if (Math.abs(dx) + Math.abs(dy) !== 1) continue;
+		const cell = dot.y * WIDTH + dot.x;
+		if (!land[cell]) continue;
+		const code = codeForSlot(dot.slot);
+		if (!code) continue;
+		paints.push({ chunk: countryChunkIndex(dot.x, dot.y), cell, code });
+	}
+	return paints;
+}
+
 /** Decode an RLE color-index chunk; rejects any stream that is not exact. */
 export function readColorIndexes(bytes: Uint8Array) {
 	if (bytes.length % 2 !== 0) throw new Error("Invalid chunk size");

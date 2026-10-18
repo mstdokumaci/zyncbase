@@ -113,6 +113,10 @@ export function reservedBotCountry(value: unknown) {
 }
 // Country chunk bytes are RLE palette indexes; user chunk bytes are JSON dots.
 
+// Small fills can wait for the country-chunk interval; large closures flush
+// immediately so territory changes are not delayed.
+const BULK_CAPTURE_FLUSH_CELLS = 100;
+
 export class World {
 	readonly owners = new Uint16Array(WIDTH * HEIGHT);
 	// Country id -> wire owner code (0 = unowned). Filled eagerly for created
@@ -125,6 +129,9 @@ export class World {
 	// user chunk's coordinates. The two grids never share a dirty entry.
 	readonly dirtyCountryChunks = new Set<number>();
 	readonly dirtyUserChunks = new Set<number>();
+	// Set by bulk enclosure captures. The publisher flushes country chunks
+	// immediately instead of waiting for the coalescing interval.
+	bulkCapturePending = false;
 	readonly dirtyCountries = new Set<number>();
 	readonly dirtyRemovedCountries = new Set<number>();
 	readonly dirtyPlayerRows = new Set<string>();
@@ -1081,6 +1088,8 @@ export class World {
 		if (this.enclosureCountries.get(countryId) !== null) {
 			// Only the fill pass marks a country processed. Anything else keeps
 			// the per-cell path so enclosure candidates are still queued.
+			if (cells.length >= BULK_CAPTURE_FLUSH_CELLS)
+				this.bulkCapturePending = true;
 			for (let i = 0; i < cells.length; i++)
 				this.claim(cells[i], countryId, true, by);
 			return;
@@ -1140,6 +1149,7 @@ export class World {
 			}
 		}
 		if (!taken) return;
+		if (taken >= BULK_CAPTURE_FLUSH_CELLS) this.bulkCapturePending = true;
 		// Four corners cover the region's extent; fills stay inside the country's
 		// bounds today, so this is normally a no-op the fill does not have to skip.
 		this.extendBounds(countryId, minY * WIDTH + minX);

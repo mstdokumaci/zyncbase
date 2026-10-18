@@ -30,6 +30,7 @@ import {
 	type PublishSnapshot,
 	restorePublishState,
 	runPublishBatches,
+	shouldPublishCountryChunks,
 } from "./publish";
 import {
 	COUNTRY_RESERVATION_MS,
@@ -573,7 +574,16 @@ function recordChunkWrites(operations: BatchOperation[]) {
 async function publish(forceRosters = false) {
 	tickCount++;
 	const rosters = shouldPublishRosters(forceRosters);
-	const snapshot = drainPublishState(world, { rosters });
+	const bulkAtPublish = world.bulkCapturePending;
+	const chunks = shouldPublishCountryChunks(
+		tickCount,
+		forceRosters,
+		bulkAtPublish,
+	);
+	const snapshot = drainPublishState(world, { rosters, chunks });
+	// Consume the bulk signal before awaiting the commit: captures that land
+	// while it is in flight must leave the next publish urgent.
+	if (chunks) world.bulkCapturePending = false;
 	const operations = buildPublishOperations(
 		world,
 		snapshot,
@@ -597,6 +607,7 @@ async function publish(forceRosters = false) {
 		);
 	} catch (error) {
 		restorePublishState(world, snapshot);
+		if (bulkAtPublish) world.bulkCapturePending = true;
 		throw error;
 	}
 	// The allocator mark rides with the country removes (see allocatorOp), so

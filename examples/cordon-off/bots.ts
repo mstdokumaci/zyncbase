@@ -32,6 +32,15 @@ function approach(from: number, to: number, horizontalFirst: boolean) {
 
 const areaScratch: number[] = new Array(MAX_SIDE * MAX_SIDE);
 const edgeScratch: number[] = new Array(MAX_SIDE * 4 - 4);
+const PATCH_GRID = 9;
+const MAX_PATCHES = PATCH_GRID * PATCH_GRID;
+const patchLeft = new Int32Array(MAX_PATCHES);
+const patchTop = new Int32Array(MAX_PATCHES);
+const patchGain = new Int32Array(MAX_PATCHES);
+const patchOrder = new Int32Array(MAX_PATCHES);
+const patchReverse = new Int32Array(MAX_PATCHES);
+const patchLoop = new Uint8Array(MAX_PATCHES);
+const evalOrder = new Int32Array(MAX_PATCHES);
 // Cells the candidate plan would paint, tracked per scoring. A generation
 // stamp avoids both Set hashing and clearing: each scoring gets a fresh token.
 const paintedFlags = new Uint32Array(WIDTH * HEIGHT);
@@ -221,6 +230,7 @@ export function planBot(
 	const from = bot.y * WIDTH + bot.x;
 	let bestGain = 0;
 	let bestCost = 1;
+	let bestOrder = Number.MAX_SAFE_INTEGER;
 	let bestPatch = 0,
 		bestRoute: number[] | undefined,
 		bestReverse = false,
@@ -228,6 +238,10 @@ export function planBot(
 		bestLoop = false;
 	const baseLeft = Math.floor(bot.x / side) * side;
 	const baseTop = Math.floor(bot.y / side) * side;
+	let patchCount = 0;
+	let seed = -1;
+	let seedGain = 0;
+	let seedLower = 1;
 	for (let dy = -4; dy <= 4; dy++) {
 		const top = baseTop + dy * side;
 		if (top < 0 || top + side > HEIGHT) continue;
@@ -252,53 +266,103 @@ export function planBot(
 			}
 			if (!gain) continue;
 			const loop = isAllLand(world, left, top, side);
-			let route: number[];
-			if (loop) {
-				route = fillPerimeter(edgeScratch, left, top, side);
-			} else {
-				let i = 0;
-				for (let y = 0; y < side; y++) {
-					const rowBase = (top + y) * WIDTH + left;
-					const odd = y % 2 !== 0;
-					for (let x = 0; x < side; x++) {
-						areaScratch[i++] = rowBase + (odd ? side - 1 - x : x);
+			const routeLen = loop ? (side > 1 ? side * 4 - 4 : 1) : side * side;
+			const reverseEntry = loop
+				? side > 1
+					? patch + WIDTH
+					: patch
+				: patch + (side - 1) * WIDTH + ((side - 1) % 2 ? 0 : side - 1);
+			const lowerForward =
+				Math.abs((patch % WIDTH) - bot.x) +
+				Math.abs(Math.floor(patch / WIDTH) - bot.y) +
+				routeLen -
+				1 +
+				(loop ? 1 : 0);
+			const lowerReverse =
+				Math.abs((reverseEntry % WIDTH) - bot.x) +
+				Math.abs(Math.floor(reverseEntry / WIDTH) - bot.y) +
+				routeLen -
+				1 +
+				(loop ? 1 : 0);
+			const lower = Math.min(lowerForward, lowerReverse);
+			const index = patchCount++;
+			patchLeft[index] = left;
+			patchTop[index] = top;
+			patchGain[index] = gain;
+			patchOrder[index] = (dy + 4) * PATCH_GRID + (dx + 4);
+			patchReverse[index] = reverseEntry;
+			patchLoop[index] = loop ? 1 : 0;
+			if (seed < 0 || gain * seedLower > seedGain * lower) {
+				seed = index;
+				seedGain = gain;
+				seedLower = lower;
+			}
+		}
+	}
+	if (seed < 0) return;
+	evalOrder[0] = seed;
+	let evalCount = 1;
+	for (let i = 0; i < patchCount; i++)
+		if (i !== seed) evalOrder[evalCount++] = i;
+	for (let oi = 0; oi < evalCount; oi++) {
+		const pi = evalOrder[oi];
+		const left = patchLeft[pi];
+		const top = patchTop[pi];
+		const patch = top * WIDTH + left;
+		const gain = patchGain[pi];
+		const loop = patchLoop[pi] === 1;
+		const reverseEntry = patchReverse[pi];
+		const routeLen = loop ? (side > 1 ? side * 4 - 4 : 1) : side * side;
+		let route: number[] | undefined;
+		for (let r = 0; r < 2; r++) {
+			const reverse = r === 1;
+			const entry = reverse ? reverseEntry : patch;
+			const lowerBound =
+				Math.abs((entry % WIDTH) - bot.x) +
+				Math.abs(Math.floor(entry / WIDTH) - bot.y) +
+				routeLen -
+				1 +
+				(loop ? 1 : 0);
+			for (let h = 0; h < 2; h++) {
+				const horizontalFirst = h === 0;
+				if (bestGain && gain * bestCost < bestGain * lowerBound) {
+					continue;
+				}
+				if (!route) {
+					if (loop) route = fillPerimeter(edgeScratch, left, top, side);
+					else {
+						let i = 0;
+						for (let y = 0; y < side; y++) {
+							const rowBase = (top + y) * WIDTH + left;
+							const odd = y % 2 !== 0;
+							for (let x = 0; x < side; x++)
+								areaScratch[i++] = rowBase + (odd ? side - 1 - x : x);
+						}
+						areaScratch.length = i;
+						route = areaScratch;
 					}
 				}
-				areaScratch.length = i;
-				route = areaScratch;
-			}
-			const routeLen = route.length;
-			const lastIndex = routeLen - 1;
-			for (let r = 0; r < 2; r++) {
-				const reverse = r === 1;
-				const entry = reverse ? route[lastIndex] : route[0];
-				const lowerBound =
-					Math.abs((entry % WIDTH) - bot.x) +
-					Math.abs(Math.floor(entry / WIDTH) - bot.y) +
-					routeLen -
-					1 +
-					(loop ? 1 : 0);
-				for (let h = 0; h < 2; h++) {
-					const horizontalFirst = h === 0;
-					if (bestGain && gain * bestCost <= bestGain * lowerBound) continue;
-					const cost = scoreCells(
-						world,
-						bot.country_id,
-						from,
-						route,
-						reverse,
-						horizontalFirst,
-						loop,
-					);
-					if (gain * bestCost > bestGain * cost) {
-						bestGain = gain;
-						bestCost = cost;
-						bestPatch = patch;
-						bestRoute = route.slice();
-						bestReverse = reverse;
-						bestHorizontalFirst = horizontalFirst;
-						bestLoop = loop;
-					}
+				const cost = scoreCells(
+					world,
+					bot.country_id,
+					from,
+					route,
+					reverse,
+					horizontalFirst,
+					loop,
+				);
+				const lhs = gain * bestCost;
+				const rhs = bestGain * cost;
+				const candidateOrder = patchOrder[pi] * 4 + r * 2 + h;
+				if (lhs > rhs || (lhs === rhs && candidateOrder < bestOrder)) {
+					bestGain = gain;
+					bestCost = cost;
+					bestOrder = candidateOrder;
+					bestPatch = patch;
+					bestRoute = route.slice();
+					bestReverse = reverse;
+					bestHorizontalFirst = horizontalFirst;
+					bestLoop = loop;
 				}
 			}
 		}
