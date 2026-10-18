@@ -1,22 +1,64 @@
 # Cordon Off profiling
 
-**Current state (2026-10-18):** Bun 1.4.0, Linux x86_64, AMD Ryzen 5 3600. Last profiling session: 2026-10-17 at `4c50d7d`; current HEAD `1c9ba73` contains no Cordon Off changes after that. Use the actual commit under test as the next baseline; record it when the session starts.
+**Current state (2026-10-18):** Bun 1.4.0, Linux x86_64, AMD Ryzen 5 3600. Last baseline `1393eff`; 3-tick country-chunk coalescing and client movement-paint prediction are committed at `cd67280` (tests in `13302af`). Record the actual commit at session start.
 
-**Initial comparison:** measured 2026-09-09 with Bun 1.4.0 on macOS x64, Intel Core i9-9880H; baseline `9f6c5982240aa73c0960d056453db3f25ee95227`. That commit predates the `examples/pixel-conquest` → `examples/cordon-off` rename. Its table below is historical context, not a reusable baseline.
+## Current state
 
-## Fresh-session protocol
+### Local simulation
+
+3 repeats, 20 countries/40 movers, 200 warmup and 1,200 measured ticks; medians (min–max) in ms.
+
+| Workload | Simulation | Simulation p99 | Serialization | Whole-update p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Fragmented / scripted | 122.9 (114.5–139.0) | 1.54 | 53.7 | 1.62 |
+| Fragmented / bots | 120.7 (101.5–148.7) | 0.490 | 80.6 | 0.601 |
+| Compact / bots | 142.4 (107.1–146.0) | 0.620 | 76.2 | 0.670 |
+
+Long run (12,000 ticks, medians of 3): fragmented scripted 309/436/751 ms simulation/serialization/total; fragmented bots 966/761/1,741; compact bots 894/778/1,673. The first 1,200 ticks cost much more per tick than the long-run average; keep both.
+
+### Publish/database
+
+`--publish --unpaced --chunk-interval 3`, 1,200 ticks, 3 repeats.
+
+| Workload | Commit p50 / p99 | Total | Country chunk writes / bytes |
+| --- | ---: | ---: | ---: |
+| Fragmented / scripted | 1.36 / 4.21 ms | 1,901.7 ms | 11,492 / 1.03 MB |
+| Fragmented / bots | 1.42 / 5.41 ms | 2,185.3 ms | 12,325 / 1.61 MB |
+| Compact / bots | 1.30 / 4.55 ms | 2,034.6 ms | 11,701 / 1.46 MB |
+
+Commit dominates unpaced publish work, but the 20 Hz paced control used only 2.85 s of measured work over 60 s and had no over-budget ticks. The DB path has headroom.
+
+### Browser and peers
+
+`profile-browser.ts`, 30 s stages; observer Chromium plus SDK peer workers.
+
+| Players | Ack p95 | Own-row p95 | Farm CPU | Farm rx | Late deltas |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 512 | 17.1 ms | 72.7 ms | 3.91 cores | 53.4 MiB/s | 1,478 |
+| 1,024 | 140.5 ms | 185.9 ms | 9.61 cores | 130.8 MiB/s | 21,122 |
+
+At 1,024 the observer held 30 fps with 4.2 ms draw p95; the Bun game server used about 0.1 cores and its database child about 0.7. The peer farm is the limiter, not the server.
+
+### Hotspots and next targets
+
+- **Serialization:** `countryChunk` is 29–35% of local self samples. Coalescing cut publish rows 20–32%, but per-row encode/allocation remains; pooling row buffers/views or a compact incremental paint protocol are the next options.
+- **Bot planning:** about 30% of bot self samples, mainly `scoreCells` (14–17%) and `planBot` (~10%). Needs a cheaper per-cell score or fewer patch candidates.
+- **Enclosure:** local flood is 8–14% of self samples; bounds grow loose and the deterministic tick ~705 spike remains optional follow-up work.
+- **Browser/peers:** the 1,024 stage is farm-CPU-bound; reduce subscription churn/per-peer dispatch or use a lighter farm for server-capacity tests. Watch predicted-paint corrections.
+- Tick 0 is a cold-fixture/GC spike; exclude it from max/p99 interpretation.
+
+## Running a session
 
 ### Preflight
 
-- Confirm a clean tree and record the exact commit: `git rev-parse HEAD`, `git status --short`.
-- Record `bun --version`, `uname -sm`, and the CPU model.
-- Install workspace dependencies with `bun install`. Run `bun test examples/cordon-off`, `bun run typecheck:examples`, and `bun run lint` before measuring.
-- Close other workloads, builds, and tests. Use the same machine, Bun version, and power profile for baseline and candidate; never run them concurrently.
-- For A/B, create a baseline worktree with `git worktree add ../zyncbase-baseline <sha>` and run `bun install` there. The harness and fixture must be identical on both sides; only the code under test should differ.
+- Start from a clean tree and record `git rev-parse HEAD`, `git status --short`, `bun --version`, `uname -sm`, and the CPU model.
+- Run `bun install`, `bun test examples/cordon-off`, and `bun run typecheck:examples`; run `bun run lint` when the project tooling is installed.
+- Close other builds/workloads. Use the same machine, Bun version, and power profile for baseline and candidate; never run them concurrently.
+- For A/B, create a baseline worktree with `git worktree add ../zyncbase-baseline <sha>` and run `bun install` there. Keep the harness and fixture identical on both sides.
 
-### Timing runs
+### Local simulation
 
-Use three repeats per workload, alternating baseline then candidate, with a fixed workload order. Do **not** pass `--profile`, `--trace`, or `--publish` (unless measuring publish separately). One output directory per repeat; result filenames include the country count, shape, mode, and `local`/`database`.
+Three repeats per workload, alternating baseline then candidate, fixed workload order. Do not use `--profile`, `--trace`, or `--publish` for timing runs.
 
 ```sh
 for r in 1 2 3; do
@@ -26,11 +68,11 @@ for r in 1 2 3; do
 done
 ```
 
-Report medians **and ranges** across repeats. Do not claim a win when the ranges overlap; treat small differences as noise. Timing runs use 20 countries, 40 movers, 200 warmup ticks, and 1,200 measured ticks (60 s simulated at 50 ms/tick) unless stated otherwise.
+Report medians and ranges; do not claim a win when ranges overlap. Use `--ticks 12000` for a long-run check.
 
-### Sampling runs
+### Sampling and spikes
 
-Run sampling separately from timing. The JSC profiler adds overhead, so timings from a `--profile` run are not comparable to timing runs; do not combine `--profile` with `--trace`.
+Run sampling separately; profiler timings are not comparable.
 
 ```sh
 bun examples/cordon-off/profile.ts --mode bots --shape fragmented --profile --ticks 12000 --output test-artifacts/cordon-off-profile/sample-fragmented-bots
@@ -38,106 +80,49 @@ bun examples/cordon-off/profile.ts --mode bots --shape compact --profile --ticks
 bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --profile --ticks 12000 --output test-artifacts/cordon-off-profile/sample-scripted-fragmented
 ```
 
-Use 1,200 ticks for a quick profile and 12,000 ticks to catch long-run drift in bounds or fallback area. `--profile` writes `<label>.profile.json` next to the timing result; `functions` and `bytecodes` are formatted text, and `stackTraces` is an array of raw stack strings. Samples are stack-inclusive (callees count toward the caller), `#<nil>` frames are common, and JIT inlining limits line-level attribution. `--profile` samples the harness process only; use `profile-browser.ts --server-profile` for the separate ZyncBase server.
+`functions`/`bytecodes` are formatted text; `stackTraces` contains `{ interval, traces }` with leaf-first frames. Counts are self samples; `#<nil>` and JIT inlining limit attribution. Use `--trace` on one run for spike indices (`spikes.topTotal`/`topSim`/`topCommit`), not for timing.
 
-### Spike diagnostics
-
-Use `--trace` on one run when a workload has large updates:
+### Publish/database
 
 ```sh
-bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --trace --output test-artifacts/cordon-off-profile/trace-scripted
+bun examples/cordon-off/profile.ts --publish --unpaced --chunk-interval 3 --mode bots --shape fragmented --ticks 1200
 ```
 
-Inspect `spikes.topTotal`, `spikes.topSim`, and `spikes.topCommit` in the result JSON. Repeated tick indices across runs usually mean deterministic events; one-off spikes are usually GC or scheduler noise. Do not use trace runs in the final timing table.
+`--publish` starts an isolated real server/database, builds it if needed, and is not comparable to local simulation. Omit `--unpaced` for the 20 Hz cadence. No browser subscribers, presence traffic, TLS, or fan-out are simulated.
 
-### Publishing (optional)
-
-`--publish` starts an isolated real server and database and is not comparable to local simulation. It runs at 20 Hz by default; `--unpaced` removes that pacing and lifts the server's 100 msg/s guard. No browser subscribers, presence traffic, TLS, or fan-out are simulated. It requires the native build prerequisites; the harness builds the server if needed.
-
-### Session record
-
-Record the date, commit under test, baseline commit, Bun version, OS/arch/CPU, commands, artifact directories, per-workload medians/ranges, checksums, and profile targets. Add one changelog line when the session completes.
-
-## Latest results
-
-The next session should fill this from three local timing repeats at the current baseline. The historical numbers below are not a substitute.
-
-| Workload | Simulation total (median, range) | Simulation p99 | Serialization total | Whole-update p99 | Updates >50 ms | Final checksum |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Fragmented / scripted | TBD | TBD | TBD | TBD | TBD | TBD |
-| Fragmented / bots | TBD | TBD | TBD | TBD | TBD | TBD |
-| Compact / bots | TBD | TBD | TBD | TBD | TBD | TBD |
-
-## Selected algorithm
-
-1. All movers paint before enclosure resolution. Countries are processed in first territory-change order, at most once per tick, including countries affected by captures.
-2. A gain can only enclose what sits beside it, and only while that pixel was the last way out, so the gate is the same `hasStraightExit` proof (straight rays, then diagonals) run after the claim: a neighbour it can still prove open is not at risk. A ring with no country pixel at all is skipped outright, because the open ring is itself eight-connected and dropping one cell from it severs nothing. A lost pixel with a straight or diagonal route to the country's conservative bounding-box edge needs no defensive reclaim. Failed proofs request a search; they do not assume an enclosure exists.
-3. Before any ray walk, the gate counts the open runs around the claimed pixel. The ring is walked in cyclic order, so consecutive entries are eight-adjacent and a single open run means every open neighbour is still joined around the new wall: nothing beside that pixel can be severed, and the proof is skipped. An incomplete ring at the array edge is never counted this way, because its run boundary may sit off the array; it falls through to the proof. The deterministic nine-nation, 6,000-tick fixture in `enclosure.perf.test.ts` pins the selected gate at 570 whole-country fallback fills; the test also records that a gate that skips the ray walks lands near 2,949.
-4. Each candidate first gets the same bounds-limited `hasStraightExit` proof. Unresolved components share a **16,384-cell flood budget per country per tick**. The flood is a depth-first dive ordered toward the nearest bound, so an exterior-connected component is proven open in about the length of its shortest route instead of the area it covers; flat stamp maps make each visited cell one typed-array write. Proven exterior cells are reused between candidates. No pixels are painted unless every candidate is resolved. Candidate storage shares the same cap; exceeding the storage or flood limit requests one fallback scan. Ray reads are separate from the flood budget and bounded by the country's width and height per candidate.
-5. The fallback is a run-length eight-connected flood over the country's bounds. Every open pixel in a row is one run, two runs in adjacent rows touch when their spans overlap by a pixel or more, and a hole is a run no perimeter run reaches, so a bbox costs one read per pixel and then work proportional to the run count. The run builder and capture checks use incrementally maintained bounds, including disconnected territory. Nothing outside those bounds is read; runs touching the bounds perimeter seed the flood as exterior.
-6. A fill takes its whole region in one bulk capture instead of calling `claim` per pixel: the owner write stays in the loop and the roster counters, capture credit, dirty sets, bounds and chunk index move out of it. Chunk index and bounds come from the ascending cell order, so no division runs per pixel. Bulk captures enqueue defensive candidates in constant time per pixel, avoiding long straight-ray checks for every captured pixel. Restore performs a full reconciliation for each populated country.
-
-The local flood is bounded; each fallback is linear in the country's bounds and runs at most once per country per tick. Overall work still depends on how many countries change, movement checks, and captured area. Bounds only grow and can become loose after losses. This caps repeated searches, not wall-clock latency on arbitrary hardware.
-
-Compared with the original baseline, capture timing is deliberately end-of-tick: a closure breached by a later mover in the same tick remains open. Captures within the resolution pass are applied in country order, not simultaneously. Water stays unowned and remains traversable background for enclosure connectivity.
-
-## Historical comparison (2026-09-09)
-
-The table compares the initial baseline `9f6c598` with the then-current candidate; the candidate commit is not recorded, so this is historical context, not a reusable baseline. Three sequential repeats per variant and workload, alternating baseline then candidate, without a sampling profiler or concurrent builds/tests. Every run used 20 countries, 40 movers, 200 warmup ticks, and 1,200 measured ticks. Values are medians as reported by the original comparison; the table does not record whether its p99 column is simulation-only or whole-update. Over-budget counts use total update time above 50 ms and were identical across repeats.
-
-| Layout / movement | Baseline simulation | Candidate simulation | Change | Baseline / candidate p99 | Updates >50 ms, baseline / candidate |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Fragmented / scripted | 9,390 ms | 5,997 ms | −36.1% | 69.22 / 36.19 ms | 143 / 0 |
-| Fragmented / bots | 2,998 ms | 2,212 ms | −26.2% | 29.82 / 16.55 ms | 2 / 0 |
-| Compact / bots | 1,057 ms | 1,263 ms | +19.4% | 15.79 / 16.21 ms | 0 / 0 |
-
-**Outcome equivalence:** baseline and candidate final checksums match for fragmented scripted movement and compact bots. Fragmented bots follow a different trajectory under end-of-tick capture timing, so their reduction is an end-to-end observation, not a comparison of identical calculations. All repeats within each variant produced the same checksum. Per-run ranges, final checksums, and the original reproduction notes are in this file's git history.
-
-## Workload and reproduction
-
-[profile.ts](./profile.ts) uses the real `World.tick` on synthetic all-land terrain in the 2000 × 1000 world. Each country starts with 26,112 home pixels. Compact countries are filled rectangles; fragmented countries are open U shapes, and each has a rival-owned, disconnected 5 × 5 outpost in its bay, for 522,740 initially owned pixels in total. The fixture is not a real coastline or a saved production map; water and coastline paths are not exercised.
-
-Scripted movers follow deterministic box routes; `steer()` runs before the measured interval, so scripted steering cost is excluded. Bot mode uses actual steering, route planning, movement, and captures inside `World.tick`; the fixture's population policy allows 40 bots without a human. Warmup uses a disposable world, then the measured world is recreated. Setup, restoration, initial database writes, explicit pre-run GC, checksums, and invariants are outside the measured interval. Local runs do not sleep; 1,200 ticks represent 60 seconds of game time.
-
-Run from the repository root with installed workspace dependencies:
+### Browser and peers
 
 ```sh
-bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output test-artifacts/cordon-off-profile/repeat-1
-bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output test-artifacts/cordon-off-profile/repeat-1
-bun examples/cordon-off/profile.ts --mode bots --shape compact --output test-artifacts/cordon-off-profile/repeat-1
+bun examples/cordon-off/profile-browser.ts --players 512,1024 --seconds 30 --countries 32 --port 19183 --output test-artifacts/cordon-off-profile/browser-run
 ```
 
-`--ticks`, `--warmup`, `--countries`, `--output`, `--publish`, `--unpaced`, `--trace`, and `--profile` control run length, fixture size, artifact placement, database writes, pacing, spike tracing, and sampling. `--countries` is capped at 20, so the standard run has 40 movers. `--unpaced` only changes behavior with `--publish`. The result JSON records options, machine, initial/final checksums, per-phase summaries, over-budget count, chunk write counts and bytes, flush count, and optional spikes.
+This starts the real server, an observer Chromium page, and SDK peer workers. Use a direct interval-1 versus interval-3 A/B for coalescing changes. `--profile` records the observer page; `--server-profile` records the game server. The 1,024 stage measures the peer farm when it nears CPU saturation.
 
-Artifact names:
+### Reading results
 
-- `<countries>-<shape>-<mode>-local.json`: timing result without profiling.
-- `<countries>-<shape>-<mode>-local-profile.json`: timing result from a profiled run; do not compare its timings.
-- `<countries>-<shape>-<mode>-local-profile.profile.json`: JSC sampling profile.
-- `<countries>-<shape>-<mode>-database.json`: database/publish result.
+- `simulation` is `World.tick` only; scripted steering is excluded and bot planning is included.
+- `serialization` is `changes(world)`; `commit` is database wait; `total` is their sum.
+- `ticksOverBudget` counts `total` above 50 ms. `countryChunkWrites`/`Bytes` and `flushes` describe publish volume; `spikes` holds trace data.
+- Artifacts: `<label>-local.json`, `<label>-local-profile.json`, `<label>-local-profile.profile.json`, `<label>-database.json`. `test-artifacts/` is gitignored.
+- Checksums cover ownership plus player state; they are not a persisted-DB reload or cross-version guarantee. JSC shares are self samples, not process CPU.
 
-Artifacts under `test-artifacts/` are generated and gitignored; record summary numbers and hashes in this file because artifacts may not survive.
+### Workload and fixture
 
-## Reading results
+`profile.ts` runs the real `World.tick` on synthetic all-land 2000 × 1000 terrain with 20 countries and 40 movers. Each country starts with 26,112 home pixels; compact countries are rectangles, fragmented ones are U shapes with rival-owned 5 × 5 outposts. The fixture is not a real coastline or production map. Warmup, setup, restoration, GC, checksums, and invariants are outside the measured interval; 1,200 ticks is 60 s of game time.
 
-- `simulation`: `World.tick` only. Scripted steering is excluded; bot steering and planning are included.
-- `serialization`: `changes(world)` (dirty rows and chunk encoding), even in local runs where the batch is discarded.
-- `commit`: database commit wait; zero in local runs.
-- `total`: simulation + serialization + commit.
-- `ticksOverBudget`: number of `total` samples above 50 ms, not simulation alone.
-- `flushes`: committed batches (database runs only).
-- `countryChunkWrites`/`Bytes`, `userChunkWrites`/`Bytes`: serialized payload volume before subscribers.
-- `spikes`: top-ten `total`, `sim`, and `commit` ticks when `--trace` is used.
+### Validation
 
-Checksums cover ownership plus player state; they are not a full persisted-database reload or a cross-version guarantee. Fragmented bot trajectories can diverge when capture timing changes; treat that as an end-to-end observation, not an identical-calculation comparison. JSC profile shares include callees and are not percentages of total Bun process CPU or allocation volume; JIT inlining limits exact attribution.
+`bun test examples/cordon-off` covers masks, bounds, budget, batching, captures, restart, and gates. `bun run test:game` is the real-server smoke suite (plaintext and IPv6/TLS). Timing thresholds are not test assertions.
 
-## Validation
+## Algorithm in brief
 
-`bun test examples/cordon-off` covers exhaustive 4 × 4 masks against an independent boundary flood, cropped bounds and world edges, scratch reuse, the shared local budget, full-scan batching, capture/defense/water behavior, scores/chunks, restart, and randomized gated-vs-unconditional ticks. Timing thresholds are not test assertions. The real-server smoke suite is `bun run test:game`, covering both plaintext and IPv6/TLS.
+1. All movers paint first; countries resolve enclosures once per tick in first-change order, so a closure breached later in the same tick stays open. Water is traversable background.
+2. The gate uses the straight/diagonal exit proof plus an open-run count. Unresolved candidates share a 16,384-cell local flood budget; a run-length eight-connected fallback scans the country bounds. Bounds only grow.
+3. Country chunks publish every 3 ticks for reconciliation; clients predict one-cell movement paints from confirmed user rows. Enclosure captures of at least 100 cells force an immediate flush. User chunks and moves remain per tick.
 
 ## Change log
 
-One line per iteration; per-run tables, diagnostics, and reproduction blocks for each are in this file's git history.
+One line per iteration; detailed tables and reproduction notes are in this file's git history.
 
 - **2026-09-09** — Fresh profile identified the full enclosure fallback as the dominant cost (73.9% of stack samples on a ten-minute fragmented-bot run).
 - **2026-09-10** — Straight-exit proof applied to local enclosure candidates before flooding: −40.3% fragmented bots, −30.9% compact bots, −29.2% scripted; 44.3% fewer fallback calls. Baseline `ebe25e5`.
@@ -154,3 +139,4 @@ One line per iteration; per-run tables, diagnostics, and reproduction blocks for
 - **2026-10-14** — Enclosure dive keeps visited and exterior-proven cells in one marks array (positive/negative stamp) and sorts hole output with the native typed-array sort instead of a comparator copy. Interleaved paced A/B on scripted fragmented: worst tick 32 → 24 ms, simulation total 436–440 → 391–412 ms, p95 1.2–1.3 → 1.2 ms; local worst tick 32 → 22 ms. Bots workloads unchanged; checksums match. Baseline `de992b0` is no longer reachable in the current history; the corresponding current-history change is `1370d7a` (parent `755305c`).
 - **2026-10-16** — Fresh profile identified enclosure dive neighbor indirection, bot candidate evaluation array allocations, and chunk serialization as remaining bottlenecks. Precomputed quadrant offsets and midpoint quadrant calculation in enclosure dive, allocation-free rival/reservation searches and hoisted coordinate math in bot planning, in-loop RLE run tracking in encodeChunk, direct iteration in userChunk, and cached chunk row IDs: simulation −20.4% scripted fragmented, −12.1% bots fragmented, −12.5% bots compact; serialization −14.1% to −17.6%; p99 latency −15.9% to −24.4%; max tick latency −12.3% to −13.8%; checksums match. Baseline `5424c21`.
 - **2026-10-17** — Fresh profile identified bot patch reservation Set allocations and lookups, dead areaScratch population during gain checks, in-loop step direction branching in scoreCells, unhoisted owners property loads in encodeChunk, and chunk coordinate math as bottlenecks: simulation −38.2% compact bots, −19.6% fragmented bots, −2.3% scripted fragmented; serialization −14.1% compact bots; p99 latency −51.6% compact bots (1.24 → 0.60 ms), −29.5% fragmented bots (1.05 → 0.74 ms); all checksums match deterministically. Baseline `e6b4196`.
+- **2026-10-18** — Profiled simulation, publish/database, and browser/peers; kept bot candidate reordering (simulation −13.2%/−14.5% on bot workloads), enclosure flood inlining (−10.2%/−11.7%/−5.3%), and 3-tick country-chunk coalescing with client movement-paint prediction and a 100-cell urgent-capture flush (country-chunk writes −20–32%, bytes −18–33%; 1,024-peer ack p95 152.9→140.5 ms, own-row p95 197.7→185.9 ms); rejected the chunk-row arena. Baseline `1393eff`; candidate `cd67280`.
