@@ -801,7 +801,7 @@ async function runCursorPhase(
 	context.lastChangeMs = performance.now();
 	markMovers(context, expectedY);
 	const convergeMs = await waitForConvergence(context, "cursor flood", () =>
-		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
+		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1),
 	);
 	return { writeMs, convergeMs };
 }
@@ -853,7 +853,7 @@ async function runRemovePhase(
 		context,
 		"remove half",
 		() =>
-			verifyUsers(context, active, CLIENTS_PER_ROOM / 2, expectedY) ??
+			verifyUsers(context, active, CLIENTS_PER_ROOM / 2, expectedY, 1) ??
 			verifyShared(context, 0),
 	);
 	return performance.now() - started;
