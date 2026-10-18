@@ -281,7 +281,7 @@ const RING_STEPS = [
 
 /** True when a cell and all eight neighbours belong to one enemy country: the
  * claim is a one-pixel hole its owner's enclosure pass is certain to refill. */
-function surroundedByEnemy(
+export function surroundedByEnemy(
 	ownerAt: (x: number, y: number) => number | undefined,
 	x: number,
 	y: number,

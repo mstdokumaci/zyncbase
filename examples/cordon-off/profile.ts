@@ -226,6 +226,12 @@ function summary(samples: number[]) {
 	};
 }
 
+function ownerChecksum(world: World) {
+	return createHash("sha256")
+		.update(new Uint8Array(world.owners.buffer))
+		.digest("hex");
+}
+
 function checksum(world: World) {
 	return createHash("sha256")
 		.update(new Uint8Array(world.owners.buffer))
@@ -266,6 +272,7 @@ async function run(client?: ZyncBaseClient) {
 	// Reset after warming code: every mode measures from the original fixture.
 	world = fixture();
 	const initialChecksum = checksum(world);
+	const initialOwnerChecksum = ownerChecksum(world);
 	const initialOwnedPixels = [...world.countries.values()].reduce(
 		(sum, c) => sum + c.count,
 		0,
@@ -374,6 +381,16 @@ async function run(client?: ZyncBaseClient) {
 		movers: world.players.size,
 		initialOwnedPixels,
 		initialChecksum,
+		initialOwnerChecksum,
+		finalOwnerChecksum: ownerChecksum(world),
+		captured: [...world.players.values()].reduce(
+			(sum, player) => sum + player.captured,
+			0,
+		),
+		lost: [...world.countries.values()].reduce(
+			(sum, country) => sum + (country.lost ?? 0),
+			0,
+		),
 		finalChecksum: checksum(world),
 		elapsedMs,
 		simulatedMs: ticks * RULES.tickMs,

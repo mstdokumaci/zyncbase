@@ -31,6 +31,7 @@ import {
 	readColorIndexes,
 	rowId,
 	steps,
+	surroundedByEnemy,
 	USER_CHUNK_COUNT,
 	type UserChunkRow,
 	userChunkIndex,
@@ -119,6 +120,8 @@ const BULK_CAPTURE_FLUSH_CELLS = 100;
 
 export class World {
 	readonly owners = new Uint16Array(WIDTH * HEIGHT);
+	private readonly ownerAtCell = (x: number, y: number) =>
+		this.owners[y * WIDTH + x];
 	// Country id -> wire owner code (0 = unowned). Filled eagerly for created
 	// and restored countries and lazily for directly injected rows, so only
 	// countries with a palette color can paint chunk bytes.
@@ -1029,6 +1032,10 @@ export class World {
 			this.dirtyPlayerRows.add(player.id);
 		}
 		if (!this.land[to] || owner === player.country_id) return;
+		// A claim fully surrounded by one enemy country is a one-cell hole the
+		// defender's enclosure pass would reclaim this same tick. Skipping it
+		// avoids the claim/reclaim cycle and the redundant country-chunk write.
+		if (surroundedByEnemy(this.ownerAtCell, x, y, player.country_id)) return;
 		this.claim(to, player.country_id, false, player.id);
 	}
 
