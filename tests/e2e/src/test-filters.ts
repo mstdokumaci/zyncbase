@@ -1,9 +1,15 @@
-import type {
-	JsonValue,
-	QueryOptions,
-	SubscriptionHandle,
-} from "@zyncbase/client";
+import type { JsonValue, QueryOptions } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
+
+function envInt(name: string, fallback: number, min = 0): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < min) {
+		throw new Error(`${name} must be an integer >= ${min}, got ${raw}`);
+	}
+	return value;
+}
 
 interface ItemRecord {
 	id: string;
@@ -23,23 +29,46 @@ interface EventRecord {
 interface ClientState {
 	client: ZyncBaseClient;
 	filterSet: "A" | "B";
-	itemsSub: SubscriptionHandle | null;
-	eventsSub: SubscriptionHandle | null;
+	itemsSnapshot: ItemRecord[];
+	eventsSnapshot: EventRecord[];
 	itemsRecords: Map<string, ItemRecord>;
 	eventsRecords: Map<string, EventRecord>;
+	itemsRevision: number;
+	eventsRevision: number;
+	itemsMapRevision: number;
+	eventsMapRevision: number;
 	isReadWrite: boolean;
 	itemsFired: boolean;
 	eventsFired: boolean;
+	ready: boolean;
 	debugId: number;
 	subscribeStartedAt: number;
 	firstFiredAt: number;
+	scannedItemsRevision: number;
+	scannedEventsRevision: number;
+	scannedBaselineItemsRevision: number;
+	scannedBaselineEventsRevision: number;
+	cachedConvergenceFailure: string | null;
 }
 
 // generation gate + field compare avoid JSON.stringify per record
 let globalGeneration = 0;
 
-const CLIENTS_PER_PROCESS = 500;
-const READ_WRITE_CLIENTS_PER_PROCESS = 100;
+const CLIENTS_PER_PROCESS = envInt(
+	"ZYNCBASE_FILTER_CLIENTS_PER_PROCESS",
+	500,
+	2,
+);
+const READ_WRITE_CLIENTS_PER_PROCESS = envInt(
+	"ZYNCBASE_FILTER_READ_WRITE_CLIENTS_PER_PROCESS",
+	100,
+	1,
+);
+const CONNECT_CONCURRENCY = envInt(
+	"ZYNCBASE_FILTER_CONNECT_CONCURRENCY",
+	100,
+	1,
+);
 const SECOND_PROCESS_SEED_OFFSET = 1_000_000;
 
 function tagsEqual(a: string[], b: string[]): boolean {
@@ -138,7 +167,159 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 	};
 }
 
-async function subscribeClient(state: ClientState): Promise<void> {
+const RECORDS_PER_WRITER = 4;
+const ITEM_TARGET_SEED_XOR = 0x9e3779b9;
+const EVENT_TARGET_SEED_XOR = 0x85ebca6b;
+const PROCESS_SEED_OFFSETS = [0, SECOND_PROCESS_SEED_OFFSET] as const;
+
+function updatedItemData(seed: number): Omit<ItemRecord, "id"> {
+	return {
+		name: "updated-item",
+		priority: Math.floor(deterministicUnit(seed + 1) * 10) + 1,
+		active: deterministicUnit(seed + 2) > 0.5,
+		tags:
+			deterministicUnit(seed + 3) > 0.5 ? ["urgent", "updated"] : ["updated"],
+	};
+}
+
+function updatedEventData(seed: number): Omit<EventRecord, "id"> {
+	return {
+		title: "updated-event",
+		score: deterministicUnit(seed + 5) * 100,
+		ratings: deterministicUnit(seed + 6) > 0.5 ? [1, 5] : [2, 3],
+	};
+}
+
+function buildUpdateTargets(count: number, seed: number): number[] {
+	const order = Array.from({ length: count }, (_, index) => index);
+	for (let i = count - 1; i > 0; i--) {
+		const j = Math.floor(deterministicUnit(seed + i) * (i + 1));
+		[order[i], order[j]] = [order[j], order[i]];
+	}
+	return order;
+}
+
+function itemValueKey(item: ItemRecord): string {
+	const tags = [...item.tags].sort().join("\u0001");
+	return `${item.name}\u0000${item.priority}\u0000${item.active ? "1" : "0"}\u0000${tags}`;
+}
+
+function eventValueKey(event: EventRecord): string {
+	const ratings = [...event.ratings].sort((a, b) => a - b).join("\u0001");
+	return `${event.title}\u0000${event.score}\u0000${ratings}`;
+}
+
+function countValues<T>(
+	records: Iterable<T>,
+	keyOf: (record: T) => string,
+): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const record of records) {
+		const key = keyOf(record);
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	return counts;
+}
+
+type ExpectedFilterRecords = {
+	items: Map<string, number>;
+	events: Map<string, number>;
+	itemCount: number;
+	eventCount: number;
+};
+
+type ExpectedRecords = Record<"A" | "B", ExpectedFilterRecords>;
+
+function buildExpectedCounts(
+	items: ItemRecord[],
+	events: EventRecord[],
+	matchesItem: (item: ItemRecord) => boolean,
+	matchesEvent: (event: EventRecord) => boolean,
+): ExpectedFilterRecords {
+	const itemRecords = items.filter(matchesItem);
+	const eventRecords = events.filter(matchesEvent);
+	return {
+		items: countValues(itemRecords, itemValueKey),
+		events: countValues(eventRecords, eventValueKey),
+		itemCount: itemRecords.length,
+		eventCount: eventRecords.length,
+	};
+}
+
+function buildExpectedRecords(readWriteCount: number): ExpectedRecords {
+	const expectedItems: ItemRecord[] = [];
+	const expectedEvents: EventRecord[] = [];
+
+	for (const seedOffset of PROCESS_SEED_OFFSETS) {
+		const items = Array.from(
+			{ length: readWriteCount * RECORDS_PER_WRITER },
+			(_, index) => ({ id: "", ...createItemData(index) }),
+		);
+		const events = Array.from(
+			{ length: readWriteCount * RECORDS_PER_WRITER },
+			(_, index) => ({ id: "", ...createEventData(index) }),
+		);
+		const itemTargets = buildUpdateTargets(
+			items.length,
+			seedOffset ^ ITEM_TARGET_SEED_XOR,
+		);
+		const eventTargets = buildUpdateTargets(
+			events.length,
+			seedOffset ^ EVENT_TARGET_SEED_XOR,
+		);
+
+		for (let writerIndex = 0; writerIndex < readWriteCount; writerIndex++) {
+			for (let j = 0; j < RECORDS_PER_WRITER; j++) {
+				const seed = seedOffset + writerIndex * 32 + j * 8;
+				const itemIndex = itemTargets[writerIndex * RECORDS_PER_WRITER + j];
+				const eventIndex = eventTargets[writerIndex * RECORDS_PER_WRITER + j];
+				items[itemIndex] = { id: "", ...updatedItemData(seed) };
+				events[eventIndex] = { id: "", ...updatedEventData(seed) };
+			}
+		}
+
+		expectedItems.push(...items);
+		expectedEvents.push(...events);
+	}
+
+	return {
+		A: buildExpectedCounts(
+			expectedItems,
+			expectedEvents,
+			matchesItemFilterA,
+			matchesEventFilterA,
+		),
+		B: buildExpectedCounts(
+			expectedItems,
+			expectedEvents,
+			matchesItemFilterB,
+			matchesEventFilterB,
+		),
+	};
+}
+
+type ReadyTracker = {
+	target: number;
+	count: number;
+	waiters: Array<{
+		resolve: () => void;
+		reject: (error: Error) => void;
+	}>;
+};
+
+function markFiredReady(tracker: ReadyTracker, state: ClientState): void {
+	if (state.ready || !state.itemsFired || !state.eventsFired) return;
+	state.ready = true;
+	tracker.count++;
+	if (tracker.count >= tracker.target) {
+		for (const waiter of tracker.waiters.splice(0)) waiter.resolve();
+	}
+}
+
+async function subscribeClient(
+	state: ClientState,
+	readiness: ReadyTracker,
+): Promise<void> {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
 	const eventsFilter =
 		state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
@@ -150,12 +331,11 @@ async function subscribeClient(state: ClientState): Promise<void> {
 		itemsFilter,
 		(items: JsonValue[]) => {
 			if (state.firstFiredAt === 0) state.firstFiredAt = Date.now();
+			state.itemsSnapshot = items as unknown as ItemRecord[];
 			state.itemsFired = true;
-			state.itemsRecords.clear();
-			for (const item of items as unknown as ItemRecord[]) {
-				state.itemsRecords.set(item.id, item);
-			}
+			state.itemsRevision++;
 			globalGeneration++;
+			markFiredReady(readiness, state);
 		},
 	);
 
@@ -164,15 +344,36 @@ async function subscribeClient(state: ClientState): Promise<void> {
 		eventsFilter,
 		(events: JsonValue[]) => {
 			if (state.firstFiredAt === 0) state.firstFiredAt = Date.now();
+			state.eventsSnapshot = events as unknown as EventRecord[];
 			state.eventsFired = true;
-			state.eventsRecords.clear();
-			for (const event of events as unknown as EventRecord[]) {
-				state.eventsRecords.set(event.id, event);
-			}
+			state.eventsRevision++;
 			globalGeneration++;
+			markFiredReady(readiness, state);
 		},
 	);
-	[state.itemsSub, state.eventsSub] = await Promise.all([itemsSub, eventsSub]);
+	await Promise.all([itemsSub, eventsSub]);
+}
+
+function getItemsRecords(state: ClientState): Map<string, ItemRecord> {
+	if (state.itemsMapRevision !== state.itemsRevision) {
+		state.itemsRecords.clear();
+		for (const item of state.itemsSnapshot) {
+			state.itemsRecords.set(item.id, item);
+		}
+		state.itemsMapRevision = state.itemsRevision;
+	}
+	return state.itemsRecords;
+}
+
+function getEventsRecords(state: ClientState): Map<string, EventRecord> {
+	if (state.eventsMapRevision !== state.eventsRevision) {
+		state.eventsRecords.clear();
+		for (const event of state.eventsSnapshot) {
+			state.eventsRecords.set(event.id, event);
+		}
+		state.eventsMapRevision = state.eventsRevision;
+	}
+	return state.eventsRecords;
 }
 
 function clientIdSet(state: ClientState): {
@@ -180,8 +381,8 @@ function clientIdSet(state: ClientState): {
 	eventIds: string[];
 } {
 	return {
-		itemIds: [...state.itemsRecords.keys()].sort(),
-		eventIds: [...state.eventsRecords.keys()].sort(),
+		itemIds: [...getItemsRecords(state).keys()].sort(),
+		eventIds: [...getEventsRecords(state).keys()].sort(),
 	};
 }
 
@@ -198,14 +399,18 @@ function reportRtts(label: string, samples: number[]) {
 }
 
 function statesMatch(a: ClientState, b: ClientState): boolean {
-	if (a.itemsRecords.size !== b.itemsRecords.size) return false;
-	if (a.eventsRecords.size !== b.eventsRecords.size) return false;
-	for (const [id, item] of a.itemsRecords) {
-		const other = b.itemsRecords.get(id);
+	const aItems = getItemsRecords(a);
+	const bItems = getItemsRecords(b);
+	const aEvents = getEventsRecords(a);
+	const bEvents = getEventsRecords(b);
+	if (aItems.size !== bItems.size) return false;
+	if (aEvents.size !== bEvents.size) return false;
+	for (const [id, item] of aItems) {
+		const other = bItems.get(id);
 		if (!other || !itemsEqual(item, other)) return false;
 	}
-	for (const [id, event] of a.eventsRecords) {
-		const other = b.eventsRecords.get(id);
+	for (const [id, event] of aEvents) {
+		const other = bEvents.get(id);
 		if (!other || !eventsEqual(event, other)) return false;
 	}
 	return true;
@@ -217,10 +422,10 @@ function verifyItemMatch(
 	firstItemIds: string[],
 	errors: string[],
 ) {
-	const missing = firstItemIds.filter((id) => !client.itemsRecords.has(id));
-	const extra = [...client.itemsRecords.keys()].filter(
-		(id) => !first.itemsRecords.has(id),
-	);
+	const firstItems = getItemsRecords(first);
+	const clientItems = getItemsRecords(client);
+	const missing = firstItemIds.filter((id) => !clientItems.has(id));
+	const extra = [...clientItems.keys()].filter((id) => !firstItems.has(id));
 
 	if (missing.length > 0) {
 		errors.push(
@@ -234,8 +439,8 @@ function verifyItemMatch(
 	}
 
 	for (const id of firstItemIds) {
-		const itemA = first.itemsRecords.get(id);
-		const itemB = client.itemsRecords.get(id);
+		const itemA = firstItems.get(id);
+		const itemB = clientItems.get(id);
 		if (itemA && itemB && !itemsEqual(itemA, itemB)) {
 			errors.push(
 				`Client ${client.debugId} item ${id} value mismatch vs client ${first.debugId}`,
@@ -250,10 +455,10 @@ function verifyEventMatch(
 	firstEventIds: string[],
 	errors: string[],
 ) {
-	const missing = firstEventIds.filter((id) => !client.eventsRecords.has(id));
-	const extra = [...client.eventsRecords.keys()].filter(
-		(id) => !first.eventsRecords.has(id),
-	);
+	const firstEvents = getEventsRecords(first);
+	const clientEvents = getEventsRecords(client);
+	const missing = firstEventIds.filter((id) => !clientEvents.has(id));
+	const extra = [...clientEvents.keys()].filter((id) => !firstEvents.has(id));
 
 	if (missing.length > 0) {
 		errors.push(
@@ -267,8 +472,8 @@ function verifyEventMatch(
 	}
 
 	for (const id of firstEventIds) {
-		const eventA = first.eventsRecords.get(id);
-		const eventB = client.eventsRecords.get(id);
+		const eventA = firstEvents.get(id);
+		const eventB = clientEvents.get(id);
 		if (eventA && eventB && !eventsEqual(eventA, eventB)) {
 			errors.push(
 				`Client ${client.debugId} event ${id} value mismatch vs client ${first.debugId}`,
@@ -277,16 +482,116 @@ function verifyEventMatch(
 	}
 }
 
+function verifyExpectedRecords(
+	client: ClientState,
+	filterLabel: "A" | "B",
+	expected: ExpectedFilterRecords,
+	errors: string[],
+) {
+	const items = getItemsRecords(client);
+	const events = getEventsRecords(client);
+	if (
+		items.size === expected.itemCount &&
+		events.size === expected.eventCount &&
+		recordsMatchExpected(items, expected.items, itemValueKey) &&
+		recordsMatchExpected(events, expected.events, eventValueKey)
+	) {
+		return;
+	}
+
+	errors.push(
+		`Client ${client.debugId}: filter ${filterLabel} does not match expected records ` +
+			`(items ${items.size}/${expected.itemCount}, events ${events.size}/${expected.eventCount}); ` +
+			`itemSample=${mismatchSample(items, expected.items, itemValueKey)}; ` +
+			`eventSample=${mismatchSample(events, expected.events, eventValueKey)}`,
+	);
+}
+
+function mismatchSample<T>(
+	records: Map<string, T>,
+	expected: Map<string, number>,
+	keyOf: (record: T) => string,
+): string {
+	const actual = countValues(records.values(), keyOf);
+	for (const [key, count] of actual) {
+		if ((expected.get(key) ?? 0) !== count) {
+			return `${key.replaceAll("\u0000", "|").replaceAll("\u0001", ",")}=${count} expected ${expected.get(key) ?? 0}`;
+		}
+	}
+	for (const [key, count] of expected) {
+		if ((actual.get(key) ?? 0) !== count) {
+			return `missing ${key.replaceAll("\u0000", "|").replaceAll("\u0001", ",")} expected ${count}`;
+		}
+	}
+	return "none";
+}
+
+function recordsMatchExpected<T>(
+	records: Map<string, T>,
+	expected: Map<string, number>,
+	keyOf: (record: T) => string,
+): boolean {
+	const actual = new Map<string, number>();
+	for (const record of records.values()) {
+		const key = keyOf(record);
+		const count = (actual.get(key) ?? 0) + 1;
+		if (count > (expected.get(key) ?? 0)) return false;
+		actual.set(key, count);
+	}
+	if (actual.size !== expected.size) return false;
+	for (const [key, count] of actual) {
+		if (count !== expected.get(key)) return false;
+	}
+	return true;
+}
+
+function verifyExpectedCounts(
+	client: ClientState,
+	filterLabel: "A" | "B",
+	expected: ExpectedFilterRecords,
+	errors: string[],
+) {
+	const items = getItemsRecords(client);
+	const events = getEventsRecords(client);
+	if (
+		items.size !== expected.itemCount ||
+		events.size !== expected.eventCount
+	) {
+		errors.push(
+			`Client ${client.debugId}: filter ${filterLabel} has ${items.size} items and ${events.size} events, ` +
+				`expected ${expected.itemCount} and ${expected.eventCount}`,
+		);
+	}
+}
+
 function verifyStateMatch(
 	first: ClientState,
 	client: ClientState,
 	errors: string[],
 ) {
-	if (statesMatch(first, client)) return;
+	if (
+		client.scannedItemsRevision === client.itemsRevision &&
+		client.scannedEventsRevision === client.eventsRevision &&
+		client.scannedBaselineItemsRevision === first.itemsRevision &&
+		client.scannedBaselineEventsRevision === first.eventsRevision &&
+		client.cachedConvergenceFailure === null
+	) {
+		return;
+	}
 
-	const firstIds = clientIdSet(first);
-	verifyItemMatch(first, client, firstIds.itemIds, errors);
-	verifyEventMatch(first, client, firstIds.eventIds, errors);
+	const errorStart = errors.length;
+	if (!statesMatch(first, client)) {
+		const firstIds = clientIdSet(first);
+		verifyItemMatch(first, client, firstIds.itemIds, errors);
+		verifyEventMatch(first, client, firstIds.eventIds, errors);
+	}
+
+	client.scannedItemsRevision = client.itemsRevision;
+	client.scannedEventsRevision = client.eventsRevision;
+	client.scannedBaselineItemsRevision = first.itemsRevision;
+	client.scannedBaselineEventsRevision = first.eventsRevision;
+	client.cachedConvergenceFailure =
+		errors.length > errorStart ? errors.slice(errorStart).join(" | ") : null;
 }
 
 function verifyRecordsMatchFilter(
@@ -296,14 +601,14 @@ function verifyRecordsMatchFilter(
 	matchesEvent: (event: EventRecord) => boolean,
 	errors: string[],
 ) {
-	for (const [id, item] of client.itemsRecords) {
+	for (const [id, item] of getItemsRecords(client)) {
 		if (!matchesItem(item)) {
 			errors.push(
 				`Client ${client.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`,
 			);
 		}
 	}
-	for (const [id, event] of client.eventsRecords) {
+	for (const [id, event] of getEventsRecords(client)) {
 		if (!matchesEvent(event)) {
 			errors.push(
 				`Client ${client.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`,
@@ -315,13 +620,16 @@ function verifyRecordsMatchFilter(
 function verifySelfConsistentStates(
 	clients: ClientState[],
 	filterLabel: "A" | "B",
+	expected: ExpectedFilterRecords,
 ): string[] {
 	const errors: string[] = [];
 	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
 
 	if (filterClients.length === 0) return [];
 	const first = filterClients[0];
+	verifyExpectedRecords(first, filterLabel, expected, errors);
 	for (let i = 1; i < filterClients.length; i++) {
+		verifyExpectedCounts(filterClients[i], filterLabel, expected, errors);
 		verifyStateMatch(first, filterClients[i], errors);
 	}
 
@@ -329,46 +637,69 @@ function verifySelfConsistentStates(
 		filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
 	const matchesEvent =
 		filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
-	for (const c of filterClients) {
-		verifyRecordsMatchFilter(c, filterLabel, matchesItem, matchesEvent, errors);
-	}
+	verifyRecordsMatchFilter(
+		first,
+		filterLabel,
+		matchesItem,
+		matchesEvent,
+		errors,
+	);
 
 	return errors;
 }
 
-function convergenceErrors(clients: ClientState[]): string[] {
+function convergenceErrors(
+	clients: ClientState[],
+	expected: ExpectedRecords,
+): string[] {
 	return [
-		...verifySelfConsistentStates(clients, "A"),
-		...verifySelfConsistentStates(clients, "B"),
+		...verifySelfConsistentStates(clients, "A", expected.A),
+		...verifySelfConsistentStates(clients, "B", expected.B),
 	];
 }
 
 async function waitForFired(
+	readiness: ReadyTracker,
 	clients: ClientState[],
 	deadline: number,
 ): Promise<number> {
-	let polls = 0;
-	while (!clients.every((c) => c.itemsFired && c.eventsFired)) {
-		if (Date.now() > deadline) {
-			const notFired = clients
-				.filter((c) => !c.itemsFired || !c.eventsFired)
-				.map((c) => c.debugId);
-			throw new Error(
-				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
-			);
-		}
-		await new Promise((resolve) => setTimeout(resolve, 25));
-		polls++;
-	}
-	return polls;
+	if (readiness.count >= readiness.target) return 0;
+	await new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(
+			() => {
+				const notFired = clients
+					.filter((c) => !c.itemsFired || !c.eventsFired)
+					.map((c) => c.debugId);
+				reject(
+					new Error(
+						`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
+					),
+				);
+			},
+			Math.max(0, deadline - Date.now()),
+		);
+		readiness.waiters.push({
+			resolve: () => {
+				clearTimeout(timer);
+				resolve();
+			},
+			reject: (error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		});
+	});
+	return 0;
 }
 
 async function waitForAllFiredAndConverged(
+	readiness: ReadyTracker,
 	clients: ClientState[],
+	expected: ExpectedRecords,
 	timeoutMs = 15000,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
-	const polls = await waitForFired(clients, deadline);
+	const polls = await waitForFired(readiness, clients, deadline);
 
 	let verifyPasses = 0;
 	// skip heavy verify when no deltas arrived since last check
@@ -376,7 +707,7 @@ async function waitForAllFiredAndConverged(
 	while (true) {
 		if (Date.now() > deadline)
 			throw new Error(
-				`Timeout: not converged — ${convergenceErrors(clients).slice(0, 6).join("; ")}`,
+				`Timeout: not converged — ${convergenceErrors(clients, expected).slice(0, 6).join("; ")}`,
 			);
 		if (globalGeneration === lastGen) {
 			await new Promise((resolve) => setTimeout(resolve, 50));
@@ -386,7 +717,7 @@ async function waitForAllFiredAndConverged(
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		if (globalGeneration !== gen) continue;
 		lastGen = gen;
-		const errors = convergenceErrors(clients);
+		const errors = convergenceErrors(clients, expected);
 		verifyPasses++;
 		if (errors.length === 0) {
 			console.log(
@@ -402,24 +733,32 @@ async function waitForAllFiredAndConverged(
 
 function closeAllClients(clients: ClientState[]) {
 	const t0 = Date.now();
-	let unsubMs = 0;
-	let closeMs = 0;
-	for (const state of clients) {
-		const u0 = Date.now();
-		void state.itemsSub?.unsubscribe();
-		void state.eventsSub?.unsubscribe();
-		unsubMs += Date.now() - u0;
-		const c0 = Date.now();
-		state.client.close();
-		closeMs += Date.now() - c0;
-	}
-	// unsubscribe/close are fire-and-forget; the timings below are local
-	// synchronous call times, not remote completion.
-	console.log(
-		`[close] ${clients.length} clients: total=${Date.now() - t0}ms ` +
-			`unsubscribe(sync)=${unsubMs}ms (avg ${(unsubMs / clients.length).toFixed(1)}) ` +
-			`close(sync)=${closeMs}ms (avg ${(closeMs / clients.length).toFixed(1)})`,
-	);
+	for (const state of clients) state.client.close();
+	console.log(`[close] ${clients.length} clients: total=${Date.now() - t0}ms`);
+}
+
+async function runWithConcurrency<T>(
+	count: number,
+	limit: number,
+	operation: (index: number) => Promise<T>,
+): Promise<T[]> {
+	const results = new Array<T>(count);
+	let next = 0;
+	let failure: Error | null = null;
+	const worker = async (): Promise<void> => {
+		while (failure === null) {
+			const index = next++;
+			if (index >= count) return;
+			try {
+				results[index] = await operation(index);
+			} catch (error) {
+				failure = error instanceof Error ? error : new Error(String(error));
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
+	if (failure) throw failure;
+	return results;
 }
 
 async function createClients(
@@ -427,43 +766,42 @@ async function createClients(
 	readWriteCount: number,
 	port: number,
 ): Promise<ClientState[]> {
-	const clients: ClientState[] = [];
-	const step = Math.floor(totalClients / readWriteCount);
-	const BATCH_SIZE = 50;
-
-	for (
-		let batchStart = 0;
-		batchStart < totalClients;
-		batchStart += BATCH_SIZE
-	) {
-		const batchEnd = Math.min(batchStart + BATCH_SIZE, totalClients);
-		const batch = await Promise.all(
-			Array.from({ length: batchEnd - batchStart }, async (_, offset) => {
-				const i = batchStart + offset;
-				const client = new ZyncBaseClient({
-					url: `ws://127.0.0.1:${port}`,
-					debug: false,
-				});
-				await client.connect();
-				return {
-					client,
-					filterSet: i < totalClients / 2 ? ("A" as const) : ("B" as const),
-					itemsSub: null,
-					eventsSub: null,
-					itemsRecords: new Map(),
-					eventsRecords: new Map(),
-					isReadWrite: i % step === 0,
-					itemsFired: false,
-					eventsFired: false,
-					debugId: i,
-					subscribeStartedAt: 0,
-					firstFiredAt: 0,
-				} satisfies ClientState;
-			}),
-		);
-		clients.push(...batch);
-	}
-	return clients;
+	const step = Math.max(1, Math.floor(totalClients / readWriteCount));
+	return runWithConcurrency(
+		totalClients,
+		CONNECT_CONCURRENCY,
+		async (i): Promise<ClientState> => {
+			const client = new ZyncBaseClient({
+				url: `ws://127.0.0.1:${port}`,
+				debug: false,
+			});
+			await client.connect();
+			return {
+				client,
+				filterSet: i < totalClients / 2 ? ("A" as const) : ("B" as const),
+				itemsSnapshot: [],
+				eventsSnapshot: [],
+				itemsRecords: new Map(),
+				eventsRecords: new Map(),
+				itemsRevision: 0,
+				eventsRevision: 0,
+				itemsMapRevision: -1,
+				eventsMapRevision: -1,
+				isReadWrite: i % step === 0,
+				itemsFired: false,
+				eventsFired: false,
+				ready: false,
+				debugId: i,
+				subscribeStartedAt: 0,
+				firstFiredAt: 0,
+				scannedItemsRevision: -1,
+				scannedEventsRevision: -1,
+				scannedBaselineItemsRevision: -1,
+				scannedBaselineEventsRevision: -1,
+				cachedConvergenceFailure: null,
+			};
+		},
+	);
 }
 
 async function createInitialData(readWriteClients: ClientState[]): Promise<{
@@ -478,8 +816,8 @@ async function createInitialData(readWriteClients: ClientState[]): Promise<{
 
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
-		for (let j = 0; j < 4; j++) {
-			const index = i * 4 + j;
+		for (let j = 0; j < RECORDS_PER_WRITER; j++) {
+			const index = i * RECORDS_PER_WRITER + j;
 			const t = Date.now();
 			createPromises.push(
 				rwClient.store.create("items", createItemData(index)).then((id) => {
@@ -506,6 +844,8 @@ async function updateWriterRecords(
 	writerIndex: number,
 	createdItemIds: string[],
 	createdEventIds: string[],
+	itemTargets: number[],
+	eventTargets: number[],
 	rtts: number[],
 	seedOffset: number,
 ): Promise<void> {
@@ -515,44 +855,24 @@ async function updateWriterRecords(
 		);
 	}
 	const promises: Promise<void>[] = [];
-	for (let j = 0; j < 4; j++) {
+	for (let j = 0; j < RECORDS_PER_WRITER; j++) {
 		const seed = seedOffset + writerIndex * 32 + j * 8;
-		const randomItemId =
-			createdItemIds[
-				Math.floor(deterministicUnit(seed) * createdItemIds.length)
-			];
+		const itemId =
+			createdItemIds[itemTargets[writerIndex * RECORDS_PER_WRITER + j]];
 		const t = Date.now();
 		promises.push(
-			client.store
-				.set(["items", randomItemId], {
-					name: "updated-item",
-					priority: Math.floor(deterministicUnit(seed + 1) * 10) + 1,
-					active: deterministicUnit(seed + 2) > 0.5,
-					tags:
-						deterministicUnit(seed + 3) > 0.5
-							? ["urgent", "updated"]
-							: ["updated"],
-				})
-				.then(() => {
-					rtts.push(Date.now() - t);
-				}),
+			client.store.set(["items", itemId], updatedItemData(seed)).then(() => {
+				rtts.push(Date.now() - t);
+			}),
 		);
 
-		const randomEventId =
-			createdEventIds[
-				Math.floor(deterministicUnit(seed + 4) * createdEventIds.length)
-			];
+		const eventId =
+			createdEventIds[eventTargets[writerIndex * RECORDS_PER_WRITER + j]];
 		const te = Date.now();
 		promises.push(
-			client.store
-				.set(["events", randomEventId], {
-					title: "updated-event",
-					score: deterministicUnit(seed + 5) * 100,
-					ratings: deterministicUnit(seed + 6) > 0.5 ? [1, 5] : [2, 3],
-				})
-				.then(() => {
-					rtts.push(Date.now() - te);
-				}),
+			client.store.set(["events", eventId], updatedEventData(seed)).then(() => {
+				rtts.push(Date.now() - te);
+			}),
 		);
 	}
 	await Promise.all(promises);
@@ -568,6 +888,8 @@ async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
+	itemTargets: number[],
+	eventTargets: number[],
 	seedOffset: number,
 ): Promise<number[]> {
 	const updatePromises: Promise<void>[] = [];
@@ -581,6 +903,8 @@ async function updateRandomRecords(
 				i,
 				createdItemIds,
 				createdEventIds,
+				itemTargets,
+				eventTargets,
 				rtts,
 				seedOffset,
 			),
@@ -610,9 +934,14 @@ async function runHalf(
 	phase("All clients connected.");
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
+	const readiness: ReadyTracker = {
+		target: clients.length,
+		count: 0,
+		waiters: [],
+	};
 
 	const subT0 = Date.now();
-	await Promise.all(clients.map((state) => subscribeClient(state)));
+	await Promise.all(clients.map((state) => subscribeClient(state, readiness)));
 	const subMs = Date.now() - subT0;
 	// subscribe() resolves at the server ack, so all registrations are live.
 	phase(`Subscribed ${clients.length} clients (${subMs}ms).`);
@@ -630,18 +959,29 @@ async function runHalf(
 	reportRtts("create", createRtts);
 
 	console.log("Read-write clients updating random records...");
+	const itemTargets = buildUpdateTargets(
+		createdItemIds.length,
+		seedOffset ^ ITEM_TARGET_SEED_XOR,
+	);
+	const eventTargets = buildUpdateTargets(
+		createdEventIds.length,
+		seedOffset ^ EVENT_TARGET_SEED_XOR,
+	);
 	await updateRandomRecords(
 		readWriteClients,
 		createdItemIds,
 		createdEventIds,
+		itemTargets,
+		eventTargets,
 		seedOffset,
 	).then((rtts) => {
 		reportRtts("update", rtts);
 	});
 	phase("All updates complete.");
 
+	const expectedRecords = buildExpectedRecords(readWriteClients.length);
 	console.log("Waiting for all clients to converge...");
-	await waitForAllFiredAndConverged(clients);
+	await waitForAllFiredAndConverged(readiness, clients, expectedRecords);
 	phase("All clients converged — filter state is consistent.");
 	reportRtts(
 		"subscribe→first-delta",
@@ -653,15 +993,15 @@ async function runHalf(
 	const sampleB = clients.find((c) => c.filterSet === "B");
 	if (
 		sampleA &&
-		sampleA.itemsRecords.size === 0 &&
-		sampleA.eventsRecords.size === 0
+		getItemsRecords(sampleA).size === 0 &&
+		getEventsRecords(sampleA).size === 0
 	) {
 		throw new Error("Filter A converged on empty state — no records received");
 	}
 	if (
 		sampleB &&
-		sampleB.itemsRecords.size === 0 &&
-		sampleB.eventsRecords.size === 0
+		getItemsRecords(sampleB).size === 0 &&
+		getEventsRecords(sampleB).size === 0
 	) {
 		throw new Error("Filter B converged on empty state — no records received");
 	}
@@ -677,6 +1017,7 @@ export async function run(port: number = 3000) {
 	if (profileDir) {
 		workerCommand.push(
 			"--cpu-prof",
+			"--cpu-prof-md",
 			"--cpu-prof-dir",
 			profileDir,
 			"--cpu-prof-name",

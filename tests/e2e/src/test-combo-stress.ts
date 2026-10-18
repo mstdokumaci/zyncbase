@@ -6,12 +6,26 @@ import {
 } from "@zyncbase/client";
 import { createTestJwt } from "./harness";
 
+function envInt(name: string, fallback: number, min = 1): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < min) {
+		throw new Error(`${name} must be an integer >= ${min}, got ${raw}`);
+	}
+	return value;
+}
+
 // Top-level topology configuration
 const ROOM_COUNT = 2;
 const PROCESS_COUNT = 4;
-const CLIENTS_PER_PROCESS = 2500;
+const CLIENTS_PER_PROCESS = envInt(
+	"ZYNCBASE_COMBO_CLIENTS_PER_PROCESS",
+	2500,
+	400,
+);
 const TOTAL_CLIENTS = PROCESS_COUNT * CLIENTS_PER_PROCESS; // 10,000
-const CONNECT_BATCH_SIZE = 50;
+const CONNECT_CONCURRENCY = envInt("ZYNCBASE_COMBO_CONNECT_CONCURRENCY", 250);
 
 // Writer role boundaries within each process (first 400 clients)
 const STORE_CREATORS = 100; // localId 0..99
@@ -21,10 +35,21 @@ const PRESENCE_SHARED_WRITERS = 100; // localId 300..399
 // localId 400..2499 are passive subscribers
 
 // Convergence sampling optimization: check every 5th client
-const CONVERGENCE_SAMPLE_STRIDE = 5;
+const CONVERGENCE_SAMPLE_STRIDE = envInt("ZYNCBASE_COMBO_SAMPLE_STRIDE", 5);
 
-const QUIET_WINDOW_MS = 100;
-const VERIFY_RETRY_INTERVAL_MS = 250;
+const QUIET_WINDOW_MS = envInt("ZYNCBASE_COMBO_QUIET_WINDOW_MS", 100, 0);
+const VERIFY_RETRY_INTERVAL_MS = envInt(
+	"ZYNCBASE_COMBO_VERIFY_RETRY_MS",
+	250,
+	0,
+);
+const PRESENCE_TICK_DELAY_MS = envInt(
+	"ZYNCBASE_COMBO_PRESENCE_TICK_DELAY_MS",
+	25,
+	0,
+);
+const PRESENCE_FULL_PAYLOAD =
+	process.env.ZYNCBASE_COMBO_PRESENCE_FULL_PAYLOAD !== "0";
 const CONVERGENCE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-combo-room";
@@ -76,12 +101,16 @@ export type ClientState = {
 	filterSet: "A" | "B";
 
 	// Store tracking
+	storeSnapshot: (ItemRecord | EventRecord)[];
 	storeRecords: Map<string, ItemRecord | EventRecord>;
+	storeMapRevision: number;
 	storeFired: boolean;
+	storeSubscribed: boolean;
 
 	// Presence tracking
 	userReady: boolean;
 	sharedReady: boolean;
+	ready: boolean;
 	userCallbacks: number;
 	sharedCallbacks: number;
 	/** Last user-presence payload written, re-applied after a reconnect. */
@@ -117,6 +146,11 @@ export type ProcessContext = {
 	errorCount: number;
 	errorSamples: string[];
 	downClients: Set<ClientState>;
+	readyCount: number;
+	readyWaiters: Array<{
+		resolve: () => void;
+		reject: (error: Error) => void;
+	}>;
 };
 
 export const BARRIER_PHASES = [
@@ -130,17 +164,37 @@ export const BARRIER_PHASES = [
 
 export type BarrierPhase = (typeof BARRIER_PHASES)[number];
 
+export type ConvergenceStats = {
+	elapsedMs: number;
+	verifyMs: number;
+	passes: number;
+	scannedClients: number;
+	cachedClients: number;
+};
+
 export type ProcessMetrics = {
 	processIndex: number;
+	clientCreateMs: number;
 	connectMs: number;
-	storeSubMs: number;
-	presenceSubMs: number;
+	connectOnlyMs: number;
+	subscribeMs: number;
+	readinessMs: number;
+	cleanupMs: number;
+	barrierWaitMs: Partial<Record<BarrierPhase, number>>;
 	storeCreateMs: number;
 	storeUpdateMs: number;
 	presenceUserMs: number;
 	presenceSharedMs: number;
 	storeConvergeMs: number;
 	presenceConvergeMs: number;
+	storeVerifyMs: number;
+	storeVerifyPasses: number;
+	storeScannedClients: number;
+	storeCachedClients: number;
+	presenceVerifyMs: number;
+	presenceVerifyPasses: number;
+	presenceScannedClients: number;
+	presenceCachedClients: number;
 	filterACount: number;
 	filterBCount: number;
 	userPresenceCount: number;
@@ -351,6 +405,23 @@ function getClientRole(localId: number): ClientRole {
 	return "passive";
 }
 
+function failReadiness(context: ProcessContext, message: string): void {
+	const error = new Error(`[process ${context.processIndex}] ${message}`);
+	for (const waiter of context.readyWaiters.splice(0)) waiter.reject(error);
+}
+
+function markClientReady(context: ProcessContext, state: ClientState): void {
+	if (state.ready) return;
+	if (!state.storeSubscribed || !state.userReady || !state.sharedReady) {
+		return;
+	}
+	state.ready = true;
+	context.readyCount++;
+	if (context.readyCount >= context.clients.length) {
+		for (const waiter of context.readyWaiters.splice(0)) waiter.resolve();
+	}
+}
+
 function makeClientState(
 	context: ProcessContext,
 	port: number,
@@ -377,10 +448,14 @@ function makeClientState(
 		localId,
 		role,
 		filterSet,
+		storeSnapshot: [],
 		storeRecords: new Map(),
+		storeMapRevision: -1,
 		storeFired: false,
+		storeSubscribed: false,
 		userReady: false,
 		sharedReady: false,
+		ready: false,
 		userCallbacks: 0,
 		sharedCallbacks: 0,
 		lastPresenceData: null,
@@ -401,25 +476,44 @@ function makeClientState(
 		// fail the run — the convergence timeouts are the failure signal.
 		if (error.retryable && error.category === "network") return;
 		context.errorCount++;
+		const sample = `client ${globalId}: ${formatError(error)}`;
 		if (context.errorSamples.length < 3) {
-			context.errorSamples.push(`client ${globalId}: ${formatError(error)}`);
+			context.errorSamples.push(sample);
 		}
+		failReadiness(context, sample);
 	});
 
 	client.on("connected", () => {
 		state.disconnected = false;
 		context.downClients.delete(state);
 	});
-	client.on("disconnected", () => {
+	client.on("disconnected", (detail) => {
 		state.disconnected = true;
-		if (!state.expectedDisconnect) context.downClients.add(state);
+		if (!state.expectedDisconnect) {
+			context.downClients.add(state);
+			if (!state.ready && !detail.retryable) {
+				failReadiness(
+					context,
+					`client ${globalId} disconnected before readiness`,
+				);
+			}
+		}
 	});
 	client.on("reconnected", () => {
 		state.disconnected = false;
 		context.downClients.delete(state);
+		state.storeSnapshot = [];
+		state.storeRecords.clear();
+		state.storeMapRevision = -1;
+		state.storeRevision++;
+		state.storeScannedRevision = -1;
+		state.storeScannedBaselineRevision = -1;
+		state.cachedStoreFailure = null;
+		state.presenceRevision++;
+		state.presenceScannedRevision = -1;
+		state.cachedPresenceFailure = null;
 		// The server drops a user's presence on disconnect; re-apply it.
 		if (state.lastPresenceData !== null) {
-			state.presenceRevision++;
 			void state.client.presence.set(state.lastPresenceData);
 		}
 	});
@@ -447,36 +541,46 @@ function assertHealthy(context: ProcessContext, label: string) {
 }
 
 async function waitForReadiness(context: ProcessContext): Promise<void> {
-	while (
-		!context.clients.every(
-			(state) =>
-				state.userReady &&
-				state.sharedReady &&
-				(
-					state.client as unknown as {
-						tracker?: { subscriptions?: Map<number, unknown> };
-					}
-				).tracker?.subscriptions?.size === 1,
-		)
-	) {
-		const issue = healthIssue(context);
-		if (issue) throw new Error(`[process ${context.processIndex}] ${issue}`);
-		await delay(10);
+	const issue = healthIssue(context);
+	if (issue) throw new Error(`[process ${context.processIndex}] ${issue}`);
+	if (context.readyCount >= context.clients.length) return;
+
+	await new Promise<void>((resolve, reject) => {
+		context.readyWaiters.push({ resolve, reject });
+	});
+}
+
+async function connectClient(state: ClientState): Promise<void> {
+	try {
+		await state.client.connect();
+	} catch (error) {
+		throw new Error(
+			`client ${state.globalId} failed to connect: ${formatError(error)}`,
+		);
 	}
 }
 
-async function connectClientBatch(batch: ClientState[]): Promise<void> {
-	await Promise.all(
-		batch.map(async (state) => {
+async function connectClientsWithConcurrency(
+	clients: ClientState[],
+	limit: number,
+): Promise<void> {
+	let next = 0;
+	let failure: Error | null = null;
+	const worker = async (): Promise<void> => {
+		while (failure === null) {
+			const index = next++;
+			if (index >= clients.length) return;
 			try {
-				await state.client.connect();
+				await connectClient(clients[index]);
 			} catch (error) {
-				throw new Error(
-					`client ${state.globalId} failed to connect: ${formatError(error)}`,
-				);
+				failure = error instanceof Error ? error : new Error(String(error));
 			}
-		}),
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(limit, clients.length) }, worker),
 	);
+	if (failure) throw failure;
 }
 
 async function subscribeClient(
@@ -496,14 +600,12 @@ async function subscribeClient(
 		context.table,
 		filter,
 		(items) => {
+			state.storeSnapshot = items as unknown as (ItemRecord | EventRecord)[];
 			state.storeFired = true;
-			state.storeRecords.clear();
-			for (const item of items as unknown as (ItemRecord | EventRecord)[]) {
-				state.storeRecords.set(item.id, item);
-			}
 			state.storeRevision++;
 			context.storeGeneration++;
 			context.lastStoreChangeMs = performance.now();
+			markClientReady(context, state);
 		},
 	);
 
@@ -513,6 +615,7 @@ async function subscribeClient(
 		state.presenceRevision++;
 		context.presenceGeneration++;
 		context.lastPresenceChangeMs = performance.now();
+		markClientReady(context, state);
 	});
 	const sharedSub = state.client.presence.subscribeShared(() => {
 		state.sharedCallbacks++;
@@ -520,45 +623,74 @@ async function subscribeClient(
 		state.presenceRevision++;
 		context.presenceGeneration++;
 		context.lastPresenceChangeMs = performance.now();
+		markClientReady(context, state);
 	});
 	await Promise.all([storeSub, userSub, sharedSub]);
+	state.storeSubscribed = true;
+	markClientReady(context, state);
 }
+
+function getStoreRecords(
+	state: ClientState,
+): Map<string, ItemRecord | EventRecord> {
+	if (state.storeMapRevision !== state.storeRevision) {
+		state.storeRecords.clear();
+		for (const item of state.storeSnapshot) {
+			state.storeRecords.set(item.id, item);
+		}
+		state.storeMapRevision = state.storeRevision;
+	}
+	return state.storeRecords;
+}
+
+type PreparationMetrics = {
+	clientCreateMs: number;
+	connectOnlyMs: number;
+	subscribeMs: number;
+	readinessMs: number;
+};
 
 async function prepareClients(
 	context: ProcessContext,
 	port: number,
 	jwtSecret: string,
-): Promise<void> {
+): Promise<PreparationMetrics> {
+	const preparation: PreparationMetrics = {
+		clientCreateMs: 0,
+		connectOnlyMs: 0,
+		subscribeMs: 0,
+		readinessMs: 0,
+	};
+
 	await withTimeout(
 		(async () => {
+			const createStart = performance.now();
 			for (let localId = 0; localId < CLIENTS_PER_PROCESS; localId++) {
 				context.clients.push(
 					makeClientState(context, port, jwtSecret, localId),
 				);
 			}
+			preparation.clientCreateMs = performance.now() - createStart;
 
-			// Batch connections to prevent server socket storm
-			for (
-				let offset = 0;
-				offset < context.clients.length;
-				offset += CONNECT_BATCH_SIZE
-			) {
-				const batch = context.clients.slice(
-					offset,
-					offset + CONNECT_BATCH_SIZE,
-				);
-				await connectClientBatch(batch);
-			}
+			const connectStart = performance.now();
+			await connectClientsWithConcurrency(context.clients, CONNECT_CONCURRENCY);
+			preparation.connectOnlyMs = performance.now() - connectStart;
 
+			const subscribeStart = performance.now();
 			await Promise.all(
 				context.clients.map((state) => subscribeClient(context, state)),
 			);
+			preparation.subscribeMs = performance.now() - subscribeStart;
 
+			const readinessStart = performance.now();
 			await waitForReadiness(context);
+			preparation.readinessMs = performance.now() - readinessStart;
 		})(),
 		CONNECT_TIMEOUT_MS,
 		`process ${context.processIndex} connection and subscription readiness`,
 	);
+
+	return preparation;
 }
 
 function getSampleClients(clients: ClientState[]): ClientState[] {
@@ -605,26 +737,36 @@ const ROOM_PRESENCE_EXPECTATIONS: RoomPresenceExpectation[] = Array.from(
 	(_, roomIndex) => buildRoomPresenceExpectation(roomIndex),
 );
 
+type VerifyStats = {
+	scannedClients: number;
+	cachedClients: number;
+};
+
 function verifyClientRecordMatches<T extends ItemRecord | EventRecord>(
 	first: ClientState,
 	other: ClientState,
 	label: "A" | "B",
 	recordsEqual: (a: T, b: T) => boolean,
+	stats: VerifyStats,
 ): string | null {
 	if (
 		other.storeScannedRevision === other.storeRevision &&
 		other.storeScannedBaselineRevision === first.storeRevision &&
 		other.cachedStoreFailure === null
 	) {
+		stats.cachedClients++;
 		return null;
 	}
+	stats.scannedClients++;
 
+	const firstRecords = getStoreRecords(first);
+	const otherRecords = getStoreRecords(other);
 	let failure: string | null = null;
-	if (other.storeRecords.size !== first.storeRecords.size) {
-		failure = `filter ${label} size mismatch: client ${first.globalId} has ${first.storeRecords.size}, client ${other.globalId} has ${other.storeRecords.size}`;
+	if (otherRecords.size !== firstRecords.size) {
+		failure = `filter ${label} size mismatch: client ${first.globalId} has ${firstRecords.size}, client ${other.globalId} has ${otherRecords.size}`;
 	} else {
-		for (const [id, record] of first.storeRecords) {
-			const otherRecord = other.storeRecords.get(id);
+		for (const [id, record] of firstRecords) {
+			const otherRecord = otherRecords.get(id);
 			if (!otherRecord) {
 				failure = `client ${other.globalId} missing record ${id} vs client ${first.globalId}`;
 				break;
@@ -660,6 +802,7 @@ function verifyFilterGroup<T extends ItemRecord | EventRecord>(
 	label: "A" | "B",
 	matchesFilter: (record: T) => boolean,
 	recordsEqual: (a: T, b: T) => boolean,
+	stats: VerifyStats,
 ): string | null {
 	if (clients.length === 0) return null;
 	for (const c of clients) {
@@ -669,12 +812,13 @@ function verifyFilterGroup<T extends ItemRecord | EventRecord>(
 	}
 
 	const first = clients[0];
-	if (first.storeRecords.size === 0) {
+	const firstRecords = getStoreRecords(first);
+	if (firstRecords.size === 0) {
 		return `filter ${label} has 0 records`;
 	}
 
 	const predErr = verifyRecordsMatchPredicate(
-		first.storeRecords,
+		firstRecords,
 		label,
 		matchesFilter,
 	);
@@ -686,6 +830,7 @@ function verifyFilterGroup<T extends ItemRecord | EventRecord>(
 			clients[i],
 			label,
 			recordsEqual,
+			stats,
 		);
 		if (err) return err;
 	}
@@ -696,6 +841,7 @@ function verifyFilterGroup<T extends ItemRecord | EventRecord>(
 function verifyStore(
 	context: ProcessContext,
 	sampledClients: ClientState[],
+	stats: VerifyStats,
 ): string | null {
 	const isItems = context.table === "items";
 	const filterAClients = sampledClients.filter((c) => c.filterSet === "A");
@@ -707,12 +853,14 @@ function verifyStore(
 				"A",
 				matchesItemFilterA,
 				itemsEqual,
+				stats,
 			)
 		: verifyFilterGroup<EventRecord>(
 				filterAClients,
 				"A",
 				matchesEventFilterA,
 				eventsEqual,
+				stats,
 			);
 	if (errA) return errA;
 
@@ -722,12 +870,14 @@ function verifyStore(
 				"B",
 				matchesItemFilterB,
 				itemsEqual,
+				stats,
 			)
 		: verifyFilterGroup<EventRecord>(
 				filterBClients,
 				"B",
 				matchesEventFilterB,
 				eventsEqual,
+				stats,
 			);
 	if (errB) return errB;
 
@@ -807,13 +957,16 @@ function verifyClientPresence(
 	expected: RoomPresenceExpectation,
 	expectedSlide: number,
 	expectedPlaying: boolean,
+	stats: VerifyStats,
 ): string | null {
 	if (
 		state.presenceScannedRevision === state.presenceRevision &&
 		state.cachedPresenceFailure === null
 	) {
+		stats.cachedClients++;
 		return null;
 	}
+	stats.scannedClients++;
 
 	const entries = state.client.presence.getAll({ includeSelf: true });
 	const scan: PresenceEntryScan = {
@@ -856,6 +1009,7 @@ function verifyClientPresence(
 function verifyPresence(
 	context: ProcessContext,
 	sampledClients: ClientState[],
+	stats: VerifyStats,
 ): string | null {
 	const expected = ROOM_PRESENCE_EXPECTATIONS[context.roomIndex];
 	const expectedSlide = context.roomIndex * 100 + 2;
@@ -868,6 +1022,7 @@ function verifyPresence(
 			expected,
 			expectedSlide,
 			expectedPlaying,
+			stats,
 		);
 		if (err) failures.push(err);
 		if (failures.length === 5) break;
@@ -890,6 +1045,7 @@ function shouldWaitForQuiet(
 	if (currentGen !== state.lastGen) {
 		state.lastGen = currentGen;
 		state.lastChanged = now;
+		state.lastVerified = 0;
 		return true;
 	}
 	if (now - state.lastChanged < QUIET_WINDOW_MS) return true;
@@ -899,13 +1055,20 @@ function shouldWaitForQuiet(
 async function waitForStoreConvergence(
 	context: ProcessContext,
 	sampledClients: ClientState[],
-): Promise<number> {
+): Promise<ConvergenceStats> {
 	const started = performance.now();
 	const deadline = started + CONVERGENCE_TIMEOUT_MS;
 	const genTracker: GenerationTracker = {
 		lastGen: context.storeGeneration,
 		lastChanged: performance.now(),
 		lastVerified: 0,
+	};
+	const stats: ConvergenceStats = {
+		elapsedMs: 0,
+		verifyMs: 0,
+		passes: 0,
+		scannedClients: 0,
+		cachedClients: 0,
 	};
 	let lastFailure = "no quiet window";
 
@@ -919,7 +1082,13 @@ async function waitForStoreConvergence(
 
 		const genBefore = context.storeGeneration;
 		genTracker.lastVerified = performance.now();
-		const failure = verifyStore(context, sampledClients);
+		const verifyStats: VerifyStats = { scannedClients: 0, cachedClients: 0 };
+		const verifyStart = performance.now();
+		const failure = verifyStore(context, sampledClients, verifyStats);
+		stats.verifyMs += performance.now() - verifyStart;
+		stats.passes++;
+		stats.scannedClients += verifyStats.scannedClients;
+		stats.cachedClients += verifyStats.cachedClients;
 		if (context.storeGeneration !== genBefore) {
 			genTracker.lastGen = context.storeGeneration;
 			genTracker.lastChanged = performance.now();
@@ -927,7 +1096,10 @@ async function waitForStoreConvergence(
 			continue;
 		}
 
-		if (failure === null) return performance.now() - started;
+		if (failure === null) {
+			stats.elapsedMs = performance.now() - started;
+			return stats;
+		}
 		lastFailure = failure;
 
 		await delay(10);
@@ -941,13 +1113,20 @@ async function waitForStoreConvergence(
 async function waitForPresenceConvergence(
 	context: ProcessContext,
 	sampledClients: ClientState[],
-): Promise<number> {
+): Promise<ConvergenceStats> {
 	const started = performance.now();
 	const deadline = started + CONVERGENCE_TIMEOUT_MS;
 	const genTracker: GenerationTracker = {
 		lastGen: context.presenceGeneration,
 		lastChanged: performance.now(),
 		lastVerified: 0,
+	};
+	const stats: ConvergenceStats = {
+		elapsedMs: 0,
+		verifyMs: 0,
+		passes: 0,
+		scannedClients: 0,
+		cachedClients: 0,
 	};
 	let lastFailure = "no quiet window";
 
@@ -961,7 +1140,13 @@ async function waitForPresenceConvergence(
 
 		const genBefore = context.presenceGeneration;
 		genTracker.lastVerified = performance.now();
-		const failure = verifyPresence(context, sampledClients);
+		const verifyStats: VerifyStats = { scannedClients: 0, cachedClients: 0 };
+		const verifyStart = performance.now();
+		const failure = verifyPresence(context, sampledClients, verifyStats);
+		stats.verifyMs += performance.now() - verifyStart;
+		stats.passes++;
+		stats.scannedClients += verifyStats.scannedClients;
+		stats.cachedClients += verifyStats.cachedClients;
 		if (context.presenceGeneration !== genBefore) {
 			genTracker.lastGen = context.presenceGeneration;
 			genTracker.lastChanged = performance.now();
@@ -969,7 +1154,10 @@ async function waitForPresenceConvergence(
 			continue;
 		}
 
-		if (failure === null) return performance.now() - started;
+		if (failure === null) {
+			stats.elapsedMs = performance.now() - started;
+			return stats;
+		}
 		lastFailure = failure;
 
 		await delay(10);
@@ -1057,16 +1245,20 @@ async function executePresenceUserWrites(
 	);
 	for (let tick = 0; tick < 3; tick++) {
 		for (const state of userWriters) {
-			const data = {
+			const fullData = {
 				name: `client-${state.globalId}`,
 				status: "active",
 				cursor: { x: state.globalId, y: tick },
 			};
-			state.lastPresenceData = data;
+			state.lastPresenceData = fullData;
 			state.presenceRevision++;
-			state.client.presence.set(data);
+			state.client.presence.set(
+				PRESENCE_FULL_PAYLOAD || tick === 0
+					? fullData
+					: { cursor: fullData.cursor },
+			);
 		}
-		if (tick < 2) await delay(25);
+		if (tick < 2) await delay(PRESENCE_TICK_DELAY_MS);
 	}
 }
 
@@ -1088,7 +1280,7 @@ async function executePresenceSharedWrites(
 				playing: tick % 2 === 1,
 			});
 		}
-		if (tick < 2) await delay(25);
+		if (tick < 2) await delay(PRESENCE_TICK_DELAY_MS);
 	}
 }
 
@@ -1112,19 +1304,33 @@ async function runProcess(
 		errorCount: 0,
 		errorSamples: [],
 		downClients: new Set(),
+		readyCount: 0,
+		readyWaiters: [],
 	};
 
 	const metrics: ProcessMetrics = {
 		processIndex,
+		clientCreateMs: 0,
 		connectMs: 0,
-		storeSubMs: 0,
-		presenceSubMs: 0,
+		connectOnlyMs: 0,
+		subscribeMs: 0,
+		readinessMs: 0,
+		cleanupMs: 0,
+		barrierWaitMs: {},
 		storeCreateMs: 0,
 		storeUpdateMs: 0,
 		presenceUserMs: 0,
 		presenceSharedMs: 0,
 		storeConvergeMs: 0,
 		presenceConvergeMs: 0,
+		storeVerifyMs: 0,
+		storeVerifyPasses: 0,
+		storeScannedClients: 0,
+		storeCachedClients: 0,
+		presenceVerifyMs: 0,
+		presenceVerifyPasses: 0,
+		presenceScannedClients: 0,
+		presenceCachedClients: 0,
 		filterACount: 0,
 		filterBCount: 0,
 		userPresenceCount: 0,
@@ -1136,48 +1342,66 @@ async function runProcess(
 		lastPresenceDeltaMs: 0,
 	};
 
+	const waitAtBarrier = async (phase: BarrierPhase): Promise<void> => {
+		const start = performance.now();
+		await barrier(phase);
+		metrics.barrierWaitMs[phase] = performance.now() - start;
+	};
+
 	const createdDocIds: string[] = [];
 
 	try {
 		// Phase 1: Connect and subscribe
 		const startConnect = performance.now();
-		await prepareClients(context, port, jwtSecret);
+		const preparation = await prepareClients(context, port, jwtSecret);
 		metrics.connectMs = performance.now() - startConnect;
-		await barrier("ready");
+		metrics.clientCreateMs = preparation.clientCreateMs;
+		metrics.connectOnlyMs = preparation.connectOnlyMs;
+		metrics.subscribeMs = preparation.subscribeMs;
+		metrics.readinessMs = preparation.readinessMs;
+		await waitAtBarrier("ready");
 
 		// Phase 2: First 100 clients create 1 document each
 		const startCreate = performance.now();
 		await executeStoreCreates(context, createdDocIds);
 		metrics.storeCreateMs = performance.now() - startCreate;
-		await barrier("store-create");
+		await waitAtBarrier("store-create");
 
 		// Phase 3: Second 100 clients update 1 document each
 		const startUpdate = performance.now();
 		await executeStoreUpdates(context, createdDocIds);
 		metrics.storeUpdateMs = performance.now() - startUpdate;
-		await barrier("store-update");
+		await waitAtBarrier("store-update");
 
 		// Phase 4: Third 100 clients write 3 user presence updates
 		const startPresenceUser = performance.now();
 		await executePresenceUserWrites(context);
 		metrics.presenceUserMs = performance.now() - startPresenceUser;
-		await barrier("presence-user");
+		await waitAtBarrier("presence-user");
 
 		// Phase 5: Fourth 100 clients write 3 shared presence updates
 		const startPresenceShared = performance.now();
 		await executePresenceSharedWrites(context);
 		metrics.presenceSharedMs = performance.now() - startPresenceShared;
-		await barrier("presence-shared");
+		await waitAtBarrier("presence-shared");
 
 		// Phase 6: Convergence check with stride 5
 		const sampled = getSampleClients(context.clients);
 		const convergeStart = performance.now();
-		const [storeConvergeMs, presenceConvergeMs] = await Promise.all([
+		const [storeConverge, presenceConverge] = await Promise.all([
 			waitForStoreConvergence(context, sampled),
 			waitForPresenceConvergence(context, sampled),
 		]);
-		metrics.storeConvergeMs = storeConvergeMs;
-		metrics.presenceConvergeMs = presenceConvergeMs;
+		metrics.storeConvergeMs = storeConverge.elapsedMs;
+		metrics.presenceConvergeMs = presenceConverge.elapsedMs;
+		metrics.storeVerifyMs = storeConverge.verifyMs;
+		metrics.storeVerifyPasses = storeConverge.passes;
+		metrics.storeScannedClients = storeConverge.scannedClients;
+		metrics.storeCachedClients = storeConverge.cachedClients;
+		metrics.presenceVerifyMs = presenceConverge.verifyMs;
+		metrics.presenceVerifyPasses = presenceConverge.passes;
+		metrics.presenceScannedClients = presenceConverge.scannedClients;
+		metrics.presenceCachedClients = presenceConverge.cachedClients;
 		metrics.storeCallbacks = context.storeGeneration;
 		metrics.presenceCallbacks = context.presenceGeneration;
 		metrics.lastStoreDeltaMs = Math.round(
@@ -1189,18 +1413,20 @@ async function runProcess(
 
 		const sampleA = sampled.find((c) => c.filterSet === "A");
 		const sampleB = sampled.find((c) => c.filterSet === "B");
-		metrics.filterACount = sampleA?.storeRecords.size ?? 0;
-		metrics.filterBCount = sampleB?.storeRecords.size ?? 0;
+		metrics.filterACount = sampleA ? getStoreRecords(sampleA).size : 0;
+		metrics.filterBCount = sampleB ? getStoreRecords(sampleB).size : 0;
 		metrics.userPresenceCount =
 			sampled[0]?.client.presence.getAll({ includeSelf: true }).length ?? 0;
 
-		await barrier("converge");
+		await waitAtBarrier("converge");
 
 		metrics.userCallbacks = context.clients.map((s) => s.userCallbacks);
 		metrics.sharedCallbacks = context.clients.map((s) => s.sharedCallbacks);
 		return metrics;
 	} finally {
+		const cleanupStart = performance.now();
 		await cleanupClients(context.clients);
+		metrics.cleanupMs = performance.now() - cleanupStart;
 	}
 }
 
@@ -1293,6 +1519,7 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 	if (profileDir) {
 		workerCommand.push(
 			"--cpu-prof",
+			"--cpu-prof-md",
 			"--cpu-prof-dir",
 			profileDir,
 			"--cpu-prof-name",
@@ -1342,6 +1569,7 @@ function percentile(values: number[], fraction: number): number {
 function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const max = (key: keyof ProcessMetrics) =>
 		Math.round(Math.max(...results.map((r) => r[key] as number)));
+	const round = (value: number) => Math.round(value);
 	const userCallbacks = results.flatMap((r) => r.userCallbacks);
 	const sharedCallbacks = results.flatMap((r) => r.sharedCallbacks);
 	console.log(
@@ -1352,6 +1580,17 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 			`store-converge=${max("storeConvergeMs")}, presence-converge=${max("presenceConvergeMs")}`,
 	);
 	console.log(
+		`Combo stress setup max ms client-create=${max("clientCreateMs")}, ` +
+			`connect-only=${max("connectOnlyMs")}, subscribe=${max("subscribeMs")}, ` +
+			`readiness=${max("readinessMs")}, cleanup=${max("cleanupMs")}`,
+	);
+	console.log(
+		`Combo stress verify max ms store=${max("storeVerifyMs")} ` +
+			`(passes=${max("storeVerifyPasses")}, scanned=${max("storeScannedClients")}, cached=${max("storeCachedClients")}), ` +
+			`presence=${max("presenceVerifyMs")} ` +
+			`(passes=${max("presenceVerifyPasses")}, scanned=${max("presenceScannedClients")}, cached=${max("presenceCachedClients")})`,
+	);
+	console.log(
 		`Combo stress delivered: store-callbacks=${max("storeCallbacks")}, presence-callbacks=${max("presenceCallbacks")}, ` +
 			`last-change-into-converge ms store=${max("lastStoreDeltaMs")}, presence=${max("lastPresenceDeltaMs")}`,
 	);
@@ -1359,6 +1598,26 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 		`Combo stress callbacks: user p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
 			`shared p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
 	);
+	for (const result of results) {
+		console.log(
+			`  proc ${result.processIndex}: create=${round(result.clientCreateMs)} ` +
+				`connect=${round(result.connectMs)} (only=${round(result.connectOnlyMs)}, ` +
+				`subscribe=${round(result.subscribeMs)}, ready=${round(result.readinessMs)}) ` +
+				`store=${round(result.storeCreateMs)}/${round(result.storeUpdateMs)} ` +
+				`presence=${round(result.presenceUserMs)}/${round(result.presenceSharedMs)} ` +
+				`converge=${round(result.storeConvergeMs)}/${round(result.presenceConvergeMs)} ` +
+				`verify=${round(result.storeVerifyMs)}/${round(result.presenceVerifyMs)} ` +
+				`cleanup=${round(result.cleanupMs)} ` +
+				`barrier=${JSON.stringify(
+					Object.fromEntries(
+						Object.entries(result.barrierWaitMs).map(([phase, ms]) => [
+							phase,
+							round(ms as number),
+						]),
+					),
+				)}`,
+		);
+	}
 }
 
 function assertCrossProcessConsistency(allMetrics: ProcessMetrics[]) {
@@ -1397,6 +1656,11 @@ function assertCrossProcessConsistency(allMetrics: ProcessMetrics[]) {
 }
 
 export async function run(port: number, jwtSecret: string) {
+	if (process.env.ZYNCBASE_COMBO_DEBUG === "1") {
+		console.log(
+			`[combo] sdk module: ${import.meta.resolve("@zyncbase/client")}`,
+		);
+	}
 	const started = performance.now();
 	const workers = Array.from({ length: PROCESS_COUNT - 1 }, (_, index) =>
 		spawnWorker(port, index + 1, jwtSecret),

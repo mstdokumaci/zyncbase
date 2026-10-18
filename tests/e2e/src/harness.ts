@@ -75,6 +75,8 @@ export type ServerOptions = {
 	maxQueryResponseSize?: number;
 	/** Override `security.maxMessagesPerSecond` for unthrottled harnesses. */
 	maxMessagesPerSecond?: number;
+	/** Override `performance.*` values for stress scenarios. */
+	performance?: Record<string, number>;
 };
 
 export type ServerHandle = {
@@ -128,16 +130,18 @@ async function readStream(
 	const decoder = new TextDecoder();
 	const parts: string[] = [];
 	let lineCount = 0;
+	let truncated = false;
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
+			if (truncated) continue;
 			const text = decoder.decode(value, { stream: true });
 			lineCount += countNewlines(text);
 			parts.push(text);
 			if (lineCount >= MAX_CAPTURED_LOG_LINES) {
-				reader.cancel().catch(() => {});
-				break;
+				truncated = true;
+				parts.push("... captured logs truncated ...\n");
 			}
 		}
 		return parts.join("");
@@ -149,7 +153,7 @@ async function readStream(
 }
 
 async function collectServerLogs(server: RunningServer) {
-	if (VERBOSE) return;
+	if (VERBOSE || !CAPTURE_LOGS) return;
 	const [stdout, stderr] = await Promise.all([
 		server.stdoutText,
 		server.stderrText,
@@ -190,7 +194,7 @@ function printCapturedLogs() {
 		!CAPTURE_LOGS
 	) {
 		status(
-			"Suppressed logs were discarded. Re-run with --verbose or --capture-logs to see them.",
+			"Suppressed logs were discarded. Re-run with ZYNCBASE_TEST_VERBOSE=1 or ZYNCBASE_TEST_CAPTURE_LOGS=1 to see them.",
 		);
 	}
 }
@@ -360,20 +364,23 @@ async function startServer(
 	configPath: string,
 	port: number,
 ): Promise<RunningServer> {
+	const captureOutput = VERBOSE || CAPTURE_LOGS;
 	const serverProcess = Bun.spawn([SERVER_BIN, "--config", configPath], {
 		stdio: VERBOSE
 			? ["inherit", "inherit", "inherit"]
-			: ["ignore", "pipe", "pipe"],
+			: CAPTURE_LOGS
+				? ["ignore", "pipe", "pipe"]
+				: ["ignore", "ignore", "ignore"],
 		cwd: process.cwd(),
 	});
 	const server: RunningServer = {
 		process: serverProcess,
-		stdoutText: VERBOSE
-			? Promise.resolve("")
-			: readStream(serverProcess.stdout),
-		stderrText: VERBOSE
-			? Promise.resolve("")
-			: readStream(serverProcess.stderr),
+		stdoutText: captureOutput
+			? readStream(serverProcess.stdout)
+			: Promise.resolve(""),
+		stderrText: captureOutput
+			? readStream(serverProcess.stderr)
+			: Promise.resolve(""),
 		configPath,
 	};
 	try {
@@ -504,6 +511,7 @@ export async function withServer<T>(
 	if (options.maxMessagesPerSecond !== undefined)
 		security.maxMessagesPerSecond = options.maxMessagesPerSecond;
 	if (Object.keys(security).length > 0) config.security = security;
+	if (options.performance) config.performance = options.performance;
 	fs.writeFileSync(configPath, JSON.stringify(config));
 
 	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);
