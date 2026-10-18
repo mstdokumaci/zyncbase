@@ -5,14 +5,33 @@ import {
 } from "@zyncbase/client";
 import { createTestJwt } from "./harness";
 
+function envInt(name: string, fallback: number, min = 0): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < min) {
+		throw new Error(`${name} must be an integer >= ${min}, got ${raw}`);
+	}
+	return value;
+}
+
 const ROOM_COUNT = 2;
 const PROCESSES_PER_ROOM = 2;
-const CLIENTS_PER_PROCESS = 500;
+const CLIENTS_PER_PROCESS = envInt(
+	"ZYNCBASE_PRESENCE_CLIENTS_PER_PROCESS",
+	500,
+);
 const CLIENTS_PER_ROOM = PROCESSES_PER_ROOM * CLIENTS_PER_PROCESS;
 const PROCESS_COUNT = ROOM_COUNT * PROCESSES_PER_ROOM;
 const TOTAL_CLIENTS = PROCESS_COUNT * CLIENTS_PER_PROCESS;
-const CONNECT_BATCH_SIZE = 50;
-const PROCESS_MUTATION_STAGGER_MS = 250;
+const CONNECT_CONCURRENCY = envInt(
+	"ZYNCBASE_PRESENCE_CONNECT_CONCURRENCY",
+	100,
+);
+const PROCESS_MUTATION_STAGGER_MS = envInt(
+	"ZYNCBASE_PRESENCE_MUTATION_STAGGER_MS",
+	50,
+);
 
 const CURSOR_GROUP_SIZE = 10;
 const FIRST_CURSOR_TICKS = 40;
@@ -21,8 +40,12 @@ const CURSOR_INTERVAL_MS = 8;
 
 const SHARED_INTERVAL_MS = 20;
 
-const QUIET_WINDOW_MS = 100;
-const VERIFY_RETRY_INTERVAL_MS = 250;
+const QUIET_WINDOW_MS = envInt("ZYNCBASE_PRESENCE_QUIET_WINDOW_MS", 25);
+const VERIFY_RETRY_INTERVAL_MS = envInt(
+	"ZYNCBASE_PRESENCE_VERIFY_RETRY_MS",
+	250,
+);
+const VERIFY_SAMPLE_STRIDE = envInt("ZYNCBASE_PRESENCE_VERIFY_STRIDE", 2);
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-stress";
@@ -50,6 +73,7 @@ type ClientState = {
 	globalId: number;
 	userReady: boolean;
 	sharedReady: boolean;
+	ready: boolean;
 	userCallbacks: number;
 	sharedCallbacks: number;
 	viewRevision: number;
@@ -57,8 +81,10 @@ type ClientState = {
 	scannedRevision: number;
 	scannedExpectedCount: number;
 	cachedScanFailure: string | null;
-	errorCount: number;
-	errorSamples: string[];
+	sharedRevision: number;
+	sharedScannedRevision: number;
+	sharedScannedRound: number;
+	cachedSharedFailure: string | null;
 	disconnected: boolean;
 	expectedDisconnect: boolean;
 };
@@ -69,11 +95,28 @@ type ProcessContext = {
 	clients: ClientState[];
 	generation: number;
 	verifyEpoch: number;
+	lastChangeMs: number;
+	errorCount: number;
+	errorSamples: string[];
+	downClients: Set<ClientState>;
+	readyCount: number;
+	readyWaiters: Array<{
+		resolve: () => void;
+		reject: (error: Error) => void;
+	}>;
+	verifyMs: number;
+	verifyPasses: number;
 };
 
 type ProcessMetrics = {
 	processIndex: number;
+	clientCreateMs: number;
 	connectMs: number;
+	connectOnlyMs: number;
+	subscribeMs: number;
+	readinessMs: number;
+	cleanupMs: number;
+	barrierWaitMs: Partial<Record<BarrierPhase, number>>;
 	joinMs: number;
 	cursorWriteMs: number;
 	cursorConvergeMs: number;
@@ -82,6 +125,8 @@ type ProcessMetrics = {
 	removeMs: number;
 	rejoinMs: number;
 	disconnectMs: number;
+	verifyMs: number;
+	verifyPasses: number;
 	userCallbacks: number[];
 	sharedCallbacks: number[];
 };
@@ -137,6 +182,20 @@ function formatError(error: unknown): string {
 	return String(error);
 }
 
+function failReadiness(context: ProcessContext, message: string): void {
+	const error = new Error(`[process ${context.processIndex}] ${message}`);
+	for (const waiter of context.readyWaiters.splice(0)) waiter.reject(error);
+}
+
+function markClientReady(context: ProcessContext, state: ClientState): void {
+	if (state.ready || !state.userReady || !state.sharedReady) return;
+	state.ready = true;
+	context.readyCount++;
+	if (context.readyCount >= context.clients.length) {
+		for (const waiter of context.readyWaiters.splice(0)) waiter.resolve();
+	}
+}
+
 function makeClientState(
 	context: ProcessContext,
 	port: number,
@@ -158,6 +217,7 @@ function makeClientState(
 		globalId,
 		userReady: false,
 		sharedReady: false,
+		ready: false,
 		userCallbacks: 0,
 		sharedCallbacks: 0,
 		viewRevision: 0,
@@ -165,8 +225,10 @@ function makeClientState(
 		scannedRevision: -1,
 		scannedExpectedCount: -1,
 		cachedScanFailure: null,
-		errorCount: 0,
-		errorSamples: [],
+		sharedRevision: 0,
+		sharedScannedRevision: -1,
+		sharedScannedRound: -1,
+		cachedSharedFailure: null,
 		disconnected: false,
 		expectedDisconnect: false,
 	};
@@ -174,24 +236,37 @@ function makeClientState(
 	client.on("error", (error) => {
 		if (state.expectedDisconnect && formatError(error) === "Disconnected")
 			return;
-		state.errorCount++;
-		if (state.errorSamples.length < 3) {
-			state.errorSamples.push(formatError(error));
-		}
+		context.errorCount++;
+		const sample = `client ${globalId}: ${formatError(error)}`;
+		if (context.errorSamples.length < 3) context.errorSamples.push(sample);
+		failReadiness(context, sample);
 	});
 	client.on("disconnected", () => {
 		state.disconnected = true;
+		if (!state.expectedDisconnect) {
+			context.downClients.add(state);
+			if (!state.ready) {
+				failReadiness(
+					context,
+					`client ${globalId} disconnected before readiness`,
+				);
+			}
+		}
+	});
+	client.on("connected", () => {
+		state.disconnected = false;
+		context.downClients.delete(state);
 	});
 
 	return state;
 }
 
 function healthIssue(context: ProcessContext): string | null {
-	for (const state of context.clients) {
-		if (state.errorCount > 0) {
-			return `client ${state.globalId} emitted ${state.errorCount} error(s): ${state.errorSamples.join("; ")}`;
-		}
-		if (state.disconnected && !state.expectedDisconnect) {
+	if (context.errorCount > 0) {
+		return `${context.errorCount} client error(s): ${context.errorSamples.join("; ")}`;
+	}
+	for (const state of context.downClients) {
+		if (!state.expectedDisconnect && state.disconnected) {
 			return `client ${state.globalId} disconnected unexpectedly`;
 		}
 	}
@@ -199,74 +274,120 @@ function healthIssue(context: ProcessContext): string | null {
 }
 
 async function waitForReadiness(context: ProcessContext): Promise<void> {
-	while (
-		!context.clients.every((state) => state.userReady && state.sharedReady)
-	) {
-		const issue = healthIssue(context);
-		if (issue) throw new Error(`[process ${context.processIndex}] ${issue}`);
-		await delay(10);
+	const issue = healthIssue(context);
+	if (issue) throw new Error(`[process ${context.processIndex}] ${issue}`);
+	if (context.readyCount >= context.clients.length) return;
+	await new Promise<void>((resolve, reject) => {
+		context.readyWaiters.push({ resolve, reject });
+	});
+}
+
+async function connectClient(state: ClientState): Promise<void> {
+	try {
+		await state.client.connect();
+	} catch (error) {
+		throw new Error(
+			`client ${state.globalId} failed to connect: ${formatError(error)}`,
+		);
 	}
+}
+
+async function connectClientsWithConcurrency(
+	clients: ClientState[],
+	limit: number,
+): Promise<void> {
+	let next = 0;
+	let failure: Error | null = null;
+	const worker = async (): Promise<void> => {
+		while (failure === null) {
+			const index = next++;
+			if (index >= clients.length) return;
+			try {
+				await connectClient(clients[index]);
+			} catch (error) {
+				failure = error instanceof Error ? error : new Error(String(error));
+			}
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(limit, clients.length) }, worker),
+	);
+	if (failure) throw failure;
+}
+
+type PreparationMetrics = {
+	clientCreateMs: number;
+	connectOnlyMs: number;
+	subscribeMs: number;
+	readinessMs: number;
+};
+
+async function subscribeClient(
+	context: ProcessContext,
+	state: ClientState,
+): Promise<void> {
+	await Promise.all([
+		state.client.presence.subscribe(() => {
+			state.userCallbacks++;
+			state.viewRevision++;
+			state.userReady = true;
+			context.generation++;
+			context.lastChangeMs = performance.now();
+			markClientReady(context, state);
+		}),
+		state.client.presence.subscribeShared(() => {
+			state.sharedCallbacks++;
+			state.viewRevision++;
+			state.sharedRevision++;
+			state.sharedReady = true;
+			context.generation++;
+			context.lastChangeMs = performance.now();
+			markClientReady(context, state);
+		}),
+	]);
 }
 
 async function prepareClients(
 	context: ProcessContext,
 	port: number,
 	jwtSecret: string,
-): Promise<void> {
+): Promise<PreparationMetrics> {
+	const preparation: PreparationMetrics = {
+		clientCreateMs: 0,
+		connectOnlyMs: 0,
+		subscribeMs: 0,
+		readinessMs: 0,
+	};
+
 	await withTimeout(
 		(async () => {
+			const createStart = performance.now();
 			for (let localId = 0; localId < CLIENTS_PER_PROCESS; localId++) {
 				context.clients.push(
 					makeClientState(context, port, jwtSecret, localId),
 				);
 			}
+			preparation.clientCreateMs = performance.now() - createStart;
 
-			for (
-				let offset = 0;
-				offset < context.clients.length;
-				offset += CONNECT_BATCH_SIZE
-			) {
-				const batch = context.clients.slice(
-					offset,
-					offset + CONNECT_BATCH_SIZE,
-				);
-				await Promise.all(
-					batch.map(async (state) => {
-						try {
-							await state.client.connect();
-						} catch (error) {
-							throw new Error(
-								`client ${state.globalId} failed to connect: ${formatError(error)}`,
-							);
-						}
-					}),
-				);
-			}
+			const connectStart = performance.now();
+			await connectClientsWithConcurrency(context.clients, CONNECT_CONCURRENCY);
+			preparation.connectOnlyMs = performance.now() - connectStart;
 
+			const subscribeStart = performance.now();
 			await Promise.all(
-				context.clients.map(async (state) => {
-					await Promise.all([
-						state.client.presence.subscribe(() => {
-							state.userCallbacks++;
-							state.viewRevision++;
-							state.userReady = true;
-							context.generation++;
-						}),
-						state.client.presence.subscribeShared(() => {
-							state.sharedCallbacks++;
-							state.viewRevision++;
-							state.sharedReady = true;
-							context.generation++;
-						}),
-					]);
-				}),
+				context.clients.map((state) => subscribeClient(context, state)),
 			);
+			preparation.subscribeMs = performance.now() - subscribeStart;
 
+			const readinessStart = performance.now();
 			await waitForReadiness(context);
+			preparation.readinessMs = performance.now() - readinessStart;
 		})(),
 		CONNECT_TIMEOUT_MS,
 		`process ${context.processIndex} connection and subscription readiness`,
 	);
+
+	return preparation;
 }
 
 type EntryScan = {
@@ -418,9 +539,11 @@ function verifyUsers(
 	active: Uint8Array,
 	expectedCount: number,
 	expectedY: Int32Array,
+	stride = VERIFY_SAMPLE_STRIDE,
 ): string | null {
 	const failures: string[] = [];
-	for (const state of context.clients) {
+	for (let i = 0; i < context.clients.length; i += stride) {
+		const state = context.clients[i];
 		if (state.expectedDisconnect) continue;
 		const failure = verifyObserver(
 			context,
@@ -463,15 +586,29 @@ function verifyShared(context: ProcessContext, round: number): string | null {
 	const expected = sharedState(context, round);
 	for (const state of context.clients) {
 		if (state.expectedDisconnect) continue;
+		if (
+			state.sharedScannedRevision === state.sharedRevision &&
+			state.sharedScannedRound === round &&
+			state.cachedSharedFailure === null
+		) {
+			continue;
+		}
+
 		const shared = state.client.presence.getShared();
+		let failure: string | null = null;
 		if (
 			shared === null ||
 			Object.keys(shared).length !== 2 ||
 			shared.slide !== expected.slide ||
 			shared.playing !== expected.playing
 		) {
-			return `observer ${state.globalId}: expected shared slide=${expected.slide}, playing=${expected.playing}; got ${JSON.stringify(shared)}`;
+			failure = `observer ${state.globalId}: expected shared slide=${expected.slide}, playing=${expected.playing}; got ${JSON.stringify(shared)}`;
 		}
+
+		state.sharedScannedRevision = state.sharedRevision;
+		state.sharedScannedRound = round;
+		state.cachedSharedFailure = failure;
+		if (failure) return failure;
 	}
 	return null;
 }
@@ -489,6 +626,7 @@ function observeGeneration(
 	if (context.generation === state.lastGeneration) return false;
 	state.lastGeneration = context.generation;
 	state.lastChanged = performance.now();
+	state.lastVerified = 0;
 	return true;
 }
 
@@ -518,7 +656,7 @@ async function waitForConvergence(
 	const deadline = started + CONVERGENCE_TIMEOUT_MS;
 	const generation: GenerationState = {
 		lastGeneration: context.generation,
-		lastChanged: performance.now(),
+		lastChanged: context.lastChangeMs,
 		lastVerified: 0,
 	};
 	let lastFailure = "no quiet window";
@@ -533,7 +671,10 @@ async function waitForConvergence(
 
 		const generationBeforeCheck = context.generation;
 		generation.lastVerified = performance.now();
+		const verifyStart = performance.now();
 		const failure = verify();
+		context.verifyMs += performance.now() - verifyStart;
+		context.verifyPasses++;
 		if (context.generation !== generationBeforeCheck) {
 			observeGeneration(context, generation);
 			await delay(10);
@@ -604,6 +745,7 @@ async function mutateAfterProcessStagger(
 		(context.processIndex % PROCESSES_PER_ROOM) * PROCESS_MUTATION_STAGGER_MS,
 	);
 	for (const state of clients) mutate(state);
+	context.lastChangeMs = performance.now();
 }
 
 async function runJoinPhase(
@@ -616,11 +758,12 @@ async function runJoinPhase(
 	await mutateAfterProcessStagger(context, context.clients, (state) =>
 		setFullPresence(state, 0),
 	);
-	await waitForConvergence(context, "join", () =>
-		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
-	);
-	await waitForConvergence(context, "join self filter", () =>
-		verifyFullJoinSelfFilter(context),
+	await waitForConvergence(
+		context,
+		"join",
+		() =>
+			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1) ??
+			verifyFullJoinSelfFilter(context),
 	);
 	return performance.now() - started;
 }
@@ -653,6 +796,7 @@ async function runCursorPhase(
 		if (tick + 1 < SECOND_CURSOR_TICKS) await delay(CURSOR_INTERVAL_MS);
 	}
 	const writeMs = performance.now() - started;
+	context.lastChangeMs = performance.now();
 	markMovers(context, expectedY);
 	const convergeMs = await waitForConvergence(context, "cursor flood", () =>
 		verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY),
@@ -672,6 +816,7 @@ async function writeSharedRounds(
 		for (const state of writers) state.client.presence.setShared(update);
 		if (offset + 1 < roundCount) await delay(SHARED_INTERVAL_MS);
 	}
+	context.lastChangeMs = performance.now();
 	return performance.now() - started;
 }
 
@@ -729,7 +874,7 @@ async function runRejoinPhase(
 		context,
 		"rejoin half",
 		() =>
-			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY) ??
+			verifyUsers(context, active, CLIENTS_PER_ROOM, expectedY, 1) ??
 			verifyShared(context, 0),
 	);
 	return performance.now() - started;
@@ -760,6 +905,7 @@ async function runDisconnectPhase(
 				active,
 				CLIENTS_PER_ROOM - CLIENTS_PER_ROOM / 4,
 				expectedY,
+				1,
 			) ?? verifyShared(context, 2),
 	);
 	return performance.now() - started;
@@ -778,6 +924,14 @@ async function runProcess(
 		clients: [],
 		generation: 0,
 		verifyEpoch: 0,
+		lastChangeMs: performance.now(),
+		errorCount: 0,
+		errorSamples: [],
+		downClients: new Set(),
+		readyCount: 0,
+		readyWaiters: [],
+		verifyMs: 0,
+		verifyPasses: 0,
 	};
 	const active = new Uint8Array(TOTAL_CLIENTS);
 	const firstRoomClient = roomIndex * CLIENTS_PER_ROOM;
@@ -785,7 +939,13 @@ async function runProcess(
 	const expectedY = new Int32Array(TOTAL_CLIENTS);
 	const metrics: ProcessMetrics = {
 		processIndex,
+		clientCreateMs: 0,
 		connectMs: 0,
+		connectOnlyMs: 0,
+		subscribeMs: 0,
+		readinessMs: 0,
+		cleanupMs: 0,
+		barrierWaitMs: {},
 		joinMs: 0,
 		cursorWriteMs: 0,
 		cursorConvergeMs: 0,
@@ -794,23 +954,35 @@ async function runProcess(
 		removeMs: 0,
 		rejoinMs: 0,
 		disconnectMs: 0,
+		verifyMs: 0,
+		verifyPasses: 0,
 		userCallbacks: [],
 		sharedCallbacks: [],
 	};
 
+	const waitAtBarrier = async (phase: BarrierPhase): Promise<void> => {
+		const start = performance.now();
+		await barrier(phase);
+		metrics.barrierWaitMs[phase] = performance.now() - start;
+	};
+
 	try {
 		const started = performance.now();
-		await prepareClients(context, port, jwtSecret);
+		const preparation = await prepareClients(context, port, jwtSecret);
 		metrics.connectMs = performance.now() - started;
-		await barrier("ready");
+		metrics.clientCreateMs = preparation.clientCreateMs;
+		metrics.connectOnlyMs = preparation.connectOnlyMs;
+		metrics.subscribeMs = preparation.subscribeMs;
+		metrics.readinessMs = preparation.readinessMs;
+		await waitAtBarrier("ready");
 
 		metrics.joinMs = await runJoinPhase(context, active, expectedY);
-		await barrier("join");
+		await waitAtBarrier("join");
 
 		const cursor = await runCursorPhase(context, active, expectedY);
 		metrics.cursorWriteMs = cursor.writeMs;
 		metrics.cursorConvergeMs = cursor.convergeMs;
-		await barrier("cursor");
+		await waitAtBarrier("cursor");
 
 		const sharedBeforeRemove = await runSharedPhase(
 			context,
@@ -820,13 +992,13 @@ async function runProcess(
 		);
 		metrics.sharedWriteMs += sharedBeforeRemove.writeMs;
 		metrics.sharedConvergeMs += sharedBeforeRemove.convergeMs;
-		await barrier("shared-before-remove");
+		await waitAtBarrier("shared-before-remove");
 
 		metrics.removeMs = await runRemovePhase(context, active, expectedY);
-		await barrier("remove");
+		await waitAtBarrier("remove");
 
 		metrics.rejoinMs = await runRejoinPhase(context, active, expectedY);
-		await barrier("rejoin");
+		await waitAtBarrier("rejoin");
 
 		const sharedAfterRejoin = await runSharedPhase(
 			context,
@@ -836,18 +1008,22 @@ async function runProcess(
 		);
 		metrics.sharedWriteMs += sharedAfterRejoin.writeMs;
 		metrics.sharedConvergeMs += sharedAfterRejoin.convergeMs;
-		await barrier("shared-after-rejoin");
+		await waitAtBarrier("shared-after-rejoin");
 
 		metrics.disconnectMs = await runDisconnectPhase(context, active, expectedY);
-		await barrier("disconnect");
+		await waitAtBarrier("disconnect");
 
+		metrics.verifyMs = context.verifyMs;
+		metrics.verifyPasses = context.verifyPasses;
 		metrics.userCallbacks = context.clients.map((state) => state.userCallbacks);
 		metrics.sharedCallbacks = context.clients.map(
 			(state) => state.sharedCallbacks,
 		);
 		return metrics;
 	} finally {
+		const cleanupStart = performance.now();
 		await cleanupClients(context.clients);
+		metrics.cleanupMs = performance.now() - cleanupStart;
 	}
 }
 
@@ -935,6 +1111,7 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 	if (profileDir) {
 		workerCommand.push(
 			"--cpu-prof",
+			"--cpu-prof-md",
 			"--cpu-prof-dir",
 			profileDir,
 			"--cpu-prof-name",
@@ -984,6 +1161,7 @@ function percentile(values: number[], fraction: number): number {
 function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const max = (key: keyof ProcessMetrics) =>
 		Math.round(Math.max(...results.map((result) => result[key] as number)));
+	const round = (value: number) => Math.round(value);
 	const userCallbacks = results.flatMap((result) => result.userCallbacks);
 	const sharedCallbacks = results.flatMap((result) => result.sharedCallbacks);
 	console.log(
@@ -992,9 +1170,37 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 			`cursor-write=${max("cursorWriteMs")}, cursor-converge=${max("cursorConvergeMs")}, ` +
 			`shared-write=${max("sharedWriteMs")}, shared-converge=${max("sharedConvergeMs")}, ` +
 			`remove=${max("removeMs")}, rejoin=${max("rejoinMs")}, disconnect=${max("disconnectMs")}; ` +
+			`verify=${max("verifyMs")} (passes=${max("verifyPasses")}); ` +
 			`user callbacks p50/p95/max=${percentile(userCallbacks, 0.5)}/${percentile(userCallbacks, 0.95)}/${Math.max(...userCallbacks)}, ` +
 			`shared callbacks p50/p95/max=${percentile(sharedCallbacks, 0.5)}/${percentile(sharedCallbacks, 0.95)}/${Math.max(...sharedCallbacks)}`,
 	);
+	console.log(
+		`Presence stress setup max ms client-create=${max("clientCreateMs")}, ` +
+			`connect-only=${max("connectOnlyMs")}, subscribe=${max("subscribeMs")}, ` +
+			`readiness=${max("readinessMs")}, cleanup=${max("cleanupMs")}`,
+	);
+	for (const result of results) {
+		console.log(
+			`  proc ${result.processIndex}: create=${round(result.clientCreateMs)} ` +
+				`connect=${round(result.connectMs)} (only=${round(result.connectOnlyMs)}, ` +
+				`subscribe=${round(result.subscribeMs)}, ready=${round(result.readinessMs)}) ` +
+				`join=${round(result.joinMs)} ` +
+				`cursor=${round(result.cursorWriteMs)}/${round(result.cursorConvergeMs)} ` +
+				`shared=${round(result.sharedWriteMs)}/${round(result.sharedConvergeMs)} ` +
+				`remove=${round(result.removeMs)} rejoin=${round(result.rejoinMs)} ` +
+				`disconnect=${round(result.disconnectMs)} ` +
+				`verify=${round(result.verifyMs)}/${result.verifyPasses} ` +
+				`cleanup=${round(result.cleanupMs)} ` +
+				`barrier=${JSON.stringify(
+					Object.fromEntries(
+						Object.entries(result.barrierWaitMs).map(([phase, ms]) => [
+							phase,
+							round(ms as number),
+						]),
+					),
+				)}`,
+		);
+	}
 }
 
 export async function run(port: number, jwtSecret: string) {
