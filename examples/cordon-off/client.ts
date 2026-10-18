@@ -474,6 +474,7 @@ function receiveUserChunk(row: UserChunkRow) {
 		dots,
 		land,
 		countryCodeForSlot,
+		ownerAt,
 	))
 		applyMovementPaint(paint);
 	for (const dot of dots)

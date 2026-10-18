@@ -88,6 +88,21 @@ test("country chunks can be held across publishes and flushed later", () => {
 	expect(world.dirtyCountryChunks.size).toBe(0);
 });
 
+test("movement predictions are applied before the authoritative country snapshot", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.dirtyCountryChunks.add(7);
+	world.dirtyUserChunks.add(3);
+	const operations = buildPublishOperations(world, drainPublishState(world));
+	const user = operations.findIndex(
+		(op) => op.op === "set" && op.path[0] === "user_chunks",
+	);
+	const country = operations.findIndex(
+		(op) => op.op === "set" && op.path[0] === "country_chunks",
+	);
+	expect(user).toBeGreaterThanOrEqual(0);
+	expect(country).toBeGreaterThan(user);
+});
+
 test("country chunks flush on the interval, on force, and after a bulk capture", () => {
 	expect(shouldPublishCountryChunks(1, false, false)).toBe(false);
 	expect(
