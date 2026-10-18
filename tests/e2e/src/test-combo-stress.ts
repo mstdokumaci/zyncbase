@@ -502,9 +502,18 @@ function makeClientState(
 	client.on("reconnected", () => {
 		state.disconnected = false;
 		context.downClients.delete(state);
+		state.storeSnapshot = [];
+		state.storeRecords.clear();
+		state.storeMapRevision = -1;
+		state.storeRevision++;
+		state.storeScannedRevision = -1;
+		state.storeScannedBaselineRevision = -1;
+		state.cachedStoreFailure = null;
+		state.presenceRevision++;
+		state.presenceScannedRevision = -1;
+		state.cachedPresenceFailure = null;
 		// The server drops a user's presence on disconnect; re-apply it.
 		if (state.lastPresenceData !== null) {
-			state.presenceRevision++;
 			void state.client.presence.set(state.lastPresenceData);
 		}
 	});

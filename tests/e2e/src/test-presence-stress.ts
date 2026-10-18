@@ -241,6 +241,7 @@ function makeClientState(
 	client.on("error", (error) => {
 		if (state.expectedDisconnect && formatError(error) === "Disconnected")
 			return;
+		if (error.retryable && error.category === "network") return;
 		context.errorCount++;
 		const sample = `client ${globalId}: ${formatError(error)}`;
 		if (context.errorSamples.length < 3) context.errorSamples.push(sample);
