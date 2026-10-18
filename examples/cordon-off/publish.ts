@@ -6,6 +6,9 @@ import type { World } from "./world";
 // at most 100 user chunks and MAX_PLAYERS dots, a slice stays well under the
 // configured message cap.
 export const PUBLISH_BATCH_SIZE = 500;
+// Country chunks are the high-volume fan-out; movement paint is predicted by
+// clients, so full rows can reconcile less often than dots move.
+export const COUNTRY_CHUNK_PUBLISH_EVERY_TICKS = 3;
 
 export type PublishSnapshot = {
 	countryChunks: number[];
@@ -54,27 +57,41 @@ function drainRosterRows(
 	return rows;
 }
 
-/** Snapshot the world's dirty sets and clear them for the next tick. */
+/** Whether this publish pass should flush full country-chunk rows. */
+export function shouldPublishCountryChunks(
+	tickCount: number,
+	force: boolean,
+	bulkCapturePending: boolean,
+): boolean {
+	return (
+		force ||
+		bulkCapturePending ||
+		tickCount % COUNTRY_CHUNK_PUBLISH_EVERY_TICKS === 0
+	);
+}
+
+/** Snapshot the world's dirty sets and clear the rows this pass owns. */
 export function drainPublishState(
 	world: World,
-	opts?: { rosters?: boolean },
+	opts?: { rosters?: boolean; chunks?: boolean },
 ): PublishSnapshot {
 	// Roster rows (countries/users) can be held back for a slower flush while
-	// chunks stay per-tick: the sets dedupe, so held entries simply publish
+	// user chunks stay per-tick: the sets dedupe, so held entries simply publish
 	// later with their latest values. Cue rows ship now either way.
 	const rosters = opts?.rosters ?? true;
+	const chunks = opts?.chunks ?? true;
 	const cueCountries = [...world.cueCountries];
 	const cuePlayers = [...world.cuePlayers];
 	world.cueCountries.clear();
 	world.cuePlayers.clear();
 	const snapshot = {
-		countryChunks: [...world.dirtyCountryChunks],
+		countryChunks: chunks ? [...world.dirtyCountryChunks] : [],
 		userChunks: [...world.dirtyUserChunks],
 		cueCountries,
 		cuePlayers,
 		...drainRosterRows(world, rosters, cueCountries, cuePlayers),
 	};
-	world.dirtyCountryChunks.clear();
+	if (chunks) world.dirtyCountryChunks.clear();
 	world.dirtyUserChunks.clear();
 	return snapshot;
 }

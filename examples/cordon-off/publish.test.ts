@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import type { BatchOperation } from "@zyncbase/client";
 import {
 	buildPublishOperations,
+	COUNTRY_CHUNK_PUBLISH_EVERY_TICKS,
 	drainPublishState,
 	PUBLISH_BATCH_SIZE,
 	restorePublishState,
 	runPublishBatches,
+	shouldPublishCountryChunks,
 } from "./publish";
 import {
 	encodeCoordinates,
@@ -70,6 +72,43 @@ test("a chunks-only drain holds roster rows back for the slower flush", () => {
 			lost: 0,
 		},
 	});
+});
+
+test("country chunks can be held across publishes and flushed later", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	world.dirtyCountryChunks.add(7);
+	world.dirtyUserChunks.add(3);
+	const held = drainPublishState(world, { chunks: false });
+	expect(held.countryChunks).toEqual([]);
+	expect(held.userChunks).toEqual([3]);
+	expect(world.dirtyCountryChunks.has(7)).toBe(true);
+	expect(world.dirtyUserChunks.size).toBe(0);
+	const flushed = drainPublishState(world, { chunks: true });
+	expect(flushed.countryChunks).toEqual([7]);
+	expect(world.dirtyCountryChunks.size).toBe(0);
+});
+
+test("country chunks flush on the interval, on force, and after a bulk capture", () => {
+	expect(shouldPublishCountryChunks(1, false, false)).toBe(false);
+	expect(
+		shouldPublishCountryChunks(COUNTRY_CHUNK_PUBLISH_EVERY_TICKS, false, false),
+	).toBe(true);
+	expect(shouldPublishCountryChunks(1, true, false)).toBe(true);
+	expect(shouldPublishCountryChunks(1, false, true)).toBe(true);
+});
+
+test("a large envelope fill marks the chunk flush urgent", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const country = world.country("Fill");
+	assert(country);
+	const cells = Array.from({ length: 100 }, (_, i) => 40 * WIDTH + 40 + i);
+	const capture = (
+		world as unknown as {
+			captureEnclosure(cells: number[], countryId: number): void;
+		}
+	).captureEnclosure;
+	capture.call(world, cells, country.country_id);
+	expect(world.bulkCapturePending).toBe(true);
 });
 
 test("cue rows ship on a chunks-only drain without forcing the roster flush", () => {
