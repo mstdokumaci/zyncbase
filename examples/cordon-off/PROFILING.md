@@ -61,10 +61,18 @@ At 1,024 the observer held 30 fps with 4.2 ms draw p95; the Bun game server used
 Three repeats per workload, alternating baseline then candidate, fixed workload order. Do not use `--profile`, `--trace`, or `--publish` for timing runs.
 
 ```sh
+repo=$(pwd)
 for r in 1 2 3; do
-  bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output "test-artifacts/cordon-off-profile/repeat-$r"
-  bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output "test-artifacts/cordon-off-profile/repeat-$r"
-  bun examples/cordon-off/profile.ts --mode bots --shape compact --output "test-artifacts/cordon-off-profile/repeat-$r"
+  for tree in baseline candidate; do
+    if [ "$tree" = baseline ]; then
+      root="$repo/../zyncbase-baseline"
+    else
+      root="$repo"
+    fi
+    (cd "$root" && bun examples/cordon-off/profile.ts --mode scripted --shape fragmented --output "$repo/test-artifacts/cordon-off-profile/$tree-repeat-$r")
+    (cd "$root" && bun examples/cordon-off/profile.ts --mode bots --shape fragmented --output "$repo/test-artifacts/cordon-off-profile/$tree-repeat-$r")
+    (cd "$root" && bun examples/cordon-off/profile.ts --mode bots --shape compact --output "$repo/test-artifacts/cordon-off-profile/$tree-repeat-$r")
+  done
 done
 ```
 
