@@ -157,13 +157,15 @@ export function buildPublishOperations(
 			path: ["users", id],
 			value: row,
 		})),
-		...snapshot.countryChunks.map((index) => {
-			const { id, ...value } = world.countryChunk(index);
-			return { op: "set" as const, path: ["country_chunks", id], value };
-		}),
+		// User chunks carry movement predictions; apply them before the
+		// authoritative country snapshot so reconciliation always wins in a batch.
 		...snapshot.userChunks.map((index) => {
 			const { id, ...value } = world.userChunk(index);
 			return { op: "set" as const, path: ["user_chunks", id], value };
+		}),
+		...snapshot.countryChunks.map((index) => {
+			const { id, ...value } = world.countryChunk(index);
+			return { op: "set" as const, path: ["country_chunks", id], value };
 		}),
 	];
 }

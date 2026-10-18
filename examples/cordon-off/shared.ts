@@ -268,13 +268,47 @@ export type MovementPaint = {
 	code: number;
 };
 
+const RING_STEPS = [
+	[-1, -1],
+	[0, -1],
+	[1, -1],
+	[-1, 0],
+	[1, 0],
+	[-1, 1],
+	[0, 1],
+	[1, 1],
+] as const;
+
+/** True when a cell and all eight neighbours belong to one enemy country: the
+ * claim is a one-pixel hole its owner's enclosure pass is certain to refill. */
+function surroundedByEnemy(
+	ownerAt: (x: number, y: number) => number | undefined,
+	x: number,
+	y: number,
+	code: number,
+): boolean {
+	const owner = ownerAt(x, y);
+	if (!owner || owner === code) return false;
+	for (const [dx, dy] of RING_STEPS) {
+		const nx = x + dx,
+			ny = y + dy;
+		// Movement wraps, but enclosure treats the map edge as exterior.
+		if (nx < 0 || nx >= WIDTH || ny < 0 || ny >= HEIGHT) return false;
+		if (ownerAt(nx, ny) !== owner) return false;
+	}
+	return true;
+}
+
 /** Paints implied by confirmed one-cell cardinal moves. Prediction is only
- * used for immediate visual feedback; full country chunks reconcile later. */
+ * used for immediate visual feedback; full country chunks reconcile later.
+ * Moves into a pixel fully surrounded by one enemy country predict nothing:
+ * the server's enclosure pass will claim it straight back. */
 export function movementPaints(
 	previous: ReadonlyMap<number, { x: number; y: number }>,
 	dots: readonly Dot[],
 	land: Uint8Array,
 	codeForSlot: (slot: number) => number | undefined,
+	ownerAt: (x: number, y: number) => number | undefined,
 ): MovementPaint[] {
 	const paints: MovementPaint[] = [];
 	for (const dot of dots) {
@@ -289,6 +323,7 @@ export function movementPaints(
 		if (!land[cell]) continue;
 		const code = codeForSlot(dot.slot);
 		if (!code) continue;
+		if (surroundedByEnemy(ownerAt, dot.x, dot.y, code)) continue;
 		paints.push({ chunk: countryChunkIndex(dot.x, dot.y), cell, code });
 	}
 	return paints;
