@@ -141,6 +141,69 @@ test("movement pays destination cost, preserves cooldowns, and survives chunk/re
 	).toBe(true);
 });
 
+test("a move into a one-cell hole in enemy land does not paint", () => {
+	const land = new Uint8Array(WIDTH * HEIGHT).fill(1);
+	const world = new World(land);
+	const enemy = world.country("Enemy");
+	const mover = world.country("Mover");
+	if (!enemy || !mover) throw new Error("Missing countries");
+	const left = 80,
+		right = 120,
+		top = 80,
+		bottom = 120;
+	for (let y = top; y <= bottom; y++)
+		for (let x = left; x <= right; x++)
+			world.owners[y * WIDTH + x] = enemy.country_id;
+	enemy.count = (right - left + 1) * (bottom - top + 1);
+	world.input(
+		"walker",
+		{
+			name: "Walker",
+			country_id: mover.country_id,
+			direction: "idle",
+			seq: 1,
+		},
+		0,
+	);
+	const player = world.players.get("walker");
+	if (!player) throw new Error("Player missing");
+	player.x = 100;
+	player.y = 100;
+	player.credit = 0;
+	const moverCount = mover.count;
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
+	world.input(
+		"walker",
+		{
+			name: "Walker",
+			country_id: mover.country_id,
+			direction: "right",
+			seq: 2,
+		},
+		1,
+	);
+	for (let tick = 0; tick < RULES.enemy; tick++) world.tick(tick + 2);
+	expect([player.x, player.y]).toEqual([101, 100]);
+	// The dot moved, but the surrounded claim was neither painted nor queued.
+	expect(world.owners[100 * WIDTH + 101]).toBe(enemy.country_id);
+	expect(enemy.count).toBe(41 * 41);
+	expect(mover.count).toBe(moverCount);
+	expect(world.dirtyCountryChunks.size).toBe(0);
+	expect(world.dirtyUserChunks.has(userChunkIndex(101, 100))).toBe(true);
+	// The first cell outside the enemy block is a real claim again.
+	player.x = right;
+	player.credit = 0;
+	world.dirtyCountryChunks.clear();
+	world.dirtyUserChunks.clear();
+	for (let tick = 0; tick < RULES.neutral; tick++)
+		world.tick(tick + 20 + RULES.enemy);
+	expect([player.x, player.y]).toEqual([right + 1, 100]);
+	expect(world.owners[100 * WIDTH + right + 1]).toBe(mover.country_id);
+	expect(mover.count).toBe(moverCount + 1);
+	expect(world.dirtyCountryChunks.size).toBe(1);
+});
+
 test("color-index chunks round-trip and reject malformed streams", () => {
 	const codes = new Uint8Array(COUNTRY_CHUNK_WIDTH * 25);
 	for (let i = 0; i < codes.length; i++)

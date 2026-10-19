@@ -458,7 +458,6 @@ function applyMovementPaint(paint: MovementPaint) {
 	const y = (paint.cell - x) / WIDTH;
 	const localX = x % COUNTRY_CHUNK_WIDTH;
 	const localY = y % COUNTRY_CHUNK_HEIGHT;
-	chunk.colorIndexes[localY * COUNTRY_CHUNK_WIDTH + localX] = paint.code;
 	const draw = chunk.image.getContext("2d");
 	if (!draw) return;
 	draw.fillStyle = COUNTRY_COLORS[paint.code - 1] ?? "#ffffff";
