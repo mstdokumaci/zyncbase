@@ -284,8 +284,7 @@ function emitObject(
 }
 
 function emitZyncBaseSchema(store: Record<string, SchemaCollection>): string {
-	// A type alias (not interface): only aliases get the implicit index
-	// signature that keeps a typed client assignable to the loose fallback.
+	// Type alias, not interface: declaration merging must not fork the schema.
 	const lines: string[] = ["export type ZyncBaseSchema = {"];
 	for (const [collectionName, collection] of Object.entries(store)) {
 		const required = new Set(collection.required ?? []);

@@ -299,10 +299,10 @@ void userId;
 `;
 
 		try {
-			Bun.write(typesFile, typesContent);
-			Bun.write(consumerFile, consumer);
+			fs.writeFileSync(typesFile, typesContent);
+			fs.writeFileSync(consumerFile, consumer);
 			const tsconfigFile = path.join(tmpDir, "tsconfig.json");
-			Bun.write(
+			fs.writeFileSync(
 				tsconfigFile,
 				JSON.stringify({
 					compilerOptions: {
