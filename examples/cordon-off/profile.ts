@@ -15,6 +15,7 @@ import {
 	createE2ETestContext,
 	withServer,
 } from "../../tests/e2e/src/harness";
+import type { ZyncBaseSchema } from "./schema-types";
 import {
 	countryChunkIndex,
 	type Direction,
@@ -240,7 +241,7 @@ function checksum(world: World) {
 }
 
 async function commitBatch(
-	client: ZyncBaseClient,
+	client: ZyncBaseClient<ZyncBaseSchema>,
 	operations: BatchOperation[],
 	label = "fixture setup",
 ) {
@@ -262,7 +263,7 @@ async function commitBatch(
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: setup, warmup and verification intentionally surround one measured interval.
-async function run(client?: ZyncBaseClient) {
+async function run(client?: ZyncBaseClient<ZyncBaseSchema>) {
 	let world = fixture();
 	for (let tick = 0; tick < warmup; tick++) {
 		steer(world, tick);
@@ -456,7 +457,7 @@ if (values.publish) {
 			maxMessagesPerSecond: values.unpaced ? 1_000_000 : undefined,
 		},
 		async ({ port }) => {
-			const client = createClient({
+			const client = createClient<ZyncBaseSchema>({
 				url: `ws://127.0.0.1:${port}`,
 				storeNamespace: NAMESPACE,
 				reconnect: false,

@@ -329,6 +329,20 @@ client.store.get(['users', userId, 'name'])
 
 ---
 
+## Static Typing
+
+`createClient<ZyncBaseSchema>(options)` binds the store API to a generated schema (`bunx @zyncbase/client generate --schema schema.json --out zyncbase-schema.ts`). With a schema bound:
+
+- `get`, `set`, `remove`, `listen` accept only paths declared by the schema — dot strings and segment tuples alike — with the field's declared value type.
+- `create` and `set` at document depth take the schema document shape; fields listed in `required` are mandatory.
+- `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`.
+- Nested object fields are addressable at any depth; there is no depth limit.
+- Without a schema argument, the permissive surface applies (`string` paths, `JsonValue` values).
+
+`batch` operation values, actions, and presence remain dynamically typed. Generated files are committed and gated with `--check` in CI; `--watch` regenerates during development. The schema file remains the single source of truth — the server validates all writes at runtime regardless of client types.
+
+---
+
 ## Related Specifications
 - [Presence API](./presence-api.md) - For user awareness features
 - [Query Language Reference](./query-language.md) - Detailed query syntax

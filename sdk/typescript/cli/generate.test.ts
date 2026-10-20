@@ -1,215 +1,198 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { generateTypes, type SchemaFile, validateSchema } from "./generate";
 
 // tsc spawns are slow — give the compile test plenty of time
 setDefaultTimeout(120_000);
 
-import * as os from "node:os";
-import * as path from "node:path";
-import * as fc from "fast-check";
-
-import {
-	collectFieldPaths,
-	emitValidPaths,
-	generateTypes,
-	type SchemaField,
-} from "./generate";
-
-// ─── Arbitraries ──────────────────────────────────────────────────────────────
-
-/** Generate a valid field name (no __, no dots, non-empty) */
-const validFieldName = fc
-	.string({ minLength: 1, maxLength: 20 })
-	.filter(
-		(s) =>
-			!s.includes("__") &&
-			!s.includes(".") &&
-			/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s),
-	);
-
-/** Generate a leaf SchemaField (non-object) */
-const leafField = fc.oneof(
-	fc.constant({ type: "string" as const }),
-	fc.constant({ type: "integer" as const }),
-	fc.constant({ type: "number" as const }),
-	fc.constant({ type: "boolean" as const }),
-	fc.constant({ type: "array" as const }),
-);
-
-/** Generate a SchemaField with optional nesting up to depth 2 */
-const schemaField: fc.Arbitrary<SchemaField> = fc.oneof(
-	{ weight: 3, arbitrary: leafField },
-	{
-		weight: 1,
-		arbitrary: fc.record({
-			type: fc.constant("object" as const),
-			fields: fc.dictionary(validFieldName, leafField, {
-				minKeys: 1,
-				maxKeys: 4,
-			}),
-		}),
+const sampleSchema: SchemaFile = {
+	version: "1.0.0",
+	store: {
+		users: {
+			unique: [["profile", "handle"]],
+			fields: {
+				name: { type: "string" },
+				score: { type: "integer" },
+				profile: {
+					type: "object",
+					fields: {
+						handle: { type: "string" },
+						address: {
+							type: "object",
+							fields: { city: { type: "string" } },
+						},
+					},
+				},
+			},
+		},
+		chunks: {
+			required: ["color_indexes", "label"],
+			unique: [["label"]],
+			fields: {
+				color_indexes: { type: "bytes" },
+				label: { type: "string" },
+				meta: {
+					type: "object",
+					fields: { created: { type: "integer" } },
+				},
+			},
+		},
 	},
-);
+};
 
-/** Generate a SchemaCollection */
-const schemaCollection = fc.record({
-	fields: fc.dictionary(validFieldName, schemaField, {
-		minKeys: 1,
-		maxKeys: 5,
-	}),
-	required: fc.option(
-		fc.array(validFieldName, { minLength: 0, maxLength: 3 }),
-		{ nil: undefined },
-	),
-});
+describe("generateTypes", () => {
+	test("emits required, optional, nested, and bytes fields", () => {
+		const output = generateTypes(sampleSchema.store);
 
-/** Generate a SchemaFile */
-const schemaFileArb = fc.record({
-	version: fc.constant("1"),
-	store: fc.dictionary(validFieldName, schemaCollection, {
-		minKeys: 1,
-		maxKeys: 4,
-	}),
-});
-
-// ─── Property 13: CLI ValidPaths completeness ─────────────────────────────────
-
-/**
- * Property 13: CLI ValidPaths completeness
- * Validates: Requirements 11.3
- *
- * For any valid SchemaFile, the generated ValidPaths union SHALL contain a tuple
- * entry for every valid path derivable from the schema.
- */
-describe("CLI ValidPaths completeness", () => {
-	test("Property 13: ValidPaths contains a tuple for every derivable path", () => {
-		fc.assert(
-			fc.property(schemaFileArb, (schemaFile) => {
-				const validPathsOutput = emitValidPaths(schemaFile.store);
-
-				for (const [collectionName, collection] of Object.entries(
-					schemaFile.store,
-				)) {
-					// Every collection must have a [collection, string] tuple
-					expect(validPathsOutput).toContain(`["${collectionName}", string]`);
-
-					// Every field path must appear
-					const fieldPaths = collectFieldPaths(collection.fields, 1, 3);
-					for (const fieldPath of fieldPaths) {
-						const segments = [
-							`"${collectionName}"`,
-							"string",
-							...fieldPath.map((f) => `"${f}"`),
-						];
-						const tuple = `[${segments.join(", ")}]`;
-						expect(validPathsOutput).toContain(tuple);
-					}
-				}
-			}),
-			{ numRuns: 100 },
-		);
+		expect(output).toContain("export type ZyncBaseSchema = {");
+		expect(output).toContain("color_indexes: Uint8Array;");
+		expect(output).toContain("label: string;");
+		expect(output).toContain("name?: string;");
+		expect(output).toContain("handle?: string;");
+		expect(output).toContain("city?: string;");
+		expect(output).not.toContain("ValidPaths");
 	});
 });
 
-// ─── Unique constraint schema typing ─────────────────────────────────────────
+describe("validateSchema", () => {
+	test("accepts the sample schema", () => {
+		expect(validateSchema(sampleSchema)).toBeNull();
+	});
 
-describe("CLI unique constraint schema typing", () => {
-	test("SchemaCollection accepts unique constraints and record types stay unchanged", () => {
-		const store = {
-			projects: {
-				required: ["slug"],
-				unique: [["slug"], ["provider", "externalId"], ["profile.handle"]],
-				fields: {
-					slug: { type: "string" as const },
-					provider: { type: "string" as const },
-					externalId: { type: "string" as const },
-					profile: {
-						type: "object" as const,
-						fields: { handle: { type: "string" as const } },
+	test("rejects a required field that does not exist", () => {
+		const schema: SchemaFile = {
+			version: "1.0.0",
+			store: { users: { required: ["missing"], fields: {} } },
+		};
+		expect(validateSchema(schema)).toContain(
+			'requires unknown field "missing"',
+		);
+	});
+
+	test("rejects a unique constraint on an unknown nested path", () => {
+		const schema: SchemaFile = {
+			version: "1.0.0",
+			store: {
+				users: {
+					unique: [["profile", "missing"]],
+					fields: {
+						profile: {
+							type: "object",
+							fields: { handle: { type: "string" } },
+						},
 					},
 				},
 			},
 		};
+		expect(validateSchema(schema)).toContain("unique constraint on unknown");
+	});
 
-		const typesOutput = generateTypes(store);
+	test("rejects unsupported field types", () => {
+		const schema = {
+			version: "1.0.0",
+			store: {
+				users: {
+					fields: { whatever: { type: "uuid" } },
+				},
+			},
+		} as unknown as SchemaFile;
+		expect(validateSchema(schema)).toContain('unsupported type "uuid"');
+	});
 
-		// Generated record types are unaffected by constraint metadata.
-		expect(typesOutput).toContain("slug");
-		expect(typesOutput).not.toContain("unique");
+	test("rejects reserved flattening separators and bad identifiers", () => {
+		const reserved: SchemaFile = {
+			version: "1.0.0",
+			store: { users: { fields: { a__b: { type: "string" } } } },
+		};
+		expect(validateSchema(reserved)).toContain('contains "__"');
 
-		// ValidPaths still contains the constrained nested path.
-		const validPaths = emitValidPaths(store);
-		expect(validPaths).toContain('["projects", string, "profile", "handle"]');
+		const bad: SchemaFile = {
+			version: "1.0.0",
+			store: { "1users": { fields: {} } },
+		};
+		expect(validateSchema(bad)).toContain("Invalid collection name");
+	});
+
+	test("rejects a missing version", () => {
+		const schema = { store: {} } as SchemaFile;
+		expect(validateSchema(schema)).toContain('non-empty "version"');
 	});
 });
 
-// ─── Property 12: CLI schema-to-types round-trip compile ─────────────────────
+describe("generated schema compiles against the typed Store", () => {
+	test("generated interface drives path and value typing", () => {
+		const typesContent = generateTypes(sampleSchema.store);
 
-/**
- * Property 12: CLI schema-to-types round-trip compile
- * Validates: Requirements 11.9
- *
- * For any valid SchemaFile, generating types and running tsc --noEmit on an
- * importing file SHALL exit with code 0.
- */
-describe("CLI schema-to-types round-trip compile", () => {
-	test("Property 12: generated types compile without errors", () => {
-		fc.assert(
-			fc.property(schemaFileArb, (schemaFile) => {
-				// Generate the types content
-				const typesContent = generateTypes(schemaFile.store);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "zyncbase-cli-"));
+		const typesFile = path.join(tmpDir, "zync-types.ts");
+		const consumerFile = path.join(tmpDir, "consumer.ts");
+		const sdkTypes = path
+			.resolve(import.meta.dir, "../src/types.ts")
+			.replace(/\\/g, "/");
 
-				// Write to a temp file
-				const tmpDir = os.tmpdir();
-				const typesFile = path.join(
-					tmpDir,
-					`zyncbase-types-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`,
-				);
-				const importFile = path.join(
-					tmpDir,
-					`zyncbase-import-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`,
-				);
+		const consumer = `import type { Store } from "${sdkTypes}";
+import type { ZyncBaseSchema } from "./zync-types";
 
-				// Write types file
-				Bun.write(typesFile, typesContent);
+declare const store: Store<ZyncBaseSchema>;
 
-				// Write a file that imports and uses the types
-				const importContent = `import type { ZyncBaseSchema, ValidCollections, ValidPaths } from "${typesFile.replace(/\\/g, "/")}";
-// Use the types to ensure they are valid
-type _Schema = ZyncBaseSchema;
-type _Collections = ValidCollections;
-type _Paths = ValidPaths;
+const name: string | undefined = await store.get("users.u1.name");
+const bytes: Uint8Array | undefined = await store.get([
+	"chunks",
+	"c1",
+	"color_indexes",
+]);
+const city: string | undefined = await store.get([
+	"users",
+	"u1",
+	"profile",
+	"address",
+	"city",
+]);
+const id: string = (await store.query("chunks"))[0].id;
+await store.set("users.u1.name", null);
+await store.set(["users", "u1", "score"], 4);
+// @ts-expect-error wrong value type
+await store.set("users.u1.name", 42);
+// @ts-expect-error unknown collection
+await store.get("nope.u1");
+// @ts-expect-error unknown field in tuple form
+await store.get(["users", "u1", "nope"]);
+// @ts-expect-error missing required field
+await store.create("chunks", { label: "a" });
+void name;
+void bytes;
+void city;
+void id;
 `;
-				Bun.write(importFile, importContent);
 
-				// Run tsc --noEmit using the local tsc binary
-				const tscPath = new URL("../node_modules/.bin/tsc", import.meta.url)
-					.pathname;
-				const result = Bun.spawnSync([
-					tscPath,
-					"--noEmit",
-					"--strict",
-					"--target",
-					"ESNext",
-					"--module",
-					"ESNext",
-					"--moduleResolution",
-					"bundler",
-					"--allowImportingTsExtensions",
-					importFile,
-				]);
+		try {
+			Bun.write(typesFile, typesContent);
+			Bun.write(consumerFile, consumer);
 
-				// Clean up
-				try {
-					fs.unlinkSync(typesFile);
-					fs.unlinkSync(importFile);
-				} catch (e) {
-					console.warn("Failed to clean up temporary test files:", e);
-				}
+			const tscPath = new URL("../node_modules/.bin/tsc", import.meta.url)
+				.pathname;
+			const result = Bun.spawnSync([
+				tscPath,
+				"--noEmit",
+				"--strict",
+				"--target",
+				"ESNext",
+				"--module",
+				"ESNext",
+				"--moduleResolution",
+				"bundler",
+				"--skipLibCheck",
+				"--allowImportingTsExtensions",
+				consumerFile,
+			]);
 
-				expect(result.exitCode).toBe(0);
-			}),
-			{ numRuns: 5 }, // fewer runs since each spawns a tsc process (~1-2s each)
-		);
+			expect(result.stderr.toString()).toBe("");
+			expect(result.exitCode).toBe(0);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });

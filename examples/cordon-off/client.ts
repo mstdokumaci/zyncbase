@@ -1,12 +1,14 @@
 import {
 	ActionExecutionError,
 	createClient,
+	type DocumentRowOf,
 	type SubscriptionHandle,
 	type ZyncBaseClient,
 } from "@zyncbase/client";
 import nipplejs from "nipplejs";
 import { JoystickSteering, type MotionDot } from "./motion";
 import { setMood, setMusicTempo, startMusic, stopMusic } from "./music";
+import type { ZyncBaseSchema } from "./schema-types";
 import { sfx } from "./sfx";
 import {
 	COUNTRY_CHUNK_HEIGHT,
@@ -88,7 +90,7 @@ const chunks = new Map<
 const userChunks = new Map<number, Dot[]>();
 const lastDotPositions = new Map<number, { x: number; y: number }>();
 const held = new Map<string, Direction>();
-let client: ZyncBaseClient | undefined;
+let client: ZyncBaseClient<ZyncBaseSchema> | undefined;
 let online = false;
 // Session phase. "lobby" (no session), "joining" (submit in flight), or
 // "playing"; transport (`online`) and admission (`joined`) stay independent.
@@ -1106,17 +1108,21 @@ function noteOwnRowMissing() {
 	return true;
 }
 
-function hasOwnRow(me: PlayerRow | undefined): me is PlayerRow {
+function hasOwnRow(
+	me: DocumentRowOf<ZyncBaseSchema, "users"> | null | undefined,
+): me is PlayerRow {
+	if (me == null) return false;
+	// Remaining checks validate exactly the fields PlayerRow requires.
+	const row = me as PlayerRow;
 	return (
-		me !== undefined &&
-		Number.isSafeInteger(me.slot) &&
-		me.slot > 0 &&
-		Number.isSafeInteger(me.last_x) &&
-		Number.isSafeInteger(me.last_y) &&
-		me.last_x >= 0 &&
-		me.last_x < WIDTH &&
-		me.last_y >= 0 &&
-		me.last_y < HEIGHT
+		Number.isSafeInteger(row.slot) &&
+		row.slot > 0 &&
+		Number.isSafeInteger(row.last_x) &&
+		Number.isSafeInteger(row.last_y) &&
+		row.last_x >= 0 &&
+		row.last_x < WIDTH &&
+		row.last_y >= 0 &&
+		row.last_y < HEIGHT
 	);
 }
 
@@ -1142,9 +1148,7 @@ async function locate() {
 		// O(1) self-locate: our own roster row names our chunk (spawn cell on
 		// admission, chunk-entry cell after crossings, final cell as a grace
 		// tombstone). No table scan; the visible-ring subscriptions deliver us.
-		const me = (await client.store.get(["users", myPlayerId])) as unknown as
-			| PlayerRow
-			| undefined;
+		const me = await client.store.get(["users", myPlayerId]);
 		if (hasOwnRow(me)) applyOwnRow(me);
 		else if (noteOwnRowMissing()) return;
 	} catch (error) {
@@ -1226,7 +1230,7 @@ async function requestSession(
 // own and replays subscriptions), but input must stop until "connected",
 // and a reconnect must also re-join: the worker may have restarted
 // meanwhile.
-function wireLifecycle(next: ZyncBaseClient) {
+function wireLifecycle(next: ZyncBaseClient<ZyncBaseSchema>) {
 	next.on("error", (error) => {
 		setConnection(`Connection issue: ${String(error)}`, true);
 	});
@@ -1262,7 +1266,7 @@ function wireLifecycle(next: ZyncBaseClient) {
 // Creates and connects the session client, then retries the join action
 // while the worker may still be booting.
 async function startSessionClient(session: SessionInfo) {
-	const next = createClient({
+	const next = createClient<ZyncBaseSchema>({
 		url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
 		auth: { token: session.token },
 		storeNamespace: NAMESPACE,
@@ -1301,7 +1305,9 @@ function rebuildRoster(rows: PlayerRow[], generation: number) {
 // Country palette + counts for the scoreboard, plus the cold roster:
 // identity and country per dot, joined at render. Returns false when a
 // returnToLobby superseded the swap, so the caller must stop.
-async function subscribeColdStores(next: ZyncBaseClient): Promise<boolean> {
+async function subscribeColdStores(
+	next: ZyncBaseClient<ZyncBaseSchema>,
+): Promise<boolean> {
 	const countriesGeneration = sessionGeneration;
 	if (countriesSubscription) await countriesSubscription.unsubscribe();
 	if (countriesGeneration !== sessionGeneration) return false;
@@ -1339,7 +1345,7 @@ async function subscribeColdStores(next: ZyncBaseClient): Promise<boolean> {
 }
 
 // From lease to live world: admission state, lobby teardown, cold stores.
-async function enterGame(next: ZyncBaseClient) {
+async function enterGame(next: ZyncBaseClient<ZyncBaseSchema>) {
 	phase = "playing";
 	online = true;
 	clearTimeout(admissionTimer);

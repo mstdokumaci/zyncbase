@@ -16,13 +16,14 @@ import type {
 	JsonValue,
 	LifecycleEvent,
 	Presence,
+	SchemaLike,
 	Store,
 	StoreSubscribe,
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
-export class ZyncBaseClient {
-	readonly store: Store;
+export class ZyncBaseClient<S extends object = SchemaLike> {
+	readonly store: Store<S>;
 	readonly presence: Presence;
 	readonly actions: Actions;
 	readonly utils: { id: () => string };
@@ -67,7 +68,8 @@ export class ZyncBaseClient {
 		this.emitError = emitError;
 
 		this.storeImpl = new StoreImpl(this.conn, this.tracker, emitError);
-		this.store = this.storeImpl;
+		// Typed facade: the runtime implementation is dynamically shaped.
+		this.store = this.storeImpl as unknown as Store<S>;
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
 		this.actionsImpl = new ActionsImpl(this.conn, emitError);
@@ -377,6 +379,8 @@ export class ZyncBaseClient {
  * Create a new ZyncBaseClient instance.
  * Does not connect immediately — call `client.connect()` to establish the WebSocket.
  */
-export function createClient(options: ClientOptions): ZyncBaseClient {
-	return new ZyncBaseClient(options);
+export function createClient<S extends object = SchemaLike>(
+	options: ClientOptions,
+): ZyncBaseClient<S> {
+	return new ZyncBaseClient<S>(options);
 }

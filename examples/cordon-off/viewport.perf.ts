@@ -4,6 +4,7 @@
 // isolates the hot paths the farm amplifies (frames, own-dot receives,
 // direction rotations, and the shared decode paths).
 import type { ZyncBaseClient } from "@zyncbase/client";
+import type { ZyncBaseSchema } from "./schema-types";
 import {
 	encodeColorIndexes,
 	encodeCoordinates,
@@ -39,7 +40,7 @@ function makeStore(): FakeStore {
 
 function makeSession(store: FakeStore) {
 	return new ViewSession({
-		store: () => store as unknown as ZyncBaseClient["store"],
+		store: () => store as unknown as ZyncBaseClient<ZyncBaseSchema>["store"],
 		sinks: { country: { receive: () => {} }, user: { receive: () => {} } },
 		width: 1440,
 		height: 900,

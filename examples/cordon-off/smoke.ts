@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createClient, type ZyncBaseClient } from "@zyncbase/client";
 import { buildBrowser } from "./build";
 import { startLocalEdge } from "./dev";
+import type { ZyncBaseSchema } from "./schema-types";
 import {
 	COUNTRY_COLORS,
 	type Country,
@@ -93,7 +94,7 @@ const edge = await startLocalEdge(edgeOptions);
 const origin = `http://localhost:${edge.port}`;
 let processHandle: Bun.Subprocess | undefined;
 let logs = "";
-const clients: ZyncBaseClient[] = [];
+const clients: ZyncBaseClient<ZyncBaseSchema>[] = [];
 const timers: ReturnType<typeof setInterval>[] = [];
 
 async function capture(stream: ReadableStream<Uint8Array>) {
@@ -221,7 +222,7 @@ async function startWithRunway(
 	throw new Error("Could not start the game with enough runway");
 }
 
-async function claimedAnyLand(client: ZyncBaseClient) {
+async function claimedAnyLand(client: ZyncBaseClient<ZyncBaseSchema>) {
 	const rows = await countryChunks(client);
 	return rows.some((row) =>
 		readColorIndexes(row.color_indexes).some((byte) => byte !== 0),
@@ -452,7 +453,7 @@ async function runLifecycle() {
 		"Blipper",
 		blip.sessionId,
 	);
-	const hasDot = async (client: ZyncBaseClient) =>
+	const hasDot = async (client: ZyncBaseClient<ZyncBaseSchema>) =>
 		(await userChunks(client))
 			.flatMap((row) => readCoordinates(row.coordinates))
 			.some((dot) => dot.slot === blipSlot);
@@ -475,7 +476,7 @@ async function runLifecycle() {
 		async () => (await healthState()).players === 0,
 		"blip player ages out",
 	);
-	const revived = createClient({
+	const revived = createClient<ZyncBaseSchema>({
 		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token: blip.token },
 		storeNamespace: NAMESPACE,
@@ -543,7 +544,7 @@ async function connect(
 	);
 	assert.equal(payload.session.tokenExpiresAt, jwt.exp);
 	assert.ok(payload.session.tokenExpiresAt > payload.exp);
-	const client = createClient({
+	const client = createClient<ZyncBaseSchema>({
 		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token },
 		storeNamespace: NAMESPACE,
@@ -556,7 +557,7 @@ async function connect(
 
 /** Admit a player through the sync join action and return its identity. */
 async function joinPlayer(
-	client: ZyncBaseClient,
+	client: ZyncBaseClient<ZyncBaseSchema>,
 	countryId: number | undefined,
 	name: string,
 	sessionId: string,
@@ -603,22 +604,26 @@ async function joinPlayer(
 }
 
 /** Fire-and-forget input, mirroring the browser's publish(). */
-function move(client: ZyncBaseClient, direction: string, seq = 1) {
+function move(
+	client: ZyncBaseClient<ZyncBaseSchema>,
+	direction: string,
+	seq = 1,
+) {
 	void client.actions.call("player_move", { direction, seq }).catch(() => {});
 }
 
 /** Remove presence and wait for the server response. */
-function leave(client: ZyncBaseClient) {
+function leave(client: ZyncBaseClient<ZyncBaseSchema>) {
 	return client.presence.remove();
 }
 
-async function countryChunks(client: ZyncBaseClient) {
+async function countryChunks(client: ZyncBaseClient<ZyncBaseSchema>) {
 	return (await client.store.query("country_chunks", {
 		limit: 2048,
 	})) as unknown as CountryChunkRow[];
 }
 
-async function userChunks(client: ZyncBaseClient) {
+async function userChunks(client: ZyncBaseClient<ZyncBaseSchema>) {
 	return (await client.store.query("user_chunks", {
 		limit: 100,
 	})) as unknown as UserChunkRow[];
@@ -724,7 +729,7 @@ try {
 		visible
 			.flatMap((row) => readCoordinates(row.coordinates))
 			.find((dot) => dot.slot === aliceSlot);
-	const rosterOf = async (client: ZyncBaseClient) =>
+	const rosterOf = async (client: ZyncBaseClient<ZyncBaseSchema>) =>
 		new Map(
 			(
 				(await client.store.query("users", {

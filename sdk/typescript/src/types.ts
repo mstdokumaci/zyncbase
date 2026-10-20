@@ -16,6 +16,171 @@ export type JsonValue =
 /** A data address: dot-notation string or string array. */
 export type Path = string | string[];
 
+// ─── Schema-derived types ────────────────────────────────────────────────────
+
+/**
+ * Permissive schema fallback: any collection, any field, any value.
+ * Generated schema types (see `bunx @zyncbase/client generate`) satisfy it.
+ */
+export type SchemaLike = Record<string, Record<string, unknown>>;
+
+/** True when `S` is the permissive fallback rather than a generated schema. */
+type IsLooseSchema<S> = string extends keyof S ? true : false;
+
+/** Collection names declared by a schema. */
+export type CollectionsOf<S> = keyof S & string;
+
+/** Document shape declared by a schema, without server-issued columns. */
+export type DocumentOf<S, C extends keyof S & string> = S[C];
+
+/** Document row as returned by reads: schema fields plus the server-issued id. */
+export type DocumentRowOf<S, C extends keyof S & string> = S[C] & {
+	id: string;
+};
+
+/** Types written as whole values — field paths never descend into these. */
+type WholeValue = readonly unknown[] | Uint8Array;
+
+/** Whether a field's value is an addressable nested object. */
+type IsNested<T> =
+	NonNullable<T> extends WholeValue
+		? false
+		: NonNullable<T> extends object
+			? true
+			: false;
+
+/** Dot-joined field paths beneath a document shape ("address.city"). */
+type DotFieldPaths<T> = {
+	[K in keyof T & string]:
+		| K
+		| (IsNested<T[K]> extends true
+				? `${K}.${DotFieldPaths<NonNullable<T[K]>>}`
+				: never);
+}[keyof T & string];
+
+/** Segment-tuple field paths beneath a document shape (["address", "city"]). */
+type TupleFieldPaths<T> = {
+	[K in keyof T & string]:
+		| [K]
+		| (IsNested<T[K]> extends true
+				? [K, ...TupleFieldPaths<NonNullable<T[K]>>]
+				: never);
+}[keyof T & string];
+
+/** Every addressable path in a typed schema: dot strings and segment tuples. */
+type SchemaPath<S> = {
+	[C in CollectionsOf<S>]:
+		| C
+		| `${C}.${string}`
+		| [C, string]
+		| `${C}.${string}.${DotFieldPaths<S[C]>}`
+		| [C, string, ...TupleFieldPaths<S[C]>];
+}[CollectionsOf<S>];
+
+type GetPath<S> = IsLooseSchema<S> extends true ? Path : SchemaPath<S>;
+
+/** Paths addressing a document or field (writes need depth 2 or more). */
+type WritePath<S> =
+	IsLooseSchema<S> extends true
+		? Path
+		: Exclude<SchemaPath<S>, CollectionsOf<S>>;
+
+/** Paths addressing exactly one document (collection + id). */
+type DocumentPath<S> =
+	IsLooseSchema<S> extends true
+		? Path
+		: {
+				[C in CollectionsOf<S>]: `${C}.${string}` | [C, string];
+			}[CollectionsOf<S>];
+
+/** Value type at a dot-joined field path. */
+type DotValue<T, P extends string> = P extends `${infer H}.${infer R}`
+	? H extends keyof T
+		? IsNested<T[H]> extends true
+			? DotValue<NonNullable<T[H]>, R>
+			: never
+		: never
+	: P extends keyof T
+		? T[P]
+		: never;
+
+/** Value type at a segment-tuple field path. */
+type TupleValue<T, Segs extends readonly string[]> = Segs extends readonly [
+	infer H extends string,
+	...infer R extends string[],
+]
+	? H extends keyof T
+		? R extends []
+			? T[H]
+			: IsNested<T[H]> extends true
+				? TupleValue<NonNullable<T[H]>, R>
+				: never
+		: never
+	: never;
+
+/** Value returned by `get` at a path. */
+type GetValue<S, P> =
+	IsLooseSchema<S> extends true
+		? JsonValue | null | undefined
+		: P extends readonly [infer C extends string, ...infer R]
+			? C extends keyof S
+				? R extends [string]
+					? DocumentRowOf<S, C> | null
+					: R extends [string, ...infer F extends string[]]
+						? TupleValue<S[C], F> | undefined
+						: never
+				: never
+			: P extends string
+				? P extends `${infer C}.${infer R}`
+					? C extends keyof S
+						? R extends `${string}.${infer F}`
+							? [DotValue<S[C], F>] extends [never]
+								? PathError
+								: DotValue<S[C], F> | undefined
+							: DocumentRowOf<S, C> | null
+						: never
+					: P extends keyof S
+						? DocumentRowOf<S, P>[]
+						: never
+				: never;
+
+/**
+ * Marker for a dot-string path whose field segment does not resolve. The call
+ * itself still compiles (`${collection}.${string}` covers doc-level ids), but
+ * the result is unusable — assigning it forces the typo into the open.
+ */
+type PathError = { readonly __zyncbaseUnknownFieldPath: true };
+
+/** Value accepted by `set` at a path. */
+type SetValue<S, P> =
+	IsLooseSchema<S> extends true
+		? JsonValue
+		: P extends readonly [infer C extends string, ...infer R]
+			? C extends keyof S
+				? R extends [string]
+					? DocumentOf<S, C>
+					: R extends [string, ...infer F extends string[]]
+						? TupleValue<S[C], F> | null
+						: never
+				: never
+			: P extends string
+				? P extends `${infer C}.${infer R}`
+					? C extends keyof S
+						? R extends `${string}.${infer F}`
+							? DotValue<S[C], F> | null
+							: DocumentOf<S, C>
+						: never
+					: never
+				: never;
+
+/** Value accepted by `create` for a collection. */
+type CreateValue<S, C extends keyof S & string> =
+	IsLooseSchema<S> extends true ? JsonValue : S[C];
+
+/** Row shape returned by `query` and `subscribe`. */
+type RowsOf<S, C extends keyof S & string> =
+	IsLooseSchema<S> extends true ? JsonValue[] : DocumentRowOf<S, C>[];
+
 /** Connection lifecycle status as exposed by `client.status` and `statusChange`. */
 export type ConnectionStatus =
 	| "connecting"
@@ -111,6 +276,10 @@ export interface QueryOptions {
 	after?: string; // opaque cursor token
 }
 
+/**
+ * One batch write. The value stays `JsonValue` rather than correlating to the
+ * path; use `set` for schema-checked writes.
+ */
 export interface BatchOperation {
 	op: "set" | "remove";
 	path: Path;
@@ -136,36 +305,43 @@ export interface ListenHandle {
 
 // ─── Store interface ──────────────────────────────────────────────────────────
 
-export interface Store {
+export interface Store<S extends object = SchemaLike> {
 	/** Set a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	set(path: Path, value: JsonValue, options?: WriteOptions): Promise<void>;
+	set<const P extends WritePath<S>>(
+		path: P,
+		value: SetValue<S, P>,
+		options?: WriteOptions,
+	): Promise<void>;
 	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	remove(path: Path, options?: WriteOptions): Promise<void>;
+	remove<const P extends DocumentPath<S>>(
+		path: P,
+		options?: WriteOptions,
+	): Promise<void>;
 	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
-	create(
-		collection: string,
-		value: JsonValue,
+	create<C extends CollectionsOf<S>>(
+		collection: C,
+		value: CreateValue<S, C>,
 		options?: WriteOptions,
 	): Promise<string>;
 	/** Get current value(s) in a one-off read. */
-	get(path: Path): Promise<JsonValue | null | undefined>;
+	get<const P extends GetPath<S>>(path: P): Promise<GetValue<S, P>>;
 	/** Listen for changes at a path; resolves with a handle once the registration settles. */
-	listen(
-		path: Path,
-		callback: (value: JsonValue) => void,
+	listen<const P extends WritePath<S>>(
+		path: P,
+		callback: (value: GetValue<S, P>) => void,
 	): Promise<ListenHandle>;
 	/** Subscribe to a collection with complex queries; resolves with its handle after server acknowledgement. */
-	subscribe(
-		collection: string,
+	subscribe<C extends CollectionsOf<S>>(
+		collection: C,
 		options: QueryOptions,
-		callback: (results: JsonValue[]) => void,
+		callback: (results: RowsOf<S, C>) => void,
 	): Promise<SubscriptionHandle>;
 	// Batch — async
 	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
-	query(
-		collection: string,
+	query<C extends CollectionsOf<S>>(
+		collection: C,
 		options?: QueryOptions,
-	): Promise<JsonValue[] & { nextCursor: string | null }>;
+	): Promise<RowsOf<S, C> & { nextCursor: string | null }>;
 }
 
 // ─── Outbound wire messages: auth ─────────────────────────────────────────────

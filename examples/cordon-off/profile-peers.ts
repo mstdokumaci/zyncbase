@@ -3,6 +3,7 @@
 // chunk caches, LocalMotion prediction, eased camera, key-gated subscriptions,
 // and change-only move publishing.
 import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import type { ZyncBaseSchema } from "./schema-types";
 import {
 	COUNTRY_COLOR_INDEX,
 	type Country,
@@ -17,7 +18,7 @@ import {
 import { FRAME_MS, ownerAt, ViewSession } from "./viewport";
 
 type Peer = {
-	client: ZyncBaseClient;
+	client: ZyncBaseClient<ZyncBaseSchema>;
 	id: string;
 	slot: number;
 	name: string;
@@ -129,9 +130,8 @@ async function readSpawn(peer: Peer) {
 	const id = peer.id;
 	if (!id) return undefined;
 	try {
-		const me = (await peer.client.store.get(["users", id])) as unknown as
-			| PlayerRow
-			| undefined;
+		// users fields are optional in the schema; admission guarantees them here.
+		const me = (await peer.client.store.get(["users", id])) as PlayerRow | null;
 		if (
 			!me ||
 			!Number.isSafeInteger(me.last_x) ||
@@ -183,7 +183,7 @@ const frame = setInterval(() => {
 
 /** Builds one peer end to end: connect, join, subscribe, admit, locate. */
 async function addPeer(data: Command, sessionId: string): Promise<void> {
-	const client = createClient({
+	const client = createClient<ZyncBaseSchema>({
 		url: data.url,
 		auth: { tokenProvider: async () => data.token },
 		storeNamespace: NAMESPACE,

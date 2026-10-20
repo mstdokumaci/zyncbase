@@ -12,7 +12,9 @@ import type { Duplex } from "node:stream";
 import {
 	ActionError,
 	type BatchOperation,
+	type CollectionsOf,
 	createClient,
+	type DocumentRowOf,
 	type JsonValue,
 } from "@zyncbase/client";
 import { deployIfChanged, publishAssets } from "./deploy";
@@ -32,6 +34,7 @@ import {
 	runPublishBatches,
 	shouldPublishCountryChunks,
 } from "./publish";
+import type { ZyncBaseSchema } from "./schema-types";
 import {
 	COUNTRY_RESERVATION_MS,
 	type Country,
@@ -501,15 +504,15 @@ const database = Bun.spawn(
 	// Keep terminal Ctrl+C in the game process; stop the database after its final commit.
 	{ cwd: root, stdout: "inherit", stderr: "inherit", detached: true },
 );
-const client = createClient({
+const client = createClient<ZyncBaseSchema>({
 	url: databaseUrl.toString(),
 	auth: { tokenProvider: async () => token("simulation") },
 	storeNamespace: NAMESPACE,
 	reconnect: false,
 });
 
-async function allRows(collection: string) {
-	const rows: JsonValue[] = [];
+async function allRows<C extends CollectionsOf<ZyncBaseSchema>>(collection: C) {
+	const rows: DocumentRowOf<ZyncBaseSchema, C>[] = [];
 	let after: string | undefined;
 	do {
 		const page = await client.store.query(collection, {
