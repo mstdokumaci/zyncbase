@@ -331,15 +331,18 @@ client.store.get(['users', userId, 'name'])
 
 ## Static Typing
 
-`createClient<ZyncBaseSchema>(options)` binds the store API to a generated schema (`bunx @zyncbase/client generate --schema schema.json --out zyncbase-schema.ts`). With a schema bound:
+`createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(options)` binds the API to types generated from `schema.json` (`bunx @zyncbase/client generate --schema schema.json --out zyncbase-schema.ts`). The action and presence arguments are optional. With types bound:
 
-- `get`, `set`, `remove`, `listen` accept only paths declared by the schema — dot strings and segment tuples alike — with the field's declared value type.
+- `get`, `set`, `remove`, `listen` accept only declared paths — dot strings and segment tuples alike — with the field's declared value type.
 - `create` and `set` at document depth take the schema document shape; fields listed in `required` are mandatory.
-- `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`.
+- `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`; subscription handles expose the same row type from `getSnapshot()`.
+- `query`/`subscribe` `where` predicates are keyed by leaf field paths (nested objects use dot paths) and restrict operators by value type; `orderBy` clauses name exactly one leaf field and one direction.
+- `actions.call`/`actions.handle` check action names, required params, `enum` literal unions, and sync return shapes; async actions (`returns: null` in the schema) resolve `undefined`.
+- `presence.set`, `setShared`, `get`, `getAll`, `getShared`, and subscriptions use the declared `presence.user`/`presence.shared` shapes.
 - Nested object fields are addressable at any depth; there is no depth limit.
-- Without a schema argument, the permissive surface applies (`string` paths, `JsonValue` values).
+- Without type arguments, the permissive surface applies (`string` paths, `JsonValue` values, dynamic actions/presence).
 
-`batch` operation values, actions, and presence remain dynamically typed. Generated files are committed and gated with `--check` in CI; `--watch` regenerates during development. The schema file remains the single source of truth — the server validates all writes at runtime regardless of client types.
+`batch` operation values and wire-internal message types remain dynamic. Generated files are committed and gated with `--check` in CI; `--watch` regenerates during development. The schema file remains the single source of truth — the server validates all writes at runtime regardless of client types.
 
 ---
 

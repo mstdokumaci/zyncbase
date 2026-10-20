@@ -28,3 +28,26 @@ export type ZyncBaseSchema = {
 		lost?: number;
 	};
 };
+
+export type ZyncBaseActions = {
+	player_join: {
+		params: {
+			name: string;
+			country_id: number;
+			session_id: string;
+		};
+		returns: {
+			user_id: string;
+			slot: number;
+			x: number;
+			y: number;
+		};
+	};
+	player_move: {
+		params: {
+			direction: "idle" | "up" | "down" | "left" | "right";
+			seq: number;
+		};
+		returns: undefined;
+	};
+};

@@ -16,6 +16,8 @@ const sampleSchema: SchemaFile = {
 			fields: {
 				name: { type: "string" },
 				score: { type: "integer" },
+				role: { type: "string", enum: ["admin", "player"] },
+				tags: { type: "array" },
 				profile: {
 					type: "object",
 					fields: {
@@ -41,19 +43,86 @@ const sampleSchema: SchemaFile = {
 			},
 		},
 	},
+	actions: {
+		player_join: {
+			params: {
+				name: { type: "string" },
+				country_id: { type: "integer" },
+				session_id: { type: "string" },
+			},
+			required: ["name", "country_id", "session_id"],
+			returns: {
+				user_id: { type: "string" },
+				slot: { type: "integer" },
+				x: { type: "integer" },
+				y: { type: "integer" },
+			},
+		},
+		player_move: {
+			params: {
+				direction: {
+					type: "string",
+					enum: ["idle", "up", "down", "left", "right"],
+				},
+				seq: { type: "integer" },
+			},
+			required: ["direction", "seq"],
+			returns: null,
+		},
+	},
+	presence: {
+		user: {
+			status: { type: "string", enum: ["active", "idle"] },
+			name: { type: "string" },
+		},
+		shared: { slide: { type: "integer" } },
+	},
 };
 
+function generateSample(): string {
+	return generateTypes(
+		sampleSchema.store,
+		sampleSchema.actions,
+		sampleSchema.presence,
+	);
+}
+
 describe("generateTypes", () => {
-	test("emits required, optional, nested, and bytes fields", () => {
-		const output = generateTypes(sampleSchema.store);
+	test("emits required, optional, nested, bytes, array, and enum fields", () => {
+		const output = generateSample();
 
 		expect(output).toContain("export type ZyncBaseSchema = {");
+		expect(output).toContain(
+			'import type { JsonValue } from "@zyncbase/client";',
+		);
 		expect(output).toContain("color_indexes: Uint8Array;");
+		expect(output).toContain("tags?: JsonValue[];");
+		expect(output).toContain('role?: "admin" | "player";');
 		expect(output).toContain("label: string;");
 		expect(output).toContain("name?: string;");
 		expect(output).toContain("handle?: string;");
 		expect(output).toContain("city?: string;");
 		expect(output).not.toContain("ValidPaths");
+	});
+
+	test("emits typed actions with enums and void returns", () => {
+		const output = generateSample();
+
+		expect(output).toContain("export type ZyncBaseActions = {");
+		expect(output).toContain("name: string;");
+		expect(output).toContain(
+			'direction: "idle" | "up" | "down" | "left" | "right";',
+		);
+		expect(output).toContain("returns: undefined;");
+		expect(output).toContain("user_id: string;");
+	});
+
+	test("emits typed presence scopes", () => {
+		const output = generateSample();
+
+		expect(output).toContain("export type ZyncBasePresence = {");
+		expect(output).toContain('status?: "active" | "idle";');
+		expect(output).toContain("slide?: number;");
 	});
 });
 
@@ -116,15 +185,40 @@ describe("validateSchema", () => {
 		expect(validateSchema(bad)).toContain("Invalid collection name");
 	});
 
+	test("rejects invalid action and presence declarations", () => {
+		const badParam: SchemaFile = {
+			version: "1.0.0",
+			store: {},
+			actions: {
+				move: {
+					params: { seq: { type: "integer" } },
+					required: ["missing"],
+				},
+			},
+		};
+		expect(validateSchema(badParam)).toContain(
+			'requires unknown param "missing"',
+		);
+
+		const badEnum = {
+			version: "1.0.0",
+			store: {},
+			presence: {
+				user: { status: { type: "string", enum: [{ nope: true }] } },
+			},
+		} as unknown as SchemaFile;
+		expect(validateSchema(badEnum)).toContain("invalid enum");
+	});
+
 	test("rejects a missing version", () => {
 		const schema = { store: {} } as SchemaFile;
 		expect(validateSchema(schema)).toContain('non-empty "version"');
 	});
 });
 
-describe("generated schema compiles against the typed Store", () => {
-	test("generated interface drives path and value typing", () => {
-		const typesContent = generateTypes(sampleSchema.store);
+describe("generated schema compiles against the typed API", () => {
+	test("generated types drive store, query, action, and presence typing", () => {
+		const typesContent = generateSample();
 
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "zyncbase-cli-"));
 		const typesFile = path.join(tmpDir, "zync-types.ts");
@@ -133,10 +227,16 @@ describe("generated schema compiles against the typed Store", () => {
 			.resolve(import.meta.dir, "../src/types.ts")
 			.replace(/\\/g, "/");
 
-		const consumer = `import type { Store } from "${sdkTypes}";
-import type { ZyncBaseSchema } from "./zync-types";
+		const consumer = `import type { Actions, Presence, Store } from "@zyncbase/client";
+import type {
+	ZyncBaseActions,
+	ZyncBasePresence,
+	ZyncBaseSchema,
+} from "./zync-types";
 
 declare const store: Store<ZyncBaseSchema>;
+declare const actions: Actions<ZyncBaseActions>;
+declare const presence: Presence<ZyncBasePresence>;
 
 const name: string | undefined = await store.get("users.u1.name");
 const bytes: Uint8Array | undefined = await store.get([
@@ -162,33 +262,69 @@ await store.get("nope.u1");
 await store.get(["users", "u1", "nope"]);
 // @ts-expect-error missing required field
 await store.create("chunks", { label: "a" });
+
+await store.query("chunks", {
+	where: { label: { contains: "a" }, "meta.created": { gte: 1 } },
+	orderBy: [{ label: "asc" }],
+	limit: 10,
+});
+// @ts-expect-error unknown where field
+await store.query("chunks", { where: { nope: 1 } });
+// @ts-expect-error comparison on a bytes field
+await store.query("chunks", { where: { color_indexes: { gte: 1 } } });
+// @ts-expect-error orderBy clause must name exactly one field
+await store.query("chunks", { orderBy: [{ label: "asc", meta: "desc" }] });
+
+const joined = await actions.call("player_join", {
+	name: "a",
+	country_id: 1,
+	session_id: "s",
+});
+const userId: string = joined.user_id;
+await actions.call("player_move", { direction: "up", seq: 1 });
+// @ts-expect-error invalid enum value
+await actions.call("player_move", { direction: "sideways", seq: 1 });
+// @ts-expect-error unknown action
+await actions.call("nope");
+
+await presence.set({ status: "active" });
+// @ts-expect-error invalid presence enum value
+await presence.set({ status: "busy" });
+
 void name;
 void bytes;
 void city;
 void id;
+void userId;
 `;
 
 		try {
 			Bun.write(typesFile, typesContent);
 			Bun.write(consumerFile, consumer);
+			const tsconfigFile = path.join(tmpDir, "tsconfig.json");
+			Bun.write(
+				tsconfigFile,
+				JSON.stringify({
+					compilerOptions: {
+						noEmit: true,
+						strict: true,
+						target: "ESNext",
+						module: "ESNext",
+						moduleResolution: "bundler",
+						skipLibCheck: true,
+						allowImportingTsExtensions: true,
+						baseUrl: ".",
+						paths: { "@zyncbase/client": [sdkTypes] },
+					},
+					include: ["consumer.ts"],
+				}),
+			);
 
 			const tscPath = new URL("../node_modules/.bin/tsc", import.meta.url)
 				.pathname;
-			const result = Bun.spawnSync([
-				tscPath,
-				"--noEmit",
-				"--strict",
-				"--target",
-				"ESNext",
-				"--module",
-				"ESNext",
-				"--moduleResolution",
-				"bundler",
-				"--skipLibCheck",
-				"--allowImportingTsExtensions",
-				consumerFile,
-			]);
+			const result = Bun.spawnSync([tscPath, "-p", tsconfigFile]);
 
+			if (result.exitCode !== 0) console.log(result.stdout.toString());
 			expect(result.stderr.toString()).toBe("");
 			expect(result.exitCode).toBe(0);
 		} finally {

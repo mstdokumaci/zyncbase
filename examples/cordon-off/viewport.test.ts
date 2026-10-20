@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ZyncBaseClient } from "@zyncbase/client";
-import type { ZyncBaseSchema } from "./schema-types";
+import type { AppClient } from "./shared";
 import {
 	COUNTRY_CHUNK_WIDTH,
 	COUNTRY_COLUMNS,
@@ -65,7 +64,7 @@ function fakeStore() {
 				},
 			});
 		},
-	} as unknown as ZyncBaseClient<ZyncBaseSchema>["store"];
+	} as unknown as AppClient["store"];
 	return {
 		store,
 		listens,
@@ -78,7 +77,7 @@ function fakeStore() {
 }
 
 function sessionOptions(
-	store: ZyncBaseClient<ZyncBaseSchema>["store"],
+	store: AppClient["store"],
 	client?: unknown,
 	onConfirmed?: () => void,
 ) {
@@ -97,7 +96,7 @@ function sessionOptions(
 			land: new Uint8Array(WIDTH * HEIGHT),
 			ownerAt: () => 0,
 			isOnline: () => true,
-			client: () => client as ZyncBaseClient<ZyncBaseSchema> | undefined,
+			client: () => client as AppClient | undefined,
 			onConfirmed,
 		},
 	};
@@ -344,7 +343,7 @@ describe("sendPlayerMove", () => {
 						: Promise.resolve();
 				},
 			},
-		} as unknown as ZyncBaseClient<ZyncBaseSchema>;
+		} as unknown as AppClient;
 		sendPlayerMove(client, "right", 1, () => true, 5);
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(attempts).toBe(2);
@@ -359,7 +358,7 @@ describe("sendPlayerMove", () => {
 					return Promise.reject(new Error("transient"));
 				},
 			},
-		} as unknown as ZyncBaseClient<ZyncBaseSchema>;
+		} as unknown as AppClient;
 		sendPlayerMove(client, "right", 1, () => false, 5);
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(attempts).toBe(1);

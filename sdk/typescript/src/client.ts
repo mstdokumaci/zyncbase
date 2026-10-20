@@ -22,10 +22,14 @@ import type {
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
-export class ZyncBaseClient<S extends object = SchemaLike> {
+export class ZyncBaseClient<
+	S extends object = SchemaLike,
+	A = never,
+	P = never,
+> {
 	readonly store: Store<S>;
-	readonly presence: Presence;
-	readonly actions: Actions;
+	readonly presence: Presence<P>;
+	readonly actions: Actions<A>;
 	readonly utils: { id: () => string };
 
 	private readonly conn: ConnectionManager;
@@ -71,9 +75,9 @@ export class ZyncBaseClient<S extends object = SchemaLike> {
 		// Typed facade: the runtime implementation is dynamically shaped.
 		this.store = this.storeImpl as unknown as Store<S>;
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
-		this.presence = this.presenceImpl;
+		this.presence = this.presenceImpl as unknown as Presence<P>;
 		this.actionsImpl = new ActionsImpl(this.conn, emitError);
-		this.actions = this.actionsImpl;
+		this.actions = this.actionsImpl as unknown as Actions<A>;
 
 		// Presence scope resolution returns the same internal UUID used by entries.
 		this.conn.onPresenceUserId((userId) => {
@@ -379,8 +383,10 @@ export class ZyncBaseClient<S extends object = SchemaLike> {
  * Create a new ZyncBaseClient instance.
  * Does not connect immediately — call `client.connect()` to establish the WebSocket.
  */
-export function createClient<S extends object = SchemaLike>(
-	options: ClientOptions,
-): ZyncBaseClient<S> {
-	return new ZyncBaseClient<S>(options);
+export function createClient<
+	S extends object = SchemaLike,
+	A = never,
+	P = never,
+>(options: ClientOptions): ZyncBaseClient<S, A, P> {
+	return new ZyncBaseClient<S, A, P>(options);
 }

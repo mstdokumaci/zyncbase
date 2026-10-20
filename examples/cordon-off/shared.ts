@@ -1,4 +1,13 @@
+import type {
+	DocumentOf,
+	DocumentRowOf,
+	ZyncBaseClient,
+} from "@zyncbase/client";
 import map from "./land.json";
+import type { ZyncBaseActions, ZyncBaseSchema } from "./schema-types";
+
+/** The game's client bound to its generated schema and action map. */
+export type AppClient = ZyncBaseClient<ZyncBaseSchema, ZyncBaseActions>;
 
 export const WIDTH = map.width;
 export const HEIGHT = map.height;
@@ -137,41 +146,22 @@ export type Dot = {
 // position for grace reconnects), removed on expiry. last_x/last_y always name
 // the chunk the player is (or was) in, so locate() can jump straight to it
 // with one direct read. slot links the row to the packed dots.
-export type PlayerRow = {
-	id: string;
-	name?: string;
+// The schema leaves roster fields optional (identity stubs exist before
+// admission); this type adds the invariant admission establishes.
+export type PlayerRow = DocumentRowOf<ZyncBaseSchema, "users"> & {
 	country_id: number;
 	is_bot: boolean;
 	last_x: number;
 	last_y: number;
 	slot: number;
-	// Enclosure fills this player's own step paint triggered; the capture cue
-	// watches the row of the local player only.
-	captured?: number;
 };
 // A country's numeric identity: referenced by PlayerRow.country_id. Its row key
 // in the countries table is the string form, and its palette color selects the
-// owner code written into chunk bitmaps.
-export type Country = {
-	country_id: number;
-	name: string;
-	color: string;
-	count: number;
-	is_bot: boolean;
-	// Round-local loss counter: land taken by enemy enclosure fills only,
-	// never ordinary step painting. Clients turn an increment into a sound.
-	lost?: number;
-};
-export type CountryChunkRow = {
-	id: string;
-	// RLE (count, color index) pairs of COUNTRY_CHUNK_CELLS palette codes.
-	color_indexes: Uint8Array;
-};
-export type UserChunkRow = {
-	id: string;
-	// Packed Dot[] of the live players inside this user chunk.
-	coordinates: Uint8Array;
-};
+// owner code written into chunk bitmaps. Writes carry no id; the row id is the
+// path segment.
+export type Country = DocumentOf<ZyncBaseSchema, "countries">;
+export type CountryChunkRow = DocumentRowOf<ZyncBaseSchema, "country_chunks">;
+export type UserChunkRow = DocumentRowOf<ZyncBaseSchema, "user_chunks">;
 export type RoundInfo = {
 	number: number;
 	startedAt: number;

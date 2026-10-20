@@ -16,6 +16,7 @@ export type {
 	ActionCallOptions,
 	ActionContext,
 	ActionHandler,
+	ActionName,
 	ActionScope,
 	Actions,
 	AuthConfig,
@@ -41,6 +42,10 @@ export type {
 	Store,
 	SubscriptionHandle,
 	TicketResponse,
+	TypedOrderClause,
+	TypedQueryOptions,
+	TypedWhere,
+	WhereOperators,
 	WriteOptions,
 } from "./types.js";
 export { generateUUIDv7 } from "./uuid.js";

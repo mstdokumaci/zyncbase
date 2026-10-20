@@ -2,15 +2,14 @@
 // Peers run the same data plane as the browser client (viewport.ts): decoded
 // chunk caches, LocalMotion prediction, eased camera, key-gated subscriptions,
 // and change-only move publishing.
-import { createClient, type ZyncBaseClient } from "@zyncbase/client";
-import type { ZyncBaseSchema } from "./schema-types";
+import { createClient } from "@zyncbase/client";
+import type { ZyncBaseActions, ZyncBaseSchema } from "./schema-types";
+import type { AppClient } from "./shared";
 import {
 	COUNTRY_COLOR_INDEX,
-	type Country,
 	type CountryChunkRow,
 	findCoordinate,
 	NAMESPACE,
-	type PlayerRow,
 	readColorIndexes,
 	terrain,
 	type UserChunkRow,
@@ -18,7 +17,7 @@ import {
 import { FRAME_MS, ownerAt, ViewSession } from "./viewport";
 
 type Peer = {
-	client: ZyncBaseClient<ZyncBaseSchema>;
+	client: AppClient;
 	id: string;
 	slot: number;
 	name: string;
@@ -130,16 +129,18 @@ async function readSpawn(peer: Peer) {
 	const id = peer.id;
 	if (!id) return undefined;
 	try {
-		// users fields are optional in the schema; admission guarantees them here.
-		const me = (await peer.client.store.get(["users", id])) as PlayerRow | null;
+		const me = await peer.client.store.get(["users", id]);
+		const x = me?.last_x;
+		const y = me?.last_y;
 		if (
-			!me ||
-			!Number.isSafeInteger(me.last_x) ||
-			!Number.isSafeInteger(me.last_y)
+			typeof x !== "number" ||
+			typeof y !== "number" ||
+			!Number.isSafeInteger(x) ||
+			!Number.isSafeInteger(y)
 		)
 			return undefined;
-		if (Number.isSafeInteger(me.slot) && me.slot > 0) peer.slot = me.slot;
-		return { x: me.last_x, y: me.last_y };
+		if (typeof me?.slot === "number" && me.slot > 0) peer.slot = me.slot;
+		return { x, y };
 	} catch {
 		return undefined;
 	}
@@ -183,7 +184,7 @@ const frame = setInterval(() => {
 
 /** Builds one peer end to end: connect, join, subscribe, admit, locate. */
 async function addPeer(data: Command, sessionId: string): Promise<void> {
-	const client = createClient<ZyncBaseSchema>({
+	const client = createClient<ZyncBaseSchema, ZyncBaseActions>({
 		url: data.url,
 		auth: { tokenProvider: async () => data.token },
 		storeNamespace: NAMESPACE,
@@ -263,27 +264,20 @@ async function addPeer(data: Command, sessionId: string): Promise<void> {
 		},
 	});
 	try {
-		const joined = (await client.actions.call("player_join", {
+		const joined = await client.actions.call("player_join", {
 			name: peer.name,
 			country_id: peer.countryId,
 			session_id: sessionId,
-		})) as {
-			user_id?: unknown;
-			slot?: unknown;
-			x?: unknown;
-			y?: unknown;
-		};
-		peer.id = typeof joined.user_id === "string" ? joined.user_id : "";
-		peer.slot = Number.isSafeInteger(joined.slot) ? (joined.slot as number) : 0;
+		});
+		peer.id = joined.user_id;
+		peer.slot = joined.slot;
 		await client.presence.set({});
 		// Browser order: publish the initial move, subscribe the cold
 		// stores, then snap the camera to the admitted cell.
 		peer.session.publishDirection();
 		await client.store.subscribe("countries", { limit: 1000 }, (rows) => {
 			callbacks++;
-			const mine = (rows as Country[]).find(
-				(row) => row.country_id === peer.countryId,
-			);
+			const mine = rows.find((row) => row.country_id === peer.countryId);
 			if (mine) peer.colorIndex = COUNTRY_COLOR_INDEX.get(mine.color) ?? 0;
 		});
 		await client.store.subscribe("users", { limit: 2048 }, () => {

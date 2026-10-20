@@ -2,11 +2,14 @@
 // CLI type generator (Bun-only).
 // Usage: bunx @zyncbase/client generate --schema <path> --out <path> [--check] [--watch]
 //
-// Emits a single `ZyncBaseSchema` interface. Path and value types are derived
-// from it by `createClient<ZyncBaseSchema>(...)` — nothing else is generated.
+// Emits `ZyncBaseSchema` (store), `ZyncBaseActions`, and `ZyncBasePresence`.
+// Path, query, action, and presence types are derived from these aliases by
+// `createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(...)`.
 
 import { watch as fsWatch } from "node:fs";
 import { basename, dirname } from "node:path";
+
+type EnumValue = string | number | boolean;
 
 interface SchemaField {
 	type:
@@ -18,6 +21,7 @@ interface SchemaField {
 		| "bytes"
 		| "object";
 	fields?: Record<string, SchemaField>;
+	enum?: EnumValue[];
 }
 
 interface SchemaCollection {
@@ -26,9 +30,22 @@ interface SchemaCollection {
 	unique?: string[][];
 }
 
+interface SchemaAction {
+	params?: Record<string, SchemaField>;
+	required?: string[];
+	returns?: Record<string, SchemaField> | null;
+}
+
+interface SchemaPresence {
+	user?: Record<string, SchemaField>;
+	shared?: Record<string, SchemaField>;
+}
+
 interface SchemaFile {
 	version: string;
 	store: Record<string, SchemaCollection>;
+	actions?: Record<string, SchemaAction>;
+	presence?: SchemaPresence;
 }
 
 interface Args {
@@ -70,7 +87,7 @@ const TS_TYPE_MAP: Record<Exclude<SchemaField["type"], "object">, string> = {
 	integer: "number",
 	number: "number",
 	boolean: "boolean",
-	array: "unknown[]",
+	array: "JsonValue[]",
 	bytes: "Uint8Array",
 };
 
@@ -90,7 +107,10 @@ export function validateSchema(schemaData: SchemaFile): string | null {
 		if (error) return error;
 	}
 
-	return null;
+	const actionError = validateActions(schemaData.actions);
+	if (actionError) return actionError;
+
+	return validatePresence(schemaData.presence);
 }
 
 function validateCollection(
@@ -121,6 +141,7 @@ function validateCollection(
 	return null;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mirrors the schema grammar field rules.
 function validateFields(
 	fields: Record<string, SchemaField>,
 	context: string,
@@ -128,6 +149,20 @@ function validateFields(
 	for (const [fieldName, field] of Object.entries(fields)) {
 		const nameError = validateIdentifier(fieldName, `field in "${context}"`);
 		if (nameError) return nameError;
+
+		if (field.enum !== undefined) {
+			if (
+				!Array.isArray(field.enum) ||
+				!field.enum.every(
+					(value) =>
+						typeof value === "string" ||
+						typeof value === "number" ||
+						typeof value === "boolean",
+				)
+			) {
+				return `Field "${context}.${fieldName}" has an invalid enum.`;
+			}
+		}
 
 		if (field.type === "object") {
 			if (field.fields) {
@@ -138,6 +173,54 @@ function validateFields(
 			return `Field "${context}.${fieldName}" has unsupported type "${field.type}".`;
 		}
 	}
+	return null;
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mirrors the schema grammar action rules.
+function validateActions(
+	actions: Record<string, SchemaAction> | undefined,
+): string | null {
+	if (!actions || typeof actions !== "object") return null;
+
+	for (const [name, action] of Object.entries(actions)) {
+		const nameError = validateIdentifier(name, "action");
+		if (nameError) return nameError;
+
+		const params = action.params ?? {};
+		const paramsError = validateFields(params, `action ${name}.params`);
+		if (paramsError) return paramsError;
+
+		for (const required of action.required ?? []) {
+			if (!(required in params)) {
+				return `Action "${name}" requires unknown param "${required}".`;
+			}
+		}
+
+		if (action.returns) {
+			const returnsError = validateFields(
+				action.returns,
+				`action ${name}.returns`,
+			);
+			if (returnsError) return returnsError;
+		}
+	}
+
+	return null;
+}
+
+function validatePresence(presence: SchemaPresence | undefined): string | null {
+	if (!presence || typeof presence !== "object") return null;
+
+	for (const scope of ["user", "shared"] as const) {
+		const fields = presence[scope];
+		if (!fields) continue;
+		if (typeof fields !== "object") {
+			return `Presence "${scope}" must be a field map.`;
+		}
+		const error = validateFields(fields, `presence.${scope}`);
+		if (error) return error;
+	}
+
 	return null;
 }
 
@@ -170,6 +253,9 @@ function resolveFieldPath(
 // ─── Type emitter ─────────────────────────────────────────────────────────────
 
 function emitFieldType(field: SchemaField, indent: string): string {
+	if (field.enum && field.enum.length > 0) {
+		return field.enum.map((value) => JSON.stringify(value)).join(" | ");
+	}
 	if (field.type === "object") {
 		if (!field.fields || Object.keys(field.fields).length === 0) {
 			return "Record<string, unknown>";
@@ -179,16 +265,18 @@ function emitFieldType(field: SchemaField, indent: string): string {
 	return TS_TYPE_MAP[field.type] ?? "unknown";
 }
 
-/** Nested objects carry no required metadata — their members are optional. */
+/** Emits an object literal; members are optional unless listed in `required`. */
 function emitObject(
 	fields: Record<string, SchemaField>,
 	indent: string,
+	required: Set<string> = new Set(),
 ): string {
 	const innerIndent = `${indent}\t`;
 	const lines: string[] = ["{"];
 	for (const [fieldName, field] of Object.entries(fields)) {
+		const optMark = required.has(fieldName) ? "" : "?";
 		lines.push(
-			`${innerIndent}${fieldName}?: ${emitFieldType(field, innerIndent)};`,
+			`${innerIndent}${fieldName}${optMark}: ${emitFieldType(field, innerIndent)};`,
 		);
 	}
 	lines.push(`${indent}}`);
@@ -200,33 +288,123 @@ function emitZyncBaseSchema(store: Record<string, SchemaCollection>): string {
 	// signature that keeps a typed client assignable to the loose fallback.
 	const lines: string[] = ["export type ZyncBaseSchema = {"];
 	for (const [collectionName, collection] of Object.entries(store)) {
-		const requiredSet = new Set(collection.required ?? []);
-		lines.push(`\t${collectionName}: {`);
-		for (const [fieldName, field] of Object.entries(collection.fields)) {
-			const optMark = requiredSet.has(fieldName) ? "" : "?";
-			lines.push(
-				`\t\t${fieldName}${optMark}: ${emitFieldType(field, "\t\t")};`,
-			);
-		}
+		const required = new Set(collection.required ?? []);
+		lines.push(
+			`\t${collectionName}: ${emitObject(collection.fields, "\t", required)};`,
+		);
+	}
+	lines.push("};");
+	return lines.join("\n");
+}
+
+function emitActions(actions: Record<string, SchemaAction>): string {
+	const lines: string[] = ["export type ZyncBaseActions = {"];
+	for (const [name, action] of Object.entries(actions)) {
+		// `returns: null` marks an async action: `call` resolves on admission.
+		const returns = action.returns
+			? emitObject(action.returns, "\t\t", new Set(Object.keys(action.returns)))
+			: "undefined";
+		const params =
+			action.params && Object.keys(action.params).length > 0
+				? emitObject(action.params, "\t\t", new Set(action.required ?? []))
+				: "Record<string, never>";
+		lines.push(`\t${name}: {`);
+		lines.push(`\t\tparams: ${params};`);
+		lines.push(`\t\treturns: ${returns};`);
 		lines.push("\t};");
 	}
 	lines.push("};");
 	return lines.join("\n");
 }
 
-/**
- * Generate the full types output for a store.
- */
-export function generateTypes(store: Record<string, SchemaCollection>): string {
-	return [
-		"// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
-		"",
-		emitZyncBaseSchema(store),
-		"",
-	].join("\n");
+function emitPresence(presence: SchemaPresence): string {
+	const lines: string[] = ["export type ZyncBasePresence = {"];
+	if (presence.user) {
+		lines.push(`\tuser: ${emitObject(presence.user, "\t")};`);
+	}
+	if (presence.shared) {
+		lines.push(`\tshared: ${emitObject(presence.shared, "\t")};`);
+	}
+	lines.push("};");
+	return lines.join("\n");
 }
 
-export type { SchemaCollection, SchemaField, SchemaFile };
+function fieldsUseJsonValue(
+	fields: Record<string, SchemaField> | undefined,
+): boolean {
+	if (!fields) return false;
+	for (const field of Object.values(fields)) {
+		if (field.type === "array") return true;
+		if (field.type === "object" && fieldsUseJsonValue(field.fields)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function usesJsonValue(
+	store: Record<string, SchemaCollection>,
+	actions: Record<string, SchemaAction> | undefined,
+	presence: SchemaPresence | undefined,
+): boolean {
+	if (
+		Object.values(store).some((collection) =>
+			fieldsUseJsonValue(collection.fields),
+		)
+	) {
+		return true;
+	}
+	if (actions) {
+		for (const action of Object.values(actions)) {
+			if (
+				fieldsUseJsonValue(action.params) ||
+				fieldsUseJsonValue(action.returns ?? undefined)
+			) {
+				return true;
+			}
+		}
+	}
+	return (
+		fieldsUseJsonValue(presence?.user) || fieldsUseJsonValue(presence?.shared)
+	);
+}
+
+/**
+ * Generate the full types output for a schema.
+ */
+export function generateTypes(
+	store: Record<string, SchemaCollection>,
+	actions?: Record<string, SchemaAction>,
+	presence?: SchemaPresence,
+): string {
+	const parts: string[] = [
+		"// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
+		"",
+	];
+
+	if (usesJsonValue(store, actions, presence)) {
+		parts.push('import type { JsonValue } from "@zyncbase/client";', "");
+	}
+
+	parts.push(emitZyncBaseSchema(store), "");
+
+	if (actions && Object.keys(actions).length > 0) {
+		parts.push(emitActions(actions), "");
+	}
+	if (presence) {
+		parts.push(emitPresence(presence), "");
+	}
+
+	return parts.join("\n");
+}
+
+export type {
+	SchemaAction,
+	SchemaCollection,
+	SchemaField,
+	SchemaFile,
+	SchemaPresence,
+};
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -248,7 +426,14 @@ async function loadAndGenerate(
 	const validationError = validateSchema(schemaData);
 	if (validationError) return { ok: false, error: validationError };
 
-	return { ok: true, content: generateTypes(schemaData.store) };
+	return {
+		ok: true,
+		content: generateTypes(
+			schemaData.store,
+			schemaData.actions,
+			schemaData.presence,
+		),
+	};
 }
 
 function watchSchema(args: Args): void {

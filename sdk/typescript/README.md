@@ -33,18 +33,35 @@ Then bind the client to it:
 
 ```ts
 import { createClient } from "@zyncbase/client";
-import type { ZyncBaseSchema } from "./zyncbase-schema";
+import type {
+	ZyncBaseActions,
+	ZyncBasePresence,
+	ZyncBaseSchema,
+} from "./zyncbase-schema";
 
-const client = createClient<ZyncBaseSchema>({ url: "ws://localhost:3000" });
+// The action and presence type arguments are optional.
+const client = createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>({
+	url: "ws://localhost:3000",
+});
 
 await client.store.set("users.alice.age", 30); // value type checked
 await client.store.get("users.alice.age");      // Promise<number | undefined>
-await client.store.query("countries");          // rows include id: string
+await client.store.query("countries", {
+	where: { count: { gte: 10 } },
+	orderBy: [{ count: "desc" }],
+});                                              // rows include id: string
+
+const joined = await client.actions.call("player_join", {
+	name: "Alice",
+	country_id: 1,
+	session_id: "...",
+});                                              // joined.user_id is string
+await client.presence.set({ status: "active" }); // enum checked (when declared)
 ```
 
-What is checked: collection names, dot-path and tuple-path fields, `get`/`set`/`create`/`listen` value types, and `query`/`subscribe` row shapes. Reads include the server-issued `id`; writes use the schema fields only.
+What is checked: collection names, dot-path and tuple-path fields, `get`/`set`/`create`/`listen` value types, `query`/`subscribe` rows and `getSnapshot()`, `where` fields and operators, single-field `orderBy` clauses, action names/params/enums/returns, and presence payloads. Reads include the server-issued `id`; writes use the schema fields only.
 
-Not yet typed: `batch` operation values, actions, and presence — they accept their dynamic shapes.
+Not yet typed: `batch` operation values and the wire-internal message types — they accept their dynamic shapes.
 
 Generic helpers should be parameterized (`Store<S>`, `ZyncBaseClient<S>`) rather than annotated with the bare fallback types: the typed and permissive surfaces are not mutually assignable, so a `ZyncBaseClient<ZyncBaseSchema>` does not flow into a slot typed `ZyncBaseClient`.
 

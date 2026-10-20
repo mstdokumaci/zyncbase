@@ -178,8 +178,12 @@ type CreateValue<S, C extends keyof S & string> =
 	IsLooseSchema<S> extends true ? JsonValue : S[C];
 
 /** Row shape returned by `query` and `subscribe`. */
-type RowsOf<S, C extends keyof S & string> =
-	IsLooseSchema<S> extends true ? JsonValue[] : DocumentRowOf<S, C>[];
+type RowsOf<S, C extends string> =
+	IsLooseSchema<S> extends true
+		? JsonValue[]
+		: C extends keyof S
+			? DocumentRowOf<S, C>[]
+			: JsonValue[];
 
 /** Connection lifecycle status as exposed by `client.status` and `statusChange`. */
 export type ConnectionStatus =
@@ -276,6 +280,55 @@ export interface QueryOptions {
 	after?: string; // opaque cursor token
 }
 
+// ─── Schema-checked query types ──────────────────────────────────────────────
+
+/** Operand object for one field predicate; operators are filtered by value type. */
+export type WhereOperators<V> = {
+	eq?: V;
+	ne?: V;
+	in?: readonly V[];
+	notIn?: readonly V[];
+	isNull?: boolean;
+	isNotNull?: boolean;
+} & (V extends number ? { gt?: V; gte?: V; lt?: V; lte?: V } : unknown) &
+	(V extends string
+		? { contains?: string; startsWith?: string; endsWith?: string }
+		: unknown) &
+	(V extends readonly unknown[] ? { contains?: unknown } : unknown);
+
+/** Dot-joined leaf field paths beneath a document shape (objects are containers). */
+type LeafDotFieldPaths<T> = {
+	[K in keyof T & string]: IsNested<T[K]> extends true
+		? `${K}.${LeafDotFieldPaths<NonNullable<T[K]>>}`
+		: K;
+}[keyof T & string];
+
+/** Field predicates for a collection, keyed by dot path. */
+export type TypedWhere<S extends object, C extends keyof S & string> = {
+	[P in LeafDotFieldPaths<S[C]>]?:
+		| NonNullable<DotValue<S[C], P>>
+		| null
+		| WhereOperators<NonNullable<DotValue<S[C], P>>>;
+} & { or?: TypedWhere<S, C>[] };
+
+/** One sort clause: exactly one leaf field path and one direction. */
+export type TypedOrderClause<S extends object, C extends keyof S & string> = {
+	[P in LeafDotFieldPaths<S[C]>]: {
+		[K in P]: SortDirection;
+	} & { [K in Exclude<LeafDotFieldPaths<S[C]>, P>]?: never };
+}[LeafDotFieldPaths<S[C]>];
+
+/** Query options checked against a collection's fields. */
+export type TypedQueryOptions<S extends object, C extends keyof S & string> = {
+	where?: TypedWhere<S, C>;
+	orderBy?: readonly TypedOrderClause<S, C>[];
+	limit?: number;
+	after?: string;
+};
+
+type QueryOptionsFor<S extends object, C extends keyof S & string> =
+	IsLooseSchema<S> extends true ? QueryOptions : TypedQueryOptions<S, C>;
+
 /**
  * One batch write. The value stays `JsonValue` rather than correlating to the
  * path; use `set` for schema-checked writes.
@@ -286,21 +339,24 @@ export interface BatchOperation {
 	value?: JsonValue;
 }
 
-export interface SubscriptionHandle {
+export interface SubscriptionHandle<
+	S extends object = SchemaLike,
+	C extends string = string,
+> {
 	/** Detach this consumer; its callback stops firing immediately. */
 	unsubscribe: () => Promise<void>;
 	loadMore: () => Promise<void>;
 	hasMore: boolean;
 	/** Current sorted results; empty before the first delivery. */
-	getSnapshot: () => JsonValue[];
+	getSnapshot: () => RowsOf<S, C>;
 }
 
 /** Handle returned by `store.listen`. */
-export interface ListenHandle {
+export interface ListenHandle<S extends object = SchemaLike, P = Path> {
 	/** Detach this consumer; its callback stops firing immediately. */
 	unlisten: () => Promise<void>;
 	/** Last value delivered to callbacks for this path; `undefined` before the first. */
-	getSnapshot: () => JsonValue | undefined;
+	getSnapshot: () => GetValue<S, P>;
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -329,18 +385,18 @@ export interface Store<S extends object = SchemaLike> {
 	listen<const P extends WritePath<S>>(
 		path: P,
 		callback: (value: GetValue<S, P>) => void,
-	): Promise<ListenHandle>;
+	): Promise<ListenHandle<S, P>>;
 	/** Subscribe to a collection with complex queries; resolves with its handle after server acknowledgement. */
 	subscribe<C extends CollectionsOf<S>>(
 		collection: C,
-		options: QueryOptions,
+		options: QueryOptionsFor<S, C>,
 		callback: (results: RowsOf<S, C>) => void,
-	): Promise<SubscriptionHandle>;
+	): Promise<SubscriptionHandle<S, C>>;
 	// Batch — async
 	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
 	query<C extends CollectionsOf<S>>(
 		collection: C,
-		options?: QueryOptions,
+		options?: QueryOptionsFor<S, C>,
 	): Promise<RowsOf<S, C> & { nextCursor: string | null }>;
 }
 
@@ -651,10 +707,24 @@ export interface ActionForward {
 	claims: Readonly<Record<string, JsonValue>>;
 }
 
+/** Presence user payload for a generated presence schema. */
+type PresenceUserOf<P> = [P] extends [never]
+	? Record<string, unknown>
+	: P extends { user: infer U }
+		? U
+		: Record<string, unknown>;
+
+/** Presence shared payload for a generated presence schema. */
+type PresenceSharedOf<P> = [P] extends [never]
+	? Record<string, unknown>
+	: P extends { shared: infer S }
+		? S
+		: Record<string, unknown>;
+
 /** Decoded presence entry exposed to SDK consumers. */
-export interface PresenceEntry {
+export interface PresenceEntry<P = never> {
 	userId: string; // Decoded UUID string
-	data: Record<string, unknown>; // Unflattened, string-keyed
+	data: PresenceUserOf<P>; // Unflattened, string-keyed
 	joinedAt: number; // Unix timestamp ms
 }
 
@@ -664,29 +734,29 @@ export interface PresenceGetAllOptions {
 }
 
 /** Public Presence API interface. */
-export interface Presence {
+export interface Presence<P = never> {
 	/** Set your user presence data. Resolves when the server accepts it; throttled to ~60fps. */
-	set(data: Record<string, unknown>): Promise<void>;
+	set(data: PresenceUserOf<P>): Promise<void>;
 	/** Merge fields into namespace-level shared state. Resolves when the server accepts it. */
-	setShared(data: Record<string, unknown>): Promise<void>;
+	setShared(data: PresenceSharedOf<P>): Promise<void>;
 	/**
 	 * Subscribe to unordered user presence snapshots. Fires with a fresh snapshot when
 	 * another user joins, updates, or leaves; self-only broadcasts do not fire. Resolves
 	 * with an unsubscribe function after server acknowledgement.
 	 */
 	subscribe(
-		callback: (users: PresenceEntry[]) => void,
+		callback: (users: PresenceEntry<P>[]) => void,
 	): Promise<() => Promise<void>>;
 	/** Subscribe to shared state changes; resolves with an unsubscribe function after server acknowledgement. */
 	subscribeShared(
-		callback: (shared: Record<string, unknown> | null) => void,
+		callback: (shared: PresenceSharedOf<P> | null) => void,
 	): Promise<() => Promise<void>>;
 	/** Synchronous local lookup of a specific user's presence. */
-	get(userId: string): PresenceEntry | undefined;
+	get(userId: string): PresenceEntry<P> | undefined;
 	/** Synchronous local lookup of all users' presence. Result order is unspecified. */
-	getAll(options?: PresenceGetAllOptions): PresenceEntry[];
+	getAll(options?: PresenceGetAllOptions): PresenceEntry<P>[];
 	/** Synchronous local lookup of current shared state. */
-	getShared(): Record<string, unknown> | null;
+	getShared(): PresenceSharedOf<P> | null;
 	/** Scope-resolved internal users.id, or null before scope setup. */
 	readonly localUserId: string | null;
 	/** Remove your presence record; resolves after the server accepts it. */
@@ -728,24 +798,55 @@ export type ActionHandler = (
 	params: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
+/** Action names declared by a generated action map (any string when loose). */
+export type ActionName<A> = [A] extends [never] ? string : keyof A & string;
+
+/** Params accepted by an action. */
+type ActionParams<A, K extends string> = [A] extends [never]
+	? Record<string, unknown>
+	: K extends keyof A
+		? A[K] extends { params: infer P }
+			? P
+			: Record<string, never>
+		: never;
+
+/** Value returned by a sync action; async actions are generated as `undefined`. */
+type ActionReturns<A, K extends string> = [A] extends [never]
+	? unknown
+	: K extends keyof A
+		? A[K] extends { returns: infer R }
+			? R
+			: unknown
+		: never;
+
 /** Public Actions API interface. */
-export interface Actions {
+export interface Actions<A = never> {
 	/**
 	 * Invoke an action. Async actions resolve to `undefined` on admission;
 	 * sync actions resolve to the validated returns object.
 	 * Action calls are never auto-retried.
 	 */
-	call(
-		name: string,
-		params?: Record<string, unknown>,
-		options?: ActionCallOptions,
-	): Promise<unknown>;
+	call<K extends ActionName<A>>(
+		name: K,
+		...args: [A] extends [never]
+			? [params?: Record<string, unknown>, options?: ActionCallOptions]
+			: [params: ActionParams<A, K>, options?: ActionCallOptions]
+	): Promise<ActionReturns<A, K>>;
 	/**
 	 * Register a handler for an action. Throws `SESSION_NOT_READY` when the
 	 * action's bound scope is not ready. Resolves when the server accepts the
 	 * registration. A worker is an ordinary client.
 	 */
-	handle(name: string, handler: ActionHandler): Promise<void>;
+	handle<K extends ActionName<A>>(
+		name: K,
+		handler: [A] extends [never]
+			? ActionHandler
+			: (
+					ctx: ActionContext,
+					params: ActionParams<A, K>,
+					// biome-ignore lint/suspicious/noConfusingVoidType: async action handlers may return nothing.
+				) => ActionReturns<A, K> | Promise<ActionReturns<A, K>> | void,
+	): Promise<void>;
 }
 
 /** Union of all inbound message types. */
