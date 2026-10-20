@@ -268,6 +268,12 @@ await store.query("chunks", {
 	orderBy: [{ label: "asc" }],
 	limit: 10,
 });
+await store.query("chunks", {
+	where: { id: { eq: "c1" }, created_at: { gte: 0 }, updated_at: { lt: 1 } },
+	orderBy: [{ created_at: "desc" }],
+});
+// @ts-expect-error doc ids do not support text operators
+await store.query("chunks", { where: { id: { contains: "c1" } } });
 // @ts-expect-error unknown where field
 await store.query("chunks", { where: { nope: 1 } });
 // @ts-expect-error comparison on a bytes field

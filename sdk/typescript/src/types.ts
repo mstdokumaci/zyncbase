@@ -303,20 +303,48 @@ type LeafDotFieldPaths<T> = {
 		: K;
 }[keyof T & string];
 
+/** System columns present on every stored document and therefore queryable. */
+type ImplicitQueryFields = {
+	id: string;
+	created_at: number;
+	updated_at: number;
+};
+
+/** The document as seen by `where`/`orderBy`: schema fields plus system columns. */
+type TypedQueryDocument<S extends object, C extends keyof S & string> = S[C] &
+	ImplicitQueryFields;
+
+/** Doc ids support equality/membership only; text operators are server-rejected. */
+type IdOperators = {
+	eq?: string;
+	ne?: string;
+	in?: readonly string[];
+	notIn?: readonly string[];
+	isNull?: boolean;
+	isNotNull?: boolean;
+};
+
+/** Schema fields cannot be named "id" (schema-grammar), so this key is unambiguous. */
+type WhereCondition<T, P extends string> = P extends "id"
+	? IdOperators
+	: WhereOperators<NonNullable<DotValue<T, P>>>;
+
 /** Field predicates for a collection, keyed by dot path. */
 export type TypedWhere<S extends object, C extends keyof S & string> = {
-	[P in LeafDotFieldPaths<S[C]>]?:
-		| NonNullable<DotValue<S[C], P>>
+	[P in LeafDotFieldPaths<TypedQueryDocument<S, C>>]?:
+		| NonNullable<DotValue<TypedQueryDocument<S, C>, P>>
 		| null
-		| WhereOperators<NonNullable<DotValue<S[C], P>>>;
+		| WhereCondition<TypedQueryDocument<S, C>, P>;
 } & { or?: TypedWhere<S, C>[] };
 
 /** One sort clause: exactly one leaf field path and one direction. */
 export type TypedOrderClause<S extends object, C extends keyof S & string> = {
-	[P in LeafDotFieldPaths<S[C]>]: {
+	[P in LeafDotFieldPaths<TypedQueryDocument<S, C>>]: {
 		[K in P]: SortDirection;
-	} & { [K in Exclude<LeafDotFieldPaths<S[C]>, P>]?: never };
-}[LeafDotFieldPaths<S[C]>];
+	} & {
+		[K in Exclude<LeafDotFieldPaths<TypedQueryDocument<S, C>>, P>]?: never;
+	};
+}[LeafDotFieldPaths<TypedQueryDocument<S, C>>];
 
 /** Query options checked against a collection's fields. */
 export type TypedQueryOptions<S extends object, C extends keyof S & string> = {

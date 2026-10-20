@@ -336,7 +336,7 @@ client.store.get(['users', userId, 'name'])
 - `get`, `set`, `remove`, `listen` accept only declared paths — dot strings and segment tuples alike — with the field's declared value type.
 - `create` and `set` at document depth take the schema document shape; fields listed in `required` are mandatory.
 - `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`; subscription handles expose the same row type from `getSnapshot()`.
-- `query`/`subscribe` `where` predicates are keyed by leaf field paths (nested objects use dot paths) and restrict operators by value type; `orderBy` clauses name exactly one leaf field and one direction.
+- `query`/`subscribe` `where` predicates are keyed by leaf field paths (nested objects use dot paths) and restrict operators by value type; `orderBy` clauses name exactly one leaf field and one direction. The implicit system columns `id`, `created_at`, and `updated_at` are filterable and sortable; doc ids accept equality/membership operators only.
 - `actions.call`/`actions.handle` check action names, required params, `enum` literal unions, and sync return shapes; async actions (`returns: null` in the schema) resolve `undefined`.
 - `presence.set`, `setShared`, `get`, `getAll`, `getShared`, and subscriptions use the declared `presence.user`/`presence.shared` shapes.
 - Nested object fields are addressable at any depth; there is no depth limit.
