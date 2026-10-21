@@ -930,9 +930,14 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
 /// still null. Swap (not load) closes the release/acquire handshake with
 /// storageEngineWakeup — exactly one of the two paths wakes the loop. The
 /// flag is cleared here, so notifyPostHandler still drains on the wakeup.
+///
+/// A shutdown requested before the loop existed is reported too: the signal
+/// handler had no loop to wake, and without this the post handler would not
+/// run until the next sweep timer tick (~1 s).
 fn takePendingWakeup(ctx: ?*anyopaque) bool {
     const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    return self.wakeup_pending.swap(false, .acquire);
+    const storage_pending = self.wakeup_pending.swap(false, .acquire);
+    return storage_pending or self.shutdown_requested.load(.acquire);
 }
 
 fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {

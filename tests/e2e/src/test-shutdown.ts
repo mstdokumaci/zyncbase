@@ -8,9 +8,19 @@ type Spawned = {
 	log: string;
 };
 
-// Logged after installSignalHandlers() runs, so it marks the earliest point
-// where a SIGTERM must be handled instead of using the default action.
-const SIGNALS_INSTALLED_MARKER = "Initializing ZyncBase server";
+type SpawnOptions = {
+	/** Log line that means the server is ready to receive the signal. */
+	readyMarker: string;
+	onReady: (pid: number) => void;
+	timeoutMs?: number;
+};
+
+// Logged after installSignalHandlers() runs, so it is the earliest externally
+// observable point where a SIGTERM must be handled rather than defaulted.
+const READY_STARTUP = "Initializing ZyncBase server";
+// Logged once listen() returned and the server accepts connections.
+const READY_LISTENING = "Server started successfully";
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 function writeConfig(ctx: E2ETestContext, name: string): string {
 	const configPath = ctx.artifactPath(`${name}.json`);
@@ -31,14 +41,28 @@ function writeConfig(ctx: E2ETestContext, name: string): string {
 	return configPath;
 }
 
+function withTimeout<T>(
+	promise: Promise<T>,
+	ms: number,
+): Promise<T | "timeout"> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve("timeout"), ms);
+		void promise.then((value) => {
+			clearTimeout(timer);
+			resolve(value);
+		});
+	});
+}
+
 /**
- * Spawn the server, wait until it has installed signal handlers, then let
- * `onReady` signal it. Returns the exit status and the captured output.
+ * Spawn the server, wait for `readyMarker`, signal it, then wait for exit with
+ * a bounded timeout so a wedged child cannot hang the suite. The stderr reader
+ * is drained to completion before returning so `log` contains the final lines.
  */
 async function withSpawnedServer(
 	ctx: E2ETestContext,
 	name: string,
-	onReady: (pid: number) => void,
+	options: SpawnOptions,
 ): Promise<Spawned> {
 	const proc = Bun.spawn([SERVER_BIN, "--config", writeConfig(ctx, name)], {
 		cwd: process.cwd(),
@@ -52,20 +76,38 @@ async function withSpawnedServer(
 	});
 	const reader = proc.stderr.getReader();
 	const decoder = new TextDecoder();
-	void (async () => {
+	const drained = (async () => {
 		for (;;) {
 			const { value, done } = await reader.read();
 			if (done) return;
 			log += decoder.decode(value, { stream: true });
-			if (log.includes(SIGNALS_INSTALLED_MARKER)) markReady();
+			if (log.includes(options.readyMarker)) markReady();
 		}
 	})();
 
-	// If the process dies before logging, proceed anyway so the assertion below
-	// reports the real exit status instead of hanging.
+	// If the child dies before reaching the marker, fall through so the exit
+	// assertions report the real status instead of hanging on `ready`.
 	await Promise.race([ready, proc.exited]);
-	onReady(proc.pid);
-	await proc.exited;
+
+	if (proc.exitCode === null && proc.signalCode === null) {
+		try {
+			options.onReady(proc.pid);
+		} catch {
+			// Child vanished between the check and the signal; the exit
+			// assertions below report it.
+		}
+	}
+
+	const outcome = await withTimeout(
+		proc.exited.then(() => "exited" as const),
+		options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+	);
+	if (outcome === "timeout") {
+		proc.kill("SIGKILL");
+		await proc.exited;
+	}
+
+	await drained;
 	return { exitCode: proc.exitCode, signalCode: proc.signalCode, log };
 }
 
@@ -83,35 +125,52 @@ function assertGraceful(label: string, spawned: Spawned): void {
 }
 
 export async function run(ctx: E2ETestContext): Promise<void> {
-	// Before the fix this died from the default SIGTERM action: no checkpoint,
-	// exit status 143.
+	// A signal during startup is parked and replayed once the server is
+	// published. Before the loop-publish wakeup fix this took ~1 s (the uWS
+	// sweep timer tick); it must now be handled on the first loop iteration.
+	let signalSentAt = 0;
 	assertGraceful(
 		"SIGTERM during startup",
-		await withSpawnedServer(ctx, "shutdown-during-startup", (pid) => {
-			process.kill(pid, "SIGTERM");
+		await withSpawnedServer(ctx, "shutdown-during-startup", {
+			readyMarker: READY_STARTUP,
+			onReady: (pid) => {
+				signalSentAt = Date.now();
+				process.kill(pid, "SIGTERM");
+			},
 		}),
 	);
+	const startupLatencyMs = Date.now() - signalSentAt;
+	if (startupLatencyMs > 500) {
+		throw new Error(
+			`SIGTERM during startup took ${startupLatencyMs}ms to exit; the loop wakeup was likely missed`,
+		);
+	}
 
 	assertGraceful(
 		"SIGINT on a running server",
-		await withSpawnedServer(ctx, "shutdown-sigint", (pid) => {
-			process.kill(pid, "SIGINT");
+		await withSpawnedServer(ctx, "shutdown-sigint", {
+			readyMarker: READY_LISTENING,
+			onReady: (pid) => process.kill(pid, "SIGINT"),
 		}),
 	);
 
-	// A second signal skips the graceful path and exits by signal. Both are sent
-	// back to back so the second lands while the shutdown is still running.
-	const escalated = await withSpawnedServer(
-		ctx,
-		"shutdown-escalation",
-		(pid) => {
+	// A second termination signal skips the graceful path and exits by signal.
+	// Different signal numbers are used because standard signals coalesce per
+	// signal number: two back-to-back SIGTERMs can collapse into one delivery,
+	// which would silently turn this into a plain graceful-shutdown test.
+	const escalated = await withSpawnedServer(ctx, "shutdown-escalation", {
+		readyMarker: READY_LISTENING,
+		onReady: (pid) => {
 			process.kill(pid, "SIGTERM");
-			process.kill(pid, "SIGTERM");
+			process.kill(pid, "SIGINT");
 		},
-	);
-	if (escalated.signalCode !== "SIGTERM" || escalated.exitCode !== null) {
+	});
+	if (
+		escalated.exitCode !== null ||
+		(escalated.signalCode !== "SIGTERM" && escalated.signalCode !== "SIGINT")
+	) {
 		throw new Error(
-			`second SIGTERM did not escalate: exit=${escalated.exitCode} signal=${escalated.signalCode}\n${escalated.log}`,
+			`second signal did not escalate: exit=${escalated.exitCode} signal=${escalated.signalCode}\n${escalated.log}`,
 		);
 	}
 }

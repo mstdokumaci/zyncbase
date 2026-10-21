@@ -305,9 +305,10 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
 
-        // A storage-engine wakeup that raced ahead of loop publish left the
-        // coalescing flag set with no loop to wake. Recheck it now so queued
-        // startup entries drain on the first post-handler iteration.
+        // A storage-engine wakeup or a shutdown request that raced ahead of
+        // loop publish left its flag set with no loop to wake. Recheck both
+        // now so the first post-handler iteration runs immediately instead of
+        // waiting for the next sweep timer tick.
         if (server.wakeup_pending_check) |check| {
             if (check(server.wakeup_pending_check_ctx)) {
                 c.us_wakeup_loop(loop);
