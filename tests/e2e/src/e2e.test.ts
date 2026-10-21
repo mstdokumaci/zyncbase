@@ -22,6 +22,7 @@ import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
 import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runResponseLimit } from "./test-response-limit";
+import { run as runShutdown } from "./test-shutdown";
 import { run as runSorting } from "./test-sorting";
 import { run as runSync } from "./test-sync";
 
@@ -186,6 +187,12 @@ describe("ZyncBase E2E", () => {
 					await runComboStress(port, PRESENCE_E2E_JWT_SECRET);
 				},
 			);
+		});
+	});
+
+	test("SIGTERM/SIGINT shut down gracefully", async () => {
+		await runE2ETest("Graceful shutdown signals", async (ctx) => {
+			await runShutdown(ctx);
 		});
 	});
 });
