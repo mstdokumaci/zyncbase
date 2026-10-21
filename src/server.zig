@@ -51,6 +51,14 @@ const Schema = schema_types.Schema;
 // plain pointer loads on AArch64 are not guaranteed to be atomic.
 var global_server: std.atomic.Value(?*ZyncBaseServer) = std.atomic.Value(?*ZyncBaseServer).init(null);
 
+// A termination signal that arrived before the server was published. The handler
+// cannot touch ZyncBaseServer yet, so it parks the request here and
+// activateSignalHandling() replays it once the instance is safe to read.
+pub var pending_signal: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+// Set by the first termination signal; the next one skips the graceful path.
+pub var signal_seen: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
     io: std.Io,
@@ -578,7 +586,7 @@ pub const ZyncBaseServer = struct {
         try self.checkpoint_manager.spawn();
 
         // Setup signal handlers for graceful shutdown (signal-safe)
-        try self.setupSignalHandlers();
+        try self.activateSignalHandling();
 
         // Start listening on configured port
         try self.websocket_server.listen();
@@ -703,33 +711,38 @@ pub const ZyncBaseServer = struct {
         self.storage_engine.stopReaderPool();
     }
 
-    /// Setup signal handlers for SIGTERM and SIGINT
-    fn setupSignalHandlers(self: *ZyncBaseServer) !void {
+    /// Install SIGTERM/SIGINT handlers. Call this before any initialization so a
+    /// signal that lands mid-startup is replayed instead of killing the process.
+    pub fn installSignalHandlers() void {
+        const termination_action = std.posix.Sigaction{
+            .handler = .{ .handler = handleSignal },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(std.posix.SIG.TERM, &termination_action, null);
+        std.posix.sigaction(std.posix.SIG.INT, &termination_action, null);
+    }
+
+    /// Publish this instance to the signal handler and replay a signal that
+    /// arrived during startup. Must run after the instance is fully initialized.
+    fn activateSignalHandling(self: *ZyncBaseServer) !void {
         // Store global reference for signal handler with release ordering so the
         // signal handler (which uses acquire) always sees a fully-initialized pointer.
         global_server.store(self, .release);
 
-        // Setup SIGTERM handler
-        const sigterm_action = std.posix.Sigaction{
-            .handler = .{ .handler = handleSignal },
-            .mask = std.posix.sigemptyset(),
-            .flags = 0,
-        };
-        std.posix.sigaction(std.posix.SIG.TERM, &sigterm_action, null);
-
-        // Setup SIGINT handler
-        const sigint_action = std.posix.Sigaction{
-            .handler = .{ .handler = handleSignal },
-            .mask = std.posix.sigemptyset(),
-            .flags = 0,
-        };
-        std.posix.sigaction(std.posix.SIG.INT, &sigint_action, null);
+        if (pending_signal.swap(false, .acq_rel)) {
+            self.shutdown_requested.store(true, .release);
+        }
     }
 
     /// Deinit everything. Order: stop background threads → deinit cross-thread
     /// resources → deinit consumers → deinit infrastructure.
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
+
+        // Unpublish before freeing so a signal cannot dereference this instance
+        // once it is gone.
+        global_server.store(null, .release);
 
         // Stop background threads before any shared-resource deinit.
         self.stopBackgroundWorkers();
@@ -872,9 +885,27 @@ pub const ZyncBaseServer = struct {
     }
 };
 
-/// Signal handler for SIGTERM and SIGINT
-/// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
-fn handleSignal(_: std.posix.SIG) callconv(.c) void {
+/// Signal handler for SIGTERM and SIGINT.
+/// ASYNC-SIGNAL-SAFE: atomics, sigaction and raise only.
+fn handleSignal(sig: std.posix.SIG) callconv(.c) void {
+    // A second signal while the graceful path is still running means the
+    // operator wants out now: restore the default action and re-raise so the
+    // process dies with the conventional exit status instead of hanging on a
+    // stuck flush.
+    if (signal_seen.swap(true, .acq_rel)) {
+        const default_action = std.posix.Sigaction{
+            .handler = .{ .handler = std.posix.SIG.DFL },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(sig, &default_action, null);
+        // libc raise directly: async-signal-safe, and the return value is
+        // irrelevant because the default action terminates the process.
+        _ = std.c.raise(sig);
+        return;
+    }
+
+    pending_signal.store(true, .release);
     if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
         if (server.websocket_server.loop.load(.acquire)) |loop| {

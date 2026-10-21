@@ -20,6 +20,11 @@ const logo =
 ;
 
 pub fn main(init: std.process.Init) !void {
+    // Install SIGTERM/SIGINT handlers before any initialization. Without this a
+    // signal during config load or schema migration kills the process with the
+    // default action and skips the final checkpoint.
+    ZyncBaseServer.installSignalHandlers();
+
     // prod allocator: SmpAllocator for all server flows (see memory/strategy.zig)
     const allocator = std.heap.smp_allocator;
     const io = init.io;

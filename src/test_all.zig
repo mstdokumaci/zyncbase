@@ -83,6 +83,7 @@ test {
     _ = @import("thread_budget_test.zig");
     _ = @import("storage_engine_stability_test.zig");
     _ = @import("server_init_test.zig");
+    _ = @import("signal_test.zig");
     _ = @import("storage_engine_error_test.zig");
     _ = @import("logging_test.zig");
     _ = @import("migration_detector_test.zig");
