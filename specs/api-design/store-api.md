@@ -329,6 +329,23 @@ client.store.get(['users', userId, 'name'])
 
 ---
 
+## Static Typing
+
+`createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(options)` binds the API to types generated from `schema.json` (`bunx @zyncbase/client generate --schema schema.json --out zyncbase-schema.ts`). The action and presence arguments are optional. With types bound:
+
+- `get`, `set`, `remove`, `listen` accept only declared paths — dot strings and segment tuples alike — with the field's declared value type.
+- `create` and `set` at document depth take the schema document shape; fields listed in `required` are mandatory.
+- `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`; subscription handles expose the same row type from `getSnapshot()`.
+- `query`/`subscribe` `where` predicates are keyed by leaf field paths (nested objects use dot paths) and restrict operators by value type; `orderBy` clauses name exactly one leaf field and one direction. The implicit system columns `id`, `created_at`, and `updated_at` are filterable and sortable; doc ids accept equality/membership operators only.
+- `actions.call`/`actions.handle` check action names, required params, `enum` literal unions, and sync return shapes; async actions (`returns: null` in the schema) resolve `undefined`.
+- `presence.set`, `setShared`, `get`, `getAll`, `getShared`, and subscriptions use the declared `presence.user`/`presence.shared` shapes.
+- Nested object fields are addressable at any depth; there is no depth limit.
+- Without type arguments, the permissive surface applies (`string` paths, `JsonValue` values, dynamic actions/presence).
+
+`batch` operation values and wire-internal message types remain dynamic. Generated files are committed and gated with `--check` in CI; `--watch` regenerates during development. The schema file remains the single source of truth — the server validates all writes at runtime regardless of client types.
+
+---
+
 ## Related Specifications
 - [Presence API](./presence-api.md) - For user awareness features
 - [Query Language Reference](./query-language.md) - Detailed query syntax

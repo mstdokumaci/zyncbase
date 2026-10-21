@@ -3,20 +3,23 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClient, type ZyncBaseClient } from "@zyncbase/client";
+import { createClient, type DocumentRowOf } from "@zyncbase/client";
 import { buildBrowser } from "./build";
 import { startLocalEdge } from "./dev";
+import type { ZyncBaseActions, ZyncBaseSchema } from "./schema-types";
+import type { AppClient } from "./shared";
 import {
 	COUNTRY_COLORS,
 	type Country,
-	type CountryChunkRow,
+	type Direction,
 	MAX_COUNTRIES,
 	NAMESPACE,
-	type PlayerRow,
 	readColorIndexes,
 	readCoordinates,
 	type UserChunkRow,
 } from "./shared";
+
+type RosterRow = DocumentRowOf<ZyncBaseSchema, "users">;
 
 async function freePort() {
 	const server = createServer();
@@ -93,7 +96,7 @@ const edge = await startLocalEdge(edgeOptions);
 const origin = `http://localhost:${edge.port}`;
 let processHandle: Bun.Subprocess | undefined;
 let logs = "";
-const clients: ZyncBaseClient[] = [];
+const clients: AppClient[] = [];
 const timers: ReturnType<typeof setInterval>[] = [];
 
 async function capture(stream: ReadableStream<Uint8Array>) {
@@ -221,7 +224,7 @@ async function startWithRunway(
 	throw new Error("Could not start the game with enough runway");
 }
 
-async function claimedAnyLand(client: ZyncBaseClient) {
+async function claimedAnyLand(client: AppClient) {
 	const rows = await countryChunks(client);
 	return rows.some((row) =>
 		readColorIndexes(row.color_indexes).some((byte) => byte !== 0),
@@ -452,7 +455,7 @@ async function runLifecycle() {
 		"Blipper",
 		blip.sessionId,
 	);
-	const hasDot = async (client: ZyncBaseClient) =>
+	const hasDot = async (client: AppClient) =>
 		(await userChunks(client))
 			.flatMap((row) => readCoordinates(row.coordinates))
 			.some((dot) => dot.slot === blipSlot);
@@ -462,9 +465,7 @@ async function runLifecycle() {
 	const blipMoves = setInterval(() => move(blip.client, "right", 1), 500);
 	timers.push(blipMoves);
 	await eventually(async () => {
-		const rows = (await blip.client.store.query(
-			"countries",
-		)) as unknown as Country[];
+		const rows = await blip.client.store.query("countries");
 		return (
 			(rows.find((row) => row.country_id === blip.countryId)?.count ?? 0) > 0
 		);
@@ -475,7 +476,7 @@ async function runLifecycle() {
 		async () => (await healthState()).players === 0,
 		"blip player ages out",
 	);
-	const revived = createClient({
+	const revived = createClient<ZyncBaseSchema, ZyncBaseActions>({
 		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token: blip.token },
 		storeNamespace: NAMESPACE,
@@ -543,7 +544,7 @@ async function connect(
 	);
 	assert.equal(payload.session.tokenExpiresAt, jwt.exp);
 	assert.ok(payload.session.tokenExpiresAt > payload.exp);
-	const client = createClient({
+	const client = createClient<ZyncBaseSchema, ZyncBaseActions>({
 		url: `ws://localhost:${edge.port}/ws`,
 		auth: { token },
 		storeNamespace: NAMESPACE,
@@ -556,22 +557,24 @@ async function connect(
 
 /** Admit a player through the sync join action and return its identity. */
 async function joinPlayer(
-	client: ZyncBaseClient,
+	client: AppClient,
 	countryId: number | undefined,
 	name: string,
 	sessionId: string,
 ) {
-	assert.equal(typeof countryId, "number");
+	if (typeof countryId !== "number")
+		throw new Error("joinPlayer requires a country id");
 	// The worker registers handlers just after /health turns ready; retry
 	// briefly so tests do not race that registration.
 	const deadline = Date.now() + 5000;
 	for (;;) {
 		try {
-			const result = (await client.actions.call("player_join", {
-				name,
-				country_id: countryId,
-				session_id: sessionId,
-			})) as { user_id?: string; slot?: number; x?: number; y?: number };
+			const result: ZyncBaseActions["player_join"]["returns"] =
+				await client.actions.call("player_join", {
+					name,
+					country_id: countryId,
+					session_id: sessionId,
+				});
 			assert.equal(typeof result.user_id, "string");
 			assert.equal(typeof result.slot, "number");
 			assert.equal(typeof result.x, "number");
@@ -590,10 +593,10 @@ async function joinPlayer(
 				await unsubscribe();
 			}
 			return {
-				id: result.user_id as string,
-				slot: result.slot as number,
-				x: result.x as number,
-				y: result.y as number,
+				id: result.user_id,
+				slot: result.slot,
+				x: result.x,
+				y: result.y,
 			};
 		} catch (error) {
 			if (Date.now() >= deadline) throw error;
@@ -603,25 +606,21 @@ async function joinPlayer(
 }
 
 /** Fire-and-forget input, mirroring the browser's publish(). */
-function move(client: ZyncBaseClient, direction: string, seq = 1) {
+function move(client: AppClient, direction: Direction, seq = 1) {
 	void client.actions.call("player_move", { direction, seq }).catch(() => {});
 }
 
 /** Remove presence and wait for the server response. */
-function leave(client: ZyncBaseClient) {
+function leave(client: AppClient) {
 	return client.presence.remove();
 }
 
-async function countryChunks(client: ZyncBaseClient) {
-	return (await client.store.query("country_chunks", {
-		limit: 2048,
-	})) as unknown as CountryChunkRow[];
+async function countryChunks(client: AppClient) {
+	return await client.store.query("country_chunks", { limit: 2048 });
 }
 
-async function userChunks(client: ZyncBaseClient) {
-	return (await client.store.query("user_chunks", {
-		limit: 100,
-	})) as unknown as UserChunkRow[];
+async function userChunks(client: AppClient) {
+	return await client.store.query("user_chunks", { limit: 100 });
 }
 
 try {
@@ -688,10 +687,10 @@ try {
 	// Subscribe before anyone joins: the admitted rows must arrive as deltas,
 	// not the initial snapshot (the browser creates the roster subscription
 	// before its join too).
-	const subscribed = new Map<string, PlayerRow>();
+	const subscribed = new Map<string, RosterRow>();
 	await bob.client.store.subscribe("users", { limit: 2048 }, (rows) => {
 		subscribed.clear();
-		for (const row of rows as PlayerRow[]) subscribed.set(row.id, row);
+		for (const row of rows) subscribed.set(row.id, row);
 	});
 	const {
 		id: aliceId,
@@ -704,7 +703,7 @@ try {
 		"Ａlice",
 		alice.sessionId,
 	);
-	let direction = "idle",
+	let direction: Direction = "idle",
 		seq = 1;
 	const send = () => move(alice.client, direction, seq);
 	send();
@@ -718,19 +717,18 @@ try {
 	assert.notEqual(aliceId, bobId);
 	let visible: UserChunkRow[] = [];
 	await bob.client.store.subscribe("user_chunks", { limit: 100 }, (rows) => {
-		visible = rows as UserChunkRow[];
+		visible = rows;
 	});
 	const dot = () =>
 		visible
 			.flatMap((row) => readCoordinates(row.coordinates))
 			.find((dot) => dot.slot === aliceSlot);
-	const rosterOf = async (client: ZyncBaseClient) =>
+	const rosterOf = async (client: AppClient) =>
 		new Map(
-			(
-				(await client.store.query("users", {
-					limit: 2048,
-				})) as unknown as PlayerRow[]
-			).map((row) => [row.id, row]),
+			(await client.store.query("users", { limit: 2048 })).map((row) => [
+				row.id,
+				row,
+			]),
 		);
 	const first = await eventually(
 		async () => dot(),
@@ -860,7 +858,12 @@ try {
 		"player worker registration denied",
 	);
 	await assert.rejects(
-		alice.client.actions.call("player_move", { direction: "sideways", seq: 2 }),
+		// Deliberate invalid enum: the server must reject it at runtime even
+		// though the typed client would refuse to compile it.
+		alice.client.actions.call("player_move", {
+			direction: "sideways" as never,
+			seq: 2,
+		}),
 		{ code: "SCHEMA_VALIDATION_FAILED" },
 	);
 	for (const timer of timers.splice(0)) clearInterval(timer);
@@ -885,13 +888,9 @@ try {
 	// two reads across a flush interval agree, or the saved counts may lag the
 	// chunks and the restart comparison fails on a pixel that moved since.
 	const savedCountries = (await eventually(async () => {
-		const before = (await observer.client.store.query(
-			"countries",
-		)) as unknown as Country[];
+		const before = await observer.client.store.query("countries");
 		await Bun.sleep(750);
-		const after = (await observer.client.store.query(
-			"countries",
-		)) as unknown as Country[];
+		const after = await observer.client.store.query("countries");
 		return JSON.stringify(before) === JSON.stringify(after) ? after : undefined;
 	}, "roster settled")) as Country[];
 	assert.ok(savedCountries.some((country) => country.count > 0));
@@ -918,7 +917,7 @@ try {
 	const restoredRoster = await rosterOf(returning.client);
 	// Reads materialize absent optional fields as explicit nulls; identity
 	// stubs (connected-but-never-admitted clients) carry no roster data.
-	const isStub = (row: PlayerRow) => row.country_id == null;
+	const isStub = (row: RosterRow) => row.country_id == null;
 	assert.ok(
 		![aliceId, bobId, teammateId].some((id) => restoredRoster.has(id)),
 		"stale human roster rows purged on restart",
@@ -929,9 +928,7 @@ try {
 		),
 		"only fieldless identity stubs remain without humans",
 	);
-	const restoredCountries = (await returning.client.store.query(
-		"countries",
-	)) as unknown as Country[];
+	const restoredCountries = await returning.client.store.query("countries");
 	for (const country of savedCountries) {
 		assert.equal(
 			restoredCountries.find((saved) => saved.country_id === country.country_id)
@@ -965,9 +962,7 @@ try {
 			readColorIndexes(row.color_indexes).every((byte) => byte === 0),
 		),
 	);
-	const fresh = (await clean.client.store.query(
-		"countries",
-	)) as unknown as Country[];
+	const fresh = await clean.client.store.query("countries");
 	assert.equal(
 		fresh.length,
 		0,

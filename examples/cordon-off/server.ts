@@ -12,8 +12,9 @@ import type { Duplex } from "node:stream";
 import {
 	ActionError,
 	type BatchOperation,
+	type CollectionsOf,
 	createClient,
-	type JsonValue,
+	type DocumentRowOf,
 } from "@zyncbase/client";
 import { deployIfChanged, publishAssets } from "./deploy";
 import {
@@ -32,6 +33,7 @@ import {
 	runPublishBatches,
 	shouldPublishCountryChunks,
 } from "./publish";
+import type { ZyncBaseActions, ZyncBaseSchema } from "./schema-types";
 import {
 	COUNTRY_RESERVATION_MS,
 	type Country,
@@ -46,7 +48,6 @@ import {
 	RULES,
 	rowId,
 	terrain,
-	type UserChunkRow,
 	WIDTH,
 } from "./shared";
 import { reservedBotCountry, World } from "./world";
@@ -501,22 +502,23 @@ const database = Bun.spawn(
 	// Keep terminal Ctrl+C in the game process; stop the database after its final commit.
 	{ cwd: root, stdout: "inherit", stderr: "inherit", detached: true },
 );
-const client = createClient({
+const client = createClient<ZyncBaseSchema, ZyncBaseActions>({
 	url: databaseUrl.toString(),
 	auth: { tokenProvider: async () => token("simulation") },
 	storeNamespace: NAMESPACE,
 	reconnect: false,
 });
 
-async function allRows(collection: string) {
-	const rows: JsonValue[] = [];
+async function allRows<C extends CollectionsOf<ZyncBaseSchema>>(collection: C) {
+	const rows: DocumentRowOf<ZyncBaseSchema, C>[] = [];
 	let after: string | undefined;
 	do {
 		const page = await client.store.query(collection, {
 			limit: 200,
 			...(after ? { after } : {}),
 		});
-		rows.push(...page);
+		// Rows for the queried collection; the generic return cannot be narrowed.
+		rows.push(...(page as unknown as DocumentRowOf<ZyncBaseSchema, C>[]));
 		after = page.nextCursor ?? undefined;
 	} while (after);
 	return rows;
@@ -634,7 +636,7 @@ function standings(): RoundStanding[] {
 			name,
 			color,
 			count,
-			isBot: is_bot,
+			isBot: is_bot === true,
 		}))
 		.sort((a, b) => b.count - a.count);
 }
@@ -828,14 +830,11 @@ try {
 		}
 	}
 	await client.connect();
-	const countries = (await allRows("countries")) as Country[];
-	const countryChunks = (await allRows("country_chunks")) as CountryChunkRow[];
-	const userChunks = (await allRows("user_chunks")) as UserChunkRow[];
+	const countries = await allRows("countries");
+	const countryChunks = await allRows("country_chunks");
+	const userChunks = await allRows("user_chunks");
 	const playerRows = (await allRows("users")) as PlayerRow[];
-	const meta = (await allRows("meta")) as {
-		id: string;
-		next_country_id: number;
-	}[];
+	const meta = await allRows("meta");
 	// Coordinates are live state: rows from a previous process never survive.
 	if (userChunks.length)
 		await runPublishBatches(

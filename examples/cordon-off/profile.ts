@@ -5,16 +5,14 @@ import { mkdir } from "node:fs/promises";
 import { cpus } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import {
-	type BatchOperation,
-	createClient,
-	type ZyncBaseClient,
-} from "@zyncbase/client";
+import { type BatchOperation, createClient } from "@zyncbase/client";
 import {
 	buildServerIfNeeded,
 	createE2ETestContext,
 	withServer,
 } from "../../tests/e2e/src/harness";
+import type { ZyncBaseActions, ZyncBaseSchema } from "./schema-types";
+import type { AppClient } from "./shared";
 import {
 	countryChunkIndex,
 	type Direction,
@@ -240,7 +238,7 @@ function checksum(world: World) {
 }
 
 async function commitBatch(
-	client: ZyncBaseClient,
+	client: AppClient,
 	operations: BatchOperation[],
 	label = "fixture setup",
 ) {
@@ -262,7 +260,7 @@ async function commitBatch(
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: setup, warmup and verification intentionally surround one measured interval.
-async function run(client?: ZyncBaseClient) {
+async function run(client?: AppClient) {
 	let world = fixture();
 	for (let tick = 0; tick < warmup; tick++) {
 		steer(world, tick);
@@ -456,7 +454,7 @@ if (values.publish) {
 			maxMessagesPerSecond: values.unpaced ? 1_000_000 : undefined,
 		},
 		async ({ port }) => {
-			const client = createClient({
+			const client = createClient<ZyncBaseSchema, ZyncBaseActions>({
 				url: `ws://127.0.0.1:${port}`,
 				storeNamespace: NAMESPACE,
 				reconnect: false,

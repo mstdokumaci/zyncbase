@@ -1,5 +1,7 @@
-import type { JsonValue, ListenHandle, ZyncBaseClient } from "@zyncbase/client";
+import type { JsonValue, ListenHandle } from "@zyncbase/client";
 import { approach, LocalMotion, type MotionDot } from "./motion";
+import type { ZyncBaseSchema } from "./schema-types";
+import type { AppClient } from "./shared";
 import {
 	COUNTRY_CHUNK_HEIGHT,
 	COUNTRY_CHUNK_WIDTH,
@@ -146,7 +148,12 @@ export function subscriptionKey(grid: ChunkGrid, view: Viewport) {
 	return `${Math.floor(xMin / grid.width)},${Math.floor(xMax / grid.width)},${Math.floor(yMin / grid.height)},${Math.floor(yMax / grid.height)}`;
 }
 
-export type PendingUnlisten = Promise<ListenHandle>;
+export type PendingUnlisten = Promise<
+	ListenHandle<
+		ZyncBaseSchema,
+		["country_chunks", string] | ["user_chunks", string]
+	>
+>;
 export type ChunkSink = {
 	receive: (row: JsonValue) => void;
 	removed?: (index: number) => void;
@@ -184,7 +191,7 @@ export class ViewportSubscriptions {
 
 	constructor(
 		// Lazy: no client exists before admission, so updates no-op until one does.
-		private readonly store: () => ZyncBaseClient["store"] | undefined,
+		private readonly store: () => AppClient["store"] | undefined,
 		private readonly sinks: { country: ChunkSink; user: ChunkSink },
 	) {}
 
@@ -270,8 +277,8 @@ export class ViewportSubscriptions {
 	}
 
 	private syncChunks(
-		store: ZyncBaseClient["store"],
-		table: string,
+		store: AppClient["store"],
+		table: "country_chunks" | "user_chunks",
 		subs: Map<number, PendingUnlisten>,
 		sink: ChunkSink,
 		visible: Set<number>,
@@ -287,7 +294,11 @@ export class ViewportSubscriptions {
 			// Direct document listens: chunk ids are the store primary keys, so
 			// no secondary index or query-subscription group is needed per tile.
 			const key = index;
-			const unlisten = store.listen([table, String(index)], (row) => {
+			const path: ["country_chunks", string] | ["user_chunks", string] =
+				table === "country_chunks"
+					? ["country_chunks", String(index)]
+					: ["user_chunks", String(index)];
+			const unlisten = store.listen(path, (row) => {
 				if (!subs.has(key)) return;
 				if (row) sink.receive(row);
 				else sink.removed?.(key);
@@ -323,7 +334,7 @@ export function ownerAt(
 // Send one direction change. The action is retried only while `isCurrent`
 // still holds: a stale client or direction must not resurrect old input.
 export function sendPlayerMove(
-	client: ZyncBaseClient,
+	client: AppClient,
 	direction: Direction,
 	seq: number,
 	isCurrent: () => boolean,
@@ -342,7 +353,7 @@ export function sendPlayerMove(
 
 export type ViewSessionOptions = {
 	// Lazy: no client exists before admission.
-	store: () => ZyncBaseClient["store"] | undefined;
+	store: () => AppClient["store"] | undefined;
 	sinks: { country: ChunkSink; user: ChunkSink };
 	// Current viewport pixel size and zoom; update with setViewport on
 	// resize/zoom so the frame path never re-reads browser globals.
@@ -354,7 +365,7 @@ export type ViewSessionOptions = {
 	// Whether moves may be sent right now (online + joined + current client).
 	isOnline: () => boolean;
 	// Current client to send actions on; undefined when offline.
-	client: () => ZyncBaseClient | undefined;
+	client: () => AppClient | undefined;
 	// Called when a received dot confirms a real position change.
 	onConfirmed?: () => void;
 };
