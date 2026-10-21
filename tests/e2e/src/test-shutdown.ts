@@ -6,6 +6,10 @@ type Spawned = {
 	exitCode: number | null;
 	signalCode: string | null;
 	log: string;
+	/** When the server logged that it finished listening, or null. */
+	listeningAt: number | null;
+	/** When the process exit was observed. */
+	exitedAt: number;
 };
 
 type SpawnOptions = {
@@ -76,20 +80,31 @@ async function withSpawnedServer(
 	});
 	const reader = proc.stderr.getReader();
 	const decoder = new TextDecoder();
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	let listeningAt: number | null = null;
 	const drained = (async () => {
 		for (;;) {
 			const { value, done } = await reader.read();
 			if (done) return;
 			log += decoder.decode(value, { stream: true });
+			const now = Date.now();
 			if (log.includes(options.readyMarker)) markReady();
+			if (listeningAt === null && log.includes(READY_LISTENING)) {
+				listeningAt = now;
+			}
 		}
 	})();
 
-	// If the child dies before reaching the marker, fall through so the exit
-	// assertions report the real status instead of hanging on `ready`.
-	await Promise.race([ready, proc.exited]);
+	// Bound the readiness wait too: a server that hangs before logging the
+	// marker must not hang the suite. A child that dies early also satisfies
+	// this wait so the exit assertions can report the real status.
+	const readyOutcome = await withTimeout(
+		Promise.race([ready, proc.exited]).then(() => "ready" as const),
+		timeoutMs,
+	);
+	let timedOut = readyOutcome === "timeout";
 
-	if (proc.exitCode === null && proc.signalCode === null) {
+	if (!timedOut && proc.exitCode === null && proc.signalCode === null) {
 		try {
 			options.onReady(proc.pid);
 		} catch {
@@ -98,17 +113,28 @@ async function withSpawnedServer(
 		}
 	}
 
-	const outcome = await withTimeout(
-		proc.exited.then(() => "exited" as const),
-		options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-	);
-	if (outcome === "timeout") {
-		proc.kill("SIGKILL");
-		await proc.exited;
+	if (!timedOut) {
+		const exitOutcome = await withTimeout(
+			proc.exited.then(() => "exited" as const),
+			timeoutMs,
+		);
+		timedOut = exitOutcome === "timeout";
 	}
 
+	if (timedOut) {
+		proc.kill("SIGKILL");
+	}
+	await proc.exited;
+	const exitedAt = Date.now();
+
 	await drained;
-	return { exitCode: proc.exitCode, signalCode: proc.signalCode, log };
+	return {
+		exitCode: proc.exitCode,
+		signalCode: proc.signalCode,
+		log,
+		listeningAt,
+		exitedAt,
+	};
 }
 
 function assertGraceful(label: string, spawned: Spawned): void {
@@ -128,21 +154,21 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 	// A signal during startup is parked and replayed once the server is
 	// published. Before the loop-publish wakeup fix this took ~1 s (the uWS
 	// sweep timer tick); it must now be handled on the first loop iteration.
-	let signalSentAt = 0;
-	assertGraceful(
-		"SIGTERM during startup",
-		await withSpawnedServer(ctx, "shutdown-during-startup", {
-			readyMarker: READY_STARTUP,
-			onReady: (pid) => {
-				signalSentAt = Date.now();
-				process.kill(pid, "SIGTERM");
-			},
-		}),
-	);
-	const startupLatencyMs = Date.now() - signalSentAt;
-	if (startupLatencyMs > 500) {
+	const startup = await withSpawnedServer(ctx, "shutdown-during-startup", {
+		readyMarker: READY_STARTUP,
+		onReady: (pid) => process.kill(pid, "SIGTERM"),
+	});
+	assertGraceful("SIGTERM during startup", startup);
+
+	// Measure from loop-ready, not from the signal: remaining init work is not
+	// part of the wakeup path and would make this fail on a slow machine.
+	if (startup.listeningAt === null) {
+		throw new Error(`server never reported listening\n${startup.log}`);
+	}
+	const wakeupLatencyMs = startup.exitedAt - startup.listeningAt;
+	if (wakeupLatencyMs > 500) {
 		throw new Error(
-			`SIGTERM during startup took ${startupLatencyMs}ms to exit; the loop wakeup was likely missed`,
+			`SIGTERM during startup took ${wakeupLatencyMs}ms from listen to exit; the loop wakeup was likely missed`,
 		);
 	}
 
