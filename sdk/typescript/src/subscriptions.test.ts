@@ -302,6 +302,82 @@ describe("SubscriptionTracker - field projection delivery", () => {
 
 		expect(snapshots).toHaveLength(0);
 	});
+
+	test("callback mutation of a delivered object cannot poison suppression", () => {
+		const tracker = new SubscriptionTracker();
+		const seen: Array<[JsonValue, JsonValue]> = [];
+
+		tracker.register(305, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [
+				(value) => {
+					const address = value as Record<string, JsonValue>;
+					seen.push([address.city, address.tier]);
+					address.tier = 999; // mutate the delivered value after delivery
+				},
+			],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		const push = (address: JsonValue) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 305,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, updated_at: 0 },
+					},
+				],
+			});
+
+		push({ city: "London", tier: 1 });
+		push({ city: "London", tier: 1 }); // equal server content: suppressed
+		expect(seen).toHaveLength(1);
+
+		push({ city: "London", tier: 999 }); // genuine change: delivered
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toEqual(["London", 999]);
+	});
+
+	test("callback mutation of delivered bytes cannot poison suppression", () => {
+		const tracker = new SubscriptionTracker();
+		const seen: JsonValue[] = [];
+
+		tracker.register(306, {
+			params: { type: "StoreSubscribe", table_index: "chunks" },
+			callbacks: [
+				(value) => {
+					const coordinates = value as Uint8Array;
+					seen.push(new Uint8Array(coordinates));
+					coordinates[0] = 9; // mutate the delivered value after delivery
+				},
+			],
+			projection: createListenProjection(["chunks", "c1", "coordinates"]),
+		});
+
+		const push = (bytes: number[]) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 306,
+				ops: [
+					{
+						op: "set",
+						path: ["chunks", "c1"],
+						value: { id: "c1", coordinates: new Uint8Array(bytes) },
+					},
+				],
+			});
+
+		push([1, 2, 3]);
+		push([1, 2, 3]); // equal server content: suppressed
+		expect(seen).toHaveLength(1);
+
+		push([9, 2, 3]); // genuine change: delivered
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toEqual(new Uint8Array([9, 2, 3]));
+	});
 });
 
 function flushTick(): Promise<void> {

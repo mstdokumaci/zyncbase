@@ -301,7 +301,10 @@ export class SubscriptionTracker {
 			);
 		}
 
-		entry.lastValue = value;
+		// Suppression compares against lastValue; keep an isolated copy so a
+		// callback mutating the delivered value cannot corrupt the baseline.
+		entry.lastValue =
+			entry.projection?.field != null ? cloneValue(value) : value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -398,6 +401,22 @@ function valuesEqual(a: JsonValue, b: JsonValue): boolean {
 	if (Array.isArray(a)) return arraysEqual(a, b);
 	if (!isPlainRecord(a) || !isPlainRecord(b)) return false;
 	return recordsEqual(a, b);
+}
+
+/** Isolated copy for the suppression baseline; primitives return as-is. */
+function cloneValue(value: JsonValue): JsonValue {
+	if (Array.isArray(value)) {
+		const copy: JsonValue[] = new Array(value.length);
+		for (let i = 0; i < value.length; i += 1) copy[i] = cloneValue(value[i]);
+		return copy;
+	}
+	if (value instanceof Uint8Array) return value.slice();
+	if (isPlainRecord(value)) {
+		const copy: Record<string, JsonValue> = {};
+		for (const key in value) copy[key] = cloneValue(value[key]);
+		return copy;
+	}
+	return value;
 }
 
 function bytesEqual(a: Uint8Array, b: JsonValue): boolean {
