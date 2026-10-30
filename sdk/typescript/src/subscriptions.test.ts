@@ -3,6 +3,7 @@ import * as fc from "fast-check";
 import {
 	createCreatedAtComparator,
 	createInitialSnapshotDelta,
+	createListenProjection,
 	SubscriptionTracker,
 } from "./subscriptions";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types";
@@ -192,6 +193,222 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		await flushTick();
 
 		expect(snapshots).toEqual([[{ id: "u1", address: { city: "NYC" } }]]);
+	});
+});
+
+describe("SubscriptionTracker - field projection delivery", () => {
+	test("object projection suppresses sibling-field and system-column updates", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(301, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		const push = (address: JsonValue, score: number, updatedAt: number) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 301,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, score, updated_at: updatedAt },
+					},
+				],
+			});
+
+		push({ city: "London" }, 1, 100);
+		push({ city: "London" }, 2, 200); // sibling + system change only
+		push({ city: "London" }, 2, 300); // system change only
+		push({ city: "Paris" }, 2, 400); // projected change
+
+		expect(values).toEqual([{ city: "London" }, { city: "Paris" }]);
+	});
+
+	test("scalar projection suppresses deliveries with an unchanged value", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(302, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "name"]),
+		});
+
+		const push = (name: string, score: number) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 302,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", name, score, updated_at: score },
+					},
+				],
+			});
+
+		push("Alice", 1);
+		push("Alice", 2);
+		push("Bob", 3);
+
+		expect(values).toEqual(["Alice", "Bob"]);
+	});
+
+	test("document-level listen delivers every pushed record", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(303, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1"]),
+		});
+
+		const record = { id: "u1", name: "Alice", updated_at: 100 };
+		const push = (value: JsonValue) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 303,
+				ops: [{ op: "set", path: ["users", "u1"], value }],
+			});
+
+		push(record);
+		push({ ...record }); // deep-equal record still delivered at document depth
+
+		expect(values).toHaveLength(2);
+	});
+
+	test("removing an absent record does not deliver", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+
+		registerView(
+			tracker,
+			304,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 304,
+			ops: [{ op: "remove", path: ["items", "missing"] }],
+		});
+		await flushTick();
+
+		expect(snapshots).toHaveLength(0);
+	});
+
+	test("callback mutation of a delivered object cannot poison suppression", () => {
+		const tracker = new SubscriptionTracker();
+		const seen: Array<[JsonValue, JsonValue]> = [];
+
+		tracker.register(305, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [
+				(value) => {
+					const address = value as Record<string, JsonValue>;
+					seen.push([address.city, address.tier]);
+					address.tier = 999; // mutate the delivered value after delivery
+				},
+			],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		const push = (address: JsonValue) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 305,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, updated_at: 0 },
+					},
+				],
+			});
+
+		push({ city: "London", tier: 1 });
+		push({ city: "London", tier: 1 }); // equal server content: suppressed
+		expect(seen).toHaveLength(1);
+
+		push({ city: "London", tier: 999 }); // genuine change: delivered
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toEqual(["London", 999]);
+	});
+
+	test("callback mutation of delivered bytes cannot poison suppression", () => {
+		const tracker = new SubscriptionTracker();
+		const seen: JsonValue[] = [];
+
+		tracker.register(306, {
+			params: { type: "StoreSubscribe", table_index: "chunks" },
+			callbacks: [
+				(value) => {
+					const coordinates = value as Uint8Array;
+					seen.push(new Uint8Array(coordinates));
+					coordinates[0] = 9; // mutate the delivered value after delivery
+				},
+			],
+			projection: createListenProjection(["chunks", "c1", "coordinates"]),
+		});
+
+		const push = (bytes: number[]) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 306,
+				ops: [
+					{
+						op: "set",
+						path: ["chunks", "c1"],
+						value: { id: "c1", coordinates: new Uint8Array(bytes) },
+					},
+				],
+			});
+
+		push([1, 2, 3]);
+		push([1, 2, 3]); // equal server content: suppressed
+		expect(seen).toHaveLength(1);
+
+		push([9, 2, 3]); // genuine change: delivered
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toEqual(new Uint8Array([9, 2, 3]));
+	});
+
+	test("own __proto__ keys survive the suppression baseline clone", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(307, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		// JSON.parse creates an own "__proto__" property (not a prototype).
+		const address = JSON.parse(
+			'{"city":"London","__proto__":{"x":1}}',
+		) as JsonValue;
+		const push = () =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 307,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, updated_at: 0 },
+					},
+				],
+			});
+
+		push();
+		push(); // equal server content: suppressed
+		expect(values).toHaveLength(1);
 	});
 });
 

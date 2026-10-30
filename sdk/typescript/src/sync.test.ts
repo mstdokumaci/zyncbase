@@ -5,6 +5,7 @@ import { type StoreConnection, StoreImpl } from "./store";
 import { SubscriptionTracker } from "./subscriptions";
 import type {
 	InboundMessage,
+	JsonValue,
 	LifecycleEvent,
 	OkResponse,
 	StoreDelta,
@@ -72,6 +73,64 @@ describe("Store Synchronization Integration", () => {
 		});
 		expect(callCount).toBe(2);
 		expect((lastValue as Record<string, unknown>).title).toBe("Live Update");
+
+		await handle.unlisten();
+	});
+
+	test("getSnapshot value is isolated from the suppression baseline", async () => {
+		const tracker = new SubscriptionTracker();
+		let capturedDeltaHandler: ((delta: StoreDelta) => void) | null = null;
+
+		const mockConn = makeConn(
+			async (msg) => {
+				const m = msg as Record<string, unknown>;
+				if (m.type === "StoreSubscribe") {
+					return {
+						type: "ok",
+						id: m.id,
+						subId: 102,
+						value: [{ id: "1", meta: { flag: false }, updated_at: 1 }],
+					} as unknown as OkResponse;
+				}
+				return { type: "ok", id: m.id } as unknown as OkResponse;
+			},
+			(handler) => {
+				capturedDeltaHandler = handler;
+			},
+		);
+
+		const store = new StoreImpl(mockConn, tracker);
+		void store.markSessionReady();
+		mockConn.onDelta((delta) => tracker.dispatch(delta));
+
+		let callCount = 0;
+		const handle = await store.listen(["tasks", "1", "meta"], () => {
+			callCount++;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(callCount).toBe(1);
+
+		const snapshot = handle.getSnapshot() as Record<string, JsonValue>;
+		snapshot.flag = true; // caller mutation must not poison suppression
+
+		const push = (flag: boolean, updatedAt: number) =>
+			capturedDeltaHandler?.({
+				type: "StoreDelta",
+				subId: 102,
+				ops: [
+					{
+						op: "set",
+						path: ["tasks", "1"],
+						value: { id: "1", meta: { flag }, updated_at: updatedAt },
+					},
+				],
+			});
+
+		push(false, 2);
+		expect(callCount).toBe(1); // equal projected value: suppressed
+
+		push(true, 3);
+		expect(callCount).toBe(2); // genuine change: delivered
 
 		await handle.unlisten();
 	});

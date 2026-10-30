@@ -351,8 +351,8 @@ export class StoreImpl {
 			if (entry) {
 				settle(() => {
 					resolve(makeHandle());
-					if (entry.lastValue === undefined) return;
-					const value = entry.lastValue;
+					if (entry.deliveredValue === undefined) return;
+					const value = entry.deliveredValue;
 					// Fire on a microtask: a caller's synchronous tail
 					// (storing the handle) must run first, or a delivery
 					// guard keyed on that store drops the snapshot.
@@ -599,7 +599,7 @@ export class StoreImpl {
 
 	private snapshotOf(state: RegistrationKey): JsonValue | undefined {
 		if (state.subId === null) return undefined;
-		return this.tracker.get(state.subId)?.lastValue;
+		return this.tracker.get(state.subId)?.deliveredValue;
 	}
 
 	/**

@@ -132,7 +132,7 @@ const current = getSnapshot()
 - `unlisten(): Promise<void>` — detaches this consumer; its callback stops firing immediately ([teardown contract](#teardown-and-the-grace-window)).
 - `getSnapshot(): JsonValue | undefined` — last value delivered to callbacks for this path ([snapshot contract](#snapshots)).
 
-The callback delivers the initial value and subsequent updates.
+The callback delivers the initial value and each change to the observed value. For a field path, a delta that leaves the projected value deep-equal — for example a write to a sibling field of the listened document — is not delivered. Document-level listens deliver each updated record.
 
 ---
 
@@ -278,6 +278,8 @@ Each handle exposes `getSnapshot()`: a synchronous read of current state, shared
 
 - `listen`: the last delivered value (array/object/scalar by path depth), `undefined` before the first.
 - `subscribe`: the current sorted result array.
+
+Snapshots are new arrays per delivery; unchanged records keep their previous object reference, so consumers can use reference equality to skip work.
 
 Snapshots are read-only. Between deltas, repeated reads return the same state; `getSnapshot` never performs I/O and never rejects.
 
