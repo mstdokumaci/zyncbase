@@ -160,9 +160,12 @@ export class SubscriptionTracker {
 		deltas: StoreDelta[],
 	): void {
 		if (!entry.materializedView) return;
+		let changed = false;
 		for (const delta of deltas) {
-			this._applyOpsToView(entry.materializedView, delta.ops);
+			changed =
+				this._applyOpsToView(entry.materializedView, delta.ops) || changed;
 		}
+		if (!changed) return;
 		const value = this._snapshotView(entry.materializedView);
 		entry.lastValue = value;
 		for (const cb of entry.callbacks) {
@@ -279,6 +282,18 @@ export class SubscriptionTracker {
 			value = this._project(delta, entry.projection);
 		}
 
+		// Field projections extract one value out of each whole pushed record;
+		// sibling or system-field writes must not re-fire them. Scalars compare
+		// by identity, objects by content. Document-level listens keep baseline
+		// semantics: an updated record is delivered.
+		if (
+			entry.projection?.field != null &&
+			entry.lastValue !== undefined &&
+			valuesEqual(value, entry.lastValue)
+		) {
+			return;
+		}
+
 		if (this.debug) {
 			console.log(
 				`[SDK] Dispatching delta to listener (subId=${delta.subId}):`,
@@ -346,19 +361,23 @@ export class SubscriptionTracker {
 	/**
 	 * Apply delta ops to a materialized view.
 	 * Root values arrive as fully decoded records ready for storage.
+	 * Returns false when the ops changed nothing.
 	 */
 	private _applyOpsToView(
 		view: MaterializedView,
 		ops: StoreDelta["ops"],
-	): void {
+	): boolean {
+		let changed = false;
 		for (const op of ops) {
 			const id = op.path[1] as string;
 			if (op.op === "set") {
 				view.records.set(id, op.value);
-			} else if (op.op === "remove") {
-				view.records.delete(id);
+				changed = true;
+			} else if (view.records.delete(id)) {
+				changed = true;
 			}
 		}
+		return changed;
 	}
 
 	/**
@@ -369,6 +388,53 @@ export class SubscriptionTracker {
 		records.sort(view.comparator);
 		return records;
 	}
+}
+
+/** Deep equality where arrays and bytes are whole values. */
+function valuesEqual(a: JsonValue, b: JsonValue): boolean {
+	if (a === b) return true;
+	if (typeof a !== typeof b || a === null || b === null) return false;
+	if (a instanceof Uint8Array) return bytesEqual(a, b);
+	if (Array.isArray(a)) return arraysEqual(a, b);
+	if (!isPlainRecord(a) || !isPlainRecord(b)) return false;
+	return recordsEqual(a, b);
+}
+
+function bytesEqual(a: Uint8Array, b: JsonValue): boolean {
+	if (!(b instanceof Uint8Array) || a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+function arraysEqual(a: JsonValue[], b: JsonValue): boolean {
+	if (!Array.isArray(b) || a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (!valuesEqual(a[i], b[i])) return false;
+	}
+	return true;
+}
+
+function recordsEqual(a: Record<string, JsonValue>, b: JsonValue): boolean {
+	if (!isPlainRecord(b)) return false;
+	const keys = Object.keys(a);
+	if (keys.length !== Object.keys(b).length) return false;
+	for (const key of keys) {
+		if (!Object.hasOwn(b, key) || !valuesEqual(a[key], b[key])) return false;
+	}
+	return true;
+}
+
+function isPlainRecord(
+	value: JsonValue | undefined,
+): value is Record<string, JsonValue> {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		!(value instanceof Uint8Array)
+	);
 }
 
 /**

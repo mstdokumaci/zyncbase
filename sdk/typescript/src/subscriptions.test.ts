@@ -3,6 +3,7 @@ import * as fc from "fast-check";
 import {
 	createCreatedAtComparator,
 	createInitialSnapshotDelta,
+	createListenProjection,
 	SubscriptionTracker,
 } from "./subscriptions";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types";
@@ -192,6 +193,114 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		await flushTick();
 
 		expect(snapshots).toEqual([[{ id: "u1", address: { city: "NYC" } }]]);
+	});
+});
+
+describe("SubscriptionTracker - field projection delivery", () => {
+	test("object projection suppresses sibling-field and system-column updates", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(301, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		const push = (address: JsonValue, score: number, updatedAt: number) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 301,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, score, updated_at: updatedAt },
+					},
+				],
+			});
+
+		push({ city: "London" }, 1, 100);
+		push({ city: "London" }, 2, 200); // sibling + system change only
+		push({ city: "London" }, 2, 300); // system change only
+		push({ city: "Paris" }, 2, 400); // projected change
+
+		expect(values).toEqual([{ city: "London" }, { city: "Paris" }]);
+	});
+
+	test("scalar projection suppresses deliveries with an unchanged value", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(302, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "name"]),
+		});
+
+		const push = (name: string, score: number) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 302,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", name, score, updated_at: score },
+					},
+				],
+			});
+
+		push("Alice", 1);
+		push("Alice", 2);
+		push("Bob", 3);
+
+		expect(values).toEqual(["Alice", "Bob"]);
+	});
+
+	test("document-level listen delivers every pushed record", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(303, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1"]),
+		});
+
+		const record = { id: "u1", name: "Alice", updated_at: 100 };
+		const push = (value: JsonValue) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 303,
+				ops: [{ op: "set", path: ["users", "u1"], value }],
+			});
+
+		push(record);
+		push({ ...record }); // deep-equal record still delivered at document depth
+
+		expect(values).toHaveLength(2);
+	});
+
+	test("removing an absent record does not deliver", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+
+		registerView(
+			tracker,
+			304,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 304,
+			ops: [{ op: "remove", path: ["items", "missing"] }],
+		});
+		await flushTick();
+
+		expect(snapshots).toHaveLength(0);
 	});
 });
 
