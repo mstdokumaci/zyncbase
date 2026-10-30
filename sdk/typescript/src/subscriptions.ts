@@ -29,8 +29,10 @@ export interface SubscriptionEntry {
 	materializedView?: MaterializedView;
 	/** Updates the caller's handle when a reconnect remaps the server subId. */
 	onRemap?: (newSubId: number) => void;
-	/** Last value delivered to callbacks — what `getSnapshot()` returns. */
+	/** Private suppression baseline: an isolated copy of the last value. */
 	lastValue?: JsonValue;
+	/** Last value delivered to callbacks — what `getSnapshot()` returns. */
+	deliveredValue?: JsonValue;
 }
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
@@ -168,6 +170,7 @@ export class SubscriptionTracker {
 		if (!changed) return;
 		const value = this._snapshotView(entry.materializedView);
 		entry.lastValue = value;
+		entry.deliveredValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -305,6 +308,7 @@ export class SubscriptionTracker {
 		// callback mutating the delivered value cannot corrupt the baseline.
 		entry.lastValue =
 			entry.projection?.field != null ? cloneValue(value) : value;
+		entry.deliveredValue = value;
 		for (const cb of entry.callbacks) {
 			try {
 				cb(value);
@@ -412,8 +416,10 @@ function cloneValue(value: JsonValue): JsonValue {
 	}
 	if (value instanceof Uint8Array) return value.slice();
 	if (isPlainRecord(value)) {
-		const copy: Record<string, JsonValue> = {};
-		for (const key in value) copy[key] = cloneValue(value[key]);
+		// Null prototype keeps an own `__proto__` field an ordinary key
+		// instead of tripping the Object.prototype setter.
+		const copy = Object.create(null) as Record<string, JsonValue>;
+		for (const key of Object.keys(value)) copy[key] = cloneValue(value[key]);
 		return copy;
 	}
 	return value;

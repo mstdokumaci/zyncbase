@@ -378,6 +378,38 @@ describe("SubscriptionTracker - field projection delivery", () => {
 		expect(seen).toHaveLength(2);
 		expect(seen[1]).toEqual(new Uint8Array([9, 2, 3]));
 	});
+
+	test("own __proto__ keys survive the suppression baseline clone", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(307, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "address"]),
+		});
+
+		// JSON.parse creates an own "__proto__" property (not a prototype).
+		const address = JSON.parse(
+			'{"city":"London","__proto__":{"x":1}}',
+		) as JsonValue;
+		const push = () =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 307,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address, updated_at: 0 },
+					},
+				],
+			});
+
+		push();
+		push(); // equal server content: suppressed
+		expect(values).toHaveLength(1);
+	});
 });
 
 function flushTick(): Promise<void> {
