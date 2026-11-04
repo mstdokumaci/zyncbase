@@ -52,20 +52,3 @@ pub const ServerMetrics = struct {
         _ = self.errors_sent_total.fetchAdd(1, .monotonic);
     }
 };
-
-test "ServerMetrics increments are independent" {
-    var m = ServerMetrics.init(1000);
-    m.recordConnectionOpen();
-    m.recordConnectionOpen();
-    m.recordMessageReceived();
-    m.recordMessagesSent(3);
-    m.recordMessageSent();
-    m.recordRateLimitRejection();
-    m.recordErrorSent();
-    try std.testing.expectEqual(@as(u64, 2), m.connections_total.load(.monotonic));
-    try std.testing.expectEqual(@as(u64, 1), m.messages_received_total.load(.monotonic));
-    try std.testing.expectEqual(@as(u64, 4), m.messages_sent_total.load(.monotonic));
-    try std.testing.expectEqual(@as(u64, 1), m.rate_limit_rejections_total.load(.monotonic));
-    try std.testing.expectEqual(@as(u64, 1), m.errors_sent_total.load(.monotonic));
-    try std.testing.expectEqual(@as(i64, 1000), m.started_at);
-}

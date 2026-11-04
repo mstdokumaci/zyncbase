@@ -15,6 +15,12 @@ type Stats = {
 	};
 };
 
+async function readStats(port: number): Promise<Stats> {
+	const res = await fetch(`http://127.0.0.1:${port}/stats`);
+	expect(res.status).toBe(200);
+	return (await res.json()) as Stats;
+}
+
 export async function run(port: number): Promise<void> {
 	// 1. Test /health endpoint
 	const healthRes = await fetch(`http://127.0.0.1:${port}/health`);
@@ -54,9 +60,7 @@ export async function run(port: number): Promise<void> {
 	// Wait briefly for server state to update
 	await new Promise((r) => setTimeout(r, 100));
 
-	const statsRes2 = await fetch(`http://127.0.0.1:${port}/stats`);
-	expect(statsRes2.status).toBe(200);
-	const stats2 = (await statsRes2.json()) as Stats;
+	const stats2 = await readStats(port);
 
 	expect(stats2.connections.total).toBeGreaterThanOrEqual(initialTotal + 1);
 	expect(stats2.connections.active).toBeGreaterThanOrEqual(1);
@@ -64,11 +68,12 @@ export async function run(port: number): Promise<void> {
 
 	await client.close();
 
-	// Wait briefly for disconnect to process
-	await new Promise((r) => setTimeout(r, 100));
-
-	const statsRes3 = await fetch(`http://127.0.0.1:${port}/stats`);
-	expect(statsRes3.status).toBe(200);
-	const stats3 = (await statsRes3.json()) as Stats;
+	// Poll until the close callback is processed instead of assuming a delay.
+	const deadline = Date.now() + 2_000;
+	let stats3 = await readStats(port);
+	while (stats3.connections.active !== 0 && Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, 25));
+		stats3 = await readStats(port);
+	}
 	expect(stats3.connections.active).toBe(0);
 }

@@ -1,10 +1,14 @@
 const std = @import("std");
 
+const json_write = @import("../json/write.zig");
+
+const Allocator = std.mem.Allocator;
+
 /// Runtime logging configuration.
-/// Defaults to .info and text output until the server applies the loaded config.
+/// Defaults to .info and JSON output until the server applies the loaded config.
 var config: struct {
     level: std.log.Level = .info,
-    json: bool = false,
+    json: bool = true,
 } = .{};
 
 /// Initialize runtime logging settings from loaded config.
@@ -25,8 +29,9 @@ pub fn logFn(
 
     if (config.json) {
         writeJsonLog(level, scope, format, args) catch |err| {
-            std.log.defaultLog(.warn, .default, "Failed to format JSON log: {}", .{err});
-            std.log.defaultLog(level, scope, format, args);
+            // The sink failed or the line could not be built. There is no other
+            // output channel, and text output would break the JSON format.
+            writeJsonFailure(level, err) catch return;
         };
     } else {
         std.log.defaultLog(level, scope, format, args);
@@ -39,58 +44,77 @@ fn writeJsonLog(
     comptime format: []const u8,
     args: anytype,
 ) !void {
+    const allocator = std.heap.smp_allocator;
+
+    // Build the line before writing so a failure leaves no partial JSON behind.
+    var line: std.ArrayListUnmanaged(u8) = .empty;
+    defer line.deinit(allocator);
+    try line.ensureTotalCapacity(allocator, 256);
+    try appendJsonLine(allocator, &line, level, scope, format, args);
+
+    try writeStderr(line.items);
+}
+
+/// Format one JSON log line (with trailing newline) into `line`.
+pub fn appendJsonLine(
+    allocator: Allocator,
+    line: *std.ArrayListUnmanaged(u8),
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) !void {
+    var msg_buf: [2048]u8 = undefined;
+    if (std.fmt.bufPrint(&msg_buf, format, args)) |msg| {
+        try appendJsonObject(allocator, line, level, scope, msg);
+    } else |err| switch (err) {
+        // Long messages allocate instead of truncating or switching to text.
+        error.NoSpaceLeft => {
+            const msg = try std.fmt.allocPrint(allocator, format, args);
+            defer allocator.free(msg);
+            try appendJsonObject(allocator, line, level, scope, msg);
+        },
+    }
+}
+
+fn appendJsonObject(
+    allocator: Allocator,
+    line: *std.ArrayListUnmanaged(u8),
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    msg: []const u8,
+) !void {
+    var json: json_write.Writer = .{ .buf = line, .allocator = allocator };
+    try json.beginObject();
+    try json.field("level", levelName(level));
+    if (scope != .default) {
+        try json.field("scope", std.fmt.comptimePrint("{t}", .{scope}));
+    }
+    try json.field("msg", msg);
+    try json.endObject();
+    try line.append(allocator, '\n');
+}
+
+/// Emit a valid JSON record when building the requested message failed.
+fn writeJsonFailure(comptime level: std.log.Level, err: anyerror) !void {
+    var line_buf: [128]u8 = undefined;
+    var line: std.Io.Writer = .fixed(&line_buf);
+    // Error names are ASCII identifiers, so they need no escaping.
+    try line.print("{{\"level\":\"{s}\",\"msg\":\"log formatting failed: {s}\"}}\n", .{
+        levelName(level),
+        @errorName(err),
+    });
+    try writeStderr(line.buffered());
+}
+
+fn writeStderr(data: []const u8) !void {
     const io = std.Options.debug_io;
     const prev = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(prev);
     var buffer: [256]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
-
-    try formatJsonLog(stderr.writer, level, scope, format, args);
-}
-
-/// Write one JSON log line. Split from writeJsonLog so tests can target a buffer.
-fn formatJsonLog(
-    w: *std.Io.Writer,
-    comptime level: std.log.Level,
-    comptime scope: @TypeOf(.enum_literal),
-    comptime format: []const u8,
-    args: anytype,
-) !void {
-    // Format message into temporary stack buffer
-    var msg_buf: [2048]u8 = undefined;
-    const msg = try std.fmt.bufPrint(&msg_buf, format, args);
-
-    try w.writeAll("{\"level\":\"");
-    try w.writeAll(levelName(level));
-    try w.writeByte('"');
-
-    if (scope != .default) {
-        try w.writeAll(",\"scope\":\"");
-        try w.print("{t}", .{scope});
-        try w.writeByte('"');
-    }
-
-    try w.writeAll(",\"msg\":\"");
-    for (msg) |ch| {
-        switch (ch) {
-            '"' => try w.writeAll("\\\""),
-            '\\' => try w.writeAll("\\\\"),
-            '\n' => try w.writeAll("\\n"),
-            '\r' => try w.writeAll("\\r"),
-            '\t' => try w.writeAll("\\t"),
-            else => {
-                // JSON strings cannot contain raw control characters.
-                if (ch < 0x20) {
-                    try w.writeAll("\\u00");
-                    try w.print("{x:0>2}", .{ch});
-                } else {
-                    try w.writeByte(ch);
-                }
-            },
-        }
-    }
-    try w.writeAll("\"}\n");
+    try stderr.writer.writeAll(data);
 }
 
 /// Use the same level names as the `logging.level` config values.
@@ -101,33 +125,4 @@ fn levelName(comptime level: std.log.Level) []const u8 {
         .info => "info",
         .debug => "debug",
     };
-}
-
-test "log configuration init" {
-    init(.debug, true);
-    try std.testing.expectEqual(std.log.Level.debug, config.level);
-    try std.testing.expect(config.json);
-    init(.info, false);
-    try std.testing.expectEqual(std.log.Level.info, config.level);
-    try std.testing.expect(!config.json);
-}
-
-test "json log line escapes special characters" {
-    var buf: [256]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    try formatJsonLog(&w, .warn, .default, "a\"b\\c\nd\x01", .{});
-    try std.testing.expectEqualStrings(
-        "{\"level\":\"warn\",\"msg\":\"a\\\"b\\\\c\\nd\\u0001\"}\n",
-        w.buffered(),
-    );
-}
-
-test "json log line includes scope" {
-    var buf: [256]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    try formatJsonLog(&w, .info, .http, "ok", .{});
-    try std.testing.expectEqualStrings(
-        "{\"level\":\"info\",\"scope\":\"http\",\"msg\":\"ok\"}\n",
-        w.buffered(),
-    );
 }

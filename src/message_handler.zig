@@ -322,7 +322,6 @@ pub const MessageHandler = struct {
     }
 
     pub fn sendError(self: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire_errors.WireError) !void {
-        if (self.metrics) |m| m.recordErrorSent();
         const error_msg = try wire_encode.encodeError(allocator, msg_id, wire_err);
         defer allocator.free(error_msg);
         conn.send(error_msg) catch |err| {
@@ -330,7 +329,10 @@ pub const MessageHandler = struct {
             self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
             return;
         };
-        if (self.metrics) |m| m.recordMessageSent();
+        if (self.metrics) |m| {
+            m.recordErrorSent();
+            m.recordMessageSent();
+        }
     }
 
     /// Snapshot the connection's identity and scope facts for one request.
