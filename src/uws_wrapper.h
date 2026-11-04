@@ -112,6 +112,7 @@ typedef void (*uws_http_handler)(uws_res_t *res, uws_req_t *req, void *user_data
 typedef void (*uws_res_data_handler)(uws_res_t *res, const char *chunk, size_t chunk_length, int is_last, void *user_data);
 typedef void (*uws_res_aborted_handler)(void *user_data);
 
+void uws_app_get(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data);
 void uws_app_post(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data);
 void uws_res_write_status(int ssl, uws_res_t *res, const char *status, size_t status_length);
 void uws_res_write_header(int ssl, uws_res_t *res, const char *key, size_t key_length, const char *value, size_t value_length);

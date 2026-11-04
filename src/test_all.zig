@@ -88,6 +88,8 @@ test {
     _ = @import("logging_test.zig");
     _ = @import("migration_detector_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
+    _ = @import("observability/metrics.zig");
+    _ = @import("observability/log.zig");
 
     // Integration tests
     _ = @import("integration_wiring_test.zig");

@@ -8,6 +8,8 @@ const session_resolver = @import("authorization/session_resolver.zig");
 const authorization_types = @import("authorization/types.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
+const http_handlers = @import("observability/http_handlers.zig");
+const observability_log = @import("observability/log.zig");
 const schema_parse = @import("schema/parse.zig");
 const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
@@ -24,6 +26,7 @@ const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
+const ServerMetrics = @import("observability/metrics.zig").ServerMetrics;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceService = @import("presence/service.zig").PresenceService;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
@@ -83,6 +86,8 @@ pub const ZyncBaseServer = struct {
     actions_service: ActionsService,
     send_queue: send_queue_type,
     message_handler: MessageHandler,
+    server_metrics: ServerMetrics,
+    http_context: http_handlers.HttpContext,
     shutdown_requested: std.atomic.Value(bool),
     wakeup_pending: std.atomic.Value(bool),
     schema: Schema,
@@ -116,6 +121,7 @@ pub const ZyncBaseServer = struct {
         self.io = io;
         self.environ = environ;
         self.allocator = allocator;
+        self.server_metrics = ServerMetrics.init(std.Io.Clock.real.now(io).toSeconds());
 
         try self.memory_strategy.initWithAllocator(allocator);
         errdefer self.memory_strategy.deinit();
@@ -124,6 +130,14 @@ pub const ZyncBaseServer = struct {
         // Auth consumers retain pointers into this configuration after init returns.
         const config = &self.config;
         errdefer config.deinit();
+
+        // Apply logging before any subsystem logs or spawns worker threads.
+        observability_log.init(switch (config.logging.level) {
+            .debug => .debug,
+            .info => .info,
+            .warn => .warn,
+            .@"error" => .err,
+        }, config.logging.format == .json);
 
         // Initialize violation tracker
         std.log.debug("Initializing violation tracker", .{});
@@ -239,6 +253,14 @@ pub const ZyncBaseServer = struct {
             self.ticket_exchange = null;
         };
         self.websocket_server.verify_ticket_cb = verifyTicketCallback;
+
+        self.http_context = .{
+            .ssl = self.websocket_server.ssl,
+            .io = self.io,
+            .metrics = &self.server_metrics,
+            .active_connection_count = &self.connection_manager.active_connection_count,
+            .checkpoint_worker = &self.checkpoint_manager,
+        };
 
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
@@ -405,6 +427,7 @@ pub const ZyncBaseServer = struct {
             if (self.jwt_validator) |*jv| jv else null,
             &config.authentication.session.claims,
         );
+        self.message_handler.setMetrics(&self.server_metrics);
     }
 
     fn initConnectionManagerInternal(self: *ZyncBaseServer, config: *const Config) !void {
@@ -418,6 +441,7 @@ pub const ZyncBaseServer = struct {
             config.security.max_connections,
             config.authentication.session.token_grace_period_seconds,
         );
+        self.connection_manager.setMetrics(&self.server_metrics);
         self.connection_manager.setLastConnectionNotifier(.{ .callback = lastConnectionClosed, .ctx = self });
     }
 
@@ -570,6 +594,10 @@ pub const ZyncBaseServer = struct {
         if (self.ticket_exchange) |te| {
             self.websocket_server.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
         }
+
+        // Register HTTP GET observability routes
+        self.websocket_server.get("/health", &self.http_context, http_handlers.handleHealth);
+        self.websocket_server.get("/stats", &self.http_context, http_handlers.handleStats);
 
         // Register WebSocket handlers with server as user data
         self.websocket_server.registerWebSocketHandlers(

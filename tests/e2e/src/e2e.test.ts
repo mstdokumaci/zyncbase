@@ -18,6 +18,7 @@ import { run as runBatch } from "./test-batch";
 import { run as runComboStress } from "./test-combo-stress";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
+import { run as runObservability } from "./test-observability";
 import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
 import { run as runPresenceStress } from "./test-presence-stress";
@@ -61,6 +62,23 @@ describe("ZyncBase E2E", () => {
 				);
 			},
 		);
+	});
+
+	test("HTTP observability endpoints (/health, /stats)", async () => {
+		await runE2ETest("Observability endpoints", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-sync.json"),
+					dataDir: ctx.dataPath("observability"),
+					configName: "zyncbase-config-observability.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+				},
+				async ({ port }) => {
+					await runObservability(port);
+				},
+			);
+		});
 	});
 
 	test("persistence survives server restart", async () => {

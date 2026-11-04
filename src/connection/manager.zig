@@ -5,6 +5,7 @@ const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
+const ServerMetrics = @import("../observability/metrics.zig").ServerMetrics;
 const Schema = @import("../schema/types.zig").Schema;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
@@ -64,6 +65,12 @@ pub const ConnectionManager = struct {
     /// Arena for temporary allocations during drainSendQueue grouping.
     drain_arena: std.heap.ArenaAllocator,
 
+    metrics: ?*ServerMetrics = null,
+
+    pub fn setMetrics(self: *ConnectionManager, metrics: ?*ServerMetrics) void {
+        self.metrics = metrics;
+    }
+
     pub fn init(
         self: *ConnectionManager,
         io: std.Io,
@@ -88,6 +95,7 @@ pub const ConnectionManager = struct {
             .schema_sync_msg = schema_sync_msg,
             .token_grace_period_seconds = token_grace_period_seconds,
             .drain_arena = std.heap.ArenaAllocator.init(allocator),
+            .metrics = null,
         };
     }
 
@@ -135,7 +143,7 @@ pub const ConnectionManager = struct {
         if (self.map.count() >= self.max_connections) {
             std.log.warn("Rejecting connection {}: limit reached", .{conn_id});
             sess.deinit(self.allocator);
-            sendDisconnectAndEnd(ws, self.allocator, "MAX_CONNECTIONS", "Server connection limit reached.", 4005);
+            sendDisconnectAndEnd(ws, self.allocator, "MAX_CONNECTIONS", "Server connection limit reached.", 4005, self.metrics);
             return;
         }
 
@@ -154,6 +162,7 @@ pub const ConnectionManager = struct {
         try self.map.put(self.allocator, conn_id, conn);
         inserted = true;
         _ = self.active_connection_count.fetchAdd(1, .acq_rel);
+        if (self.metrics) |m| m.recordConnectionOpen();
         std.log.info("Client connected: id={}", .{conn_id});
 
         conn.send(self.schema_sync_msg) catch {
@@ -161,11 +170,14 @@ pub const ConnectionManager = struct {
             self.message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
             return;
         };
+        if (self.metrics) |m| m.recordMessageSent();
     }
 
     /// Entry point for WebSocket message events
     pub fn onMessage(self: *ConnectionManager, ws: *WebSocket, data: []const u8, msg_type: MessageType) void {
         const conn_id = ws.getConnId();
+
+        if (self.metrics) |m| m.recordMessageReceived();
 
         // 1. Explicitly reject non-binary frames at the entry point.
         // ZyncBase uses binary MessagePack for all communications.
@@ -174,8 +186,13 @@ pub const ConnectionManager = struct {
             if (wire_encode.encodeError(self.allocator, null, wire_errors.getWireError(error.InvalidMessageType))) |error_msg| {
                 defer self.allocator.free(error_msg);
                 switch (ws.send(error_msg, .binary)) {
-                    .success, .backpressure => {},
-                    .dropped => sendDisconnectAndEnd(ws, self.allocator, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004),
+                    .success, .backpressure => {
+                        if (self.metrics) |m| {
+                            m.recordErrorSent();
+                            m.recordMessageSent();
+                        }
+                    },
+                    .dropped => sendDisconnectAndEnd(ws, self.allocator, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004, self.metrics),
                 }
             } else |err| {
                 std.log.err("Failed to encode error response for invalid message type: {}", .{err});
@@ -235,11 +252,13 @@ pub const ConnectionManager = struct {
         return conn;
     }
 
-    fn sendOrClose(conn: *Connection, data: []const u8, message_handler: *MessageHandler) void {
+    fn sendOrClose(conn: *Connection, data: []const u8, message_handler: *MessageHandler, metrics: ?*ServerMetrics, count: u64) void {
         conn.send(data) catch |err| {
             std.log.warn("Connection {} send failed ({}), closing", .{ conn.id, err });
             message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+            return;
         };
+        if (metrics) |m| m.recordMessagesSent(count);
     }
 
     /// Broadcast helper as a method on ConnectionManager.
@@ -247,7 +266,7 @@ pub const ConnectionManager = struct {
         const conn = self.acquireConnection(conn_id) catch return;
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-        sendOrClose(conn, data, self.message_handler);
+        sendOrClose(conn, data, self.message_handler, self.metrics, 1);
     }
 
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
@@ -319,7 +338,7 @@ pub const ConnectionManager = struct {
                 continue;
             }
 
-            sendConcatenatedOrClose(conn, group.entries.items, alloc, self.message_handler);
+            sendConcatenatedOrClose(conn, group.entries.items, alloc, self.message_handler, self.metrics);
         }
     }
 
@@ -352,9 +371,11 @@ pub const ConnectionManager = struct {
 
         for (connections.items) |conn| {
             if (msg) |bytes| {
-                conn.send(bytes) catch |err| {
+                if (conn.send(bytes)) {
+                    if (self.metrics) |m| m.recordMessageSent();
+                } else |err| {
                     std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
-                };
+                }
             }
             conn.ws.end(close_code);
             if (conn.release()) {
@@ -425,11 +446,16 @@ pub const ConnectionManager = struct {
             var backpressure_close = false;
             if (action.notify) {
                 if (notify_msg) |bytes| {
-                    conn.send(bytes) catch |err| {
+                    if (conn.send(bytes)) {
+                        if (self.metrics) |m| {
+                            m.recordErrorSent();
+                            m.recordMessageSent();
+                        }
+                    } else |err| {
                         std.log.warn("Failed to notify connection {} about token expiry: {}", .{ conn.id, err });
                         self.message_handler.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
                         backpressure_close = true;
-                    };
+                    }
                 } else if (!action.close) {
                     self.mutex.lockUncancelable(self.io);
                     conn.token_expiry_notified = false;
@@ -438,9 +464,11 @@ pub const ConnectionManager = struct {
             }
             if (action.close and !backpressure_close) {
                 if (disconnect_msg) |bytes| {
-                    conn.send(bytes) catch |err| {
+                    if (conn.send(bytes)) {
+                        if (self.metrics) |m| m.recordMessageSent();
+                    } else |err| {
                         std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
-                    };
+                    }
                 }
                 conn.ws.end(4006);
             }
@@ -469,11 +497,16 @@ pub const ConnectionManager = struct {
     }
 };
 
-fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, message: []const u8, close_code: u16) void {
+fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, message: []const u8, close_code: u16, metrics: ?*ServerMetrics) void {
     defer ws.end(close_code);
     const payload = wire_encode.encodeServerDisconnect(allocator, code, message) catch return;
     defer allocator.free(payload);
-    _ = ws.send(payload, .binary);
+    switch (ws.send(payload, .binary)) {
+        .success, .backpressure => {
+            if (metrics) |m| m.recordMessageSent();
+        },
+        .dropped => {},
+    }
 }
 
 /// Send a group of send-queue entries as a single frame: complete msgpack
@@ -482,9 +515,9 @@ fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, 
 /// allocated (graceful degradation). Deinits every entry after sending —
 /// uWS copies the payload into its send buffer synchronously, so the concat
 /// buffer (drain arena) may be reset on the next drain pass.
-fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator, message_handler: *MessageHandler) void {
+fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator, message_handler: *MessageHandler, metrics: ?*ServerMetrics) void {
     if (entries.len == 1) {
-        ConnectionManager.sendOrClose(conn, entries[0].data, message_handler);
+        ConnectionManager.sendOrClose(conn, entries[0].data, message_handler, metrics, 1);
         entries[0].deinit();
         return;
     }
@@ -494,7 +527,7 @@ fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, a
 
     const buf = alloc.alloc(u8, total) catch {
         for (entries) |e| {
-            ConnectionManager.sendOrClose(conn, e.data, message_handler);
+            ConnectionManager.sendOrClose(conn, e.data, message_handler, metrics, 1);
             e.deinit();
         }
         return;
@@ -506,6 +539,6 @@ fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, a
         offset += e.data.len;
     }
 
-    ConnectionManager.sendOrClose(conn, buf, message_handler);
+    ConnectionManager.sendOrClose(conn, buf, message_handler, metrics, @intCast(entries.len));
     for (entries) |e| e.deinit();
 }

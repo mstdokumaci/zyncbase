@@ -197,6 +197,15 @@ static void uws_res_upgrade_impl(
 }
 
 template<bool SSL>
+static void uws_app_get_impl(uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data) {
+    std::string pat = pattern ? std::string(pattern, pattern_length) : std::string();
+    auto *uwsApp = (uWS::TemplatedApp<SSL> *)app;
+    uwsApp->get(pat, [handler, user_data](auto *res, auto *req) {
+        handler((uws_res_t *)res, (uws_req_t *)req, user_data);
+    });
+}
+
+template<bool SSL>
 static void uws_app_post_impl(uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data) {
     std::string pat = pattern ? std::string(pattern, pattern_length) : std::string();
     auto *uwsApp = (uWS::TemplatedApp<SSL> *)app;
@@ -338,6 +347,12 @@ extern "C"
     {
         uWS::Loop *uwsLoop = (uWS::Loop *)loop;
         uwsLoop->removePostHandler(key);
+    }
+
+    void uws_app_get(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data)
+    {
+        if (ssl) uws_app_get_impl<true>(app, pattern, pattern_length, handler, user_data);
+        else     uws_app_get_impl<false>(app, pattern, pattern_length, handler, user_data);
     }
 
     void uws_app_post(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data)
