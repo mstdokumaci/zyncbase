@@ -1,10 +1,12 @@
 const std = @import("std");
 
+const observability_log = @import("observability/log.zig");
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
 
 pub const std_options: std.Options = .{
-    .log_level = .info,
+    .log_level = .debug,
+    .logFn = observability_log.logFn,
 };
 
 const logo_color = "\x1b[95m";

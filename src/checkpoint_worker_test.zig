@@ -215,39 +215,6 @@ test "CheckpointWorker: getMetrics" {
     try testing.expect(metrics.last_checkpoint_duration_ms == 150);
 }
 
-test "CheckpointWorker: Prometheus metrics format" {
-    const allocator = std.heap.smp_allocator;
-
-    const metrics = CheckpointWorker.CheckpointMetrics{
-        .last_checkpoint_time = 1234567890,
-        .last_checkpoint_duration_ms = 150,
-        .wal_size_bytes = 5000000,
-        .checkpoint_count = 42,
-        .failed_checkpoint_count = 3,
-    };
-
-    const output = try metrics.toPrometheus(allocator);
-    defer allocator.free(output);
-
-    // Verify format contains metric names
-    try testing.expect(std.mem.indexOf(u8, output, "zyncbase_checkpoint_last_time_seconds") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "zyncbase_checkpoint_last_duration_ms") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "zyncbase_wal_size_bytes") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "zyncbase_checkpoint_total") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "zyncbase_checkpoint_failed_total") != null);
-
-    // Verify format contains HELP and TYPE directives
-    try testing.expect(std.mem.indexOf(u8, output, "# HELP") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "# TYPE") != null);
-
-    // Verify values are present
-    try testing.expect(std.mem.indexOf(u8, output, "1234567890") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "150") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "5000000") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "42") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "3") != null);
-}
-
 test "CheckpointWorker: performCheckpointWithEscalation - no escalation needed" {
     const allocator = std.heap.smp_allocator;
 

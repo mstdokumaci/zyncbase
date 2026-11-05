@@ -16,6 +16,7 @@ const SecurityConfig = @import("config/state.zig").Config.SecurityConfig;
 const RequestContext = @import("connection/request_context.zig").RequestContext;
 const ViolationTracker = @import("connection/violations.zig").ConnectionViolationTracker;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
+const ServerMetrics = @import("observability/metrics.zig").ServerMetrics;
 const PresenceService = @import("presence/service.zig").PresenceService;
 const StoreService = @import("store_service.zig").StoreService;
 
@@ -39,6 +40,11 @@ pub const MessageHandler = struct {
     schema: *const schema_types.Schema,
     jwt_validator: ?*JwtValidator,
     session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
+    metrics: ?*ServerMetrics = null,
+
+    pub fn setMetrics(self: *MessageHandler, metrics: ?*ServerMetrics) void {
+        self.metrics = metrics;
+    }
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -71,6 +77,7 @@ pub const MessageHandler = struct {
             .schema = schema,
             .jwt_validator = jwt_validator,
             .session_claims_mapping = session_claims_mapping,
+            .metrics = null,
         };
     }
 
@@ -104,7 +111,12 @@ pub const MessageHandler = struct {
         conn.send(response) catch {
             std.log.warn("Connection {}: dropped while sending error response, closing", .{conn.id});
             self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+            return;
         };
+        if (self.metrics) |m| {
+            m.recordErrorSent();
+            m.recordMessageSent();
+        }
     }
 
     /// Handle WebSocket message event
@@ -145,6 +157,7 @@ pub const MessageHandler = struct {
             };
 
             if (is_rate_limited) {
+                if (self.metrics) |m| m.recordRateLimitRejection();
                 std.log.warn("Rate limit exceeded for connection {}: tokens={d:.2} (limit={d}/s, burst={d})", .{
                     conn_id,
                     @as(f64, @floatFromInt(conn.request_tokens)) / 1_000_000.0,
@@ -183,7 +196,9 @@ pub const MessageHandler = struct {
             conn.send(payload) catch {
                 std.log.warn("Connection {}: dropped while sending response, closing", .{conn_id});
                 self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+                return;
             };
+            if (self.metrics) |m| m.recordMessageSent();
         }
     }
 
@@ -205,6 +220,7 @@ pub const MessageHandler = struct {
         };
 
         if (is_rate_limited) {
+            if (self.metrics) |m| m.recordRateLimitRejection();
             var wire_err = wire_errors.getWireError(error.RateLimited);
             wire_err.retry_after_ms = 500;
             try self.sendError(self.allocator, conn, msg_id, wire_err);
@@ -215,7 +231,9 @@ pub const MessageHandler = struct {
         conn.send(wire_encode.encodeSuccessIntoBuffer(msg_id, &response)) catch |err| {
             std.log.warn("Connection {}: dropped Ping response ({}), closing", .{ conn.id, err });
             self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+            return;
         };
+        if (self.metrics) |m| m.recordMessageSent();
     }
 
     pub fn routeMessageFast(
@@ -309,7 +327,12 @@ pub const MessageHandler = struct {
         conn.send(error_msg) catch |err| {
             std.log.warn("Connection {}: dropped while sending error ({}), closing", .{ conn.id, err });
             self.sendServerDisconnectAndClose(conn, "BACKPRESSURE_LIMIT", "Outbound buffer limit exceeded.", 4004);
+            return;
         };
+        if (self.metrics) |m| {
+            m.recordErrorSent();
+            m.recordMessageSent();
+        }
     }
 
     /// Snapshot the connection's identity and scope facts for one request.
@@ -870,9 +893,11 @@ pub const MessageHandler = struct {
         defer conn.ws.end(close_code);
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
-        conn.send(disconnect_msg) catch |err| {
+        if (conn.send(disconnect_msg)) {
+            if (self.metrics) |m| m.recordMessageSent();
+        } else |err| {
             std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
-        };
+        }
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

@@ -75,40 +75,14 @@ pub const CheckpointWorker = struct {
             result.frames_checkpointed >= result.frames_in_wal;
     }
 
-    /// Metrics for Prometheus export
+    /// Checkpoint metrics snapshot read by GET /stats.
     pub const CheckpointMetrics = struct {
+        /// Unix timestamp (seconds) of the last checkpoint.
         last_checkpoint_time: i64,
         last_checkpoint_duration_ms: u64,
         wal_size_bytes: usize,
         checkpoint_count: u64,
         failed_checkpoint_count: u64,
-
-        pub fn toPrometheus(self: CheckpointMetrics, allocator: Allocator) ![]const u8 {
-            return std.fmt.allocPrint(allocator,
-                \\# HELP zyncbase_checkpoint_last_time_seconds Unix timestamp of last checkpoint
-                \\# TYPE zyncbase_checkpoint_last_time_seconds gauge
-                \\zyncbase_checkpoint_last_time_seconds {d}
-                \\# HELP zyncbase_checkpoint_last_duration_ms Duration of last checkpoint in milliseconds
-                \\# TYPE zyncbase_checkpoint_last_duration_ms gauge
-                \\zyncbase_checkpoint_last_duration_ms {d}
-                \\# HELP zyncbase_wal_size_bytes Current WAL file size in bytes
-                \\# TYPE zyncbase_wal_size_bytes gauge
-                \\zyncbase_wal_size_bytes {d}
-                \\# HELP zyncbase_checkpoint_total Total number of successful checkpoints
-                \\# TYPE zyncbase_checkpoint_total counter
-                \\zyncbase_checkpoint_total {d}
-                \\# HELP zyncbase_checkpoint_failed_total Total number of failed checkpoints
-                \\# TYPE zyncbase_checkpoint_failed_total counter
-                \\zyncbase_checkpoint_failed_total {d}
-                \\
-            , .{
-                self.last_checkpoint_time,
-                self.last_checkpoint_duration_ms,
-                self.wal_size_bytes,
-                self.checkpoint_count,
-                self.failed_checkpoint_count,
-            });
-        }
     };
 
     /// Initialize a new CheckpointWorker

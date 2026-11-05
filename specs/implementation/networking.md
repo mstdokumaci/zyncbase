@@ -16,6 +16,8 @@ ZyncBase uses vendored uWebSockets/usockets through a narrow Zig wrapper. The ne
 | `src/connection/manager.zig` | Connection registry and targeted send helper. |
 | `src/connection/state.zig` | Per-connection WebSocket handle, session state, and send/close behavior. |
 | `src/message_handler.zig` | Message callback consumer and request router. |
+| `src/observability/http_handlers.zig` | Unauthenticated `GET /health` and `GET /stats` handlers. |
+| `src/observability/metrics.zig` | In-process counters read by `/stats`. |
 | `build.zig` | uWebSockets/usockets/OpenSSL/C++ link configuration. |
 | `vendor/uwebsockets`, `vendor/usockets` | Pinned upstream networking dependencies. |
 
@@ -53,6 +55,17 @@ TLS is provided by OpenSSL through usockets when configured. Config shape is own
 4. The server sends the `SchemaSync` bootstrap push.
 5. Binary frames are delivered to `MessageHandler.handleMessage`.
 6. Close/error callbacks detach subscriptions, clear scoped session state, and remove connection-owned presence.
+
+## HTTP Observability
+
+`src/server.zig` registers two plain HTTP `GET` routes on the same listener as WebSocket traffic:
+
+| Route | Response |
+|-------|----------|
+| `/health` | `200` with `{"status":"ok"}` while the event loop is responsive. Liveness only; storage is not probed. |
+| `/stats` | `200` with JSON counters and `Cache-Control: no-store`: `uptime_seconds`, `connections`, `messages`, `errors`, `storage`. |
+
+Both routes are public by design: they carry no ticket check and expose only aggregate server diagnostics (counters and storage gauges) — never user data or schema. `messages_sent_total` counts each message inside a concatenated frame, not frames. A deployment that must keep load metadata private has to block `/stats` at its proxy.
 
 ## Backpressure And Sends
 

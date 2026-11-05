@@ -175,6 +175,18 @@ pub const WebSocketServer = struct {
         );
     }
 
+    /// Register an HTTP GET handler
+    pub fn get(self: *WebSocketServer, pattern: []const u8, user_data: ?*anyopaque, handler: c.uws_http_handler) void {
+        c.uws_app_get(
+            if (self.ssl) 1 else 0,
+            self.app,
+            pattern.ptr,
+            pattern.len,
+            handler,
+            user_data,
+        );
+    }
+
     /// Register an HTTP POST handler
     pub fn post(self: *WebSocketServer, pattern: []const u8, user_data: ?*anyopaque, handler: c.uws_http_handler) void {
         c.uws_app_post(
