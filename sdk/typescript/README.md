@@ -26,7 +26,8 @@ const name = await client.store.get("users.alice.name");
 Generate types from the same `schema.json` the server boots with:
 
 ```bash
-bunx @zyncbase/client generate --schema path/to/schema.json --out src/zyncbase-schema.ts
+# in a project that has @zyncbase/client installed (bunx resolves its local bin)
+bunx generate --schema path/to/schema.json --out src/zyncbase-schema.ts
 ```
 
 Then bind the client to it:
@@ -69,7 +70,7 @@ Generic helpers should be parameterized (`Store<S>`, `ZyncBaseClient<S>`) rather
 
 | When | Command |
 |---|---|
-| Schema changed | `bunx @zyncbase/client generate --schema ... --out ...` (same moment you restart the server to apply the migration) |
+| Schema changed | `bunx generate --schema ... --out ...` (same moment you restart the server to apply the migration) |
 | Local development | add `--watch` to regenerate on save |
 | CI | add `--check` — exits non-zero when the checked-in file is stale |
 
