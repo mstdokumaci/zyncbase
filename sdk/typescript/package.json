@@ -29,6 +29,9 @@
 		"type": "git",
 		"url": "git+https://github.com/mstdokumaci/zyncbase.git"
 	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node"
 	},
