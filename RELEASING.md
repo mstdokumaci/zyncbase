@@ -38,10 +38,18 @@ GitHub → Actions → **Release SDK** → Run workflow, from `main`:
 | `patch` / `minor` / `major` | semver bump via `npm version` |
 | exact `0.3.0` | sets that version (must not already exist on npm) |
 
-The workflow publishes *before* pushing the commit and tag. If publishing
-succeeds but the tag step fails, push the tag manually:
+The workflow publishes *before* pushing the version commit and tag. If publishing
+succeeds but the commit/tag step fails, the runner's bump was never pushed —
+recreate it locally and push commit first, then tag, so the tag points at the
+version-bump commit:
 
 ```bash
+cd sdk/typescript
+npm version <version> --no-git-tag-version
+cd ../..
+git add sdk/typescript/package.json
+git commit -m "release: @zyncbase/client v<version>"
+git push origin HEAD
 git tag -a sdk-v<version> -m "@zyncbase/client v<version>"
 git push origin sdk-v<version>
 ```

@@ -30,7 +30,7 @@ For backend-enforced business logic and ephemeral upstream streaming. Routes sch
 Thin hook layer (`@zyncbase/client/react`) over Store, Presence, Actions, and connection lifecycle:
 - **Provider & Hooks**: `ZyncBaseProvider`, `useQuery`, `useListen`, `useAction`, `usePresence`, `useSyncStatus`, `useClient`.
 - **Contract**: triad return states, `skip` sentinel, no `useMutation` (writes via `useClient`), Suspense deferred.
-- **Status**: design contract for a not-yet-built `@zyncbase/client/react` export entry.
+- **Status**: implemented (`@zyncbase/client/react`, React 19 optional peer); acceptance criteria in the spec.
 
 ### Connection Management ([connection-management.md](./connection-management.md))
 SDK client lifecycle:

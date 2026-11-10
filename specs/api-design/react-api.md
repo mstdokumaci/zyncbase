@@ -8,10 +8,10 @@ This document is the design contract for the React layer. The implementation spe
 
 1. [Design Principles](#design-principles)
 2. [Decision Log](#decision-log)
-3. [Package & Exports](#package-exports)
+3. [Package & Exports](#package--exports)
 4. [Provider](#provider)
 5. [Hooks](#hooks)
-6. [Loading & Error States](#loading-error-states)
+6. [Loading & Error States](#loading--error-states)
 7. [Lifecycle Contract](#lifecycle-contract)
 8. [Deliberately Not Included](#deliberately-not-included)
 9. [Testing Requirements](#testing-requirements)
@@ -212,7 +212,7 @@ Named so absence is a decision, not an omission. Each is a cheap follow-up in ve
 
 ## Testing Requirements
 
-Creation of `@zyncbase/client/react` is the following iteration; these are its acceptance criteria. Hook tests run under `@testing-library/react` with happy-dom via Bun; per repo convention, no production code is added to accommodate tests:
+Creation of `@zyncbase/client/react` is complete; these remain its acceptance criteria. Hook tests run under `@testing-library/react` with happy-dom via Bun; per repo convention, no production code is added to accommodate tests:
 
 1. Provider missing → every hook throws a descriptive dev error.
 2. `useQuery` triad transitions: `isLoading` true → false on first delivery; skip sentinel registers nothing; inline option literals do not re-subscribe.

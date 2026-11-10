@@ -4,7 +4,7 @@ GlobalRegistrator.register();
 
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
-import { createElement } from "react";
+import { createElement, StrictMode } from "react";
 import type { ZyncBaseClient } from "../client.js";
 import {
 	createZyncBaseReact,
@@ -370,6 +370,26 @@ describe("useAction", () => {
 			await expect(result.current()).rejects.toThrow("action failed");
 		});
 	});
+
+	test("binds the actions receiver", async () => {
+		const { client } = makeClient();
+		const actions = client.actions as unknown as {
+			call: (this: { marker: string }) => Promise<unknown>;
+			marker: string;
+		};
+		actions.marker = "receiver";
+		actions.call = function (this: { marker: string }) {
+			return Promise.resolve(this.marker);
+		};
+
+		const { result } = renderHook(() => useAction("player_join"), {
+			wrapper: wrapperFor(client),
+		});
+
+		await act(async () => {
+			await expect(result.current({})).resolves.toBe("receiver");
+		});
+	});
 });
 
 // ─── usePresence ────────────────────────────────────────────────────────────
@@ -445,6 +465,57 @@ describe("usePresence", () => {
 
 		await waitFor(() => expect(presenceListeners.length).toBe(1));
 		unmount();
+		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(1));
+	});
+
+	test("StrictMode unmount before ack releases every wire subscription", async () => {
+		const { client, presenceListeners, getPresenceUnsubscribes } = makeClient();
+		const { unmount } = renderHook(() => usePresence(), {
+			wrapper: ({ children }: { children?: ReactNode }) =>
+				createElement(
+					StrictMode,
+					null,
+					createElement(ZyncBaseProvider, { client }, children),
+				),
+		});
+
+		// Unmount while the subscribe acks are still pending: they resolve after
+		// refs already dropped to zero, so each handle must release itself.
+		const subscribeCalls = presenceListeners.length;
+		expect(subscribeCalls).toBeGreaterThan(0);
+		unmount();
+		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(subscribeCalls));
+	});
+
+	test("a failed subscribe does not poison the shared hub", async () => {
+		const { client, getPresenceUnsubscribes } = makeClient();
+		const presence = client.presence as unknown as {
+			subscribe: (
+				callback: (entries: unknown[]) => void,
+			) => Promise<() => Promise<void>>;
+		};
+		const originalSubscribe = presence.subscribe.bind(presence);
+		let subscribeCalls = 0;
+		presence.subscribe = (callback) => {
+			subscribeCalls += 1;
+			if (subscribeCalls === 1) return Promise.reject(new Error("boom"));
+			return originalSubscribe(callback);
+		};
+
+		const first = renderHook(() => usePresence(), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(subscribeCalls).toBe(1));
+
+		// The second consumer mounts while the first is still alive; without the
+		// registry cleanup it would reuse the dead hub and never subscribe.
+		const second = renderHook(() => usePresence(), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(subscribeCalls).toBe(2));
+
+		second.unmount();
+		first.unmount();
 		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(1));
 	});
 });

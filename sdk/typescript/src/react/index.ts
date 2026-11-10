@@ -291,8 +291,10 @@ export function createZyncBaseReact<
 	): BoundAction<A, K> {
 		const client = useClient();
 		const optionsRef = useRef(options);
-		optionsRef.current = options;
-		const call = client.actions.call as unknown as (
+		useEffect(() => {
+			optionsRef.current = options;
+		});
+		const call = client.actions.call.bind(client.actions) as unknown as (
 			action: string,
 			params?: Record<string, unknown>,
 			callOptions?: ActionCallOptions,
@@ -316,6 +318,7 @@ export function createZyncBaseReact<
 	} {
 		const client = useClient();
 		const [snapshot, setSnapshot] = useState<readonly unknown[]>([]);
+		const [, bump] = useState(0);
 
 		useEffect(() => {
 			let hub = presenceHubs.get(client);
@@ -336,9 +339,21 @@ export function createZyncBaseReact<
 						}
 					})
 					.then((unsubscribe) => {
+						// Ack arrived after the last consumer unmounted (StrictMode
+						// double-invoke or a fast unmount): release the wire sub now.
+						if (created.refs === 0) {
+							void unsubscribe().catch(() => {});
+							return;
+						}
 						created.unsubscribe = unsubscribe;
 					})
-					.catch(() => {});
+					.catch(() => {
+						// Drop the dead hub so a later mount retries instead of
+						// reusing a hub that never subscribed.
+						if (presenceHubs.get(client) === created) {
+							presenceHubs.delete(client);
+						}
+					});
 			}
 			const active = hub;
 			active.refs += 1;
@@ -348,7 +363,9 @@ export function createZyncBaseReact<
 				active.listeners.delete(setSnapshot);
 				active.refs -= 1;
 				if (active.refs === 0) {
-					presenceHubs.delete(client);
+					if (presenceHubs.get(client) === active) {
+						presenceHubs.delete(client);
+					}
 					void active.unsubscribe?.().catch(() => {});
 					active.unsubscribe = null;
 				}
@@ -360,7 +377,8 @@ export function createZyncBaseReact<
 				await client.presence.set(data);
 				// Self broadcasts do not fire the wire subscription; re-render so
 				// `mine` (read from the local presence cache) reflects the publish.
-				setSnapshot((previous) => previous.slice());
+				// A counter keeps `snapshot` identity stable for the peers memo.
+				bump((count) => count + 1);
 			},
 			[client],
 		);

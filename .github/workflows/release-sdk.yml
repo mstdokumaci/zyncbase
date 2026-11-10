@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +45,10 @@ jobs:
       - name: Set version
         id: version
         working-directory: sdk/typescript
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          npm version "${{ inputs.version }}" --no-git-tag-version
+          npm version "$REQUESTED_VERSION" --no-git-tag-version
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       # Trusted publishing: no NODE_AUTH_TOKEN. npm >= 11.5.1 exchanges the
