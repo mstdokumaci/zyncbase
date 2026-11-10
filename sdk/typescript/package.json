@@ -12,6 +12,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./react": {
+			"types": "./dist/react/index.d.ts",
+			"import": "./dist/react/index.js"
 		}
 	},
 	"bin": {
@@ -32,8 +36,16 @@
 	"publishConfig": {
 		"access": "public"
 	},
+	"peerDependencies": {
+		"react": "^19.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
+	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node"
+		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",

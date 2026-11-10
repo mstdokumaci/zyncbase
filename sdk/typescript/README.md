@@ -76,6 +76,44 @@ Generic helpers should be parameterized (`Store<S>`, `ZyncBaseClient<S>`) rather
 
 Generated files are the single source of truth for client types; commit them and gate drift with `--check`.
 
+## React
+
+React 19 bindings ship in the same package under the `/react` subpath:
+
+```tsx
+import { createClient } from "@zyncbase/client";
+import {
+	ZyncBaseProvider,
+	useQuery,
+	useListen,
+	useSyncStatus,
+} from "@zyncbase/client/react";
+
+const client = createClient({ url: "ws://localhost:3000" });
+
+function Tasks() {
+	const { data, isLoading, error } = useQuery("tasks", {
+		where: { done: false },
+	});
+	const title = useListen("projects.p1.name");
+	const sync = useSyncStatus();
+	// ...
+}
+
+root.render(
+	<ZyncBaseProvider client={client}>
+		<Tasks />
+	</ZyncBaseProvider>,
+);
+```
+
+- Hooks: `useQuery`, `useListen`, `useAction`, `usePresence`, `useSyncStatus`,
+  and `useClient` — writes go through `useClient()` directly.
+- The provider never connects; call `await client.connect()` yourself.
+- With a generated schema, bind types once for fully typed hooks:
+  `const z = createZyncBaseReact<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>();`
+- React 19 is an optional peer dependency; the core client works without it.
+
 ## License
 
 See the repository root.

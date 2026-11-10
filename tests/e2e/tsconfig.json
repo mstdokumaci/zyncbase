@@ -4,7 +4,7 @@
 		"module": "Preserve",
 		"moduleDetection": "force",
 		"moduleResolution": "bundler",
-		"lib": ["ESNext"],
+		"lib": ["ESNext", "DOM"],
 		"types": ["bun"],
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true,
@@ -13,7 +13,8 @@
 		"skipLibCheck": true,
 		"baseUrl": "../..",
 		"paths": {
-			"@zyncbase/client": ["sdk/typescript/src/index.ts"]
+			"@zyncbase/client": ["sdk/typescript/src/index.ts"],
+			"@zyncbase/client/react": ["sdk/typescript/src/react/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts"]

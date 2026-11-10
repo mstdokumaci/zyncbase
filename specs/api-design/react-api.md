@@ -162,6 +162,21 @@ await client.store.create("tasks", { title: "New" });
 - The write path. Typed by the generated schema; identical to the plain client API.
 - Also the escape hatch for everything this iteration deliberately does not wrap (`presence.setShared`, `presence.subscribeShared`, raw `store.get`, `batch`, `client.on`).
 
+The module-level hooks are loosely typed (`SchemaLike`). Applications with a
+generated schema bind their types once through the factory — same six bindings,
+fully typed rows and action signatures:
+
+```tsx
+const z = createZyncBaseReact<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>();
+
+<z.ZyncBaseProvider client={client}>
+	<App />
+</z.ZyncBaseProvider>
+
+const { data } = z.useQuery("tasks", { where: { done: false } }); // typed rows
+const join = z.useAction("player_join"); // typed params and returns
+```
+
 ## Loading & Error States
 
 Uniform rule across every data hook:
