@@ -25,7 +25,7 @@ export type Path = string | string[];
 export type SchemaLike = Record<string, Record<string, unknown>>;
 
 /** True when `S` is the permissive fallback rather than a generated schema. */
-type IsLooseSchema<S> = string extends keyof S ? true : false;
+export type IsLooseSchema<S> = string extends keyof S ? true : false;
 
 /** Collection names declared by a schema. */
 export type CollectionsOf<S> = keyof S & string;
@@ -354,7 +354,7 @@ export type TypedQueryOptions<S extends object, C extends keyof S & string> = {
 	after?: string;
 };
 
-type QueryOptionsFor<S extends object, C extends keyof S & string> =
+export type QueryOptionsFor<S extends object, C extends keyof S & string> =
 	IsLooseSchema<S> extends true ? QueryOptions : TypedQueryOptions<S, C>;
 
 /**
@@ -830,7 +830,7 @@ export type ActionHandler = (
 export type ActionName<A> = [A] extends [never] ? string : keyof A & string;
 
 /** Params accepted by an action. */
-type ActionParams<A, K extends string> = [A] extends [never]
+export type ActionParams<A, K extends string> = [A] extends [never]
 	? Record<string, unknown>
 	: K extends keyof A
 		? A[K] extends { params: infer P }
@@ -839,7 +839,7 @@ type ActionParams<A, K extends string> = [A] extends [never]
 		: never;
 
 /** Value returned by a sync action; async actions are generated as `undefined`. */
-type ActionReturns<A, K extends string> = [A] extends [never]
+export type ActionReturns<A, K extends string> = [A] extends [never]
 	? unknown
 	: K extends keyof A
 		? A[K] extends { returns: infer R }

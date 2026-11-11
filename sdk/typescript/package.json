@@ -1,18 +1,51 @@
 {
 	"name": "@zyncbase/client",
 	"version": "0.1.0",
+	"description": "Realtime TypeScript client for ZyncBase: schema-validated store, subscriptions, presence, and actions over WebSocket.",
+	"license": "BUSL-1.1",
 	"type": "module",
+	"files": [
+		"dist"
+	],
+	"sideEffects": false,
 	"exports": {
 		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./react": {
+			"types": "./dist/react/index.d.ts",
+			"import": "./dist/react/index.js"
 		}
 	},
 	"bin": {
 		"generate": "./dist/cli/generate.js"
 	},
+	"keywords": [
+		"realtime",
+		"websocket",
+		"database",
+		"presence",
+		"sync",
+		"collaboration"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/mstdokumaci/zyncbase.git"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"peerDependencies": {
+		"react": "^19.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
+	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm"
+		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",

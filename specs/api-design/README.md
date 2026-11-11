@@ -26,6 +26,12 @@ For backend-enforced business logic and ephemeral upstream streaming. Routes sch
 
 ## Lifecycle & Setup
 
+### React Bindings ([react-api.md](./react-api.md))
+Thin hook layer (`@zyncbase/client/react`) over Store, Presence, Actions, and connection lifecycle:
+- **Provider & Hooks**: `ZyncBaseProvider`, `useQuery`, `useListen`, `useAction`, `usePresence`, `useSyncStatus`, `useClient`.
+- **Contract**: triad return states, `skip` sentinel, no `useMutation` (writes via `useClient`), Suspense deferred.
+- **Status**: implemented (`@zyncbase/client/react`, React 19 optional peer); acceptance criteria in the spec.
+
 ### Connection Management ([connection-management.md](./connection-management.md))
 SDK client lifecycle:
 - Creating clients (`createClient` options)

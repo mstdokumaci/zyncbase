@@ -1,12 +1,13 @@
-#!/usr/bin/env bun
-// CLI type generator (Bun-only).
-// Usage: bunx @zyncbase/client generate --schema <path> --out <path> [--check] [--watch]
+#!/usr/bin/env node
+// CLI type generator (runs under Node and Bun).
+// Usage: bunx generate --schema <path> --out <path> [--check] [--watch]
 //
 // Emits `ZyncBaseSchema` (store), `ZyncBaseActions`, and `ZyncBasePresence`.
 // Path, query, action, and presence types are derived from these aliases by
 // `createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(...)`.
 
 import { watch as fsWatch } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 
 type EnumValue = string | number | boolean;
@@ -410,16 +411,20 @@ export type {
 async function loadAndGenerate(
 	schemaPath: string,
 ): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
-	const schemaFile = Bun.file(schemaPath);
-	if (!(await schemaFile.exists())) {
-		return { ok: false, error: `Schema file not found: ${schemaPath}` };
-	}
-
 	let schemaData: SchemaFile;
 	try {
-		schemaData = JSON.parse(await schemaFile.text()) as SchemaFile;
-	} catch {
-		return { ok: false, error: `Invalid JSON in schema file: ${schemaPath}` };
+		schemaData = JSON.parse(await readFile(schemaPath, "utf8")) as SchemaFile;
+	} catch (err) {
+		const missing =
+			typeof err === "object" &&
+			err !== null &&
+			(err as NodeJS.ErrnoException).code === "ENOENT";
+		return {
+			ok: false,
+			error: missing
+				? `Schema file not found: ${schemaPath}`
+				: `Invalid JSON in schema file: ${schemaPath}`,
+		};
 	}
 
 	const validationError = validateSchema(schemaData);
@@ -433,6 +438,11 @@ async function loadAndGenerate(
 			schemaData.presence,
 		),
 	};
+}
+
+async function writeOutput(outPath: string, content: string): Promise<void> {
+	await mkdir(dirname(outPath), { recursive: true });
+	await writeFile(outPath, content);
 }
 
 function watchSchema(args: Args): void {
@@ -449,7 +459,7 @@ function watchSchema(args: Args): void {
 				process.stderr.write(`Error: ${result.error}\n`);
 				return;
 			}
-			await Bun.write(args.out, result.content);
+			await writeOutput(args.out, result.content);
 			process.stdout.write(`Regenerated ${args.out}\n`);
 		}, 50);
 	});
@@ -461,7 +471,7 @@ export async function generate(argv: string[]): Promise<void> {
 	const args = parseArgs(argv);
 	if (!args) {
 		process.stderr.write(
-			"Usage: bunx @zyncbase/client generate --schema <path> --out <path> [--check] [--watch]\n",
+			"Usage: bunx generate --schema <path> --out <path> [--check] [--watch]\n",
 		);
 		process.exit(1);
 	}
@@ -473,12 +483,16 @@ export async function generate(argv: string[]): Promise<void> {
 	}
 
 	if (args.check) {
-		const current = Bun.file(args.out);
-		const upToDate =
-			(await current.exists()) && (await current.text()) === result.content;
+		let currentText: string | null = null;
+		try {
+			currentText = await readFile(args.out, "utf8");
+		} catch {
+			currentText = null;
+		}
+		const upToDate = currentText === result.content;
 		if (!upToDate) {
 			process.stderr.write(
-				`Error: ${args.out} is out of date. Run: bunx @zyncbase/client generate --schema ${args.schema} --out ${args.out}\n`,
+				`Error: ${args.out} is out of date. Run: bunx generate --schema ${args.schema} --out ${args.out}\n`,
 			);
 			process.exit(1);
 		}
@@ -486,7 +500,7 @@ export async function generate(argv: string[]): Promise<void> {
 		return;
 	}
 
-	await Bun.write(args.out, result.content);
+	await writeOutput(args.out, result.content);
 	process.stdout.write(`Generated ${args.out}\n`);
 
 	if (args.watch) watchSchema(args);

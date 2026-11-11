@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { generateTypes, type SchemaFile, validateSchema } from "./generate";
+import {
+	generate,
+	generateTypes,
+	type SchemaFile,
+	validateSchema,
+} from "./generate";
 
 // tsc spawns are slow — give the compile test plenty of time
 setDefaultTimeout(120_000);
@@ -333,6 +338,24 @@ void userId;
 			if (result.exitCode !== 0) console.log(result.stdout.toString());
 			expect(result.stderr.toString()).toBe("");
 			expect(result.exitCode).toBe(0);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("generate", () => {
+	test("creates missing output directories", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "zyncbase-generate-"));
+		try {
+			const schemaFile = path.join(tmpDir, "schema.json");
+			fs.writeFileSync(schemaFile, JSON.stringify(sampleSchema));
+			const outFile = path.join(tmpDir, "nested", "deep", "schema-types.ts");
+
+			await generate(["--schema", schemaFile, "--out", outFile]);
+
+			expect(fs.existsSync(outFile)).toBe(true);
+			expect(fs.readFileSync(outFile, "utf8")).toContain("ZyncBaseSchema");
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}

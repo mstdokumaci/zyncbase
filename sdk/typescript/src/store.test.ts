@@ -244,6 +244,21 @@ describe("StoreImpl", () => {
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 12 });
 	});
 
+	test("subscribe delivers an acknowledged empty snapshot", async () => {
+		const { store } = makeStore(
+			[{ type: "ok", id: 1, subId: 9, value: [] }],
+			await makeReadySchema(),
+		);
+		const snapshots: JsonValue[][] = [];
+		const handle = await store.subscribe("users", {}, (value) =>
+			snapshots.push(value),
+		);
+
+		expect(snapshots).toEqual([[]]);
+		expect(handle.getSnapshot()).toEqual([]);
+		await handle.unsubscribe();
+	});
+
 	test("subscribe registers collection view and loadMore dispatches cursor request", async () => {
 		const { store, messages, responseTableIndexes } = makeStore(
 			[

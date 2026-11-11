@@ -1,0 +1,69 @@
+name: Release SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish: exact (0.2.0) or semver bump (patch/minor/major)"
+        required: true
+        type: string
+
+permissions:
+  contents: write # version commit + tag push
+  id-token: write # npm trusted publishing (OIDC) and provenance attestation
+
+concurrency:
+  group: release-sdk
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so tag push and annotated tags work
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK
+        run: bun run --filter @zyncbase/client build
+
+      - name: Test SDK
+        run: bun test sdk
+
+      - name: Set version
+        id: version
+        working-directory: sdk/typescript
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          npm version "$REQUESTED_VERSION" --no-git-tag-version
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Trusted publishing: no NODE_AUTH_TOKEN. npm >= 11.5.1 exchanges the
+      # OIDC token itself and attests provenance automatically.
+      - name: Publish to npm
+        working-directory: sdk/typescript
+        run: npm publish --provenance
+
+      - name: Commit version bump and tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sdk/typescript/package.json
+          git commit -m "release: @zyncbase/client v${VERSION}"
+          git tag -a "sdk-v${VERSION}" -m "@zyncbase/client v${VERSION}"
+          git push --atomic origin HEAD "refs/tags/sdk-v${VERSION}"
