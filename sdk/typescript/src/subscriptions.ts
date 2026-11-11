@@ -283,6 +283,11 @@ export class SubscriptionTracker {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
+				// The replay that follows is a fresh snapshot: clear the delivered
+				// baseline so an empty replay reaches subscribers instead of being
+				// suppressed like a duplicate empty loadMore page.
+				entry.lastValue = undefined;
+				entry.deliveredValue = undefined;
 			}
 		}
 	}

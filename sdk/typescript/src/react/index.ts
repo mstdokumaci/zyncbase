@@ -382,7 +382,15 @@ export function createZyncBaseReact<
 			active.refs += 1;
 			active.listeners.add(setSnapshot);
 			setSnapshot(active.snapshot);
+			// A mount before client.connect() fails with SESSION_NOT_READY, and
+			// the client drops the callback. Re-subscribe once the session is
+			// live so the already-mounted consumer recovers without a remount.
+			const retry = () => {
+				if (active.failed) start(active);
+			};
+			client.on("synced", retry);
 			return () => {
+				client.off("synced", retry);
 				active.listeners.delete(setSnapshot);
 				active.refs -= 1;
 				if (active.refs === 0) {

@@ -618,6 +618,49 @@ describe("usePresence", () => {
 		first.unmount();
 		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(1));
 	});
+
+	test("retries a pre-connect registration once the session is synced", async () => {
+		const { client, presenceListeners, getPresenceUnsubscribes } = makeClient();
+		const emitter = client as unknown as {
+			emit: (event: string, ...args: unknown[]) => void;
+		};
+		const presence = client.presence as unknown as {
+			subscribe: (
+				callback: (entries: unknown[]) => void,
+			) => Promise<() => Promise<void>>;
+		};
+		const originalSubscribe = presence.subscribe.bind(presence);
+		let subscribeCalls = 0;
+		presence.subscribe = (callback) => {
+			subscribeCalls += 1;
+			if (subscribeCalls === 1) {
+				return Promise.reject(new Error("Session is not ready"));
+			}
+			return originalSubscribe(callback);
+		};
+
+		const { result, unmount } = renderHook(() => usePresence(), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(subscribeCalls).toBe(1));
+		expect(result.current.peers).toEqual([]);
+
+		act(() => emitter.emit("synced"));
+		await waitFor(() => expect(subscribeCalls).toBe(2));
+		await waitFor(() => expect(presenceListeners.length).toBe(1));
+
+		act(() => {
+			presenceListeners[0]([{ userId: "other", data: {}, joinedAt: 0 }]);
+		});
+		expect(result.current.peers).toHaveLength(1);
+
+		// A healthy hub ignores later synced events.
+		act(() => emitter.emit("synced"));
+		expect(subscribeCalls).toBe(2);
+
+		unmount();
+		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(1));
+	});
 });
 
 // ─── useSyncStatus ──────────────────────────────────────────────────────────

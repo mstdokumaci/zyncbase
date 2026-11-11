@@ -139,6 +139,33 @@ describe("SubscriptionTracker - materialized view set ops", () => {
 		expect(snapshots).toEqual([[{ id: "doc-1", name: "item", priority: 5 }]]);
 	});
 
+	test("empty reconnect replay clears the delivered snapshot", async () => {
+		const tracker = new SubscriptionTracker();
+		const snapshots: JsonValue[][] = [];
+
+		registerView(
+			tracker,
+			301,
+			{ type: "StoreSubscribe", table_index: "items" },
+			(value) => snapshots.push(value),
+		);
+
+		tracker.dispatchInitialSnapshot(
+			301,
+			["items"],
+			[{ id: "i1", name: "one" }],
+		);
+		await flushTick();
+		expect(snapshots).toEqual([[{ id: "i1", name: "one" }]]);
+
+		// Reconnect clears the view and its delivered baseline, then replays.
+		// The empty replay must reach subscribers, not be suppressed.
+		tracker.reconnect(new Map([[301, 302]]));
+		tracker.dispatchInitialSnapshot(302, ["items"], []);
+
+		expect(snapshots.at(-1)).toEqual([]);
+	});
+
 	test("stores the inbound delta value directly", async () => {
 		const tracker = new SubscriptionTracker();
 		const snapshots: JsonValue[][] = [];
