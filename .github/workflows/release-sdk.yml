@@ -66,4 +66,4 @@ jobs:
           git add sdk/typescript/package.json
           git commit -m "release: @zyncbase/client v${VERSION}"
           git tag -a "sdk-v${VERSION}" -m "@zyncbase/client v${VERSION}"
-          git push --atomic origin HEAD --follow-tags
+          git push --atomic origin HEAD "refs/tags/sdk-v${VERSION}"

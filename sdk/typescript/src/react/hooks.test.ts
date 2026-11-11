@@ -276,6 +276,45 @@ describe("useQuery", () => {
 		expect(result.current.isLoading).toBe(false);
 		expect(result.current.data).toEqual([]);
 	});
+
+	test("client swap resets cached data", async () => {
+		const a = makeClient();
+		const b = makeClient();
+		const seen: Array<{ data: unknown[]; isLoading: boolean }> = [];
+
+		function Probe() {
+			const query = useQuery("tasks", {});
+			seen.push({ data: query.data, isLoading: query.isLoading });
+			return null;
+		}
+
+		const tree = render(
+			createElement(
+				ZyncBaseProvider,
+				{ client: a.client },
+				createElement(Probe),
+			),
+		);
+		await waitFor(() => expect(a.querySubs.length).toBe(1));
+		act(() => {
+			a.querySubs[0].push([{ id: "a" }]);
+		});
+		expect(seen[seen.length - 1]?.data).toEqual([{ id: "a" }]);
+
+		tree.rerender(
+			createElement(
+				ZyncBaseProvider,
+				{ client: b.client },
+				createElement(Probe),
+			),
+		);
+
+		const latest = seen[seen.length - 1];
+		expect(latest?.isLoading).toBe(true);
+		expect(latest?.data).toEqual([]);
+		await waitFor(() => expect(a.querySubs[0].unsubscribed).toBe(1));
+		await waitFor(() => expect(b.querySubs.length).toBe(1));
+	});
 });
 
 // ─── useListen ──────────────────────────────────────────────────────────────
@@ -325,6 +364,45 @@ describe("useListen", () => {
 			listenSubs[1].listener.push("new-value");
 		});
 		expect(result.current.value).toBe("new-value");
+	});
+
+	test("client swap resets the value", async () => {
+		const a = makeClient();
+		const b = makeClient();
+		const seen: Array<{ value: unknown; isLoading: boolean }> = [];
+
+		function Probe() {
+			const listen = useListen("tasks.t1.title");
+			seen.push({ value: listen.value, isLoading: listen.isLoading });
+			return null;
+		}
+
+		const tree = render(
+			createElement(
+				ZyncBaseProvider,
+				{ client: a.client },
+				createElement(Probe),
+			),
+		);
+		await waitFor(() => expect(a.listenSubs.length).toBe(1));
+		act(() => {
+			a.listenSubs[0].listener.push("a-title");
+		});
+		expect(seen[seen.length - 1]?.value).toBe("a-title");
+
+		tree.rerender(
+			createElement(
+				ZyncBaseProvider,
+				{ client: b.client },
+				createElement(Probe),
+			),
+		);
+
+		const latest = seen[seen.length - 1];
+		expect(latest?.isLoading).toBe(true);
+		expect(latest?.value).toBeUndefined();
+		await waitFor(() => expect(a.listenSubs[0].listener.unlistened).toBe(1));
+		await waitFor(() => expect(b.listenSubs.length).toBe(1));
 	});
 });
 
@@ -487,8 +565,8 @@ describe("usePresence", () => {
 		await waitFor(() => expect(getPresenceUnsubscribes()).toBe(subscribeCalls));
 	});
 
-	test("a failed subscribe does not poison the shared hub", async () => {
-		const { client, getPresenceUnsubscribes } = makeClient();
+	test("a failed subscribe retries on the shared hub", async () => {
+		const { client, presenceListeners, getPresenceUnsubscribes } = makeClient();
 		const presence = client.presence as unknown as {
 			subscribe: (
 				callback: (entries: unknown[]) => void,
@@ -502,17 +580,39 @@ describe("usePresence", () => {
 			return originalSubscribe(callback);
 		};
 
-		const first = renderHook(() => usePresence(), {
-			wrapper: wrapperFor(client),
-		});
+		const seen = new Map<string, unknown[]>();
+		function Consumer({ tag }: { tag: string }) {
+			const { peers } = usePresence();
+			seen.set(tag, peers);
+			return null;
+		}
+
+		const first = render(
+			createElement(
+				ZyncBaseProvider,
+				{ client },
+				createElement(Consumer, { tag: "first" }),
+			),
+		);
 		await waitFor(() => expect(subscribeCalls).toBe(1));
 
-		// The second consumer mounts while the first is still alive; without the
-		// registry cleanup it would reuse the dead hub and never subscribe.
-		const second = renderHook(() => usePresence(), {
-			wrapper: wrapperFor(client),
-		});
+		// A second consumer mounts while the first is still alive. The retry
+		// reuses the hub, so the first consumer's listener recovers too.
+		const second = render(
+			createElement(
+				ZyncBaseProvider,
+				{ client },
+				createElement(Consumer, { tag: "second" }),
+			),
+		);
 		await waitFor(() => expect(subscribeCalls).toBe(2));
+		await waitFor(() => expect(presenceListeners.length).toBe(1));
+
+		act(() => {
+			presenceListeners[0]([{ userId: "other", data: {}, joinedAt: 0 }]);
+		});
+		expect(seen.get("first")).toHaveLength(1);
+		expect(seen.get("second")).toHaveLength(1);
 
 		second.unmount();
 		first.unmount();

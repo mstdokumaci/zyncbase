@@ -51,6 +51,7 @@ afterAll(() => {
 
 interface ProbeRender {
 	titles: string[];
+	isLoading: boolean;
 	listenTitle: string | undefined;
 	status: string;
 	synced: boolean;
@@ -82,6 +83,7 @@ describe("React hooks E2E", () => {
 							titles: query.data.map((row) =>
 								String((row as { title?: unknown }).title ?? ""),
 							),
+							isLoading: query.isLoading,
 							listenTitle: listen.value as string | undefined,
 							status: status.status,
 							synced: status.synced,
@@ -108,6 +110,17 @@ describe("React hooks E2E", () => {
 								const last = renders[renders.length - 1];
 								expect(last?.status).toBe("connected");
 								expect(last?.synced).toBe(true);
+							},
+							{ timeout: 10_000 },
+						);
+
+						// An empty collection ack must complete the query: the server
+						// sends value: [], which produces no delta ops.
+						await waitFor(
+							() => {
+								const last = renders[renders.length - 1];
+								expect(last?.isLoading).toBe(false);
+								expect(last?.titles).toEqual([]);
 							},
 							{ timeout: 10_000 },
 						);

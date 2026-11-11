@@ -108,6 +108,8 @@ interface PresenceHub {
 	snapshot: readonly unknown[];
 	unsubscribe: (() => Promise<void>) | null;
 	refs: number;
+	/** A subscribe attempt failed while consumers were still mounted. */
+	failed: boolean;
 }
 
 const presenceHubs = new WeakMap<object, PresenceHub>();
@@ -154,6 +156,7 @@ export function createZyncBaseReact<
 		const skipped = options === "skip";
 		const key = skipped ? null : queryKey(collection, options);
 		const [state, setState] = useState<{
+			client: Client;
 			key: string;
 			data: QueryRows<S, C>;
 			isLoading: boolean;
@@ -169,7 +172,7 @@ export function createZyncBaseReact<
 			client.store
 				.subscribe(collection, options as SubscribeOptions<S, C>, (rows) => {
 					if (disposed) return;
-					setState({ key, data: rows, isLoading: false, error: null });
+					setState({ client, key, data: rows, isLoading: false, error: null });
 				})
 				.then((resolved) => {
 					if (disposed) {
@@ -180,8 +183,11 @@ export function createZyncBaseReact<
 					const seed = resolved.getSnapshot();
 					if (seed.length > 0) {
 						setState((prev) =>
-							prev === null || prev.key !== key || prev.isLoading
-								? { key, data: seed, isLoading: false, error: null }
+							prev === null ||
+							prev.client !== client ||
+							prev.key !== key ||
+							prev.isLoading
+								? { client, key, data: seed, isLoading: false, error: null }
 								: prev,
 						);
 					}
@@ -189,6 +195,7 @@ export function createZyncBaseReact<
 				.catch((error: unknown) => {
 					if (disposed) return;
 					setState({
+						client,
 						key,
 						data: empty,
 						isLoading: false,
@@ -207,7 +214,7 @@ export function createZyncBaseReact<
 		if (key === null) {
 			return { data: empty, isLoading: false, error: null };
 		}
-		if (state !== null && state.key === key) {
+		if (state !== null && state.client === client && state.key === key) {
 			return {
 				data: state.data,
 				isLoading: state.isLoading,
@@ -223,6 +230,7 @@ export function createZyncBaseReact<
 		const client = useClient();
 		const key = stableStringify(path);
 		const [state, setState] = useState<{
+			client: Client;
 			key: string;
 			value: ListenValue<S, Pth>;
 			isLoading: boolean;
@@ -236,7 +244,7 @@ export function createZyncBaseReact<
 			client.store
 				.listen(path, (value) => {
 					if (disposed) return;
-					setState({ key, value, isLoading: false, error: null });
+					setState({ client, key, value, isLoading: false, error: null });
 				})
 				.then((resolved) => {
 					if (disposed) {
@@ -247,8 +255,11 @@ export function createZyncBaseReact<
 					const seed = resolved.getSnapshot();
 					if (seed !== undefined) {
 						setState((prev) =>
-							prev === null || prev.key !== key || prev.isLoading
-								? { key, value: seed, isLoading: false, error: null }
+							prev === null ||
+							prev.client !== client ||
+							prev.key !== key ||
+							prev.isLoading
+								? { client, key, value: seed, isLoading: false, error: null }
 								: prev,
 						);
 					}
@@ -256,6 +267,7 @@ export function createZyncBaseReact<
 				.catch((error: unknown) => {
 					if (disposed) return;
 					setState({
+						client,
 						key,
 						value: undefined as ListenValue<S, Pth>,
 						isLoading: false,
@@ -271,7 +283,7 @@ export function createZyncBaseReact<
 			// The serialized path fully describes the registration inputs.
 		}, [client, key]);
 
-		if (state !== null && state.key === key) {
+		if (state !== null && state.client === client && state.key === key) {
 			return {
 				value: state.value,
 				isLoading: state.isLoading,
@@ -322,38 +334,49 @@ export function createZyncBaseReact<
 
 		useEffect(() => {
 			let hub = presenceHubs.get(client);
-			if (hub === undefined) {
-				const created: PresenceHub = {
-					listeners: new Set(),
-					snapshot: [],
-					unsubscribe: null,
-					refs: 0,
-				};
-				hub = created;
-				presenceHubs.set(client, created);
+			const start = (target: PresenceHub) => {
+				target.failed = false;
 				client.presence
 					.subscribe((users) => {
-						created.snapshot = users;
-						for (const listener of created.listeners) {
+						target.snapshot = users;
+						for (const listener of target.listeners) {
 							listener(users);
 						}
 					})
 					.then((unsubscribe) => {
 						// Ack arrived after the last consumer unmounted (StrictMode
 						// double-invoke or a fast unmount): release the wire sub now.
-						if (created.refs === 0) {
+						if (target.refs === 0) {
 							void unsubscribe().catch(() => {});
 							return;
 						}
-						created.unsubscribe = unsubscribe;
+						target.unsubscribe = unsubscribe;
 					})
 					.catch(() => {
-						// Drop the dead hub so a later mount retries instead of
-						// reusing a hub that never subscribed.
-						if (presenceHubs.get(client) === created) {
-							presenceHubs.delete(client);
+						if (target.refs === 0) {
+							if (presenceHubs.get(client) === target) {
+								presenceHubs.delete(client);
+							}
+							return;
 						}
+						// Keep the hub and its listeners; the next mount retries so
+						// consumers that were already mounted recover too.
+						target.failed = true;
 					});
+			};
+			if (hub === undefined) {
+				const created: PresenceHub = {
+					listeners: new Set(),
+					snapshot: [],
+					unsubscribe: null,
+					refs: 0,
+					failed: false,
+				};
+				hub = created;
+				presenceHubs.set(client, created);
+				start(created);
+			} else if (hub.failed) {
+				start(hub);
 			}
 			const active = hub;
 			active.refs += 1;

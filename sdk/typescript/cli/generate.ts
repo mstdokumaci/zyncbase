@@ -7,7 +7,7 @@
 // `createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(...)`.
 
 import { watch as fsWatch } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 
 type EnumValue = string | number | boolean;
@@ -440,6 +440,11 @@ async function loadAndGenerate(
 	};
 }
 
+async function writeOutput(outPath: string, content: string): Promise<void> {
+	await mkdir(dirname(outPath), { recursive: true });
+	await writeFile(outPath, content);
+}
+
 function watchSchema(args: Args): void {
 	const target = basename(args.schema);
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -454,7 +459,7 @@ function watchSchema(args: Args): void {
 				process.stderr.write(`Error: ${result.error}\n`);
 				return;
 			}
-			await writeFile(args.out, result.content);
+			await writeOutput(args.out, result.content);
 			process.stdout.write(`Regenerated ${args.out}\n`);
 		}, 50);
 	});
@@ -495,7 +500,7 @@ export async function generate(argv: string[]): Promise<void> {
 		return;
 	}
 
-	await writeFile(args.out, result.content);
+	await writeOutput(args.out, result.content);
 	process.stdout.write(`Generated ${args.out}\n`);
 
 	if (args.watch) watchSchema(args);

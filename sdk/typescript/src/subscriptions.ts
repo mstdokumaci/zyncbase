@@ -188,6 +188,26 @@ export class SubscriptionTracker {
 		const delta = createInitialSnapshotDelta(subId, segments, value);
 		if (delta.ops.length > 0) {
 			this.dispatch(delta);
+			return;
+		}
+		// An acknowledged empty collection (value: []) produces no ops. Deliver
+		// the empty snapshot so subscribers leave their loading state; the
+		// deliveredValue guard keeps an empty loadMore page from re-delivering
+		// an existing view. Listen entries keep their no-initial-delivery path:
+		// their ack value is a records array, not the projected value.
+		const entry = this.subscriptions.get(subId);
+		if (!entry?.materializedView || entry.deliveredValue !== undefined) {
+			return;
+		}
+		const snapshot = this._snapshotView(entry.materializedView);
+		entry.lastValue = snapshot;
+		entry.deliveredValue = snapshot;
+		for (const cb of entry.callbacks) {
+			try {
+				cb(snapshot);
+			} catch (err) {
+				console.error("[SDK] Subscription callback threw:", err);
+			}
 		}
 	}
 
