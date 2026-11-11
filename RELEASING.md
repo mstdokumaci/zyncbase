@@ -31,7 +31,11 @@ release workflow (`.github/workflows/release.yml`) — `sdk-v*` tags must not.
 
 ## Cutting a release
 
-GitHub → Actions → **Release SDK** → Run workflow, from `main`:
+GitHub → Actions → **Release SDK** → Run workflow, from `main`.
+
+Pick branch `main` in the **Use workflow from** dropdown. Selecting a tag makes
+`github.ref` a tag, the job's `if` fails, and the run shows as *skipped* with no
+error.
 
 | Input | Effect |
 |---|---|

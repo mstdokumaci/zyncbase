@@ -48,7 +48,8 @@ jobs:
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          npm version "$REQUESTED_VERSION" --no-git-tag-version
+          current=$(node -p "require('./package.json').version")
+          [ "$REQUESTED_VERSION" = "$current" ] || npm version "$REQUESTED_VERSION" --no-git-tag-version
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       # Trusted publishing: no NODE_AUTH_TOKEN. npm >= 11.5.1 exchanges the
@@ -64,6 +65,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add sdk/typescript/package.json
-          git commit -m "release: @zyncbase/client v${VERSION}"
-          git tag -a "sdk-v${VERSION}" -m "@zyncbase/client v${VERSION}"
-          git push --atomic origin HEAD "refs/tags/sdk-v${VERSION}"
+          git diff --cached --quiet || git commit -m "release: @zyncbase/client v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/sdk-v${VERSION}"; then
+            git push origin HEAD
+          else
+            git tag -a "sdk-v${VERSION}" -m "@zyncbase/client v${VERSION}"
+            git push --atomic origin HEAD "refs/tags/sdk-v${VERSION}"
+          fi
