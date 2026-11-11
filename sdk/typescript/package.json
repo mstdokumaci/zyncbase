@@ -2,7 +2,7 @@
 	"name": "@zyncbase/client",
 	"version": "0.1.0",
 	"description": "Realtime TypeScript client for ZyncBase: schema-validated store, subscriptions, presence, and actions over WebSocket.",
-	"license": "BUSL-1.1",
+	"license": "Apache-2.0",
 	"type": "module",
 	"files": [
 		"dist"

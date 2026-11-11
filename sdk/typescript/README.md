@@ -116,4 +116,4 @@ root.render(
 
 ## License
 
-See the repository root.
+Apache License 2.0 — see [LICENSE](LICENSE).

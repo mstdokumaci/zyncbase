@@ -62,8 +62,13 @@ versions are immutable.
 ```bash
 cd sdk/typescript
 bun run build
-npm publish --dry-run   # verifies tarball contents and metadata, publishes nothing
+npm pack --dry-run      # tarball must list LICENSE, README.md, package.json and dist/
+npm publish --dry-run   # verifies metadata, publishes nothing
 ```
+
+`@zyncbase/client` ships its own `sdk/typescript/LICENSE` (Apache-2.0). npm only
+auto-includes a LICENSE that sits in the package root, not the repository root —
+if the pack output lacks `LICENSE`, stop and fix it before publishing.
 
 ## Versions and changelogs — decision log
 

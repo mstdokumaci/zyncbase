@@ -20,5 +20,6 @@ ZyncBase is licensed under the **Business Source License 1.1**.
 - **Source code is available** for everyone to view, modify, and use for non-production purposes.
 - **Production use is permitted** as long as you are not offering ZyncBase as a managed cloud service.
 - **Automatic Open Source**: On **January 1, 2032**, this project will automatically transition to the **Apache License 2.0**.
+- **TypeScript SDK** (`sdk/typescript/`): **Apache License 2.0** — see [sdk/typescript/LICENSE](sdk/typescript/LICENSE).
 
 For full terms, see the [LICENSE](LICENSE) file.

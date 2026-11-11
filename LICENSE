@@ -13,6 +13,11 @@ Additional Use Grant:
                     is the primary value proposition. All non-production use
                     is permitted.
 
+Separately Licensed Work:
+                    The contents of sdk/typescript/ are not part of the
+                    Licensed Work and are licensed under the Apache
+                    License, Version 2.0. See sdk/typescript/LICENSE.
+
 ----------------------------------------------------------------------
 
 Terms
