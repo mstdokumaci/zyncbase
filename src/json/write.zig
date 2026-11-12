@@ -100,13 +100,6 @@ pub const Writer = struct {
         try self.buf.print(self.allocator, "{d}", .{value});
     }
 
-    pub fn floatField(self: *Writer, key: []const u8, value: anytype) !void {
-        try self.separator();
-        try self.writeEscapedString(key);
-        try self.buf.append(self.allocator, ':');
-        try self.appendFloat(value);
-    }
-
     pub fn rawField(self: *Writer, key: []const u8, json_bytes: []const u8) !void {
         try self.separator();
         try self.writeEscapedString(key);
@@ -139,14 +132,6 @@ pub const Writer = struct {
     }
 
     pub fn beginArray(self: *Writer) !void {
-        try self.buf.append(self.allocator, '[');
-        self.is_first = true;
-    }
-
-    /// Begins a nested array as an array item, emitting the item separator.
-    /// Use instead of `beginArray` for elements of an outer array.
-    pub fn beginArrayItem(self: *Writer) !void {
-        try self.separator();
         try self.buf.append(self.allocator, '[');
         self.is_first = true;
     }
