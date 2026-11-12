@@ -45,9 +45,11 @@ pub const StorageEngine = struct {
         in_memory: bool = false,
         reader_pool_size: usize = 0,
         max_query_response_size: usize = 0,
+        synchronous: Synchronous = .full,
     };
 
     const PerformanceConfig = @import("config/state.zig").Config.PerformanceConfig;
+    const Synchronous = @import("config/state.zig").Synchronous;
 
     pub const State = enum(u8) { setup, running, shutdown };
 
@@ -99,7 +101,7 @@ pub const StorageEngine = struct {
         errdefer writer_conn.deinit();
 
         // Configure WAL mode and pragmas
-        try connection.configureDatabase(&writer_conn, true);
+        try connection.configureDatabase(&writer_conn, true, options.synchronous);
         try sql.ensureNamespaceTable(&writer_conn);
 
         // Create reader pool
@@ -270,7 +272,7 @@ pub const StorageEngine = struct {
                 .shared_cache = options.in_memory,
             });
             errdefer node.conn.deinit();
-            try connection.configureDatabase(&node.conn, false);
+            try connection.configureDatabase(&node.conn, false, options.synchronous);
             node.stmt_cache.init(allocator, performance_config.statement_cache_size);
             node.mutex = .init;
             node.select_document_stmts = &.{};

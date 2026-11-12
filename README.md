@@ -9,6 +9,14 @@ High-performance, multi-threaded real-time database built with Zig.
 - **SQLite Integration**: Reliable persistence with WAL mode.
 - **uWebSockets Backend**: Industry-leading WebSocket performance.
 
+## Production
+
+See [OPERATIONS.md](OPERATIONS.md) for backup, restore, durability, and upgrade guidance.
+
+- `storage.synchronous` defaults to `full`; committed writes survive process crashes and power loss (assuming the disk honors flush).
+- Backups are not automatic. Schedule `zyncbase backup` with cron or a systemd timer.
+- `zyncbase restore` requires the server to be stopped and keeps a safety copy by default.
+
 ## Getting Started
 
 See [BUILD.md](BUILD.md) for build instructions and prerequisites.

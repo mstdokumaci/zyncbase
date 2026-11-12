@@ -2,12 +2,15 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+pub const Synchronous = enum { full, normal };
+
 pub const Config = struct {
     server: ServerConfig,
     authentication: AuthConfig,
     security: SecurityConfig,
     logging: LoggingConfig,
     performance: PerformanceConfig,
+    storage: StorageConfig,
     data_dir: []const u8,
     schema_file: []const u8,
     schema_content: ?[]const u8 = null,
@@ -80,6 +83,12 @@ pub const Config = struct {
         /// the age window still applies.
         presence_batch_max_updates: usize = 512,
         statement_cache_size: usize = 100,
+    };
+
+    pub const StorageConfig = struct {
+        /// `full` fsyncs each write batch; `normal` trades power-loss
+        /// durability for throughput. See OPERATIONS.md for the RPO contract.
+        synchronous: Synchronous = .full,
     };
 
     pub fn deinit(self: *Config) void {

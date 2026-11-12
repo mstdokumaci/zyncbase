@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const cli = @import("cli.zig");
 const observability_log = @import("observability/log.zig");
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
@@ -47,14 +48,31 @@ pub fn main(init: std.process.Init) !void {
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args.deinit();
     _ = args.skip();
+
+    var arg_list: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer arg_list.deinit(allocator);
     while (args.next()) |arg| {
+        try arg_list.append(allocator, arg);
+    }
+
+    if (arg_list.items.len > 0 and cli.isCommand(arg_list.items[0])) {
+        cli.run(io, init.minimal.environ, allocator, arg_list.items) catch |err| {
+            std.log.err("zyncbase {s}: {s}", .{ arg_list.items[0], @errorName(err) });
+            std.process.exit(1);
+        };
+        return;
+    }
+
+    var index: usize = 0;
+    while (index < arg_list.items.len) : (index += 1) {
+        const arg = arg_list.items[index];
         if (std.mem.eql(u8, arg, "--config")) {
-            if (args.next()) |path| {
-                config_path = path;
-            } else {
+            index += 1;
+            if (index >= arg_list.items.len) {
                 std.log.err("--config requires a path argument", .{});
                 return error.InvalidArguments;
             }
+            config_path = arg_list.items[index];
         }
     }
 

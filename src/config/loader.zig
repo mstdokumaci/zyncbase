@@ -2,6 +2,7 @@ const std = @import("std");
 
 const json_read = @import("../json/read.zig");
 const Config = @import("state.zig").Config;
+const Synchronous = @import("state.zig").Synchronous;
 
 const Allocator = std.mem.Allocator;
 
@@ -53,6 +54,7 @@ pub const ConfigLoader = struct {
             .security = .{},
             .logging = .{},
             .performance = .{},
+            .storage = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
             .schema_file = try allocator.dupe(u8, "./schema.json"),
             .authorization_file = null,
@@ -107,6 +109,7 @@ pub const ConfigLoader = struct {
             .security = .{},
             .logging = .{},
             .performance = .{},
+            .storage = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
             .schema_file = try allocator.dupe(u8, "./schema.json"),
             .authorization_file = null,
@@ -123,6 +126,7 @@ pub const ConfigLoader = struct {
         try parseSecurity(allocator, &config, obj);
         try parseLogging(allocator, &config, obj);
         try parsePerformance(allocator, &config, obj);
+        try parseStorage(allocator, &config, obj);
 
         return config;
     }
@@ -281,6 +285,17 @@ pub const ConfigLoader = struct {
         try json_read.setInt(u32, &config.performance.presence_batch_timeout, perf_obj, "presenceBatchTimeoutMs");
         try json_read.setInt(usize, &config.performance.presence_batch_max_updates, perf_obj, "presenceBatchMaxUpdates");
         try json_read.setInt(usize, &config.performance.statement_cache_size, perf_obj, "statementCacheSize");
+    }
+
+    fn parseStorage(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {
+        _ = allocator;
+        const storage_obj = (try json_read.getObject(obj, "storage")) orelse return;
+
+        const sync_opt = try json_read.getString(storage_obj, "synchronous");
+        if (sync_opt) |sync| {
+            config.storage.synchronous = std.meta.stringToEnum(Synchronous, sync) orelse
+                return error.InvalidSynchronousMode;
+        }
     }
 
     fn validateConfig(io: std.Io, config: *Config) !void {

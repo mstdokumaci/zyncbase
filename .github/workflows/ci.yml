@@ -108,8 +108,8 @@ jobs:
 
           mkdir -p /tmp/zwanzig
           curl -fsSL -o /tmp/zwanzig.tar.gz \
-            "https://github.com/forketyfork/zwanzig/releases/download/v0.14.0/zwanzig-v0.14.0-linux-x86_64.tar.gz"
-          echo "4667f5f0635b27362a4c9340aa971318f71e5aee778bd5302e88c008e5ce368d  /tmp/zwanzig.tar.gz" | sha256sum -c -
+            "https://github.com/forketyfork/zwanzig/releases/download/v0.15.1/zwanzig-v0.15.1-zig-0.16.0-linux-x86_64.tar.gz"
+          echo "8e39619834f0283379dd91824701793f665c887b2c78d9b1863bad624ef4fd61  /tmp/zwanzig.tar.gz" | sha256sum -c -
           tar -xzf /tmp/zwanzig.tar.gz -C /tmp/zwanzig
           sudo mv /tmp/zwanzig/zwanzig /usr/local/bin/zwanzig
 

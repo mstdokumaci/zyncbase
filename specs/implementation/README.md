@@ -83,6 +83,7 @@ Each owner file documents the full flow; other files link rather than duplicate.
 ## Security & Reliability
 
 - [Security](./security.md) - Parser limits, rate limiting, origin policy, and authorization fail-closed behavior.
+- [Backup & Restore](./backup-restore.md) - Snapshots, restore, data-directory locking, and durability.
 - [Auth Exchange](./auth-exchange.md) - HTTP ticket exchange, WebSocket connection, and session projection.
 - [Auth System](./auth-system.md) - Declarative authorization model and presence authorization boundary.
 - [Error Taxonomy](./error-taxonomy.md) - Canonical public error catalog and retry categories.

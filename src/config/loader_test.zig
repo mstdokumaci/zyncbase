@@ -3,6 +3,7 @@ const std = @import("std");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const ConfigLoader = @import("loader.zig").ConfigLoader;
 const Config = @import("state.zig").Config;
+const Synchronous = @import("state.zig").Synchronous;
 
 /// Writes an empty schema file and the given config content under `test_dir`,
 /// returning an allocated path to the config file. The caller owns the returned
@@ -41,6 +42,7 @@ test "ConfigLoader loads defaults when file not found" {
     try std.testing.expectEqual(@as(usize, 500), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 8), config.performance.presence_batch_timeout);
     try std.testing.expectEqual(@as(usize, 512), config.performance.presence_batch_max_updates);
+    try std.testing.expectEqual(Synchronous.full, config.storage.synchronous);
 }
 
 test "ConfigLoader parses valid JSON config" {
@@ -77,6 +79,66 @@ test "ConfigLoader parses valid JSON config" {
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
     try std.testing.expectEqual(@as(u32, 16), config.performance.presence_batch_timeout);
     try std.testing.expectEqual(@as(usize, 64), config.performance.presence_batch_max_updates);
+}
+
+test "ConfigLoader parses storage.synchronous" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-storage");
+    defer context.deinit();
+
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "config-storage-schema.json" });
+    defer allocator.free(schema_file);
+    const config_content = try std.fmt.allocPrint(
+        allocator,
+        "{{ \"dataDir\": \"{s}\", \"schema\": \"{s}\", \"storage\": {{ \"synchronous\": \"normal\" }} }}",
+        .{ context.test_dir, schema_file },
+    );
+    defer allocator.free(config_content);
+
+    const temp_file = try writeConfigWithSchema(
+        allocator,
+        context.test_dir,
+        "config-storage.json",
+        schema_file,
+        config_content,
+    );
+    defer allocator.free(temp_file);
+
+    var config = try loadConfig(allocator, temp_file);
+    defer config.deinit();
+
+    try std.testing.expectEqual(Synchronous.normal, config.storage.synchronous);
+}
+
+test "ConfigLoader rejects invalid storage.synchronous" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-storage-invalid");
+    defer context.deinit();
+
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "config-storage-invalid-schema.json" });
+    defer allocator.free(schema_file);
+    const config_content = try std.fmt.allocPrint(
+        allocator,
+        "{{ \"dataDir\": \"{s}\", \"schema\": \"{s}\", \"storage\": {{ \"synchronous\": \"sometimes\" }} }}",
+        .{ context.test_dir, schema_file },
+    );
+    defer allocator.free(config_content);
+
+    const temp_file = try writeConfigWithSchema(
+        allocator,
+        context.test_dir,
+        "config-storage-invalid.json",
+        schema_file,
+        config_content,
+    );
+    defer allocator.free(temp_file);
+
+    try std.testing.expectError(
+        error.InvalidSynchronousMode,
+        loadConfig(allocator, temp_file),
+    );
 }
 
 test "ConfigLoader validates port range" {

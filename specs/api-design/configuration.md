@@ -120,6 +120,10 @@ Main server configuration file.
     "presenceBatchTimeoutMs": 8,
     "presenceBatchMaxUpdates": 512,
     "statementCacheSize": 100
+  },
+
+  "storage": {
+    "synchronous": "full"
   }
 }
 ```
@@ -335,6 +339,20 @@ Performance tuning.
   }
 }
 ```
+
+#### `storage`
+
+Durability settings for the SQLite write path.
+
+```json
+{
+  "storage": {
+    "synchronous": "full"   // full (default) or normal
+  }
+}
+```
+
+- `synchronous` - `full` fsyncs each write batch, so committed writes survive a power loss (assuming the OS and disk honor flush). `normal` is faster, but a power loss or hard reset can roll back recently committed transactions. Process crashes are safe in both modes. See [OPERATIONS.md](../../OPERATIONS.md) for the RPO contract.
 
 ---
 

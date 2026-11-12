@@ -5,6 +5,7 @@ const sqlite = @import("sqlite");
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
+const Synchronous = @import("../config/state.zig").Synchronous;
 
 const Allocator = std.mem.Allocator;
 const CheckpointMode = write_queue.CheckpointMode;
@@ -91,7 +92,7 @@ fn classifyForeignKeyCheckError(err: anyerror) anyerror {
     return classified_err;
 }
 
-pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
+pub fn configureDatabase(db: *sqlite.Db, is_writer: bool, synchronous: Synchronous) !void {
     if (is_writer) {
         try pragmaChecked(db, "journal_mode", "wal");
         try pragmaChecked(db, "wal_autocheckpoint", "1000");
@@ -100,7 +101,10 @@ pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     try setForeignKeys(db, true);
     try pragmaChecked(db, "busy_timeout", "5000");
     try pragmaChecked(db, "read_uncommitted", "true");
-    try pragmaChecked(db, "synchronous", "normal");
+    switch (synchronous) {
+        .full => try pragmaChecked(db, "synchronous", "full"),
+        .normal => try pragmaChecked(db, "synchronous", "normal"),
+    }
     try pragmaChecked(db, "cache_size", "-64000");
     try pragmaChecked(db, "mmap_size", "268435456");
 }
