@@ -6,6 +6,7 @@ const authorization_defaults = @import("authorization/defaults.zig");
 const authorization_parse = @import("authorization/parse.zig");
 const session_resolver = @import("authorization/session_resolver.zig");
 const authorization_types = @import("authorization/types.zig");
+const backup = @import("backup.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
 const http_handlers = @import("observability/http_handlers.zig");
@@ -22,6 +23,7 @@ const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config/loader.zig").ConfigLoader;
 const Config = @import("config/state.zig").Config;
 const send_queue_type = @import("connection/send_queue.zig").send_queue;
+const DataLock = @import("data_lock.zig").DataLock;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
@@ -68,6 +70,7 @@ pub const ZyncBaseServer = struct {
     environ: std.process.Environ,
     allocator: std.mem.Allocator,
     config: Config,
+    data_lock: ?DataLock = null,
     memory_strategy: MemoryStrategy,
     thread_budget: ThreadBudget,
     violation_tracker: ViolationTracker,
@@ -173,6 +176,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.websocket_server.deinit();
 
         try self.initStorageAndMigrations(config);
+        errdefer self.releaseDataLock();
         errdefer self.storage_engine.deinit();
 
         try self.initCheckpoint();
@@ -312,6 +316,29 @@ pub const ZyncBaseServer = struct {
 
     fn initStorageAndMigrations(self: *ZyncBaseServer, config: *const Config) !void {
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
+
+        self.data_lock = DataLock.acquire(
+            self.io,
+            self.memory_strategy.generalAllocator(),
+            config.data_dir,
+        ) catch |err| {
+            if (err == error.DataDirLocked) {
+                std.log.err(
+                    "Data directory {s} is locked by another zyncbase process",
+                    .{config.data_dir},
+                );
+            }
+            return err;
+        };
+        errdefer self.releaseDataLock();
+
+        try backup.recoverInterruptedRestore(
+            self.io,
+            self.memory_strategy.generalAllocator(),
+            config.data_dir,
+        );
+
+        std.log.info("Storage durability: synchronous={s}", .{@tagName(config.storage.synchronous)});
         try self.storage_engine.init(
             self.io,
             self.memory_strategy.generalAllocator(),
@@ -319,11 +346,25 @@ pub const ZyncBaseServer = struct {
             config.data_dir,
             &self.schema,
             config.performance,
-            .{ .reader_pool_size = self.thread_budget.readers, .max_query_response_size = config.security.max_query_response_size },
+            .{
+                .reader_pool_size = self.thread_budget.readers,
+                .max_query_response_size = config.security.max_query_response_size,
+                .synchronous = config.storage.synchronous,
+            },
             storageEngineWakeup,
             self,
         );
+        errdefer self.storage_engine.deinit();
         try self.runMigrationsAndStartEngine();
+
+        if (self.data_lock) |*lock| try lock.downgradeToShared(self.io);
+    }
+
+    fn releaseDataLock(self: *ZyncBaseServer) void {
+        if (self.data_lock) |*lock| {
+            lock.release(self.io);
+            self.data_lock = null;
+        }
     }
 
     fn initCheckpoint(self: *ZyncBaseServer) !void {
@@ -820,6 +861,8 @@ pub const ZyncBaseServer = struct {
         // storage_engine.deinit() guards double-join via state check.
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
+
+        self.releaseDataLock();
 
         std.log.debug("Deinitializing subscription_engine", .{});
         self.subscription_engine.deinit();

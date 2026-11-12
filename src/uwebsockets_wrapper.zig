@@ -72,6 +72,7 @@ pub const WebSocketServer = struct {
     pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
         if (config.idle_timeout < 2 or config.idle_timeout > 239) return error.InvalidConfig;
 
+        // zwanzig-disable-next-line: sentinel-alloc
         const host_z = allocator.dupeZ(u8, config.host) catch return error.OutOfMemory;
         errdefer allocator.free(host_z);
 

@@ -10,7 +10,7 @@ This document defines the schema, properties, and constraints for the server run
 
 | File | Responsibility |
 |------|----------------|
-| `src/config/state.zig` | Configuration types: `Config`, `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig`. |
+| `src/config/state.zig` | Configuration types: `Config`, `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig`, `StorageConfig`. |
 | `src/config/loader.zig` | Loads JSON configuration files, expands environment variables in strings, applies defaults, and validates settings. |
 | `src/config/loader_test.zig` | Verifies default values, validation ranges, and environment replacements. |
 
@@ -18,12 +18,13 @@ This document defines the schema, properties, and constraints for the server run
 
 | Type | Dependencies | Responsibility |
 |------|--------------|----------------|
-| `Config` | `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig` | Root configuration structure representing the complete JSON layout. |
+| `Config` | `ServerConfig`, `AuthConfig`, `SecurityConfig`, `LoggingConfig`, `PerformanceConfig`, `StorageConfig` | Root configuration structure representing the complete JSON layout. |
 | `ServerConfig` | none | Host, port, WebSocket idle timeout, and interface binding parameters. |
 | `AuthConfig` | `jwt`, `ticket`, `anonymous`, `session` config keys | JWT validation, ticket exchange, anonymous-auth, projected claims, and token grace periods. |
 | `SecurityConfig` | none | Allowed origins, rate limiting bounds, message caps, and violation thresholds. |
 | `LoggingConfig` | none | Output format (JSON/text) and minimum log level threshold. |
 | `PerformanceConfig` | none | Ring buffer sizes, SQL statement cache capacities, and write-batching parameters. |
+| `StorageConfig` | none | SQLite durability mode (`synchronous`). |
 
 ---
 
@@ -38,6 +39,7 @@ This document defines the schema, properties, and constraints for the server run
 | `security` | `object` | `{}` | Access control and rate limits object. |
 | `logging` | `object` | `{}` | Log verbosity and format settings object. |
 | `performance` | `object` | `{}` | Internal tuning configurations object. |
+| `storage` | `object` | `{}` | Durability settings object. |
 | `dataDir` | `string` | `"./data"` | Directory path for persistence (SQLite, WAL). Supports env expansion. |
 | `schema` | `string \| object` | `"./schema.json"` | Path to schema JSON or inline schema object. If missing, runs with users-only schema. |
 | `authorization` | `string` | `null` | Path to `authorization.json` file. If missing, runs with playground default. |
@@ -122,6 +124,12 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | `presenceBatchTimeoutMs` | `number` | `8` | Max age of a pending presence broadcast before it is flushed (in ms). `0` flushes after every processed presence op. |
 | `presenceBatchMaxUpdates` | `number` | `512` | Max pending presence updates coalesced into a single broadcast. `0` disables the cap; the age window still applies. |
 | `statementCacheSize` | `number` | `100` | Max number of prepared statements cached per SQLite connection. |
+
+### `storage` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `synchronous` | `string` | `"full"` | SQLite durability mode. `full` fsyncs each write batch; `normal` may roll back recent commits on power loss. Invalid values fail startup with `error.InvalidSynchronousMode`. |
 
 ---
 

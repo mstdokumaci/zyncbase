@@ -37,7 +37,12 @@ pub fn makeTestSharedSingleField(allocator: std.mem.Allocator) ![]const schema_t
     return fields;
 }
 
-pub fn makePresencePatch(allocator: std.mem.Allocator, entries: []const struct { idx: usize, value: msgpack.Payload }) !msgpack.Payload {
+pub const PresencePatchEntry = struct {
+    idx: usize,
+    value: msgpack.Payload,
+};
+
+pub fn makePresencePatch(allocator: std.mem.Allocator, entries: []const PresencePatchEntry) !msgpack.Payload {
     const flat = try allocator.alloc(msgpack.Payload, entries.len * 2);
     errdefer allocator.free(flat);
     for (entries, 0..) |entry, i| {

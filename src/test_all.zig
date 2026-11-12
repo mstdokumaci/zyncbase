@@ -70,6 +70,8 @@ test {
     _ = @import("memory/lock_free_cache_leak_test.zig");
     _ = @import("memory/strategy_test.zig");
     _ = @import("config/loader_test.zig");
+    _ = @import("backup_test.zig");
+    _ = @import("data_lock_test.zig");
 
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("storage_engine_test.zig");

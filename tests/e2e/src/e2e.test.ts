@@ -14,8 +14,10 @@ import {
 	withServer,
 } from "./harness";
 import { run as runActions } from "./test-actions";
+import { run as runBackup } from "./test-backup";
 import { run as runBatch } from "./test-batch";
 import { run as runComboStress } from "./test-combo-stress";
+import { run as runCrash } from "./test-crash";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runObservability } from "./test-observability";
@@ -211,6 +213,18 @@ describe("ZyncBase E2E", () => {
 	test("SIGTERM/SIGINT shut down gracefully", async () => {
 		await runE2ETest("Graceful shutdown signals", async (ctx) => {
 			await runShutdown(ctx);
+		});
+	});
+
+	test("backup, verify, and restore", async () => {
+		await runE2ETest("Backup and restore", async (ctx) => {
+			await runBackup(ctx);
+		});
+	});
+
+	test("committed writes survive SIGKILL", async () => {
+		await runE2ETest("Crash recovery", async (ctx) => {
+			await runCrash(ctx);
 		});
 	});
 });

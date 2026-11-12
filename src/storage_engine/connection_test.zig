@@ -11,7 +11,7 @@ test "foreign key connection enforcement and integrity check" {
     });
     defer db.deinit();
 
-    try connection.configureDatabase(&db, false);
+    try connection.configureDatabase(&db, false, .full);
     try std.testing.expectEqual(@as(?i64, 1), try db.pragma(i64, .{}, "foreign_keys", null));
     try db.exec("CREATE TABLE parents (id INTEGER PRIMARY KEY)", .{}, .{});
     try db.exec("CREATE TABLE children (parent_id INTEGER REFERENCES parents(id))", .{}, .{});
@@ -23,4 +23,18 @@ test "foreign key connection enforcement and integrity check" {
 
     try db.exec("DELETE FROM children", .{}, .{});
     try connection.verifyForeignKeys(&db);
+}
+
+test "synchronous pragma follows the configured mode" {
+    var db = try sqlite.Db.init(.{
+        .mode = .Memory,
+        .open_flags = .{ .write = true, .create = true },
+    });
+    defer db.deinit();
+
+    try connection.configureDatabase(&db, false, .full);
+    try std.testing.expectEqual(@as(?i64, 2), try db.pragma(i64, .{}, "synchronous", null));
+
+    try connection.configureDatabase(&db, false, .normal);
+    try std.testing.expectEqual(@as(?i64, 1), try db.pragma(i64, .{}, "synchronous", null));
 }

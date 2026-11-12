@@ -89,6 +89,7 @@ test "foreign key migration detector finds missing constraints and action drift"
 }
 
 fn execDDL(db: *sqlite.Db, allocator: std.mem.Allocator, ddl: []const u8) !void {
+    // zwanzig-disable-next-line: sentinel-alloc
     const ddl_z = try allocator.dupeZ(u8, ddl);
     defer allocator.free(ddl_z);
     try db.execMulti(ddl_z, .{});

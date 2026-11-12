@@ -11,6 +11,7 @@ extern fn zync_regex_free(handle: *anyopaque) void;
 
 pub fn compilePattern(allocator: Allocator, pattern: []const u8) !*anyopaque {
     if (std.mem.indexOfScalar(u8, pattern, 0) != null) return error.InvalidRegex;
+    // zwanzig-disable-next-line: sentinel-alloc
     const pattern_z = try allocator.dupeZ(u8, pattern);
     defer allocator.free(pattern_z);
 
@@ -30,6 +31,7 @@ pub fn matchPattern(handle: *anyopaque, allocator: Allocator, str: []const u8) !
         buf[str.len] = 0;
         return zync_regex_match(handle, &buf) == 1;
     } else {
+        // zwanzig-disable-next-line: sentinel-alloc
         const str_z = try allocator.dupeZ(u8, str);
         defer allocator.free(str_z);
         return zync_regex_match(handle, str_z.ptr) == 1;

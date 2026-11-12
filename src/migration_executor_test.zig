@@ -21,12 +21,14 @@ fn openMemDb() !sqlite.Db {
 }
 
 fn execSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !void {
+    // zwanzig-disable-next-line: sentinel-alloc
     const sql_z = try allocator.dupeZ(u8, sql);
     defer allocator.free(sql_z);
     try db.execDynamic(sql_z, .{}, .{});
 }
 
 fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !void {
+    // zwanzig-disable-next-line: sentinel-alloc
     const sql_z = try allocator.dupeZ(u8, sql);
     defer allocator.free(sql_z);
     try db.execMulti(sql_z, .{});
