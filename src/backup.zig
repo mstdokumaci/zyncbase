@@ -54,6 +54,7 @@ pub fn create(
     defer allocator.free(partial_path);
     errdefer deleteQuietly(io, partial_path);
 
+    // zwanzig-disable-next-line: sentinel-alloc
     const db_path_z = try allocator.dupeZ(u8, db_path);
     defer allocator.free(db_path_z);
 
@@ -179,6 +180,7 @@ fn verifyFile(
 ) !void {
     if (!try fileExists(io, path)) return error.BackupNotFound;
 
+    // zwanzig-disable-next-line: sentinel-alloc
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
 

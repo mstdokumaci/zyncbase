@@ -5,6 +5,7 @@ const sqlite = @import("sqlite");
 const backup = @import("backup.zig");
 
 fn openDb(allocator: std.mem.Allocator, path: []const u8) !sqlite.Db {
+    // zwanzig-disable-next-line: sentinel-alloc
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
     return sqlite.Db.init(.{

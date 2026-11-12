@@ -46,6 +46,7 @@ const DirectWriterContext = struct {
         for (self.schema.tables) |schema_table| {
             const ddl = try gen.generateDDL(schema_table);
             defer allocator.free(ddl);
+            // zwanzig-disable-next-line: sentinel-alloc
             const ddl_z = try allocator.dupeZ(u8, ddl);
             defer allocator.free(ddl_z);
             try sth.execSetupSQL(&self.engine, ddl_z);

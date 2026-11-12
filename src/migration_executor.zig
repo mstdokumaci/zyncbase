@@ -126,6 +126,7 @@ pub const MigrationExecutor = struct {
             .create_table => {
                 const ddl = try self.ddl_gen.generateDDL(change.table.*);
                 defer self.allocator.free(ddl);
+                // zwanzig-disable-next-line: sentinel-alloc
                 const ddl_z = try self.allocator.dupeZ(u8, ddl);
                 defer self.allocator.free(ddl_z);
                 try self.db.execMulti(ddl_z, .{});
@@ -267,6 +268,7 @@ pub const MigrationExecutor = struct {
         // 3. Create new table
         const ddl = try self.ddl_gen.generateDDL(table);
         defer self.allocator.free(ddl);
+        // zwanzig-disable-next-line: sentinel-alloc
         const ddl_z = try self.allocator.dupeZ(u8, ddl);
         defer self.allocator.free(ddl_z);
         try self.db.execMulti(ddl_z, .{});

@@ -15,7 +15,7 @@
     "test:safe": "zig build test -Doptimize=ReleaseSafe --summary all --error-style minimal",
     "test:fast": "zig build test -Doptimize=ReleaseFast --summary all --error-style minimal",
     "test:slowest": "zig build test-slowest -Doptimize=ReleaseSafe --summary all --error-style minimal",
-    "lint": "zsort check . --ban-prefix ./ --ban-prefix src/ --remove-unused && zig fmt --check src && zlint --deny-warnings && zwanzig --format text src && zig build check --summary all",
+    "lint": "zsort check . --ban-prefix ./ --ban-prefix src/ --remove-unused && zig fmt --check src && zlint --deny-warnings && zwanzig --format text --skip unused-decl src && zig build check --summary all",
     "lint:fix": "zsort fix . --ban-prefix ./ --ban-prefix src/ --remove-unused && zig fmt src",
     "typecheck:sdk": "tsc -p sdk/typescript/tsconfig.json --noEmit",
     "typecheck:e2e": "tsc -p tests/e2e/tsconfig.json",

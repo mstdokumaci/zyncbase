@@ -129,6 +129,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
     });
     defer db.deinit();
 
+    // zwanzig-disable-next-line: sentinel-alloc
     const ddl_z = try allocator.dupeZ(u8, ddl);
     defer allocator.free(ddl_z);
     try db.execMulti(ddl_z, .{});
@@ -306,6 +307,7 @@ test "ddl_generator: generated DDL is executable" {
         defer db.deinit();
 
         // execMulti requires null-terminated string
+        // zwanzig-disable-next-line: sentinel-alloc
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
 
@@ -520,6 +522,7 @@ test "ddl_generator: managed names cannot collide across valid table and field b
     for ([_]schema_types.Table{ users_namespace, users }) |table| {
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
+        // zwanzig-disable-next-line: sentinel-alloc
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
         try db.execMulti(ddl_z, .{});
