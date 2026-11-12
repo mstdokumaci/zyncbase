@@ -197,11 +197,12 @@ pub fn restore(
         journal_started = false;
         // Past this point the old database cannot be recovered automatically.
         syncParentDir(io, db_path) catch |err| {
+            const safety_path = if (safety) |copy| copy.db else "<unknown>";
             std.log.err(
-                "restore: database replaced but directory sync failed: {}; previous database kept",
-                .{err},
+                "restore: database replaced but journal deletion sync failed: {}; previous database kept at {s}; if startup restores the old database, rerun restore; remove {s}.restore-journal only after verifying the replacement",
+                .{ err, safety_path, db_path },
             );
-            return .{ .safety_copy = owned_safety };
+            return error.RestoreCommitIndeterminate;
         };
     }
 

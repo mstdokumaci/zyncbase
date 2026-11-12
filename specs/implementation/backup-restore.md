@@ -55,7 +55,7 @@ This document defines the operator-facing backup, restore, and durability contra
 8. Delete the journal and sync the parent directory. The safety copy is retained by default and deleted only when `--no-safety-copy` is set, after that sync succeeds.
 9. On failure or interruption, the journal restores the previous database and WAL/SHM before the storage engine can open the database.
 
-If the replacement is committed but a later cleanup sync fails, restore keeps the safety copy and reports that the database was replaced; it does not roll back.
+If the replacement is committed but journal deletion cannot be made durable, restore returns `error.RestoreCommitIndeterminate`, keeps the safety copy, and logs its path and recovery instructions. Verify the replacement before starting the server; if startup restores the old database, rerun the restore.
 
 The restore is offline by design. A single-node SQLite deployment cannot safely replace the database under a live writer.
 
