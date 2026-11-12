@@ -98,9 +98,17 @@ pub const Backed = enum(u8) {
     }
 };
 
+pub const A = struct {
+    pub fn reset(self: A) void {
+        _ = self;
+    }
+};
+
 pub const test_only_const: u8 = 1;
 
 pub fn callbackHandler() void {}
+
+pub fn inlineOnly() void {}
 
 pub fn deadTopLevel() void {}
 `);
@@ -108,9 +116,31 @@ pub fn deadTopLevel() void {}
 
 const cb = types.callbackHandler;
 
+const B = struct {
+    fn reset(self: B) void {
+        _ = self;
+    }
+};
+
+fn callB(b: B) void {
+    b.reset();
+}
+
+fn useA(a: types.A) void {
+    _ = a;
+}
+
 fn sqlType(field: anytype) []const u8 {
     return field.toSqlType();
 }
+`);
+    write("inline_use.zig", `_ = @import("types.zig");
+
+fn callInline() void {
+    @import("types.zig").inlineOnly();
+}
+`);
+    write("missing_import.zig", `pub const missing = @import("missing.zig").missing;
 `);
     write("user.zig", `const send_queue = @import("send_queue.zig").send_queue;
 const types = @import("types.zig");
@@ -164,10 +194,13 @@ test "test-only const" {
     assert.ok(noRef.some(l => l.includes("unusedAfterToSql") && l.includes("parent=FieldType")), "unusedAfterToSql should keep FieldType parent");
     assert.ok(noRef.some(l => l.includes("unusedBacked") && l.includes("parent=Backed")), "enum(u8) method should keep Backed parent");
     assert.ok(noRef.some(l => l.includes("unusedAfterOwner") && l.includes("parent=Entry")), "method after method should keep Entry parent");
-    assert.ok(!noRef.some(l => l.includes("toSqlType")), "toSqlType should be used via a direct call");
-    assert.ok(!possible.some(l => l.includes("toSqlType")), "toSqlType should be used via a direct call");
+    assert.ok(!noRef.some(l => l.includes("toSqlType")), "toSqlType should not be no-ref");
+    assert.ok(possible.some(l => l.includes("toSqlType") && l.includes("types.zig")), "toSqlType should be weak evidence from an unqualified call");
     assert.ok(!noRef.some(l => l.includes("callbackHandler")), "callbackHandler should be used via a function pointer");
     assert.ok(!possible.some(l => l.includes("callbackHandler")), "callbackHandler should be used via a function pointer");
+    assert.ok(!noRef.some(l => l.includes("inlineOnly")), "inlineOnly should be used via an inline import");
+    assert.ok(!possible.some(l => l.includes("inlineOnly")), "inlineOnly should be used via an inline import");
+    assert.ok(possible.some(l => l.includes(" reset") && l.includes("parent=A")), "A.reset should not be strong-matched by B.reset");
     assert.ok(possible.some(l => l.includes(" owner") && l.includes("send_queue.zig")), "owner should be possibly used");
     assert.ok(possible.some(l => l.includes(" push") && l.includes("queue.zig")), "push should be possibly used");
     assert.ok(possible.some(l => l.includes(" pop") && l.includes("queue.zig")), "pop should be possibly used");
@@ -210,17 +243,34 @@ for (const f of all) {
 }
 
 const impRe = /const\s+(\w+)\s*=\s*@import\("(.+?)"\)(?:\.(\w+))?\s*;/g;
+const anyImportRe = /@import\("([^"]+)"\)/g;
 
 for (const f of all) {
     const lines = nocomment(f.text).split("\n");
     for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
         if (!ln.includes("@import") && !ln.startsWith("pub const")) continue;
+
+        // Record every local @import, including `_ = @import(...)` and
+        // expression-position imports. The const-form loop below only adds
+        // bindings/aliases on top of these edges.
+        if (ln.includes("@import")) {
+            anyImportRe.lastIndex = 0;
+            let im;
+            while ((im = anyImportRe.exec(ln)) !== null) {
+                if (EXTERNAL.has(im[1])) continue;
+                const sf = canonical(path.resolve(path.dirname(f.abspath), im[1]));
+                if (!imports.has(sf)) continue;
+                imports.get(f.path).add(sf);
+            }
+        }
+
         impRe.lastIndex = 0;
         let m;
         while ((m = impRe.exec(ln)) !== null) {
             if (EXTERNAL.has(m[2])) continue;
             const sf = canonical(path.resolve(path.dirname(f.abspath), m[2]));
+            if (!imports.has(sf)) continue;
             imports.get(f.path).add(sf);
             if (m[3]) {
                 bindings.get(f.path).set(m[1], { sf, si: m[3] });
@@ -491,7 +541,7 @@ for (const d of decls) {
                 const qn = d.parent + "." + d.name;
                 const strongHit = isSelf
                     ? (hasWordOutsideLines(selfText, qn, [d.line]) || hasCallOutsideLines(selfText, d.name, [d.line]))
-                    : (hasWord(fText, qn) || hasCall(fText, d.name));
+                    : hasWord(fText, qn);
                 if (strongHit) strong.add(fp);
                 const weakHit = isSelf
                     ? (hasMemberAccessOutsideLines(selfText, d.name, [d.line]) ||
