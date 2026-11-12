@@ -48,8 +48,9 @@ Useful flags:
 - `--no-safety-copy` skips keeping the previous database. The default is to keep it at
   `zyncbase.db.pre-restore-<timestamp>`.
 
-`backup` refuses to overwrite an existing output. `restore` refuses to run while the server holds
-`<dataDir>/zyncbase.lock`.
+`backup` refuses to overwrite an existing output and holds a shared data-directory lock, so a
+restore cannot start mid-backup. `restore` requires the exclusive lock on
+`<dataDir>/zyncbase.lock`, so it refuses to run while the server or a backup is active.
 
 ---
 
@@ -158,11 +159,17 @@ Restart=always
 User=zyncbase
 ```
 
-Restore while the server is stopped:
+Restore while the server is stopped. Restore Litestream into a temporary file first, then
+install it through `zyncbase restore`. `set -e` ensures the server starts only if both commands
+succeed; the trap removes the temporary file on any exit.
 
 ```bash
 systemctl stop zyncbase
-litestream restore -o /var/lib/zyncbase/zyncbase.db s3://my-bucket/zyncbase
+set -e
+tmp=$(mktemp /var/lib/zyncbase/zyncbase-litestream-XXXXXX.db)
+trap 'rm -f "$tmp"' EXIT
+litestream restore -o "$tmp" s3://my-bucket/zyncbase
+zyncbase restore "$tmp" --config /etc/zyncbase/zyncbase-config.json
 systemctl start zyncbase
 ```
 

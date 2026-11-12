@@ -10,8 +10,13 @@ type CliResult = {
 	stderr: string;
 };
 
+const CLI_TIMEOUT_MS = 30_000;
+
 function runCli(args: string[]): CliResult {
-	const result = Bun.spawnSync([SERVER_BIN, ...args], { cwd: process.cwd() });
+	const result = Bun.spawnSync([SERVER_BIN, ...args], {
+		cwd: process.cwd(),
+		timeout: CLI_TIMEOUT_MS,
+	});
 	return {
 		code: result.exitCode ?? -1,
 		stdout: result.stdout.toString(),
@@ -123,10 +128,32 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 	const corrupt = runCli([
 		"restore",
 		corruptPath,
-		"--data-dir",
-		ctx.dataPath("corrupt-target"),
+		"--config",
+		ctx.artifactPath(configName),
 	]);
 	if (corrupt.code === 0) {
 		throw new Error("restored a corrupt snapshot");
 	}
+
+	// The rejected restore must leave the stopped server's existing data intact.
+	await withServer(ctx, serverOptions, async ({ port }) => {
+		const client = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
+		await client.connect();
+		try {
+			const before = await client.get("public", ["persistence", "before"]);
+			const after = await client.get("public", ["persistence", "after"]);
+			const newer = await client.get("public", ["persistence", "newer"]);
+
+			if (!before)
+				throw new Error("record lost after rejected corrupt restore");
+			if (!after)
+				throw new Error("second record lost after rejected corrupt restore");
+			if (newer)
+				throw new Error(
+					"post-snapshot record reappeared after rejected restore",
+				);
+		} finally {
+			client.close();
+		}
+	});
 }

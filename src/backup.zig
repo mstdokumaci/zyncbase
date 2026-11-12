@@ -28,6 +28,8 @@ const SafetyCopy = struct {
     shm: []const u8,
 };
 
+const restore_journal_header = "zyncbase-restore-v1\n";
+
 pub fn dbPath(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ data_dir, db_file_name });
 }
@@ -45,6 +47,12 @@ pub fn create(
 ) !CreateInfo {
     if (!try fileExists(io, db_path)) return error.DatabaseNotFound;
     if (try fileExists(io, out_path)) return error.OutputExists;
+
+    const data_dir = std.fs.path.dirname(db_path) orelse ".";
+    var lock = try DataLock.acquireShared(io, allocator, data_dir);
+    defer lock.release(io);
+
+    if (try restoreJournalExists(io, allocator, db_path)) return error.RestoreInProgress;
 
     const partial_path = try std.fmt.allocPrint(
         allocator,
@@ -75,7 +83,11 @@ pub fn create(
 
     if (try fileExists(io, out_path)) return error.OutputExists;
     const cwd = std.Io.Dir.cwd();
-    try cwd.rename(partial_path, cwd, out_path, io);
+    cwd.renamePreserve(partial_path, cwd, out_path, io) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.OutputExists,
+        else => return err,
+    };
+    try syncParentDir(io, out_path);
 
     const stat = try cwd.statFile(io, out_path, .{});
     return .{
@@ -97,9 +109,9 @@ pub fn verify(
 
 /// Replace the database in `data_dir` with `backup_path`.
 ///
-/// Requires exclusive access to the data directory, so the server must be
-/// stopped. The current database (and its WAL/SHM) is moved aside first and
-/// restored on failure.
+/// Requires exclusive access to the data directory, so the server and any
+/// running backups must be stopped. The current database (and its WAL/SHM) is
+/// moved aside first and restored on failure or interruption.
 pub fn restore(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -110,52 +122,76 @@ pub fn restore(
     var lock = try DataLock.acquire(io, allocator, data_dir);
     defer lock.release(io);
 
+    try recoverInterruptedRestore(io, allocator, data_dir);
+
     try verifyFile(io, allocator, backup_path, true);
-    try std.Io.Dir.cwd().createDirPath(io, data_dir);
+    try rejectWalSidecar(io, allocator, backup_path);
 
     const cwd = std.Io.Dir.cwd();
     const db_path = try dbPath(allocator, data_dir);
     defer allocator.free(db_path);
     const tmp_path = try std.fmt.allocPrint(allocator, "{s}.restore-tmp", .{db_path});
     defer allocator.free(tmp_path);
+    const tmp_wal = try std.fmt.allocPrint(allocator, "{s}-wal", .{tmp_path});
+    defer allocator.free(tmp_wal);
+    const tmp_shm = try std.fmt.allocPrint(allocator, "{s}-shm", .{tmp_path});
+    defer allocator.free(tmp_shm);
     const db_wal = try std.fmt.allocPrint(allocator, "{s}-wal", .{db_path});
     defer allocator.free(db_wal);
     const db_shm = try std.fmt.allocPrint(allocator, "{s}-shm", .{db_path});
     defer allocator.free(db_shm);
 
-    errdefer deleteQuietly(io, tmp_path);
+    errdefer {
+        deleteQuietly(io, tmp_path);
+        deleteQuietly(io, tmp_wal);
+        deleteQuietly(io, tmp_shm);
+    }
 
     try cwd.copyFile(backup_path, cwd, tmp_path, io, .{ .replace = true });
     try syncFile(io, tmp_path);
+    try verifyFile(io, allocator, tmp_path, true);
+    // The staged database is standalone; verification may have created sidecars.
+    deleteQuietly(io, tmp_wal);
+    deleteQuietly(io, tmp_shm);
 
     const had_db = try fileExists(io, db_path);
     var safety_db_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var safety_wal_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var safety_shm_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var safety: ?SafetyCopy = null;
-    var restore_started = false;
-    errdefer if (restore_started) rollbackRestore(io, db_path, db_wal, db_shm, safety);
+    var journal_started = false;
+    errdefer if (journal_started) recoverInterruptedRestore(io, allocator, data_dir) catch |err| {
+        std.log.err("restore rollback failed: {}", .{err});
+    };
 
     if (had_db) {
-        const safety_db = try std.fmt.bufPrint(
+        const timestamp = std.Io.Clock.real.now(io).toNanoseconds();
+        const copy = try makeSafetyCopy(
+            db_path,
+            timestamp,
             &safety_db_buf,
-            "{s}.pre-restore-{d}",
-            .{ db_path, std.Io.Clock.real.now(io).toNanoseconds() },
+            &safety_wal_buf,
+            &safety_shm_buf,
         );
-        const copy = SafetyCopy{
-            .db = safety_db,
-            .wal = try std.fmt.bufPrint(&safety_wal_buf, "{s}-wal", .{safety_db}),
-            .shm = try std.fmt.bufPrint(&safety_shm_buf, "{s}-shm", .{safety_db}),
-        };
         safety = copy;
 
-        restore_started = true;
+        try writeRestoreJournal(io, allocator, db_path, timestamp);
+        journal_started = true;
+
         try cwd.rename(db_path, cwd, copy.db, io);
         try moveIfExists(io, db_wal, copy.wal);
         try moveIfExists(io, db_shm, copy.shm);
+        try syncParentDir(io, db_path);
     }
 
     try cwd.rename(tmp_path, cwd, db_path, io);
+    try syncParentDir(io, db_path);
+
+    if (journal_started) {
+        try deleteRestoreJournal(io, allocator, db_path);
+        journal_started = false;
+        try syncParentDir(io, db_path);
+    }
 
     if (!keep_safety_copy) {
         if (safety) |copy| {
@@ -170,6 +206,66 @@ pub fn restore(
         if (safety) |copy| owned_safety = try allocator.dupe(u8, copy.db);
     }
     return .{ .safety_copy = owned_safety };
+}
+
+/// Complete or roll back a restore that was interrupted after it started
+/// moving the live database. Must run while holding the exclusive data lock and
+/// before `StorageEngine.init` opens the database.
+pub fn recoverInterruptedRestore(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+) !void {
+    const db_path = try dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    const db_wal = try std.fmt.allocPrint(allocator, "{s}-wal", .{db_path});
+    defer allocator.free(db_wal);
+    const db_shm = try std.fmt.allocPrint(allocator, "{s}-shm", .{db_path});
+    defer allocator.free(db_shm);
+
+    const timestamp = readRestoreJournal(io, allocator, db_path) catch |err| switch (err) {
+        error.CorruptRestoreJournal => {
+            if (!try fileExists(io, db_path)) return err;
+            try clearRestoreArtifacts(io, allocator, db_path);
+            return;
+        },
+        else => return err,
+    };
+    if (timestamp == null) return;
+
+    var safety_db_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var safety_wal_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var safety_shm_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const safety = try makeSafetyCopy(
+        db_path,
+        timestamp.?,
+        &safety_db_buf,
+        &safety_wal_buf,
+        &safety_shm_buf,
+    );
+
+    try moveIfExists(io, safety.db, db_path);
+    try moveIfExists(io, safety.wal, db_wal);
+    try moveIfExists(io, safety.shm, db_shm);
+    if (!try fileExists(io, db_path)) return error.RestoreRecoveryFailed;
+
+    try clearRestoreArtifacts(io, allocator, db_path);
+}
+
+fn clearRestoreArtifacts(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.restore-tmp", .{db_path});
+    defer allocator.free(tmp_path);
+    const tmp_wal = try std.fmt.allocPrint(allocator, "{s}-wal", .{tmp_path});
+    defer allocator.free(tmp_wal);
+    const tmp_shm = try std.fmt.allocPrint(allocator, "{s}-shm", .{tmp_path});
+    defer allocator.free(tmp_shm);
+    deleteQuietly(io, tmp_path);
+    deleteQuietly(io, tmp_wal);
+    deleteQuietly(io, tmp_shm);
+
+    try syncParentDir(io, db_path);
+    try deleteRestoreJournal(io, allocator, db_path);
+    try syncParentDir(io, db_path);
 }
 
 fn verifyFile(
@@ -208,6 +304,94 @@ fn verifyFile(
     if (marker == null or marker.? != 1) return error.NotZyncBaseDatabase;
 }
 
+fn rejectWalSidecar(io: std.Io, allocator: std.mem.Allocator, backup_path: []const u8) !void {
+    const wal_path = try std.fmt.allocPrint(allocator, "{s}-wal", .{backup_path});
+    defer allocator.free(wal_path);
+    const stat = std.Io.Dir.cwd().statFile(io, wal_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    if (stat.size > 0) return error.BackupHasWal;
+}
+
+fn makeSafetyCopy(
+    db_path: []const u8,
+    timestamp: i96,
+    db_buf: []u8,
+    wal_buf: []u8,
+    shm_buf: []u8,
+) !SafetyCopy {
+    const safety_db = try std.fmt.bufPrint(db_buf, "{s}.pre-restore-{d}", .{ db_path, timestamp });
+    return .{
+        .db = safety_db,
+        .wal = try std.fmt.bufPrint(wal_buf, "{s}-wal", .{safety_db}),
+        .shm = try std.fmt.bufPrint(shm_buf, "{s}-shm", .{safety_db}),
+    };
+}
+
+fn writeRestoreJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    timestamp: i96,
+) !void {
+    const journal_path = try restoreJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    errdefer deleteQuietly(io, journal_path);
+
+    const contents = try std.fmt.allocPrint(
+        allocator,
+        "{s}{d}\n",
+        .{ restore_journal_header, timestamp },
+    );
+    defer allocator.free(contents);
+
+    const file = try std.Io.Dir.cwd().createFile(io, journal_path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, contents);
+    try file.sync(io);
+    try syncParentDir(io, db_path);
+}
+
+fn readRestoreJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+) !?i96 {
+    const journal_path = try restoreJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, journal_path, allocator, .limited(128)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    if (!std.mem.startsWith(u8, contents, restore_journal_header)) return error.CorruptRestoreJournal;
+    const value = std.mem.trim(u8, contents[restore_journal_header.len..], "\r\n \t");
+    if (value.len == 0) return error.CorruptRestoreJournal;
+    return try std.fmt.parseInt(i96, value, 10);
+}
+
+fn deleteRestoreJournal(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
+    const journal_path = try restoreJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    std.Io.Dir.cwd().deleteFile(io, journal_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn restoreJournalPath(allocator: std.mem.Allocator, db_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.restore-journal", .{db_path});
+}
+
+fn restoreJournalExists(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    const journal_path = try restoreJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    return fileExists(io, journal_path);
+}
+
 fn fileExists(io: std.Io, path: []const u8) !bool {
     std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
@@ -222,33 +406,22 @@ fn syncFile(io: std.Io, path: []const u8) !void {
     try file.sync(io);
 }
 
+fn syncParentDir(io: std.Io, path: []const u8) !void {
+    const dir_path = std.fs.path.dirname(path) orelse ".";
+    const dir = try std.Io.Dir.cwd().openFile(io, dir_path, .{
+        .mode = .read_only,
+        .allow_directory = true,
+    });
+    defer dir.close(io);
+    try dir.sync(io);
+}
+
 fn moveIfExists(io: std.Io, from: []const u8, to: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
     cwd.rename(from, cwd, to, io) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
-}
-
-fn rollbackRestore(
-    io: std.Io,
-    db_path: []const u8,
-    db_wal: []const u8,
-    db_shm: []const u8,
-    safety: ?SafetyCopy,
-) void {
-    const cwd = std.Io.Dir.cwd();
-    if (safety) |copy| {
-        cwd.rename(copy.db, cwd, db_path, io) catch |err| {
-            std.log.err("restore rollback failed to restore {s}: {}", .{ db_path, err });
-        };
-        moveIfExists(io, copy.wal, db_wal) catch |err| {
-            std.log.err("restore rollback failed to restore {s}: {}", .{ db_wal, err });
-        };
-        moveIfExists(io, copy.shm, db_shm) catch |err| {
-            std.log.err("restore rollback failed to restore {s}: {}", .{ db_shm, err });
-        };
-    }
 }
 
 fn deleteQuietly(io: std.Io, path: []const u8) void {

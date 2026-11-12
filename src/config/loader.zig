@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const fs_utils = @import("../fs_utils.zig");
 const json_read = @import("../json/read.zig");
 const Config = @import("state.zig").Config;
 const Synchronous = @import("state.zig").Synchronous;
@@ -303,7 +304,7 @@ pub const ConfigLoader = struct {
             return error.InvalidPort;
         }
 
-        std.Io.Dir.cwd().createDirPath(io, config.data_dir) catch return error.InvalidDataDir;
+        fs_utils.createDirPathBounded(io, config.data_dir) catch return error.InvalidDataDir;
 
         if (config.schema_content == null) {
             if (config.schema_file.len == 0) {

@@ -6,6 +6,7 @@ const authorization_defaults = @import("authorization/defaults.zig");
 const authorization_parse = @import("authorization/parse.zig");
 const session_resolver = @import("authorization/session_resolver.zig");
 const authorization_types = @import("authorization/types.zig");
+const backup = @import("backup.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
 const http_handlers = @import("observability/http_handlers.zig");
@@ -175,6 +176,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.websocket_server.deinit();
 
         try self.initStorageAndMigrations(config);
+        errdefer self.releaseDataLock();
         errdefer self.storage_engine.deinit();
 
         try self.initCheckpoint();
@@ -328,12 +330,13 @@ pub const ZyncBaseServer = struct {
             }
             return err;
         };
-        errdefer {
-            if (self.data_lock) |*lock| {
-                lock.release(self.io);
-                self.data_lock = null;
-            }
-        }
+        errdefer self.releaseDataLock();
+
+        try backup.recoverInterruptedRestore(
+            self.io,
+            self.memory_strategy.generalAllocator(),
+            config.data_dir,
+        );
 
         std.log.info("Storage durability: synchronous={s}", .{@tagName(config.storage.synchronous)});
         try self.storage_engine.init(
@@ -352,6 +355,15 @@ pub const ZyncBaseServer = struct {
             self,
         );
         try self.runMigrationsAndStartEngine();
+
+        if (self.data_lock) |*lock| try lock.downgradeToShared(self.io);
+    }
+
+    fn releaseDataLock(self: *ZyncBaseServer) void {
+        if (self.data_lock) |*lock| {
+            lock.release(self.io);
+            self.data_lock = null;
+        }
     }
 
     fn initCheckpoint(self: *ZyncBaseServer) !void {
@@ -849,10 +861,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
 
-        if (self.data_lock) |*lock| {
-            lock.release(self.io);
-            self.data_lock = null;
-        }
+        self.releaseDataLock();
 
         std.log.debug("Deinitializing subscription_engine", .{});
         self.subscription_engine.deinit();

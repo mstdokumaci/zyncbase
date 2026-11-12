@@ -12,7 +12,8 @@ This document defines the operator-facing backup, restore, and durability contra
 |------|----------------|
 | `src/backup.zig` | Snapshot creation (`VACUUM INTO`), integrity verification, restore and rollback, safety copy. |
 | `src/cli.zig` | `backup`, `restore`, and `verify` commands; config/data-dir resolution. |
-| `src/data_lock.zig` | Exclusive advisory lock on `<dataDir>/zyncbase.lock`. |
+| `src/data_lock.zig` | Advisory lock on `<dataDir>/zyncbase.lock`; shared for backups, exclusive for restore and server startup. |
+| `src/fs_utils.zig` | Bounded directory creation shared by locks and storage initialization. |
 | `src/server.zig` | Acquires the data lock for the server's lifetime. |
 | `src/config/state.zig`, `src/config/loader.zig` | `storage.synchronous` configuration. |
 | `src/storage_engine/connection.zig` | Applies the `synchronous` pragma to the writer connection. |
@@ -35,21 +36,24 @@ This document defines the operator-facing backup, restore, and durability contra
 
 - The snapshot runs in a read transaction on a separate SQLite connection. In WAL mode it sees a consistent committed state while writers continue.
 - `VACUUM INTO` produces one compact database file and includes committed WAL frames.
-- The snapshot is written to `<out>.partial`, verified with `PRAGMA quick_check`, fsynced, then renamed into place. A failed or interrupted backup never appears as a valid output.
+- The snapshot is written to `<out>.partial-<timestamp>`, verified with `PRAGMA quick_check`, fsynced, then published with a non-replacing rename. A failed or interrupted backup never appears as a valid output.
 - The source database is opened read-write without create, so SQLite can recover a hot WAL after a crash before snapshotting.
-- The snapshot contains all namespaces, users, and store data. It does not contain `schema.json`, `authorization.json`, or secrets; those stay in version control.
+- The snapshot contains all namespaces, users, and store data. It does not contain `schema.json` or `authorization.json`; those configuration files stay in version control.
+- Secrets (JWT keys, ticket secrets, credentials) must never be stored in the snapshot, `schema.json`, `authorization.json`, or version control. Keep them in a protected secret store outside version control.
 
 ---
 
 ## Restore Semantics
 
-1. Acquire the exclusive data-directory lock. Fails with `DataDirLocked` if the server is running.
-2. Run `PRAGMA integrity_check` and the ZyncBase marker check on the input.
-3. Copy the input to `<db>.restore-tmp` and fsync it.
-4. Move the current `zyncbase.db` and its `-wal`/`-shm` aside to `<db>.pre-restore-<timestamp>`.
-5. Rename the temp file into place.
-6. On failure, move the previous database and WAL/SHM back.
-7. Keep the previous database unless `--no-safety-copy` is set.
+1. Acquire the exclusive data-directory lock. Fails with `DataDirLocked` if the server or a backup is running.
+2. Recover any interrupted restore recorded in `<db>.restore-journal` before reading or writing live state.
+3. Run `PRAGMA integrity_check` and the ZyncBase marker check on the input. Reject inputs with a non-empty `-wal` sidecar; the input must be a standalone snapshot.
+4. Copy the input to `<db>.restore-tmp`, fsync it, then run `verifyFile` against the staged copy.
+5. Write and fsync a restore journal containing the safety-copy timestamp.
+6. Move the current `zyncbase.db` and its `-wal`/`-shm` aside to `<db>.pre-restore-<timestamp>`, then sync the parent directory.
+7. Rename the temp file into place and sync the parent directory.
+8. Delete the journal and sync the parent directory. Only then delete the safety copy unless `--no-safety-copy` is set.
+9. On failure or interruption, the journal restores the previous database and WAL/SHM before the storage engine can open the database.
 
 The restore is offline by design. A single-node SQLite deployment cannot safely replace the database under a live writer.
 
@@ -57,10 +61,11 @@ The restore is offline by design. A single-node SQLite deployment cannot safely 
 
 ## Data-Directory Lock
 
-`<dataDir>/zyncbase.lock` is opened with a non-blocking exclusive advisory lock and held for the process lifetime. It:
+`<dataDir>/zyncbase.lock` is opened with a non-blocking advisory lock and held for the process lifetime. It:
 
-- Prevents two servers from opening the same data directory.
-- Lets `restore` distinguish a stopped server from a running one.
+- Prevents two servers from opening the same data directory. The server takes the exclusive lock through startup and then downgrades it to shared.
+- Lets backups coexist with the server by taking a shared lock for the lifetime of their database connection.
+- Makes `restore` take the exclusive lock, so it cannot replace the database while the server or any backup is active.
 - Is released automatically by the OS when the process exits or is killed.
 
 The lock is advisory: tools that bypass it (for example, a manual `sqlite3` shell) can still access the database.

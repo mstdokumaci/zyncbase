@@ -74,8 +74,8 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 
 	const first = await startServer(configPath);
 	const firstClient = new ZyncBaseClient(`ws://127.0.0.1:${ctx.port}`);
-	await firstClient.connect();
 	try {
+		await firstClient.connect();
 		for (let i = 0; i < recordCount; i += 1) {
 			await firstClient.store.set(
 				["persistence", `crash-${i}`],
@@ -85,10 +85,13 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 		}
 	} finally {
 		firstClient.close();
+		try {
+			process.kill(first.process.pid, "SIGKILL");
+		} catch {
+			// The server may already be gone; the exit status below reports it.
+		}
+		await first.process.exited.catch(() => {});
 	}
-
-	process.kill(first.process.pid, "SIGKILL");
-	await first.process.exited;
 
 	if (first.process.signalCode !== "SIGKILL") {
 		throw new Error(
