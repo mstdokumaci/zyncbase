@@ -142,6 +142,15 @@ fn callInline() void {
 `);
     write("missing_import.zig", `pub const missing = @import("missing.zig").missing;
 `);
+    write("fake.zig", `pub fn fakeFn() void {}
+`);
+    write("string_import.zig", `const demo =
+    \\\\const fake = @import("fake.zig");
+;
+fn callFake() void {
+    fakeFn();
+}
+`);
     write("user.zig", `const send_queue = @import("send_queue.zig").send_queue;
 const types = @import("types.zig");
 
@@ -200,6 +209,7 @@ test "test-only const" {
     assert.ok(!possible.some(l => l.includes("callbackHandler")), "callbackHandler should be used via a function pointer");
     assert.ok(!noRef.some(l => l.includes("inlineOnly")), "inlineOnly should be used via an inline import");
     assert.ok(!possible.some(l => l.includes("inlineOnly")), "inlineOnly should be used via an inline import");
+    assert.ok(noRef.some(l => l.includes("fakeFn")), "fakeFn must not gain an edge from a multiline string");
     assert.ok(possible.some(l => l.includes(" reset") && l.includes("parent=A")), "A.reset should not be strong-matched by B.reset");
     assert.ok(possible.some(l => l.includes(" owner") && l.includes("send_queue.zig")), "owner should be possibly used");
     assert.ok(possible.some(l => l.includes(" push") && l.includes("queue.zig")), "push should be possibly used");
@@ -250,6 +260,10 @@ for (const f of all) {
     for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
         if (!ln.includes("@import") && !ln.startsWith("pub const")) continue;
+
+        // Zig multiline-string content is line-prefixed with \\; it cannot
+        // contain real code, so skip it before either import parser runs.
+        if (/^[ \t]*\\\\.*$/.test(ln)) continue;
 
         // Record every local @import, including `_ = @import(...)` and
         // expression-position imports. The const-form loop below only adds
