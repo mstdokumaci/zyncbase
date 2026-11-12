@@ -50,7 +50,8 @@ Useful flags:
 
 `backup` refuses to overwrite an existing output and holds a shared data-directory lock, so a
 restore cannot start mid-backup. `restore` requires the exclusive lock on
-`<dataDir>/zyncbase.lock`, so it refuses to run while the server or a backup is active.
+`<dataDir>/zyncbase.lock`, so it refuses to run while the server or a backup is active. A server
+started while a backup is running also fails with `DataDirLocked`; retry after the backup finishes.
 
 ---
 
@@ -159,15 +160,16 @@ Restart=always
 User=zyncbase
 ```
 
-Restore while the server is stopped. Restore Litestream into a temporary file first, then
+Restore while the server is stopped. Restore Litestream into a temporary directory first, then
 install it through `zyncbase restore`. `set -e` ensures the server starts only if both commands
-succeed; the trap removes the temporary file on any exit.
+succeed; the trap removes the temporary directory on any exit.
 
 ```bash
 systemctl stop zyncbase
 set -e
-tmp=$(mktemp /var/lib/zyncbase/zyncbase-litestream-XXXXXX.db)
-trap 'rm -f "$tmp"' EXIT
+tmpdir=$(mktemp -d /var/lib/zyncbase/zyncbase-litestream-XXXXXX)
+tmp="$tmpdir/restore.db"
+trap 'rm -rf "$tmpdir"' EXIT
 litestream restore -o "$tmp" s3://my-bucket/zyncbase
 zyncbase restore "$tmp" --config /etc/zyncbase/zyncbase-config.json
 systemctl start zyncbase

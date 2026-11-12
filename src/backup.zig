@@ -160,6 +160,8 @@ pub fn restore(
     var safety_shm_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var safety: ?SafetyCopy = null;
     var journal_started = false;
+    var owned_safety: ?[]u8 = null;
+    errdefer if (owned_safety) |path| allocator.free(path);
     errdefer if (journal_started) recoverInterruptedRestore(io, allocator, data_dir) catch |err| {
         std.log.err("restore rollback failed: {}", .{err});
     };
@@ -174,6 +176,9 @@ pub fn restore(
             &safety_shm_buf,
         );
         safety = copy;
+        // Allocate before the commit point: the returned path must not fail
+        // after the replacement is durable.
+        owned_safety = try allocator.dupe(u8, copy.db);
 
         try writeRestoreJournal(io, allocator, db_path, timestamp);
         journal_started = true;
@@ -190,7 +195,14 @@ pub fn restore(
     if (journal_started) {
         try deleteRestoreJournal(io, allocator, db_path);
         journal_started = false;
-        try syncParentDir(io, db_path);
+        // Past this point the old database cannot be recovered automatically.
+        syncParentDir(io, db_path) catch |err| {
+            std.log.err(
+                "restore: database replaced but directory sync failed: {}; previous database kept",
+                .{err},
+            );
+            return .{ .safety_copy = owned_safety };
+        };
     }
 
     if (!keep_safety_copy) {
@@ -199,13 +211,13 @@ pub fn restore(
             deleteQuietly(io, copy.wal);
             deleteQuietly(io, copy.shm);
         }
+        if (owned_safety) |path| {
+            allocator.free(path);
+            owned_safety = null;
+        }
     }
 
-    var owned_safety: ?[]u8 = null;
-    if (keep_safety_copy) {
-        if (safety) |copy| owned_safety = try allocator.dupe(u8, copy.db);
-    }
-    return .{ .safety_copy = owned_safety };
+    return .{ .safety_copy = if (keep_safety_copy) owned_safety else null };
 }
 
 /// Complete or roll back a restore that was interrupted after it started
@@ -363,6 +375,7 @@ fn readRestoreJournal(
 
     const contents = std.Io.Dir.cwd().readFileAlloc(io, journal_path, allocator, .limited(128)) catch |err| switch (err) {
         error.FileNotFound => return null,
+        error.StreamTooLong => return error.CorruptRestoreJournal,
         else => return err,
     };
     defer allocator.free(contents);
@@ -370,7 +383,7 @@ fn readRestoreJournal(
     if (!std.mem.startsWith(u8, contents, restore_journal_header)) return error.CorruptRestoreJournal;
     const value = std.mem.trim(u8, contents[restore_journal_header.len..], "\r\n \t");
     if (value.len == 0) return error.CorruptRestoreJournal;
-    return try std.fmt.parseInt(i96, value, 10);
+    return std.fmt.parseInt(i96, value, 10) catch return error.CorruptRestoreJournal;
 }
 
 fn deleteRestoreJournal(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {

@@ -129,3 +129,49 @@ test "backup: interrupted restore rolls back before storage opens" {
     defer if (name) |value| allocator.free(value);
     try std.testing.expectEqualStrings("old", name.?);
 }
+
+test "backup: corrupt journal is cleared when the database still exists" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root = try std.fs.path.join(allocator, &.{ ".zig-cache/tmp", tmp.sub_path[0..] });
+    defer allocator.free(root);
+    const data_dir = try std.fs.path.join(allocator, &.{ root, "data" });
+    defer allocator.free(data_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, data_dir);
+
+    const db_path = try backup.dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+
+    {
+        var db = try openDb(allocator, db_path);
+        defer db.deinit();
+        try db.exec("CREATE TABLE _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)", .{}, .{});
+    }
+
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.restore-journal", .{db_path});
+    defer allocator.free(journal_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = journal_path,
+        .data = "zyncbase-restore-v1\nnot-a-timestamp\n",
+    });
+
+    try backup.recoverInterruptedRestore(std.testing.io, allocator, data_dir);
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(std.testing.io, journal_path, .{}),
+    );
+
+    var db = try openDb(allocator, db_path);
+    defer db.deinit();
+    const marker = try db.one(
+        i64,
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_zync_namespaces'",
+        .{},
+        .{},
+    );
+    try std.testing.expectEqual(@as(?i64, 1), marker);
+}

@@ -27,16 +27,6 @@ pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
     const io = init.io;
 
-    const cpu_count = std.Thread.getCpuCount() catch {
-        std.log.err("Failed to detect CPU count", .{});
-        return error.CpuCountDetectionFailed;
-    };
-
-    _ = ThreadBudget.init(cpu_count) catch {
-        std.log.err("ZyncBase requires at least 2 CPU cores, found {}", .{cpu_count});
-        return error.InsufficientCpuCores;
-    };
-
     var config_path: ?[]const u8 = null;
 
     // Basic CLI argument parsing
@@ -57,6 +47,16 @@ pub fn main(init: std.process.Init) !void {
         };
         return;
     }
+
+    const cpu_count = std.Thread.getCpuCount() catch {
+        std.log.err("Failed to detect CPU count", .{});
+        return error.CpuCountDetectionFailed;
+    };
+
+    _ = ThreadBudget.init(cpu_count) catch {
+        std.log.err("ZyncBase requires at least 2 CPU cores, found {}", .{cpu_count});
+        return error.InsufficientCpuCores;
+    };
 
     // Install SIGTERM/SIGINT handlers only for the server path. CLI commands
     // keep the default disposition so signals stop long-running backups and

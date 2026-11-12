@@ -16,7 +16,7 @@ pub fn createDirPathBounded(io: std.Io, path: []const u8) !void {
             component = it.next() orelse return;
         } else |err| switch (err) {
             error.PathAlreadyExists => {
-                const st = try dir.statFile(io, component.path, .{ .follow_symlinks = false });
+                const st = try dir.statFile(io, component.path, .{ .follow_symlinks = true });
                 if (st.kind != .directory) return error.NotDir;
                 component = it.next() orelse return;
             },

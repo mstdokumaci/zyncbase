@@ -52,8 +52,10 @@ This document defines the operator-facing backup, restore, and durability contra
 5. Write and fsync a restore journal containing the safety-copy timestamp.
 6. Move the current `zyncbase.db` and its `-wal`/`-shm` aside to `<db>.pre-restore-<timestamp>`, then sync the parent directory.
 7. Rename the temp file into place and sync the parent directory.
-8. Delete the journal and sync the parent directory. Only then delete the safety copy unless `--no-safety-copy` is set.
+8. Delete the journal and sync the parent directory. The safety copy is retained by default and deleted only when `--no-safety-copy` is set, after that sync succeeds.
 9. On failure or interruption, the journal restores the previous database and WAL/SHM before the storage engine can open the database.
+
+If the replacement is committed but a later cleanup sync fails, restore keeps the safety copy and reports that the database was replaced; it does not roll back.
 
 The restore is offline by design. A single-node SQLite deployment cannot safely replace the database under a live writer.
 

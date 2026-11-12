@@ -354,6 +354,7 @@ pub const ZyncBaseServer = struct {
             storageEngineWakeup,
             self,
         );
+        errdefer self.storage_engine.deinit();
         try self.runMigrationsAndStartEngine();
 
         if (self.data_lock) |*lock| try lock.downgradeToShared(self.io);
