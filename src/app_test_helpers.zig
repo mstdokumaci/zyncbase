@@ -11,7 +11,6 @@ const connection_state = @import("connection/state.zig");
 const connection_violations = @import("connection/violations.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
-const schema_mod_format = @import("schema/format.zig");
 const schema_parse = @import("schema/parse.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
@@ -192,15 +191,6 @@ pub const AppTestContext = struct {
     pub fn initWithOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef, options: StorageEngine.Options) !void {
         const schema = try schema_helpers.createTestSchema(allocator, table_defs);
         try self.initWithSchemaAndOptions(allocator, prefix, schema, options);
-    }
-
-    pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema_value: Schema) !void {
-        const json_text = try schema_mod_format.format(allocator, &schema_value);
-        defer allocator.free(json_text);
-
-        const schema = try schema_parse.initFromJson(allocator, json_text);
-        // No errdefer here — ownership transfers to initWithSchemaAndOptions
-        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true, .reader_pool_size = 1 });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {

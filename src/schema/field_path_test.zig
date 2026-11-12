@@ -25,40 +25,6 @@ test "field_path join: deep nesting composes correctly" {
     try std.testing.expectEqualStrings("a__b__c", outer);
 }
 
-test "field_path splitFirst: no separator returns whole path with null rest" {
-    const s = field_path.splitFirst("name");
-    try std.testing.expectEqualStrings("name", s.segment);
-    try std.testing.expect(s.rest == null);
-}
-
-test "field_path splitFirst: splits at first __ leaving rest" {
-    const s = field_path.splitFirst("address__city");
-    try std.testing.expectEqualStrings("address", s.segment);
-    try std.testing.expectEqualStrings("city", s.rest.?);
-}
-
-test "field_path splitFirst: only splits at first __ when multiple exist" {
-    const s = field_path.splitFirst("a__b__c");
-    try std.testing.expectEqualStrings("a", s.segment);
-    try std.testing.expectEqualStrings("b__c", s.rest.?);
-}
-
-test "field_path remainder: empty prefix returns full path" {
-    try std.testing.expectEqualStrings("city", field_path.remainder("city", "").?);
-}
-
-test "field_path remainder: strips matching prefix and separator" {
-    try std.testing.expectEqualStrings("city", field_path.remainder("address__city", "address").?);
-}
-
-test "field_path remainder: returns null for non-matching prefix" {
-    try std.testing.expect(field_path.remainder("other__city", "address") == null);
-}
-
-test "field_path remainder: returns null when path equals prefix with no remainder" {
-    try std.testing.expect(field_path.remainder("address", "address") == null);
-}
-
 test "field_path normalizeDots: converts dots to double underscores" {
     const allocator = std.testing.allocator;
     const result = try field_path.normalizeDots(allocator, "a.b.c");

@@ -23,7 +23,6 @@ test {
     _ = @import("schema/types_test.zig");
     _ = @import("schema/system_test.zig");
     _ = @import("schema/field_path_test.zig");
-    _ = @import("schema/format_test.zig");
     _ = @import("schema/constraints_test.zig");
     _ = @import("authorization/parse_test.zig");
     _ = @import("authorization/pattern_test.zig");

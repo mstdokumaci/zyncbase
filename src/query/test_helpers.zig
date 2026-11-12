@@ -4,13 +4,49 @@ const mth = @import("../msgpack_test_helpers.zig");
 const msgpack_utils = @import("../msgpack_utils.zig");
 const schema_types = @import("../schema/types.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
+const typed = @import("../typed/types.zig");
 const query_ast = @import("ast.zig");
+const query_eval = @import("eval.zig");
 
 const Payload = msgpack_utils.Payload;
 const FieldType = schema_types.FieldType;
+const Record = typed.Record;
 const Condition = query_ast.Condition;
+const FilterPredicate = query_ast.FilterPredicate;
 const OrClause = query_ast.OrClause;
 const QueryFilter = query_ast.QueryFilter;
+
+/// Test-side reference evaluator for full predicates, including OR clauses.
+/// Production matching goes through query/eval.zig `evaluateCondition`.
+pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Record) !bool {
+    switch (predicate.state) {
+        .match_all => return true,
+        .match_none => return false,
+        .conditional => {},
+    }
+
+    if (predicate.conditions) |conds| {
+        for (conds) |condition| {
+            if (!try query_eval.evaluateCondition(&condition, record)) return false;
+        }
+    }
+
+    if (predicate.or_clauses) |clauses| {
+        for (clauses) |clause| {
+            if (clause.len == 0) continue;
+            var clause_matched = false;
+            for (clause) |condition| {
+                if (try query_eval.evaluateCondition(&condition, record)) {
+                    clause_matched = true;
+                    break;
+                }
+            }
+            if (!clause_matched) return false;
+        }
+    }
+
+    return true;
+}
 
 /// Creates a synthetic QueryFilter ordered by field index 0 (`id`) for tests.
 /// Caller owns the memory and must call deinit(allocator).

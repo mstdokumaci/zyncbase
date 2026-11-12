@@ -5,7 +5,6 @@ const send_queue_mod = @import("../connection/send_queue.zig");
 const migration_detector = @import("../migration_detector.zig");
 const migration_executor = @import("../migration_executor.zig");
 const ddl_generator = @import("../sql/ddl.zig");
-const schema_mod_format = @import("format.zig");
 const schema_index = @import("index.zig");
 const schema_parse = @import("parse.zig");
 const schema_types = @import("types.zig");
@@ -223,24 +222,6 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
 
     try schema_index.buildTableIndex(allocator, &result);
     return result;
-}
-
-pub fn deinitTestSchema(_: std.mem.Allocator, schema_value: *Schema) void {
-    schema_value.deinit();
-}
-
-pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Schema, path: []const u8) !void {
-    const json_text = try schema_mod_format.format(allocator, schema_value);
-    defer allocator.free(json_text);
-
-    // Ensure directory exists
-    if (std.fs.path.dirname(path)) |dir| {
-        try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
-    }
-
-    const file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{});
-    defer file.close(std.testing.io);
-    try file.writeStreamingAll(std.testing.io, json_text);
 }
 
 pub const TestContext = struct {

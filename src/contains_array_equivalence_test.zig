@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const query_ast = @import("query/ast.zig");
-const query_eval = @import("query/eval.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
@@ -111,7 +110,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {
-        if (try query_eval.evaluatePredicate(&mem_filter.predicate, &row)) {
+        if (try qth.evaluatePredicate(&mem_filter.predicate, &row)) {
             const id = sth.getFieldDocIdOrNull(row, items_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }
@@ -212,7 +211,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer mem_ids.deinit();
 
     for (all_res.records) |row| {
-        if (try query_eval.evaluatePredicate(&mem_filter.predicate, &row)) {
+        if (try qth.evaluatePredicate(&mem_filter.predicate, &row)) {
             const id = sth.getFieldDocIdOrNull(row, players_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }
