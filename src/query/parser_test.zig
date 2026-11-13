@@ -1200,3 +1200,91 @@ fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_
     }
     return .{ .arr = arr };
 }
+
+test "parseWritePrecondition: accepts conditions and orConditions" {
+    const allocator = std.testing.allocator;
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{ "age", "status" },
+        .types = &[_]schema_types.FieldType{ .integer, .text },
+    }});
+    defer schema.deinit();
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
+
+    const payload = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{.{ "age", 4, 18 }},
+        .or_conditions = .{ .{ "status", 0, "active" }, .{ "status", 0, "pending" } },
+    });
+    defer payload.free(allocator);
+
+    var predicate = try query_parser.parseWritePrecondition(allocator, &schema, tbl.index, payload);
+    defer predicate.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), predicate.conditions.?.len);
+    try testing.expectEqual(@as(usize, 1), predicate.or_clauses.?.len);
+    try testing.expectEqual(@as(usize, 2), predicate.or_clauses.?[0].len);
+}
+
+test "parseWritePrecondition: rejects orderBy and empty predicates" {
+    const allocator = std.testing.allocator;
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{"age"},
+        .types = &[_]schema_types.FieldType{.integer},
+    }});
+    defer schema.deinit();
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
+
+    const with_order = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{.{ "age", 4, 18 }},
+        .orderBy = .{.{ "age", 0 }},
+    });
+    defer with_order.free(allocator);
+    try testing.expectError(error.InvalidConditionFormat, query_parser.parseWritePrecondition(allocator, &schema, tbl.index, with_order));
+
+    var empty = msgpack.Payload.mapPayload(allocator);
+    defer empty.free(allocator);
+    try testing.expectError(error.EmptyPrecondition, query_parser.parseWritePrecondition(allocator, &schema, tbl.index, empty));
+}
+
+test "parseWritePrecondition: rejects always-true and over-limit predicates" {
+    const allocator = std.testing.allocator;
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{"age"},
+        .types = &[_]schema_types.FieldType{.integer},
+    }});
+    defer schema.deinit();
+    const tbl = schema.table("users") orelse return error.TestExpectedValue;
+    const age_idx = tbl.fieldIndex("age") orelse return error.TestExpectedValue;
+
+    // notIn [] is trivially true.
+    {
+        var map = msgpack.Payload.mapPayload(allocator);
+        defer map.free(allocator);
+        const conds = try allocator.alloc(msgpack.Payload, 1);
+        const tuple = try allocator.alloc(msgpack.Payload, 3);
+        tuple[0] = msgpack.Payload.uintToPayload(age_idx);
+        tuple[1] = msgpack.Payload.uintToPayload(10); // notIn
+        tuple[2] = .{ .arr = &.{} };
+        conds[0] = .{ .arr = tuple };
+        try map.mapPut("conditions", .{ .arr = conds });
+        try testing.expectError(error.InvalidPrecondition, query_parser.parseWritePrecondition(allocator, &schema, tbl.index, map));
+    }
+
+    // 33 conditions exceeds the write cap.
+    {
+        var map = msgpack.Payload.mapPayload(allocator);
+        defer map.free(allocator);
+        const conds = try allocator.alloc(msgpack.Payload, 33);
+        for (conds) |*cond| {
+            const tuple = try allocator.alloc(msgpack.Payload, 3);
+            tuple[0] = msgpack.Payload.uintToPayload(age_idx);
+            tuple[1] = msgpack.Payload.uintToPayload(0); // eq
+            tuple[2] = msgpack.Payload.intToPayload(1);
+            cond.* = .{ .arr = tuple };
+        }
+        try map.mapPut("conditions", .{ .arr = conds });
+        try testing.expectError(error.PreconditionTooLarge, query_parser.parseWritePrecondition(allocator, &schema, tbl.index, map));
+    }
+}

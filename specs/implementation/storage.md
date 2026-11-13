@@ -79,12 +79,27 @@ Document timestamps are server-generated Unix microseconds. Before worker thread
 7. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
 8. Immediate and committed acknowledgements follow ADR-018 semantics.
 
+### Conditional Writes and Increments
+
+Conditional writes and atomic increments reuse the writer transaction and the same-row guard machinery (ADR-023).
+
+- A conditional write adds the client predicate as a second SQL fragment after the authorization guard. The guard for these writes is the AND of the collection's write rule and read rule; a row the session cannot read is `PERMISSION_DENIED` before the client predicate is evaluated.
+- Update SQL shape: `SET <columns>, <increments>, updated_at = ? WHERE id = ? AND namespace_id = ? [AND auth] [AND if] [AND increment guards] RETURNING <cols>`.
+- Bind order is: absolute column values, increment deltas, `updated_at`, `id`, `namespace_id`, auth guard values, `if` values, then per increment: delta (typeof), delta again when a bound exists, minimum, maximum.
+- Increment guards are `typeof(field) = 'integer' AND typeof(field + delta) = 'integer'` plus the declared `minimum`/`maximum`. SQLite integer addition overflows to REAL, which the `typeof` check rejects. A NULL field fails the first check.
+- Delete SQL shape: `DELETE ... WHERE id = ? AND namespace_id = ? [AND auth] [AND if] RETURNING <cols>`.
+- A zero-row write is classified by probing the writer's own SQL view (never the lock-free cache), in this order: existence, auth/read guard, client precondition, then increment bounds. Auth is classified first so a client cannot use `if` as a value oracle.
+- A rejected operation affects no row, pushes no cache or change-queue entry, and is reported per operation. In the coalesced flush path the transaction continues and other operations commit; in a confirmed batch the first rejection aborts the transaction and `batchIndex` identifies it.
+- Increment eligibility is validated before enqueue: integer storage, no `enum`, not in a unique constraint, non-zero delta. Unique constraint indexes are relative to `userFields()`, not global field indexes.
+- Conditional writes do not add a version column and do not change last-write-wins for unconditional writes.
+
 ## Invariants
 
 - `users.namespaced` and namespace ownership rules must match authorization/session decisions.
 - Same-row authorization guards should be expressed in the write SQL path when possible.
 - Reader statements/results are owned by their reader connection and allocator.
 - Batch writes are atomic at the storage boundary: either the accepted batch commits consistently or returns a failure.
+- Conditional-write and increment rejections are per-operation in the coalesced flush path and abort the whole transaction in a confirmed batch. Neither path may silently drop an unrelated accepted write.
 - `created_at` is required, immutable, JavaScript-safe, strictly increasing in writer order within one table, and enforced unique by SQLite.
 - Startup rejects persisted `created_at` values outside `0..Number.MAX_SAFE_INTEGER`; no global cross-table clock exists.
 - Transaction-local delta coalescing changes only subscription publication. Every SQL operation, guard, referential action, and write outcome still executes in its original order.

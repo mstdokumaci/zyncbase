@@ -29,7 +29,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 |----------|-----------|-------|-------|
 | `authentication` | No | Server + SDK | Token/ticket/session identity problems. The caller must refresh or reconnect. |
 | `authorization` | No | Server + SDK | Authorization rules denied access. |
-| `state` | No | Server + SDK | Scope, namespace, or subscription state is not valid for the request. |
+| `state` | No | Server + SDK | Scope, namespace, subscription, or row state is not valid for the request. |
 | `validation` | No | Server + SDK | Request payload, path, schema, query, or message format is invalid. |
 | `client` | No | SDK + server limits | Client-side path/batch/size issues. |
 | `rate_limit` | Yes | Server + SDK | SDK may retry after `retryAfter`; callers can opt out. |
@@ -46,6 +46,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `NAMESPACE_UNAUTHORIZED` | `authorization` | Server | Namespace-level authorization denied access. |
 | `PERMISSION_DENIED` | `authorization` | Server | Store, presence, or action rule denied the operation. |
 | `SESSION_NOT_READY` | `state` | Server | Store/presence operation arrived before the required scoped session was ready. |
+| `PRECONDITION_FAILED` | `state` | Server | A conditional write's `if` predicate did not hold, or an atomic increment's result was NULL, out of range, or would overflow. The write was not applied. Non-retryable automatically; the application may retry after re-reading. Observable only on `confirm: "committed"` writes (ADR-023). |
 | `REQUEST_SUPERSEDED` | `state` | Server | A newer scope request superseded in-flight work (scope resolution or a pending action call). |
 | `NAMESPACE_SWITCH_REJECTED` | `state` | Server | Namespace switching is forbidden for the active `users.namespaced` model. |
 | `SUBSCRIPTION_NOT_FOUND` | `state` | Server | Requested subscription id is not known for the connection. |

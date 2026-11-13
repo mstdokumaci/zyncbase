@@ -446,3 +446,44 @@ test "extractActionReplyFast: non-bool ok is rejected" {
 
     try testing.expectError(error.InvalidMessageFormat, decode.extractActionReplyFast(bytes, allocator));
 }
+
+test "extractStorePathPayloads: optional if and committed write id" {
+    const allocator = std.testing.allocator;
+    const typed_doc_id = @import("../typed/doc_id.zig");
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+
+    const path_arr = try allocator.alloc(msgpack.Payload, 2);
+    path_arr[0] = msgpack.Payload.uintToPayload(5);
+    const id_bytes = typed_doc_id.toBytes(42);
+    path_arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
+    try map.mapPut("path", .{ .arr = path_arr });
+
+    var if_map = msgpack.Payload.mapPayload(allocator);
+    const conds = try allocator.alloc(msgpack.Payload, 1);
+    const tuple = try allocator.alloc(msgpack.Payload, 3);
+    tuple[0] = msgpack.Payload.uintToPayload(3);
+    tuple[1] = msgpack.Payload.uintToPayload(4);
+    tuple[2] = msgpack.Payload.intToPayload(1);
+    conds[0] = .{ .arr = tuple };
+    try if_map.mapPut("conditions", .{ .arr = conds });
+    try map.mapPut("if", if_map);
+
+    try map.mapPut("confirm", try msgpack.Payload.strToPayload("committed", allocator));
+    try map.mapPut("writeId", try msgpack.Payload.strToPayload("00112233445566778899aabbccddeeff", allocator));
+
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const result = try decode.extractStorePathPayloads(bytes, allocator);
+    defer {
+        result.path.free(allocator);
+        if (result.value) |v| v.free(allocator);
+        if (result.if_predicate) |v| v.free(allocator);
+    }
+
+    try testing.expect(result.if_predicate != null);
+    const expected_write_id: decode.WriteId = .{ 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+    try testing.expectEqual(@as(?decode.WriteId, expected_write_id), result.write_id);
+}

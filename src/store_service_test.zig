@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const helpers = @import("app_test_helpers.zig");
+const authorization_parse = @import("authorization/parse.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_ast = @import("query/ast.zig");
 const query_parser = @import("query/parser.zig");
@@ -82,7 +83,7 @@ test "StoreService: set - full document replacement" {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
@@ -101,7 +102,7 @@ test "StoreService: set - full document replacement" {
         var path = try documentPath(allocator, 999, 1);
         defer path.free(allocator);
 
-        const result = service.setPath(writeCtx(4), path, val);
+        const result = service.setPath(writeCtx(4), path, val, null);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -131,7 +132,7 @@ test "StoreService: set - sparse field update" {
         var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         var doc = try items.getOne(allocator, 1, 1);
@@ -154,7 +155,7 @@ test "StoreService: set - sparse field update" {
         var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, map_val);
+        try service.setPath(writeCtx(1), path, map_val, null);
     }
 
     {
@@ -166,7 +167,7 @@ test "StoreService: set - sparse field update" {
         var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         var doc = try items.getOne(allocator, 1, 1);
@@ -187,7 +188,7 @@ test "StoreService: setPath path validation" {
     const value = try msgpack.Payload.strToPayload("active", allocator);
     defer value.free(allocator);
 
-    try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), .nil, value));
+    try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), .nil, value, null));
 
     {
         const arr = try allocator.alloc(msgpack.Payload, 1);
@@ -195,7 +196,7 @@ test "StoreService: setPath path validation" {
         const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
-        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value));
+        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value, null));
     }
 
     {
@@ -205,7 +206,7 @@ test "StoreService: setPath path validation" {
         const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
-        try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), path, value));
+        try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), path, value, null));
     }
 
     {
@@ -217,7 +218,7 @@ test "StoreService: setPath path validation" {
         const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
-        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value));
+        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value, null));
     }
 }
 
@@ -238,7 +239,7 @@ test "StoreService: setPath rejects odd-length sparse value" {
     var odd = msgpack.Payload{ .arr = items };
     defer odd.free(allocator);
 
-    try testing.expectError(error.InvalidPayload, service.setPath(writeCtx(1), path, odd));
+    try testing.expectError(error.InvalidPayload, service.setPath(writeCtx(1), path, odd, null));
 }
 
 test "StoreService: remove" {
@@ -267,7 +268,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
     }
 
@@ -281,7 +282,7 @@ test "StoreService: remove" {
         const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
-        const result = service.removePath(writeCtx(1), path);
+        const result = service.removePath(writeCtx(1), path, null);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
@@ -290,7 +291,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
 
-        try service.removePath(writeCtx(1), path);
+        try service.removePath(writeCtx(1), path, null);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema.table("people") orelse return error.UnknownTable;
@@ -304,7 +305,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, 999, 1);
         defer path.free(allocator);
 
-        const result = service.removePath(writeCtx(4), path);
+        const result = service.removePath(writeCtx(4), path, null);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -348,7 +349,7 @@ test "StoreService: array validation" {
         var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
     }
 
     // 2. Negative: Element type mismatch (integer in string array)
@@ -367,7 +368,7 @@ test "StoreService: array validation" {
         var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
-        const result = app.store_service.setPath(writeCtx(1), path, val);
+        const result = app.store_service.setPath(writeCtx(1), path, val, null);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -387,7 +388,7 @@ test "StoreService: array validation" {
         var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
-        const result = app.store_service.setPath(writeCtx(1), path, val);
+        const result = app.store_service.setPath(writeCtx(1), path, val, null);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -407,7 +408,7 @@ test "StoreService: array validation" {
         var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
     }
 }
 
@@ -432,7 +433,7 @@ test "StoreService: persistence and namespace isolation" {
         var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
-        try app.store_service.setPath(writeCtx(2), path, val);
+        try app.store_service.setPath(writeCtx(2), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         var stored_doc = try test_table.getOne(allocator, 1, 2);
@@ -450,7 +451,7 @@ test "StoreService: persistence and namespace isolation" {
         var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(3), path, val);
+        try service.setPath(writeCtx(3), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         var doc_a = try test_table.getOne(allocator, 1, 2);
@@ -472,7 +473,7 @@ test "StoreService: persistence and namespace isolation" {
         var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
-        try app.store_service.setPath(writeCtx(2), path, val);
+        try app.store_service.setPath(writeCtx(2), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         var doc = try test_table.getOne(allocator, 1, 2);
@@ -919,7 +920,7 @@ test "StoreService: batchWrite - mixed set and remove" {
         defer val.free(allocator);
         var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
     }
 
@@ -977,7 +978,7 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
         defer value.free(allocator);
         var path = try documentPath(allocator, items.metadata.index, seed.id);
         defer path.free(allocator);
-        try service.setPath(writeCtx(1), path, value);
+        try service.setPath(writeCtx(1), path, value, null);
     }
     try app.storage_engine.flushPendingWrites();
     for (app.test_context.change_queue.?.shards) |*shard| {
@@ -1320,7 +1321,7 @@ test "StoreService: create requires all required fields but update does not" {
         var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
         defer path.free(allocator);
 
-        const result = service.setPath(writeCtx(1), path, val);
+        const result = service.setPath(writeCtx(1), path, val, null);
         try testing.expectError(StorageError.MissingRequiredField, result);
     }
 
@@ -1336,7 +1337,7 @@ test "StoreService: create requires all required fields but update does not" {
         var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         // Verify the document was created
@@ -1359,7 +1360,7 @@ test "StoreService: create requires all required fields but update does not" {
         var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, val, null);
         try app.storage_engine.flushPendingWrites();
 
         // Verify the update succeeded
@@ -1368,4 +1369,306 @@ test "StoreService: create requires all required fields but update does not" {
         _ = try doc.expectFieldString("status", "archived");
         _ = try doc.expectFieldString("description", "Updated description");
     }
+}
+
+fn writeCtxCommitted(namespace_id: i64, write_id: [16]u8) store_service.StoreService.WriteContext {
+    var ctx = writeCtx(namespace_id);
+    ctx.write_id = write_id;
+    return ctx;
+}
+
+fn makePrecondition(
+    allocator: std.mem.Allocator,
+    field_index: usize,
+    op: query_ast.Operator,
+    operand: msgpack.Payload,
+) !msgpack.Payload {
+    const conds = try allocator.alloc(msgpack.Payload, 1);
+    const tuple = try allocator.alloc(msgpack.Payload, 3);
+    tuple[0] = msgpack.Payload.uintToPayload(field_index);
+    tuple[1] = msgpack.Payload.uintToPayload(@intFromEnum(op));
+    tuple[2] = operand;
+    conds[0] = .{ .arr = tuple };
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    try map.mapPut("conditions", .{ .arr = conds });
+    return map;
+}
+
+fn makeIncrementOp(
+    allocator: std.mem.Allocator,
+    path: msgpack.Payload,
+    field_index: usize,
+    delta: i64,
+) !msgpack.Payload {
+    const tuple = try allocator.alloc(msgpack.Payload, 4);
+    tuple[0] = try msgpack.Payload.strToPayload("i", allocator);
+    tuple[1] = path;
+    tuple[2] = msgpack.Payload.uintToPayload(field_index);
+    tuple[3] = msgpack.Payload.intToPayload(delta);
+    return .{ .arr = tuple };
+}
+
+fn freeIncrementOp(allocator: std.mem.Allocator, op: msgpack.Payload) void {
+    op.arr[0].free(allocator);
+    allocator.free(op.arr);
+}
+
+test "StoreService: conditional set applies when the precondition holds" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-conditional-set", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const seed = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 10) }});
+    defer seed.free(allocator);
+    try service.setPath(writeCtx(1), path, seed, null);
+    try app.storage_engine.flushPendingWrites();
+
+    var if_payload = try makePrecondition(allocator, balance_idx, .gte, msgpack.Payload.intToPayload(5));
+    defer if_payload.free(allocator);
+
+    const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
+    defer value.free(allocator);
+    try service.setPath(writeCtxCommitted(1, .{1} ** 16), path, value, if_payload);
+    try app.storage_engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
+}
+
+test "StoreService: conditional set never creates a missing document" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-conditional-no-create", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    var if_payload = try makePrecondition(allocator, balance_idx, .gte, msgpack.Payload.intToPayload(0));
+    defer if_payload.free(allocator);
+
+    const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
+    defer value.free(allocator);
+    try service.setPath(writeCtxCommitted(1, .{2} ** 16), path, value, if_payload);
+    try app.storage_engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expect(rec == null);
+}
+
+test "StoreService: conditional write without committed confirmation is rejected" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-conditional-confirm", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    var if_payload = try makePrecondition(allocator, balance_idx, .gte, msgpack.Payload.intToPayload(0));
+    defer if_payload.free(allocator);
+
+    const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
+    defer value.free(allocator);
+    try testing.expectError(error.InvalidWriteAck, service.setPath(writeCtx(1), path, value, if_payload));
+}
+
+test "StoreService: batch increment op applies" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-increment-batch", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const seed = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 10) }});
+    defer seed.free(allocator);
+    try service.setPath(writeCtx(1), path, seed, null);
+    try app.storage_engine.flushPendingWrites();
+
+    const inc_op = try makeIncrementOp(allocator, path, balance_idx, -5);
+    defer freeIncrementOp(allocator, inc_op);
+    const ops = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops);
+    ops[0] = inc_op;
+
+    try service.batchWrite(writeCtxCommitted(1, .{3} ** 16), .{ .arr = ops });
+    try app.storage_engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expectEqual(@as(i64, 5), rec.?.values[balance_idx].scalar.integer);
+}
+
+test "StoreService: batch increment without committed confirmation is rejected" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-increment-confirm", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const inc_op = try makeIncrementOp(allocator, path, balance_idx, -5);
+    defer freeIncrementOp(allocator, inc_op);
+    const ops = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops);
+    ops[0] = inc_op;
+
+    try testing.expectError(error.InvalidWriteAck, service.batchWrite(writeCtx(1), .{ .arr = ops }));
+}
+
+test "StoreService: increment on a non-integer field is rejected" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-increment-type", &.{
+        .{ .name = "accounts", .fields = &.{ "name", "balance" }, .types = &.{ .text, .integer } },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const name_idx = accounts.metadata.fieldIndex("name") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const inc_op = try makeIncrementOp(allocator, path, name_idx, 1);
+    defer freeIncrementOp(allocator, inc_op);
+    const ops = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops);
+    ops[0] = inc_op;
+
+    try testing.expectError(StorageError.TypeMismatch, service.batchWrite(writeCtxCommitted(1, .{4} ** 16), .{ .arr = ops }));
+}
+
+test "StoreService: increment on enum and unique fields is rejected" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "accounts": {
+        \\      "fields": {
+        \\        "status": { "type": "integer", "enum": [1, 2] },
+        \\        "seat": { "type": "integer" }
+        \\      },
+        \\      "unique": [["seat"]]
+        \\    }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "store-increment-constraints", schema_json);
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const accounts = app.schema.table("accounts") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.index, 1);
+    defer path.free(allocator);
+
+    inline for (.{ "status", "seat" }) |field_name| {
+        const field_idx = accounts.fieldIndex(field_name) orelse return error.TestExpectedValue;
+        const inc_op = try makeIncrementOp(allocator, path, field_idx, 1);
+        defer freeIncrementOp(allocator, inc_op);
+        const ops = try allocator.alloc(msgpack.Payload, 1);
+        defer allocator.free(ops);
+        ops[0] = inc_op;
+        try testing.expectError(StorageError.IncrementNotSupported, service.batchWrite(writeCtxCommitted(1, .{5} ** 16), .{ .arr = ops }));
+    }
+}
+
+test "StoreService: conditional write on an unreadable row returns PermissionDenied" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "items": { "fields": { "val": { "type": "string" } } }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "store-conditional-read-guard", schema_json);
+    defer app.deinit();
+
+    const auth_json =
+        \\{
+        \\  "namespaces": [
+        \\    { "pattern": "public", "storeFilter": true, "presenceRead": true, "presenceWrite": true }
+        \\  ],
+        \\  "store": [
+        \\    { "collection": "items", "read": { "$doc.owner_id": { "eq": "$session.userId" } }, "write": true }
+        \\  ]
+        \\}
+    ;
+    const new_auth = try authorization_parse.initFromJson(allocator, auth_json, &app.schema);
+    app.auth_config.deinit();
+    app.auth_config = new_auth;
+
+    const service = &app.store_service;
+    const items = app.schema.table("items") orelse return error.TestExpectedValue;
+    const val_idx = items.fieldIndex("val") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, items.index, 1);
+    defer path.free(allocator);
+
+    // Seed an unreadable row: owner 999, while the session user is 0.
+    const seed = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "original" } } }};
+    try sth.enqueueUpsert(&app.storage_engine, items.index, 1, 1, 999, &seed, null, null, null);
+    try app.storage_engine.flushPendingWrites();
+
+    var if_payload = try makePrecondition(allocator, val_idx, .eq, try msgpack.Payload.strToPayload("different", allocator));
+    defer if_payload.free(allocator);
+    const value = try store_helpers.createDocumentMapPayload(allocator, items, .{.{ "val", "updated" }});
+    defer value.free(allocator);
+
+    var ctx = writeCtxCommitted(1, .{6} ** 16);
+    ctx.request.user_doc_id = typed_doc_id.zero;
+    try service.setPath(ctx, path, value, if_payload);
+    try app.storage_engine.flushPendingWrites();
+
+    var saw_permission_denied = false;
+    while (app.test_context.send_queue.?.pop()) |entry| {
+        var owned = entry;
+        defer owned.deinit();
+        if (std.mem.indexOf(u8, owned.data, "PERMISSION_DENIED") != null) saw_permission_denied = true;
+        try testing.expect(std.mem.indexOf(u8, owned.data, "PRECONDITION_FAILED") == null);
+    }
+    try testing.expect(saw_permission_denied);
+
+    const rec = try sth.readDoc(allocator, &app.storage_engine, items.index, 1, 1);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expectEqualStrings("original", rec.?.values[val_idx].scalar.text);
 }

@@ -1,4 +1,4 @@
-// Schema Dictionary — Client-side integer routing (ADR-025)
+// Schema Dictionary — Client-side integer routing (ADR-009)
 //
 // Maintains bidirectional mappings between schema string identifiers
 // (collection names, field names) and their dense integer indices.

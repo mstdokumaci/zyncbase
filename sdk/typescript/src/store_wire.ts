@@ -2,6 +2,7 @@ import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { flatten, joinFieldPath, normalizePath } from "./path.js";
 import type {
 	BatchOperation,
+	ConditionalWriteOptions,
 	JsonValue,
 	OkResponse,
 	Path,
@@ -46,7 +47,7 @@ const OP_CODES: Record<string, number> = {
 export function buildSet(
 	path: Path,
 	value: JsonValue,
-	options?: WriteOptions,
+	options?: ConditionalWriteOptions,
 ): StoreCommand<WithoutId<StoreSet>> {
 	const segments = normalizePath(path);
 	if (segments.length === 1) {
@@ -56,6 +57,7 @@ export function buildSet(
 			retryable: false,
 		});
 	}
+	assertConditionalConfirm(options);
 
 	const wirePath = segments.slice(0, 2);
 	const wireValue =
@@ -69,6 +71,7 @@ export function buildSet(
 			type: "StoreSet",
 			path: wirePath,
 			value: encodeWriteValue(wirePath, wireValue),
+			...(options?.if ? { if: encodeWhereClause(options.if) } : {}),
 			...(options?.confirm ? { confirm: options.confirm } : {}),
 			...(options?.confirm === "committed"
 				? { writeId: generateUUIDv7().replace(/-/g, "") }
@@ -79,7 +82,7 @@ export function buildSet(
 
 export function buildRemove(
 	path: Path,
-	options?: WriteOptions,
+	options?: ConditionalWriteOptions,
 ): StoreCommand<WithoutId<StoreRemove>> {
 	const segments = normalizePath(path);
 	if (segments.length !== 2) {
@@ -92,12 +95,14 @@ export function buildRemove(
 			},
 		);
 	}
+	assertConditionalConfirm(options);
 
 	return {
 		segments,
 		message: {
 			type: "StoreRemove",
 			path: segments,
+			...(options?.if ? { if: encodeWhereClause(options.if) } : {}),
 			...(options?.confirm ? { confirm: options.confirm } : {}),
 			...(options?.confirm === "committed"
 				? { writeId: generateUUIDv7().replace(/-/g, "") }
@@ -166,6 +171,16 @@ export function buildBatch(
 		ops.push(buildBatchOp(op));
 	}
 
+	const hasConditional =
+		operations.some((op) => op.if !== undefined) ||
+		operations.some((op) => op.op === "increment");
+	if (hasConditional) {
+		requireCommitted(
+			options,
+			"Batch operations with 'if' or increment require confirm: 'committed'",
+		);
+	}
+
 	return {
 		type: "StoreBatch",
 		ops,
@@ -177,17 +192,6 @@ export function buildBatch(
 }
 
 function buildBatchOp(op: BatchOperation): StoreBatch["ops"][number] {
-	if (op.op !== "set" && op.op !== "remove") {
-		throw new ZyncBaseError(
-			"Batch operation must specify op as set or remove",
-			{
-				code: ErrorCodes.INVALID_MESSAGE,
-				category: "client",
-				retryable: false,
-			},
-		);
-	}
-
 	const segments = normalizePath(op.path);
 	if (segments.length < 2) {
 		throw new ZyncBaseError("Batch operation path requires depth 2 or more", {
@@ -196,25 +200,109 @@ function buildBatchOp(op: BatchOperation): StoreBatch["ops"][number] {
 			retryable: false,
 		});
 	}
-	if (op.op === "remove") {
-		if (segments.length !== 2) {
+
+	switch (op.op) {
+		case "remove":
+			return buildBatchRemove(op, segments);
+		case "increment":
+			return buildBatchIncrement(op, segments);
+		case "set":
+			return buildBatchSet(op, segments);
+		default:
 			throw new ZyncBaseError(
-				"store.remove requires a path of depth 2 (collection + document id)",
+				"Batch operation must specify op as set, remove, or increment",
 				{
-					code: ErrorCodes.INVALID_PATH,
+					code: ErrorCodes.INVALID_MESSAGE,
 					category: "client",
 					retryable: false,
 				},
 			);
-		}
-		return ["r", segments];
 	}
+}
+
+function buildBatchRemove(
+	op: Extract<BatchOperation, { op: "remove" }>,
+	segments: string[],
+): StoreBatch["ops"][number] {
+	if (segments.length !== 2) {
+		throw new ZyncBaseError(
+			"store.remove requires a path of depth 2 (collection + document id)",
+			{
+				code: ErrorCodes.INVALID_PATH,
+				category: "client",
+				retryable: false,
+			},
+		);
+	}
+	return op.if ? ["r", segments, encodeWhereClause(op.if)] : ["r", segments];
+}
+
+function buildBatchIncrement(
+	op: Extract<BatchOperation, { op: "increment" }>,
+	segments: string[],
+): StoreBatch["ops"][number] {
+	if (segments.length < 3) {
+		throw new ZyncBaseError(
+			"store.increment requires a field path of depth 3 or more",
+			{
+				code: ErrorCodes.INVALID_PATH,
+				category: "client",
+				retryable: false,
+			},
+		);
+	}
+	if (!Number.isSafeInteger(op.by) || op.by === 0) {
+		throw new ZyncBaseError(
+			"Increment amount must be a non-zero safe integer",
+			{
+				code: ErrorCodes.INVALID_MESSAGE,
+				category: "client",
+				retryable: false,
+			},
+		);
+	}
+	const wirePath = segments.slice(0, 2);
+	const fieldPath = joinFieldPath(...segments.slice(2));
+	return op.if
+		? ["i", wirePath, fieldPath, op.by, encodeWhereClause(op.if)]
+		: ["i", wirePath, fieldPath, op.by];
+}
+
+function buildBatchSet(
+	op: Extract<BatchOperation, { op: "set" }>,
+	segments: string[],
+): StoreBatch["ops"][number] {
 	const wirePath = segments.slice(0, 2);
 	const wireValue =
 		segments.length >= 3
 			? { [joinFieldPath(...segments.slice(2))]: op.value ?? null }
 			: (op.value ?? null);
-	return ["s", wirePath, encodeWriteValue(wirePath, wireValue)];
+	const encoded = encodeWriteValue(wirePath, wireValue);
+	return op.if
+		? ["s", wirePath, encoded, encodeWhereClause(op.if)]
+		: ["s", wirePath, encoded];
+}
+
+function requireCommitted(
+	options: { confirm?: "accepted" | "committed" } | undefined,
+	message: string,
+): void {
+	if (options?.confirm !== "committed") {
+		throw new ZyncBaseError(message, {
+			code: ErrorCodes.INVALID_MESSAGE,
+			category: "client",
+			retryable: false,
+		});
+	}
+}
+
+function assertConditionalConfirm(options?: ConditionalWriteOptions): void {
+	if (options?.if !== undefined) {
+		requireCommitted(
+			options,
+			"Conditional writes require confirm: 'committed'",
+		);
+	}
 }
 
 export function buildListen(

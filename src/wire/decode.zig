@@ -389,12 +389,14 @@ pub fn decodeWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?Wri
 pub const StorePathPayloads = struct {
     path: Payload,
     value: ?Payload,
+    if_predicate: ?Payload = null,
     write_id: ?WriteId = null,
 };
 
 const StorePathRawFields = struct {
     path: Payload,
     value: ?Payload,
+    if_predicate: ?Payload = null,
     confirm: ?[]const u8 = null,
     write_id: ?[]const u8 = null,
 };
@@ -402,6 +404,7 @@ const StorePathRawFields = struct {
 const store_path_table = [_]Field{
     .{ .key = "path", .kind = .payload, .field = "path", .required = true },
     .{ .key = "value", .kind = .payload, .field = "value", .required = false },
+    .{ .key = "if", .kind = .payload, .field = "if_predicate", .required = false },
     .{ .key = "confirm", .kind = .str, .field = "confirm", .required = false },
     .{ .key = "writeId", .kind = .str, .field = "write_id", .required = false },
 };
@@ -411,10 +414,12 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
     errdefer {
         raw.path.free(allocator);
         if (raw.value) |v| v.free(allocator);
+        if (raw.if_predicate) |v| v.free(allocator);
     }
     return .{
         .path = raw.path,
         .value = raw.value,
+        .if_predicate = raw.if_predicate,
         .write_id = try decodeWriteAck(raw.confirm, raw.write_id),
     };
 }

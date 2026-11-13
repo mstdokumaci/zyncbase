@@ -20,6 +20,12 @@ pub const ColumnValue = struct {
     value: typed.Value,
 };
 
+/// A single-field relative update: `SET field = field + delta`.
+pub const IncrementValue = struct {
+    field_index: usize,
+    delta: i64,
+};
+
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList.
 const Entry = struct {
@@ -533,7 +539,9 @@ pub fn buildUpdateDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
+    increments: []const IncrementValue,
     guard_sql: ?[]const u8,
+    precondition_sql: ?[]const u8,
 ) ![]const u8 {
     var buf = SqlBuf.init();
     defer buf.deinit(allocator);
@@ -542,8 +550,9 @@ pub fn buildUpdateDocumentSql(
     try buf.appendSlice(allocator, table_metadata.name_quoted);
     try buf.appendSlice(allocator, " SET ");
 
-    try appendUpdateColumnSet(allocator, &buf, table_metadata, columns);
-    try appendDocIdNamespaceWhere(allocator, &buf, guard_sql);
+    try appendUpdateColumnSet(allocator, &buf, table_metadata, columns, increments);
+    try appendDocIdNamespaceWhere(allocator, &buf, guard_sql, precondition_sql);
+    try appendIncrementGuards(allocator, &buf, table_metadata, increments);
     try buf.appendSlice(allocator, " RETURNING ");
     try build.appendProjectedColumnsSql(allocator, &buf, table_metadata);
 
@@ -555,6 +564,7 @@ fn appendUpdateColumnSet(
     buf: *SqlBuf,
     table_metadata: *const schema_types.Table,
     columns: []const ColumnValue,
+    increments: []const IncrementValue,
 ) !void {
     var list = SqlList.init(buf, ", ");
     for (columns) |col| {
@@ -568,15 +578,63 @@ fn appendUpdateColumnSet(
             try buf.appendSlice(allocator, "?");
         }
     }
+    for (increments) |inc| {
+        if (inc.field_index >= table_metadata.fields.len) return errors.StorageError.UnknownField;
+        const field = table_metadata.fields[inc.field_index];
+        try list.maybeSep(allocator);
+        try buf.appendSlice(allocator, field.name_quoted);
+        try buf.appendSlice(allocator, " = ");
+        try buf.appendSlice(allocator, field.name_quoted);
+        try buf.appendSlice(allocator, " + ?");
+    }
     try list.maybeSep(allocator);
     try buf.appendSlice(allocator, schema_system.quoted_updated_at);
     try buf.appendSlice(allocator, " = ?");
+}
+
+/// Emits the per-increment guards. Placeholder order per increment is:
+/// delta (typeof operand), then delta again when a range bound exists,
+/// followed by minimum and maximum. The caller binds the same order after the
+/// guard/precondition values.
+fn appendIncrementGuards(
+    allocator: Allocator,
+    buf: *SqlBuf,
+    table_metadata: *const schema_types.Table,
+    increments: []const IncrementValue,
+) !void {
+    for (increments) |inc| {
+        if (inc.field_index >= table_metadata.fields.len) return errors.StorageError.UnknownField;
+        const field = table_metadata.fields[inc.field_index];
+        try buf.appendSlice(allocator, " AND typeof(");
+        try buf.appendSlice(allocator, field.name_quoted);
+        try buf.appendSlice(allocator, ") = 'integer' AND typeof(");
+        try buf.appendSlice(allocator, field.name_quoted);
+        try buf.appendSlice(allocator, " + ?) = 'integer'");
+
+        const constraints = field.constraints orelse continue;
+        const has_min = constraints.minimum != null;
+        const has_max = constraints.maximum != null;
+        if (has_min and has_max) {
+            try buf.appendSlice(allocator, " AND (");
+            try buf.appendSlice(allocator, field.name_quoted);
+            try buf.appendSlice(allocator, " + ?) BETWEEN ? AND ?");
+        } else if (has_min) {
+            try buf.appendSlice(allocator, " AND (");
+            try buf.appendSlice(allocator, field.name_quoted);
+            try buf.appendSlice(allocator, " + ?) >= ?");
+        } else if (has_max) {
+            try buf.appendSlice(allocator, " AND (");
+            try buf.appendSlice(allocator, field.name_quoted);
+            try buf.appendSlice(allocator, " + ?) <= ?");
+        }
+    }
 }
 
 fn appendDocIdNamespaceWhere(
     allocator: Allocator,
     buf: *SqlBuf,
     guard_sql: ?[]const u8,
+    precondition_sql: ?[]const u8,
 ) !void {
     try buf.appendSlice(allocator, " WHERE ");
     try buf.appendSlice(allocator, schema_system.quoted_id);
@@ -584,6 +642,9 @@ fn appendDocIdNamespaceWhere(
     try buf.appendSlice(allocator, schema_system.quoted_namespace_id);
     try buf.appendSlice(allocator, "=?");
     if (guard_sql) |fragment| {
+        try buf.appendSlice(allocator, fragment);
+    }
+    if (precondition_sql) |fragment| {
         try buf.appendSlice(allocator, fragment);
     }
 }

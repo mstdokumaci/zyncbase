@@ -82,6 +82,103 @@ describe("store_wire", () => {
 		).toThrow(ZyncBaseError);
 	});
 
+	test("buildSet encodes if and requires committed confirmation", () => {
+		expect(() =>
+			buildSet(
+				"users.u1",
+				{ name: "Ada" },
+				{
+					if: { name: { eq: "Ada" } },
+				},
+			),
+		).toThrow(ZyncBaseError);
+
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { name: { eq: "Ada" } },
+			},
+		);
+		expect(command.message.if).toEqual({
+			conditions: [["name", 0, "Ada"]],
+		});
+		expect(command.message.writeId).toBeTruthy();
+	});
+
+	test("buildRemove encodes if and requires committed confirmation", () => {
+		expect(() =>
+			buildRemove("users.u1", { if: { name: { eq: "Ada" } } }),
+		).toThrow(ZyncBaseError);
+
+		const command = buildRemove("users.u1", {
+			confirm: "committed",
+			if: { name: { eq: "Ada" } },
+		});
+		expect(command.message.if).toEqual({
+			conditions: [["name", 0, "Ada"]],
+		});
+		expect(command.message.writeId).toBeTruthy();
+	});
+
+	test("buildBatch encodes conditional and increment ops", () => {
+		const message = buildBatch(
+			[
+				{
+					op: "set",
+					path: "users.u1",
+					value: { name: "Ada" },
+					if: { name: { eq: "old" } },
+				},
+				{ op: "remove", path: "users.u2", if: { name: { eq: "x" } } },
+				{
+					op: "increment",
+					path: "users.u1.coins",
+					by: -5,
+					if: { coins: { gte: 5 } },
+				},
+			],
+			{ confirm: "committed" },
+		);
+
+		expect(message.ops).toEqual([
+			[
+				"s",
+				["users", "u1"],
+				{ name: "Ada" },
+				{ conditions: [["name", 0, "old"]] },
+			],
+			["r", ["users", "u2"], { conditions: [["name", 0, "x"]] }],
+			["i", ["users", "u1"], "coins", -5, { conditions: [["coins", 4, 5]] }],
+		]);
+		expect(message.writeId).toBeTruthy();
+	});
+
+	test("buildBatch rejects conditional ops without committed confirmation", () => {
+		expect(() =>
+			buildBatch([{ op: "increment", path: "users.u1.coins", by: 1 }]),
+		).toThrow(ZyncBaseError);
+		expect(() =>
+			buildBatch([
+				{
+					op: "set",
+					path: "users.u1",
+					value: { name: "Ada" },
+					if: { name: { eq: "x" } },
+				},
+			]),
+		).toThrow(ZyncBaseError);
+	});
+
+	test("buildBatch rejects zero increment deltas", () => {
+		expect(() =>
+			buildBatch([{ op: "increment", path: "users.u1.coins", by: 0 }], {
+				confirm: "committed",
+			}),
+		).toThrow(ZyncBaseError);
+	});
+
 	test("buildLoadMore contains only server-required fields", () => {
 		expect(buildLoadMore(9, "next")).toEqual({
 			type: "StoreLoadMore",

@@ -58,6 +58,18 @@ pub const StorageError = error{
     LengthViolation,
     /// Numeric value is outside the allowed range
     RangeViolation,
+    /// A client-supplied write precondition did not hold
+    PreconditionFailed,
+    /// Atomic increments require an unconstrained, non-unique integer field
+    IncrementNotSupported,
+    /// Increment delta is zero or otherwise invalid
+    InvalidIncrement,
+    /// Write precondition exceeds the condition cap
+    PreconditionTooLarge,
+    /// Write precondition has no conditions
+    EmptyPrecondition,
+    /// Write precondition simplifies to always true
+    InvalidPrecondition,
 };
 
 pub fn classifyError(err: anyerror) anyerror {

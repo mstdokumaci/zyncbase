@@ -30,6 +30,7 @@ pub const ReaderNode = connection.ReaderNode;
 pub const StorageError = storage_errors.StorageError;
 pub const ReadRequest = read_buffer.ReadRequest;
 pub const ColumnValue = sql.ColumnValue;
+pub const IncrementValue = sql.IncrementValue;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
 pub const CheckpointMode = write_queue.CheckpointMode;
 const CheckpointStats = write_queue.CheckpointStats;

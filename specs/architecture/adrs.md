@@ -938,7 +938,7 @@ Input validation runs inside the Zig engine before forwarding to workers; invali
    - The server tracks the call by a server-minted execution id, routes it to a registered worker, awaits the worker's `ActionReply`, validates return fields, and forwards the response back to the client.
    - The SDK returns `Promise<unknown>`; the return shape is validated at runtime and typed action outputs await a future codegen pass.
 
-Sync actions are orchestration, not transactions. The engine provides no atomic increment or compare-and-set, and a sync reply is a worker claim — not committed state. Workers that mutate store must use `confirm: "committed"` where the outcome matters and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
+Sync actions are orchestration, not transaction management. A multi-step action is not a transaction, and a sync reply remains a worker claim — not committed state. Workers that mutate store must use `confirm: "committed"` where the outcome matters and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
 
 ### Namespace Scope Binding
 
@@ -993,10 +993,73 @@ Sync actions are orchestration, not transactions. The engine provides no atomic 
 
 - Completely eliminates the need to abuse the Presence system or SQLite store for upstream client-to-server messaging.
 - Schema serves as the single source of truth for validation, execution mode, and scope binding.
-- Sync actions add worker availability and round-trip latency to the caller's path; they are not transactional and cannot express atomic counters or compare-and-set.
+- Sync actions add worker availability and round-trip latency to the caller's path; multi-step action logic is not transactional.
 - Async actions are at-most-once, inherit the per-connection message rate limit, and provide no delivery or failure feedback.
 - Clients write clean, boilerplate-free code (`client.actions.call(name, params)`). Action params/returns are schema-validated at runtime; typed action params/returns await action-aware codegen (today the generator covers the store schema only), so sync results are `unknown` and cast by the caller until then.
 - Keeps the Zig core fast and lean: business logic stays in external worker processes (Node/Bun/Go) while ZyncBase acts as the high-speed binary multiplexer.
 
 **Principles**: P-RTF, P-TSF, P-PPF, P-SBD, P-POM
 
+---
+
+## ADR-023: Conditional Writes and Atomic Increments
+
+Last-write-wins (ADR-010) is the right default for collaborative fields, but it is the wrong answer for state transitions that must not lose an update. A balance decrement, an inventory reservation, a seat claim, and a checkout all depend on "the current value still permits this write". Before this decision, the only ways to express that were a schema-declared unique constraint (ADR-021, existence only) or a single-worker process that owns the authoritative state and is the only writer — which undercuts the "configure it, don't code it" model and does not survive a restart without rebuilding from the store. Actions make the gap worse: they are routed round-robin and their workers are stateless (ADR-022), so a worker cannot make read-modify-write safe by remembering the last value it saw.
+
+**Decision**: Add two opt-in store primitives, evaluated by SQLite inside the writer's transaction:
+
+1. **Conditional writes** — `store.set`, `store.remove`, and each batch operation accept an optional `if` predicate (`conditions` / `orConditions`, the existing query grammar). The write applies only if the predicate holds against the **existing** row.
+2. **Atomic increments** — a single-field relative update, `SET field = field + delta`, for integer fields. The result must remain inside the field's declared `minimum` / `maximum` and must not be NULL or overflow.
+
+Both require `confirm: "committed"` and a `writeId`. Both are reported as write-phase outcomes (`WriteCommitted` / `WriteError`); state still reaches clients only through subscriptions (P-SAT).
+
+### Conditional Write Semantics
+
+- A conditional write is a compare-and-set on an existing row. It **never creates**. A conditional `set` on a missing row returns `PRECONDITION_FAILED`; an unconditional `set` keeps its upsert behavior. A conditional `remove` on a missing row returns `PRECONDITION_FAILED`; an unconditional `remove` keeps its success/no-op behavior.
+- The predicate is evaluated against the pre-update row. `SET x = ? WHERE x = ?` sees the old value, as in standard CAS.
+- The write guard is the AND of the collection's write rule and its **read** rule. A conditional write therefore requires read visibility on the target row. This prevents `if` from being used as a value oracle on rows the write rule exposes but the read rule hides. Classification is auth-first: a denied row returns `PERMISSION_DENIED` without evaluating the client predicate.
+- A confirmed batch with per-op `if` is a multi-document compare-and-set: operations run in order, later operations see earlier uncommitted effects, and the first rejected operation rolls back the whole batch and reports its `batchIndex`.
+- Conditional writes do not change LWW for unconditional writes, do not add a version column, and cost nothing on writes that do not use them.
+
+### Atomic Increment Semantics
+
+- One field per operation; multiple fields use multiple batch operations (the batch is already atomic).
+- The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint. These are rejected at accept with `SCHEMA_VALIDATION_FAILED`.
+- The SQL is one statement. The guard checks, in order: the stored value is an integer, the arithmetic result is an integer (SQLite overflows integer addition to REAL), and the result is within the declared bounds. A result that fails any check affects zero rows and is classified as `PRECONDITION_FAILED`; it is a rejection, not a transaction error.
+- Increments never create. A missing row, a NULL stored value, an overflow, or a range violation is `PRECONDITION_FAILED`.
+- The new value is delivered through the subscription delta, not the write response (P-SAT). An action that needs the resulting balance performs a post-commit read; that read is "balance now", possibly after later writes.
+
+### Confirmation and Error Semantics
+
+- `if` or an increment without `confirm: "committed"` is rejected at accept with `INVALID_MESSAGE`. Under `confirm: "accepted"` a rejection has no outcome channel, so a precondition would silently do nothing — worse than no precondition.
+- The public code is `PRECONDITION_FAILED`, category `state`, non-retryable. It covers a failed `if`, a missing row, a NULL field, an overflow, and a range violation. The application may retry after re-reading and re-evaluating; the SDK must never auto-retry a write. Increments are not idempotent, and no `writeId` dedupe exists: a manual retry after an ambiguous connection failure may apply twice.
+- A rejected operation produces no subscription delta. In the coalesced flush path a rejection is per-operation and other operations commit; in a confirmed batch it rolls back the batch.
+
+### Authorization and `$value`
+
+`$value` for a conditional `set`/`remove` remains the incoming value payload. For an increment, `$value.<field>` is the **delta**, supplied as a synthetic sparse array to the pre-enqueue authorization evaluator. Rules that need the resulting value cannot be expressed because it depends on concurrent state.
+
+### Wire and SDK Surface
+
+- `StoreSet` / `StoreRemove` gain an optional `if` map. `StoreBatch` set/remove tuples gain an optional trailing `if`; the new increment tuple is `["i", path, fieldIndex, delta, if?]`.
+- The SDK exposes `store.set` / `store.remove` / `store.batch` with `if`, and `store.increment(path, by, { if })`. Increment is a one-op batch and always commits. There is no `{ increment: n }` value form: nested write values are flattened by the SDK, and a map in value position would corrupt the field name.
+- `store.create` does not accept `if`; creates are governed by schema constraints and `$value` authorization.
+
+### Explicitly Rejected Alternatives
+
+- **Version columns / OCC as the only primitive** — a user-declared `version` field plus `if: { version: { eq: n } }` already gives OCC without a system column. A built-in version adds a column, a migration, and a schema surface for what one predicate expresses.
+- **Pre-read then write** — reintroduces the check-then-write race the writer exists to remove.
+- **Post-write validation with rollback for increments** — a validation error in the coalesced flush transaction rolls back unrelated accepted writes, and untracked writes receive no error. The bounds check belongs in the same `WHERE`, where failure is local and the statement count is unchanged.
+- **Returning the resulting record from a confirmed write** — widens P-SAT into a second state channel. The caller reads after commit.
+- **Floating-point increments** — deferred; integer counters are the concrete need and avoid drift and NaN semantics.
+- **`writeId` dedupe / idempotent retries** — deferred. Documented as a limitation; SDK does not auto-retry increments.
+
+### Consequences
+
+- The checkout and reservation patterns become safe without a single-writer worker, while multi-step business logic still requires a worker or a batch of per-op preconditions.
+- Unique indexes remain the authority for existence invariants; conditional writes add state-transition invariants. Both run inside the writer's transaction.
+- No schema keys and no migrations are added.
+- The writer gains a failure-path classification probe (existence, auth, precondition); the happy path adds one SQL predicate and no extra statement.
+- A conditional write on a row the session cannot read fails with `PERMISSION_DENIED`; workers that can write but not read must use unconditional writes.
+
+**Principles**: P-RTF, P-POM, P-SAT, P-SBD, P-TSF, P-PPF, P-CIB

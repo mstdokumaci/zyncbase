@@ -150,9 +150,9 @@ All client messages include `type` and `id`. The fields below are additional mes
 | Message | Fields | Scope/session rule | Responsibility |
 |---------|--------|--------------------|----------------|
 | `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
-| `StoreSet` | `path`, `value`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path. |
-| `StoreRemove` | `path`, optional `confirm`, optional `writeId` | Ready store scope. | Remove a store document/path. |
-| `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove operations. |
+| `StoreSet` | `path`, `value`, optional `if`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path; with `if`, update only if the existing row matches. |
+| `StoreRemove` | `path`, optional `if`, optional `confirm`, optional `writeId` | Ready store scope. | Remove a store document; with `if`, only if the existing row matches. |
+| `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove/increment operations. |
 | `StoreQuery` | `table_index`, optional query fields | Ready store scope. | Execute a one-shot store query. |
 | `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
 | `StoreLoadMore` | `subId`, `nextCursor`, optional `table_index` | Ready store scope and known subscription. | Page historical results for an active subscription. The server resolves the retained query by `subId`; SDKs may include `table_index` as response-context metadata. |
@@ -178,10 +178,35 @@ Query fields for `StoreQuery` and `StoreSubscribe` are owned by [Query Grammar](
 | Omitted `confirm` or `confirm: "accepted"` | Server response confirms the mutation was accepted into the write path. |
 | `confirm: "committed"` | SDK waits for committed outcome before resolving the mutation. |
 | `writeId` | Client-provided write correlation id when the SDK is tracking committed outcome. |
+| `if` or increment present | Requires `confirm: "committed"` and `writeId`; otherwise the write is rejected with `INVALID_MESSAGE`. |
 | `WriteCommitted` push | Writer committed the tracked mutation. |
 | `WriteError` push | Writer failed the tracked mutation after the immediate accept phase. |
 
 Store subscription state is updated by committed `StoreDelta` pushes, not by optimistic mutation responses.
+
+## Conditional Writes and Atomic Increments
+
+`StoreSet`, `StoreRemove`, and each `StoreBatch` set/remove operation accept an optional `if` write precondition. It uses the query filter wire grammar:
+
+- A map with `conditions` and/or `orConditions`; each condition is `[field_index, op_code, operand?]`.
+- No `orderBy`, `limit`, or `after`. At most 32 conditions total. Empty and always-true preconditions are rejected.
+- The predicate is evaluated against the **existing** row inside the writer transaction. A conditional set/remove never creates; a missing row is `PRECONDITION_FAILED`.
+- `if` requires `confirm: "committed"` and a `writeId`; without them the write is rejected with `INVALID_MESSAGE`.
+- Conditional writes require read visibility: the write guard is the AND of the collection's write rule and read rule.
+
+`StoreBatch` operation tuples:
+
+```text
+["s", path, value] or ["s", path, value, if]
+["r", path] or ["r", path, if]
+["i", path, field_index, delta] or ["i", path, field_index, delta, if]
+```
+
+The increment tuple is one integer field. `delta` is a non-zero integer. The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint. The SQL applies `field = field + delta` with guards for integer storage, integer overflow, and the field's declared `minimum`/`maximum`. Failure affects zero rows and is reported as `PRECONDITION_FAILED`; it never creates a row.
+
+A rejected conditional/increment operation is reported through `WriteError` with code `PRECONDITION_FAILED`, `phase: "write"`, and `batchIndex` when it belongs to a batch. A rejected operation produces no subscription delta. In a confirmed batch the first rejection rolls back the transaction; in the coalesced flush path rejections are per-operation.
+
+Increments are not idempotent and the protocol has no `writeId` dedupe. The SDK does not auto-retry increments.
 
 ## Server Responses
 

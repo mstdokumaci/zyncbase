@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"store": {
+		"accounts": {
+			"fields": {
+				"balance": { "type": "integer", "minimum": 0 }
+			}
+		}
+	}
+}

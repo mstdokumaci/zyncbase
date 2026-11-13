@@ -162,6 +162,22 @@ Relational ordering (`gt`, `gte`, `lt`, `lte`), membership (`in`, `notIn`), stri
 
 ---
 
+## Write Preconditions
+
+Conditional writes use the same condition tuples as read filters, parsed by `parseWritePrecondition` and rendered by the same `filter_sql.renderAndClause` (ADR-023).
+
+| Rule | Behavior |
+|------|----------|
+| Accepted keys | `conditions`, `orConditions` only. `orderBy`, `limit`, and `after` are rejected. |
+| Shape | At most one flat OR group, identical to read queries. |
+| Limit | At most 32 conditions across AND and OR. |
+| Empty | Rejected: a precondition must contain at least one condition. |
+| Always true | Rejected after normalization; a conditional write must be a real condition. |
+| Evaluation | Against the existing row, inside the writer transaction. `UPDATE ... SET x=? WHERE x=?` sees the pre-update value. |
+| Authorization | Rendered as a separate SQL fragment. The writer classifies auth before the client predicate so `if` cannot be a value oracle. |
+
+`isNull`, `isNotNull`, comparison, membership, array, text, and byte operators are all available under the same per-field-type rules as reads.
+
 ## Predicate Normalization Rules
 
 Filters are simplified prior to execution based on logical invariants:

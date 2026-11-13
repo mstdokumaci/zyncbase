@@ -36,6 +36,16 @@ describe("ZyncBaseError", () => {
 		expect(error.category).toBe("validation");
 		expect(error.retryable).toBe(false);
 	});
+
+	test("PRECONDITION_FAILED derives state category and is non-retryable", () => {
+		const error = ZyncBaseError.fromServerResponse({
+			code: ErrorCodes.PRECONDITION_FAILED,
+			message: "Write precondition did not hold",
+		});
+		expect(error.code).toBe("PRECONDITION_FAILED");
+		expect(error.category).toBe("state");
+		expect(error.retryable).toBe(false);
+	});
 });
 
 describe("toZyncError", () => {

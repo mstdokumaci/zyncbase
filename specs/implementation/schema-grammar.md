@@ -91,6 +91,10 @@ Equality is SQLite equality over the stored column representation: text stays ca
 
 ---
 
+### Atomic Increment Eligibility
+
+Atomic increments (ADR-023) are a store operation, not a schema key. A field is increment-eligible when it is `integer`, is not a system field, has no `enum` constraint, and does not participate in any table-level unique constraint. `minimum` and `maximum` are enforced by the writer's SQL guard. `number`, `bytes`, `array`, `text`, and `boolean` fields are rejected with `SCHEMA_VALIDATION_FAILED`.
+
 ## Supported Field Types
 
 | JSON Type | SQLite Storage Type | Flattening Behavior | Description |

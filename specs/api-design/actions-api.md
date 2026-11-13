@@ -81,7 +81,7 @@ An action's operational mode is determined directly by the presence or absence o
 | **Peer Visibility** | Private (Delivered to worker only) | Private (Delivered to caller only) |
 
 > [!IMPORTANT]
-> Sync actions are **orchestration, not transaction management**. The engine provides no atomic increment or compare-and-set, reads and writes inside a handler are ordinary store operations subject to last-write-wins, and a returned value is a claim — not committed state. Use `confirm: "committed"` for store writes whose outcome matters, guard invariants with schema constraints, and never auto-retry a call whose first attempt may have executed.
+> Sync actions are **orchestration, not transaction management**. Single-document compare-and-set and atomic integer increments are available through the store (`if` and `store.increment`, ADR-023), but a multi-step action is not a transaction and a returned value is a claim — not committed state. Use `confirm: "committed"` for store writes whose outcome matters, use `if`/`increment` for per-document invariants, and never auto-retry a call whose first attempt may have executed.
 
 ---
 
@@ -187,19 +187,25 @@ await server.actions.handle('player_move', async (ctx, params) => {
 
 // Sync Action Handler (must return an object matching the schema's returns definition)
 await server.actions.handle('checkout', async (ctx, params) => {
-  const user = await server.store.get(['users', ctx.userId]);
-  if (user.coins < 100) {
-    throw new ActionError('INSUFFICIENT_FUNDS', 'Balance is too low');
+  // One atomic statement: decrement only if the balance still covers it.
+  try {
+    await server.store.increment(['users', ctx.userId, 'coins'], -100, {
+      if: { coins: { gte: 100 } },
+    });
+  } catch (err) {
+    if (err.code === 'PRECONDITION_FAILED') {
+      throw new ActionError('INSUFFICIENT_FUNDS', 'Balance is too low');
+    }
+    throw err;
   }
 
-  // Confirmed so the reply only claims state that committed.
-  await server.store.batch([
-    { op: 'set', path: ['users', ctx.userId], value: { coins: user.coins - 100 } },
-  ], { confirm: 'committed' });
+  // The increment is committed. This read is "balance now" — it may include
+  // later writes from other workers.
+  const user = await server.store.get(['users', ctx.userId]);
 
   return {
     order_id: server.utils.id(),
-    remaining_coins: user.coins - 100,
+    remaining_coins: user.coins,
   };
 });
 ```
@@ -213,7 +219,7 @@ await server.actions.handle('checkout', async (ctx, params) => {
 - Round-robin provides no sticky routing: handlers must be stateless across invocations or share state explicitly.
 
 > [!WARNING]
-> The `checkout` pattern above is read-modify-write and remains subject to last-write-wins: two concurrent handlers can read the same balance and lose a decrement. Do not model atomic counters this way. Prefer schema constraints (unique indexes, required fields) for invariants, or serialize through a single worker/namespace design.
+> The `checkout` handler is safe for a single-document counter because `store.increment` + `if` is one atomic statement. It is still **not** a multi-step transaction: a handler that reads other documents, decides, and writes across them can interleave with another handler. Use a confirmed batch with per-op `if` for multi-document compare-and-set, or serialize that logic through a single worker. The returned `remaining_coins` is a post-commit read, not the value produced by this handler's write.
 
 ---
 
