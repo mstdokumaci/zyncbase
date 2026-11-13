@@ -3,9 +3,9 @@ const std = @import("std");
 const query_ast = @import("../query/ast.zig");
 const latch_mod = @import("../threading/latch.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
+const sql = @import("sql.zig");
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
-const ColumnValue = @import("sql.zig").ColumnValue;
 
 const Allocator = std.mem.Allocator;
 
@@ -64,7 +64,7 @@ pub const WriteOp = union(enum) {
         id: typed_doc_id.DocId,
         namespace_id: i64,
         owner_doc_id: typed_doc_id.DocId,
-        columns: []ColumnValue,
+        columns: []sql.ColumnValue,
         guard_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
         conn_id: ?u64 = null,
@@ -74,8 +74,10 @@ pub const WriteOp = union(enum) {
         table_index: usize,
         id: typed_doc_id.DocId,
         namespace_id: i64,
-        columns: []ColumnValue,
+        columns: []sql.ColumnValue,
+        increments: []sql.IncrementValue = &.{},
         guard_predicate: ?query_ast.FilterPredicate = null,
+        precondition_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
@@ -85,6 +87,7 @@ pub const WriteOp = union(enum) {
         id: typed_doc_id.DocId,
         namespace_id: i64,
         guard_predicate: ?query_ast.FilterPredicate = null,
+        precondition_predicate: ?query_ast.FilterPredicate = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     },
@@ -135,10 +138,13 @@ pub const WriteOp = union(enum) {
             .update => |op| {
                 for (op.columns) |col| col.value.deinit(allocator);
                 allocator.free(op.columns);
+                if (op.increments.len > 0) allocator.free(op.increments);
                 if (op.guard_predicate) |*pred| pred.freeMemory(allocator);
+                if (op.precondition_predicate) |*pred| pred.freeMemory(allocator);
             },
             .delete => |op| {
                 if (op.guard_predicate) |*pred| pred.freeMemory(allocator);
+                if (op.precondition_predicate) |*pred| pred.freeMemory(allocator);
             },
             .resolve_session => |op| {
                 allocator.free(op.namespace);

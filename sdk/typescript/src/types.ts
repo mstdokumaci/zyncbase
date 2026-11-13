@@ -1,5 +1,5 @@
 // Wire protocol type definitions
-// Source of truth: specs/implementation/wire-protocol.md (ADR-023)
+// Source of truth: specs/implementation/wire-protocol.md (ADR-008)
 import type { ZyncBaseError } from "./errors";
 
 // ─── Primitive / utility types ───────────────────────────────────────────────
@@ -337,6 +337,33 @@ export type TypedWhere<S extends object, C extends keyof S & string> = {
 		| WhereCondition<TypedQueryDocument<S, C>, P>;
 } & { or?: TypedWhere<S, C>[] };
 
+/** Extract the collection name from a write path. */
+type CollectionOfPath<S, P> = P extends readonly [
+	infer C extends string,
+	...unknown[],
+]
+	? C
+	: P extends `${infer C}.${string}`
+		? C
+		: CollectionsOf<S>;
+
+/** Options for conditional writes; `if` requires committed confirmation. */
+export type ConditionalWriteOptions<
+	S extends object = SchemaLike,
+	P = Path,
+> = WriteOptions & {
+	if?: IsLooseSchema<S> extends true
+		? QueryOptions["where"]
+		: TypedWhere<S, Extract<CollectionOfPath<S, P>, keyof S & string>>;
+};
+
+/** Options for atomic increments; increments always commit and cannot be un-confirmed. */
+export type IncrementOptions<S extends object = SchemaLike, P = Path> = {
+	if?: IsLooseSchema<S> extends true
+		? QueryOptions["where"]
+		: TypedWhere<S, Extract<CollectionOfPath<S, P>, keyof S & string>>;
+};
+
 /** One sort clause: exactly one leaf field path and one direction. */
 export type TypedOrderClause<S extends object, C extends keyof S & string> = {
 	[P in LeafDotFieldPaths<TypedQueryDocument<S, C>>]: {
@@ -361,11 +388,10 @@ export type QueryOptionsFor<S extends object, C extends keyof S & string> =
  * One batch write. The value stays `JsonValue` rather than correlating to the
  * path; use `set` for schema-checked writes.
  */
-export interface BatchOperation {
-	op: "set" | "remove";
-	path: Path;
-	value?: JsonValue;
-}
+export type BatchOperation =
+	| { op: "set"; path: Path; value?: JsonValue; if?: QueryOptions["where"] }
+	| { op: "remove"; path: Path; if?: QueryOptions["where"] }
+	| { op: "increment"; path: Path; by: number; if?: QueryOptions["where"] };
 
 export interface SubscriptionHandle<
 	S extends object = SchemaLike,
@@ -394,12 +420,21 @@ export interface Store<S extends object = SchemaLike> {
 	set<const P extends WritePath<S>>(
 		path: P,
 		value: SetValue<S, P>,
-		options?: WriteOptions,
+		options?: ConditionalWriteOptions<S, P>,
 	): Promise<void>;
 	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
 	remove<const P extends DocumentPath<S>>(
 		path: P,
-		options?: WriteOptions,
+		options?: ConditionalWriteOptions<S, P>,
+	): Promise<void>;
+	/**
+	 * Atomically add `by` to an integer field. Always waits for commit.
+	 * Use `if` to make the update conditional on the current row.
+	 */
+	increment<const P extends WritePath<S>>(
+		path: P,
+		by: number,
+		options?: IncrementOptions<S, P>,
 	): Promise<void>;
 	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
 	create<C extends CollectionsOf<S>>(
@@ -443,11 +478,20 @@ export interface Ping {
 
 // ─── Outbound wire messages: writes ──────────────────────────────────────────
 
+/** Encoded write precondition: conditions with field names, before integer encoding. */
+export type WireConditionTuple = [field: string, op: number, value?: JsonValue];
+
+export interface IfWire {
+	conditions?: WireConditionTuple[];
+	orConditions?: WireConditionTuple[];
+}
+
 export interface StoreSet {
 	type: "StoreSet";
 	id: number;
 	path: string[];
 	value: JsonValue;
+	if?: IfWire;
 	confirm?: "accepted" | "committed";
 	writeId?: string;
 }
@@ -456,15 +500,25 @@ export interface StoreRemove {
 	type: "StoreRemove";
 	id: number;
 	path: string[];
+	if?: IfWire;
 	confirm?: "accepted" | "committed";
 	writeId?: string;
 }
 
-/** ops are positional tuples: ["s", path, value] for set, ["r", path] for remove */
+/**
+ * ops are positional tuples:
+ * - ["s", path, value] or ["s", path, value, if]
+ * - ["r", path] or ["r", path, if]
+ * - ["i", path, fieldPath, by] or ["i", path, fieldPath, by, if]
+ */
 export interface StoreBatch {
 	type: "StoreBatch";
 	id: number;
-	ops: (["s", string[], JsonValue] | ["r", string[]])[];
+	ops: (
+		| ["s", string[], JsonValue, IfWire?]
+		| ["r", string[], IfWire?]
+		| ["i", string[], string, number, IfWire?]
+	)[];
 	confirm?: "accepted" | "committed";
 	writeId?: string;
 }

@@ -486,6 +486,341 @@ test "StorageEngine: ensureHealthy returns error when unhealthy" {
     try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
 }
 
+test "StorageEngine: conditional update with failing precondition is rejected and leaves the row untouched" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "precondition-fail", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const val_idx = table_meta.fieldIndex("val").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 1;
+
+    const seed = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "original" } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, 1, &seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var precondition = try makeGuardPredicate(allocator, val_idx, .text, try tth.valTextOwned(allocator, "different"));
+    defer precondition.deinit(allocator);
+
+    const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 7001;
+    const write_id: [16]u8 = .{7} ** 16;
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expect(rec != null);
+    try testing.expectEqualStrings("original", rec.?.values[val_idx].scalar.text);
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_error)) != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PRECONDITION_FAILED") != null);
+}
+
+test "StorageEngine: conditional update with passing precondition applies" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "precondition-pass", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const val_idx = table_meta.fieldIndex("val").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 1;
+
+    const seed = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "original" } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, 1, &seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var precondition = try makeGuardPredicate(allocator, val_idx, .text, try tth.valTextOwned(allocator, "original"));
+    defer precondition.deinit(allocator);
+
+    const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 7002;
+    const write_id: [16]u8 = .{8} ** 16;
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expect(rec != null);
+    try testing.expectEqualStrings("updated", rec.?.values[val_idx].scalar.text);
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expectEqual(conn_id, entries[0].conn_id);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_error)) == null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, &typeMarker(.write_committed)) != null);
+}
+
+test "StorageEngine: conditional update on a missing row returns PreconditionFailed" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "precondition-missing", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const val_idx = table_meta.fieldIndex("val").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 42;
+
+    var precondition = try makeGuardPredicate(allocator, val_idx, .text, try tth.valTextOwned(allocator, "original"));
+    defer precondition.deinit(allocator);
+
+    const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 7003;
+    const write_id: [16]u8 = .{9} ** 16;
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expect(rec == null);
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PRECONDITION_FAILED") != null);
+}
+
+test "StorageEngine: auth rejection is classified before a failed precondition" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("author_id", .doc_id),
+        schema_helpers.makeField("val", .text),
+    };
+    const table = schema_helpers.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "precondition-auth-first", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_idx = table_meta.fieldIndex("author_id").?;
+    const val_idx = table_meta.fieldIndex("val").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 1;
+    const author_a: typed_doc_id.DocId = 100;
+    const author_b: typed_doc_id.DocId = 200;
+
+    const seed = [_]sth.ColumnValue{
+        .{ .index = author_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, author_a, &seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+    var precondition = try makeGuardPredicate(allocator, val_idx, .text, try tth.valTextOwned(allocator, "different"));
+    defer precondition.deinit(allocator);
+
+    const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 7004;
+    const write_id: [16]u8 = .{10} ** 16;
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, guard, precondition, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 1), entries.len);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PERMISSION_DENIED") != null);
+    try testing.expect(std.mem.indexOf(u8, entries[0].data, "PRECONDITION_FAILED") == null);
+}
+
+test "StorageEngine: atomic increment applies and enforces min/max" {
+    const allocator = std.heap.smp_allocator;
+    var balance_field = schema_helpers.makeField("balance", .integer);
+    balance_field.constraints = .{ .minimum = .{ .integer = 0 }, .maximum = .{ .integer = 100 } };
+    var fields_arr = [_]sth.Field{balance_field};
+    const table = schema_helpers.makeTable("accounts", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "increment-bounds", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("accounts");
+    const balance_idx = table_meta.fieldIndex("balance").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 1;
+
+    const seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = 10 } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, 1, &seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -3, null, 7101, .{11} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, 100, null, 7102, .{12} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -100, null, 7103, .{13} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -7, null, 7104, .{14} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 0), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 4), entries.len);
+    for (entries) |e| {
+        if (e.conn_id == 7101 or e.conn_id == 7104) {
+            try testing.expect(std.mem.indexOf(u8, e.data, &typeMarker(.write_error)) == null);
+        } else {
+            try testing.expect(std.mem.indexOf(u8, e.data, "PRECONDITION_FAILED") != null);
+        }
+    }
+}
+
+test "StorageEngine: increment combines with a precondition atomically" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("balance", .integer)};
+    const table = schema_helpers.makeTable("accounts", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "increment-precondition", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("accounts");
+    const balance_idx = table_meta.fieldIndex("balance").?;
+    const ns: i64 = 1;
+    const id: typed_doc_id.DocId = 1;
+
+    const seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = 10 } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, 1, &seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var sufficient = try makeOpPredicate(allocator, balance_idx, .integer, .gte, .{ .scalar = .{ .integer = 5 } });
+    defer sufficient.deinit(allocator);
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -5, sufficient, 7201, .{21} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 5), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    var insufficient = try makeOpPredicate(allocator, balance_idx, .integer, .gte, .{ .scalar = .{ .integer = 6 } });
+    defer insufficient.deinit(allocator);
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -6, insufficient, 7202, .{22} ** 16);
+    try ctx.engine.flushPendingWrites();
+    {
+        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
+        defer if (rec) |r| r.deinit(allocator);
+        try testing.expectEqual(@as(i64, 5), rec.?.values[balance_idx].scalar.integer);
+    }
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 2), entries.len);
+    for (entries) |e| {
+        if (e.conn_id == 7201) {
+            try testing.expect(std.mem.indexOf(u8, e.data, &typeMarker(.write_error)) == null);
+        } else {
+            try testing.expect(std.mem.indexOf(u8, e.data, "PRECONDITION_FAILED") != null);
+        }
+    }
+}
+
+test "StorageEngine: increment rejects NULL and overflowing results" {
+    const allocator = std.heap.smp_allocator;
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("balance", .integer)};
+    const table = schema_helpers.makeTable("accounts", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "increment-edge", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("accounts");
+    const balance_idx = table_meta.fieldIndex("balance").?;
+    const ns: i64 = 1;
+
+    // Missing field (NULL) cannot be incremented.
+    const empty_seed = [_]sth.ColumnValue{};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, 1, ns, 1, &empty_seed, null, null, null);
+    // i64 max + 1 overflows.
+    const max_seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = std.math.maxInt(i64) } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, 2, ns, 1, &max_seed, null, null, null);
+    // i64 min - 1 overflows.
+    const min_seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = std.math.minInt(i64) } } }};
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, 3, ns, 1, &min_seed, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 1, ns, balance_idx, 1, null, 7301, .{31} ** 16);
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 2, ns, balance_idx, 1, null, 7302, .{32} ** 16);
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 3, ns, balance_idx, -1, null, 7303, .{33} ** 16);
+    try ctx.engine.flushPendingWrites();
+
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        allocator.free(entries);
+    }
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    for (entries) |e| {
+        try testing.expect(std.mem.indexOf(u8, e.data, "PRECONDITION_FAILED") != null);
+    }
+
+    const rec1 = try sth.readDoc(allocator, &ctx.engine, table_meta.index, 1, ns);
+    defer if (rec1) |r| r.deinit(allocator);
+    try testing.expect(rec1.?.values[balance_idx] == .nil);
+
+    const rec2 = try sth.readDoc(allocator, &ctx.engine, table_meta.index, 2, ns);
+    defer if (rec2) |r| r.deinit(allocator);
+    try testing.expectEqual(std.math.maxInt(i64), rec2.?.values[balance_idx].scalar.integer);
+
+    const rec3 = try sth.readDoc(allocator, &ctx.engine, table_meta.index, 3, ns);
+    defer if (rec3) |r| r.deinit(allocator);
+    try testing.expectEqual(std.math.minInt(i64), rec3.?.values[balance_idx].scalar.integer);
+}
+
 fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
     var entries = std.ArrayListUnmanaged(SendQueueEntry).empty;
     errdefer {
@@ -499,16 +834,26 @@ fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
     return try entries.toOwnedSlice(std.heap.smp_allocator);
 }
 
-fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
+fn makeOpPredicate(
+    allocator: std.mem.Allocator,
+    field_index: usize,
+    field_type: sth.FieldType,
+    op: query_ast.Operator,
+    value: typed.Value,
+) !query_ast.FilterPredicate {
     const conditions = try allocator.alloc(query_ast.Condition, 1);
     conditions[0] = .{
         .field_index = field_index,
-        .op = .eq,
+        .op = op,
         .value = value,
         .field_type = field_type,
         .items_type = null,
     };
     return .{ .conditions = conditions };
+}
+
+fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
+    return makeOpPredicate(allocator, field_index, field_type, .eq, value);
 }
 
 test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDenied" {

@@ -312,19 +312,27 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path: msgpack.Payload,
         value: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path);
-        try self.applySet(parsed, ctx, value);
+        try self.applySet(parsed, ctx, value, if_payload);
     }
 
     pub fn removePath(
         self: *StoreService,
         ctx: WriteContext,
         path: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path);
 
-        const store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
+        const has_conditional = if_payload != null;
+        try requireCommittedForConditional(has_conditional, ctx.write_id);
+
+        var precondition = try self.decodePrecondition(parsed.table, if_payload);
+        errdefer if (precondition) |*p| p.deinit(self.allocator);
+
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
             .table = parsed.table,
             .session_user_id = ctx.request.user_doc_id,
@@ -335,6 +343,9 @@ pub const StoreService = struct {
             .value = null,
             .is_create = false,
         });
+        errdefer if (store_write) |*p| p.deinit(self.allocator);
+
+        if (has_conditional) try self.mergeReadGuard(ctx, parsed.table, &store_write);
 
         const op = storage_mod.WriteOp{
             .delete = .{
@@ -342,10 +353,13 @@ pub const StoreService = struct {
                 .id = parsed.doc_id,
                 .namespace_id = ctx.request.store_namespace_id,
                 .guard_predicate = store_write,
+                .precondition_predicate = precondition,
                 .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         };
+        store_write = null;
+        precondition = null;
         errdefer op.deinit(self.allocator);
 
         try self.storage_engine.enqueueWriteOp(op);
@@ -411,10 +425,21 @@ pub const StoreService = struct {
         const kind = tuple[0].str.value();
         if (std.mem.eql(u8, kind, "s")) {
             if (tuple.len < 3) return error.MissingRequiredFields;
-            return self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, doc_states);
+            if (tuple.len > 4) return error.InvalidMessageFormat;
+            const if_payload = if (tuple.len == 4) tuple[3] else null;
+            return self.buildBatchSetEntry(ctx, tuple[1], tuple[2], if_payload, timestamp, doc_states);
         }
         if (std.mem.eql(u8, kind, "r")) {
-            return self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, doc_states);
+            if (tuple.len < 2) return error.MissingRequiredFields;
+            if (tuple.len > 3) return error.InvalidMessageFormat;
+            const if_payload = if (tuple.len == 3) tuple[2] else null;
+            return self.buildBatchRemoveEntry(ctx, tuple[1], if_payload, timestamp, doc_states);
+        }
+        if (std.mem.eql(u8, kind, "i")) {
+            if (tuple.len < 4) return error.MissingRequiredFields;
+            if (tuple.len > 5) return error.InvalidMessageFormat;
+            const if_payload = if (tuple.len == 5) tuple[4] else null;
+            return self.buildBatchIncrementEntry(ctx, tuple[1], tuple[2], tuple[3], if_payload, timestamp);
         }
         return error.InvalidMessageFormat;
     }
@@ -446,6 +471,7 @@ pub const StoreService = struct {
         path: StorePath,
         ctx: WriteContext,
         value: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
     ) !void {
         if (value != .arr) return error.InvalidPayload;
 
@@ -455,7 +481,15 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
+        const has_conditional = if_payload != null;
+        try requireCommittedForConditional(has_conditional, ctx.write_id);
+
+        var precondition = try self.decodePrecondition(path.table, if_payload);
+        errdefer if (precondition) |*p| p.deinit(self.allocator);
+
+        // A conditional set is a compare-and-set on an existing row. It never
+        // creates: the upsert INSERT branch has no WHERE guard.
+        const is_create = if (has_conditional) false else !self.storage_engine.documentExists(path.table_index, path.doc_id);
 
         if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
@@ -470,11 +504,11 @@ pub const StoreService = struct {
             .value = &value,
             .is_create = is_create,
         });
+        errdefer if (store_write) |*p| p.deinit(self.allocator);
 
-        const columns_slice = columns.toOwnedSlice(self.allocator) catch |err| {
-            if (store_write) |*p| p.deinit(self.allocator);
-            return err;
-        };
+        if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
+
+        const columns_slice = try columns.toOwnedSlice(self.allocator);
 
         const op = if (is_create) storage_mod.WriteOp{
             .upsert = .{
@@ -495,11 +529,14 @@ pub const StoreService = struct {
                 .namespace_id = ctx.request.store_namespace_id,
                 .columns = columns_slice,
                 .guard_predicate = store_write,
+                .precondition_predicate = precondition,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
                 .conn_id = ctx.request.conn_id,
                 .write_id = ctx.write_id,
             },
         };
+        store_write = null;
+        precondition = null;
         errdefer op.deinit(self.allocator);
 
         try self.storage_engine.enqueueWriteOp(op);
@@ -510,6 +547,7 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
         timestamp: i64,
         doc_states: *BatchDocStates,
     ) !storage_mod.WriteOp {
@@ -523,9 +561,15 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
+        const has_conditional = if_payload != null;
+        try requireCommittedForConditional(has_conditional, ctx.write_id);
+
+        var precondition = try self.decodePrecondition(path.table, if_payload);
+        errdefer if (precondition) |*p| p.deinit(self.allocator);
+
         const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
         const effective_state = doc_states.get(key);
-        const is_create = if (effective_state) |state|
+        const is_create = if (has_conditional) false else if (effective_state) |state|
             state == .deleted
         else
             !self.storage_engine.documentExists(path.table_index, path.doc_id);
@@ -545,41 +589,113 @@ pub const StoreService = struct {
         });
         errdefer if (store_write) |*p| p.deinit(self.allocator);
 
+        if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
+
         try doc_states.put(key, .exists);
 
         const columns_slice = try columns.toOwnedSlice(self.allocator);
 
-        if (is_create) {
-            return storage_mod.WriteOp{ .upsert = .{
-                .table_index = path.table_index,
-                .id = path.doc_id,
-                .namespace_id = ctx.request.store_namespace_id,
-                .owner_doc_id = ctx.request.user_doc_id,
-                .columns = columns_slice,
-                .guard_predicate = store_write,
-                .timestamp = timestamp,
-            } };
-        } else {
-            return storage_mod.WriteOp{ .update = .{
-                .table_index = path.table_index,
-                .id = path.doc_id,
-                .namespace_id = ctx.request.store_namespace_id,
-                .columns = columns_slice,
-                .guard_predicate = store_write,
-                .timestamp = timestamp,
-            } };
-        }
+        const op = if (is_create) storage_mod.WriteOp{ .upsert = .{
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = ctx.request.store_namespace_id,
+            .owner_doc_id = ctx.request.user_doc_id,
+            .columns = columns_slice,
+            .guard_predicate = store_write,
+            .timestamp = timestamp,
+        } } else storage_mod.WriteOp{ .update = .{
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = ctx.request.store_namespace_id,
+            .columns = columns_slice,
+            .guard_predicate = store_write,
+            .precondition_predicate = precondition,
+            .timestamp = timestamp,
+        } };
+        store_write = null;
+        precondition = null;
+        return op;
+    }
+
+    fn buildBatchIncrementEntry(
+        self: *StoreService,
+        ctx: WriteContext,
+        path_payload: msgpack.Payload,
+        field_payload: msgpack.Payload,
+        delta_payload: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
+        timestamp: i64,
+    ) !storage_mod.WriteOp {
+        const path = try self.parseStorePath(path_payload);
+        const field_index = msgpack.extractPayloadUsize(field_payload) orelse return error.InvalidMessageFormat;
+        const delta = msgpack.payloadToInt(delta_payload) catch return StorageError.InvalidIncrement;
+        try validateIncrementField(path.table, field_index, delta);
+        try requireCommittedForConditional(true, ctx.write_id);
+
+        // $value would mean the delta here, while for a set it means the
+        // value being written. The resulting value is unknown pre-enqueue, so
+        // refuse the ambiguity instead of silently evaluating the delta.
+        const rule = self.auth_config.storeRuleFor(path.table.name) orelse return error.AccessDenied;
+        if (conditionUsesValueScope(rule.write)) return StorageError.IncrementValueAuthUnsupported;
+
+        var precondition = try self.decodePrecondition(path.table, if_payload);
+        errdefer if (precondition) |*p| p.deinit(self.allocator);
+
+        var synthetic_values = [_]msgpack.Payload{ field_payload, delta_payload };
+        const synthetic = msgpack.Payload{ .arr = &synthetic_values };
+
+        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
+            .doc_id = path.doc_id,
+            .value = &synthetic,
+            .is_create = false,
+        });
+        errdefer if (store_write) |*p| p.deinit(self.allocator);
+
+        try self.mergeReadGuard(ctx, path.table, &store_write);
+
+        const columns = try self.allocator.alloc(storage_mod.ColumnValue, 0);
+        errdefer self.allocator.free(columns);
+        const increments = try self.allocator.alloc(storage_mod.IncrementValue, 1);
+        errdefer self.allocator.free(increments);
+        increments[0] = .{ .field_index = field_index, .delta = delta };
+
+        const op = storage_mod.WriteOp{ .update = .{
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = ctx.request.store_namespace_id,
+            .columns = columns,
+            .increments = increments,
+            .guard_predicate = store_write,
+            .precondition_predicate = precondition,
+            .timestamp = timestamp,
+        } };
+        store_write = null;
+        precondition = null;
+        return op;
     }
 
     fn buildBatchRemoveEntry(
         self: *StoreService,
         ctx: WriteContext,
         path_payload: msgpack.Payload,
+        if_payload: ?msgpack.Payload,
         timestamp: i64,
         doc_states: *BatchDocStates,
     ) !storage_mod.WriteOp {
         _ = timestamp;
         const path = try self.parseStorePath(path_payload);
+
+        const has_conditional = if_payload != null;
+        try requireCommittedForConditional(has_conditional, ctx.write_id);
+
+        var precondition = try self.decodePrecondition(path.table, if_payload);
+        errdefer if (precondition) |*p| p.deinit(self.allocator);
 
         var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
             .config = self.auth_config,
@@ -594,14 +710,111 @@ pub const StoreService = struct {
         });
         errdefer if (store_write) |*p| p.deinit(self.allocator);
 
+        if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
+
         const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
         try doc_states.put(key, .deleted);
 
-        return storage_mod.WriteOp{ .delete = .{
+        const op = storage_mod.WriteOp{ .delete = .{
             .table_index = path.table_index,
             .id = path.doc_id,
             .namespace_id = ctx.request.store_namespace_id,
             .guard_predicate = store_write,
+            .precondition_predicate = precondition,
         } };
+        store_write = null;
+        precondition = null;
+        return op;
+    }
+
+    fn decodePrecondition(
+        self: *StoreService,
+        table: *const schema_types.Table,
+        if_payload: ?msgpack.Payload,
+    ) !?query_ast.FilterPredicate {
+        const payload = if_payload orelse return null;
+        return try query_parser.parseWritePrecondition(self.allocator, self.schema, table.index, payload);
+    }
+
+    /// Conditional writes require read visibility so `if` cannot be used as a
+    /// value oracle on rows the write rule exposes but the read rule hides.
+    fn mergeReadGuard(
+        self: *StoreService,
+        ctx: WriteContext,
+        table: *const schema_types.Table,
+        write_guard: *?query_ast.FilterPredicate,
+    ) !void {
+        var read_guard = try authorization_store.authorizeStoreRead(self.allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
+        });
+        errdefer if (read_guard) |*p| p.deinit(self.allocator);
+
+        if (read_guard) |*rg| {
+            if (write_guard.*) |*wg| {
+                try query_ast.FilterPredicate.mergeInPlace(wg, self.allocator, rg);
+                rg.* = .{};
+            } else {
+                write_guard.* = rg.*;
+                rg.* = .{};
+            }
+        }
     }
 };
+
+fn requireCommittedForConditional(is_conditional: bool, write_id: ?[16]u8) !void {
+    if (is_conditional and write_id == null) return error.InvalidWriteAck;
+}
+
+fn conditionUsesValueScope(condition: authorization_types.Condition) bool {
+    switch (condition) {
+        .boolean => return false,
+        .logical_and => |conditions| {
+            for (conditions) |c| {
+                if (conditionUsesValueScope(c)) return true;
+            }
+            return false;
+        },
+        .logical_or => |conditions| {
+            for (conditions) |c| {
+                if (conditionUsesValueScope(c)) return true;
+            }
+            return false;
+        },
+        .comparison => |comp| {
+            if (comp.lhs.scope == .value) return true;
+            if (comp.rhs) |rhs| {
+                return switch (rhs) {
+                    .context_var => |cv| cv.scope == .value,
+                    .literal => false,
+                };
+            }
+            return false;
+        },
+    }
+}
+
+fn validateIncrementField(table: *const schema_types.Table, field_index: usize, delta: i64) !void {
+    if (field_index < schema_system.first_user_field_index or
+        field_index >= table.fields.len - schema_system.trailing_system_field_count) return StorageError.ImmutableField;
+
+    const field = table.fields[field_index];
+    if (field.storage_type != .integer) return StorageError.TypeMismatch;
+    if (field.constraints) |constraints| {
+        if (constraints.enum_values != null) return StorageError.IncrementNotSupported;
+    }
+
+    // Unique constraint indexes are relative to userFields().
+    const relative_index = field_index - schema_system.first_user_field_index;
+    for (table.unique_constraints) |constraint| {
+        for (constraint.field_indexes) |index| {
+            if (index == relative_index) return StorageError.IncrementNotSupported;
+        }
+    }
+
+    if (delta == 0) return StorageError.InvalidIncrement;
+}

@@ -94,12 +94,17 @@ ZyncBase evaluates variables using two execution paths:
 | `StoreSet` (Create) | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Candidate RAM |
 | `StoreSet` (Update) | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
 | `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ Predicate Lowering |
+| `StoreBatch` (increment) | ✅ RAM | ✅ RAM | ✅ RAM | ❌ Rejected | ❌ | ✅ Predicate Lowering |
 | `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
 | `PresenceSetShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
 | `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `PresenceSubscribeShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 | `ActionCall` | ✅ RAM | ✅ RAM | ❌ | ✅ RAM | ❌ | ❌ |
 | `ActionRegister` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
+
+`$value` is available for set writes (`StoreSet` create/update, including batch set operations) and for action `invoke` (the params payload). It is not available for `StoreRemove` or increment operations.
+
+Increment operations are rejected when the collection's write rule references `$value` (`SCHEMA_VALIDATION_FAILED`). The delta is known before the write, but the resulting value is not; use schema `minimum`/`maximum` and the `if` predicate for result invariants. A `$doc`-only write rule remains valid for increments.
 
 ---
 

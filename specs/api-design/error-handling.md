@@ -109,6 +109,8 @@ ZyncBase separates state delivery from write outcome reporting:
 3. Confirmed writes reject their promise when the writer reports failure.
 4. Tracked write errors use `writeId` and may include best-effort `path` metadata.
 5. Batch write errors include `details.batchIndex` when the failing operation is known.
+6. `PRECONDITION_FAILED` means the write did not apply: a conditional `if` did not hold, the row was missing, or an increment was NULL, out of range, or would overflow. No subscription delta is emitted. The application may retry after re-reading; the SDK never auto-retries a write.
+7. Increments are not idempotent. A manual retry after an ambiguous connection failure may apply twice; there is no `writeId` dedupe.
 
 Confirmed write timeouts mean confirmation was not received. They do not imply the write was aborted or failed to commit. After reconnect, subscriptions remain the source of truth for final state.
 

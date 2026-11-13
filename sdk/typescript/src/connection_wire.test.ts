@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { packDocId } from "./doc_id.js";
+import { buildSet } from "./store_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { InboundMessage, StoreDelta } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
@@ -585,5 +586,81 @@ describe("ConnectionWireCodec actions", () => {
 		);
 		expect(ok.actionResult).toBeUndefined();
 		expect(ok.id).toBe(2);
+	});
+});
+
+describe("ConnectionWireCodec conditional writes", () => {
+	test("encodes StoreSet if conditions and increment batch ops", async () => {
+		const codec = await makeCodec();
+		const id = generateUUIDv7();
+		const writeId = "00112233445566778899aabbccddeeff";
+
+		const setEncoded = codec.encode(
+			{
+				type: "StoreSet",
+				path: ["users", id],
+				value: { name: "Ada" },
+				if: { conditions: [["name", 0, "Ada"]] },
+				confirm: "committed",
+				writeId,
+			},
+			1,
+		);
+		const setWire = decode(setEncoded.bytes) as Record<string, unknown>;
+		expect(setWire.type).toBe(WireMessageType.StoreSet);
+		expect(setWire.if).toEqual({ conditions: [[1, 0, "Ada"]] });
+		expect(setWire.value).toEqual([1, "Ada"]);
+		expect(setWire.writeId).toBe(writeId);
+
+		const batchEncoded = codec.encode(
+			{
+				type: "StoreBatch",
+				ops: [
+					[
+						"s",
+						["users", id],
+						{ name: "Ada" },
+						{ conditions: [["name", 0, "old"]] },
+					],
+					["i", ["users", id], "name", -5, { conditions: [["name", 4, 5]] }],
+				],
+				confirm: "committed",
+				writeId,
+			},
+			2,
+		);
+		const batchWire = decode(batchEncoded.bytes) as {
+			type: number;
+			ops: unknown[];
+		};
+		expect(batchWire.type).toBe(WireMessageType.StoreBatch);
+		expect(batchWire.ops[0]).toEqual([
+			"s",
+			[0, expect.any(Uint8Array)],
+			[1, "Ada"],
+			{ conditions: [[1, 0, "old"]] },
+		]);
+		expect(batchWire.ops[1]).toEqual([
+			"i",
+			[0, expect.any(Uint8Array)],
+			1,
+			-5,
+			{ conditions: [[1, 4, 5]] },
+		]);
+	});
+
+	test("encodes a dotted conditional if to the flattened field index", async () => {
+		const codec = await makeCodec();
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { "address.city": "London" },
+			},
+		);
+		const encoded = codec.encode(command.message, 1);
+		const wire = decode(encoded.bytes) as Record<string, unknown>;
+		expect(wire.if).toEqual({ conditions: [[2, 0, "London"]] });
 	});
 });

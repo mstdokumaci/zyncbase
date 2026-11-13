@@ -511,8 +511,24 @@ export class ConnectionWireCodec {
 					wire.value as Record<string, unknown>,
 				);
 			}
+			if (wire.if !== undefined) {
+				wire.if = this.encodeIf(tableIndex, wire.if);
+			}
 		}
 		return wire;
+	}
+
+	private encodeIf(tableIndex: number, raw: unknown): unknown {
+		if (!raw || typeof raw !== "object") return raw;
+		const src = raw as { conditions?: unknown; orConditions?: unknown };
+		const out: { conditions?: unknown; orConditions?: unknown } = {};
+		if (src.conditions !== undefined) {
+			out.conditions = this.encodeConditions(tableIndex, src.conditions);
+		}
+		if (src.orConditions !== undefined) {
+			out.orConditions = this.encodeConditions(tableIndex, src.orConditions);
+		}
+		return out;
 	}
 
 	private encodeStoreBatch(
@@ -537,21 +553,26 @@ export class ConnectionWireCodec {
 		}
 
 		const encodedPath = this.schema.encodePath(rawPath as string[]);
-		if (kind === "r") return ["r", encodedPath];
-		if (
-			kind === "s" &&
-			op[2] !== null &&
-			typeof op[2] === "object" &&
-			!Array.isArray(op[2])
-		) {
-			const tableIndex = encodedPath[0] as number;
-			return [
-				"s",
-				encodedPath,
-				this.schema.encodeValue(tableIndex, op[2] as Record<string, unknown>),
-			];
+		const tableIndex = encodedPath[0] as number;
+		const encodeIfAt = (index: number): unknown[] =>
+			op.length > index ? [this.encodeIf(tableIndex, op[index])] : [];
+
+		if (kind === "r") return ["r", encodedPath, ...encodeIfAt(2)];
+		if (kind === "i") {
+			const fieldIndex = this.schema.getFieldIndex(tableIndex, op[2] as string);
+			return ["i", encodedPath, fieldIndex, op[3], ...encodeIfAt(4)];
 		}
-		return ["s", encodedPath, op[2]];
+		if (kind === "s") {
+			const value =
+				op[2] !== null && typeof op[2] === "object" && !Array.isArray(op[2])
+					? this.schema.encodeValue(
+							tableIndex,
+							op[2] as Record<string, unknown>,
+						)
+					: op[2];
+			return ["s", encodedPath, value, ...encodeIfAt(3)];
+		}
+		return op;
 	}
 
 	private encodeStoreRead(

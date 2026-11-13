@@ -9,8 +9,9 @@ ZyncBase's API is divided into three primary namespaces to separate persistent s
 ### 1. Store API ([store-api.md](./store-api.md))
 For durable, synchronized data. Everything in the Store API is validated against your schema, persisted to SQLite, and syncs across clients.
 - **CRUD Operations**: Get, Set, and Remove data by path.
+- **Conditional Writes & Increments**: Compare-and-set writes with `if`, and atomic integer field updates with `store.increment`.
 - **Query API**: Filter, sort, and search through data.
-- **Batch Operations**: Perform multiple write operations atomically.
+- **Batch Operations**: Perform multiple write operations atomically, including per-operation preconditions and increments.
 - **Query Language**: See [Query Language Reference](./query-language.md) for the Prisma-inspired DSL syntax.
 
 ### 2. Presence API ([presence-api.md](./presence-api.md))

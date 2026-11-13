@@ -486,6 +486,7 @@ pub const MessageHandler = struct {
             .{ .request = ctx, .write_id = payloads.write_id },
             payloads.path,
             value,
+            payloads.if_predicate,
         );
 
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
@@ -504,6 +505,7 @@ pub const MessageHandler = struct {
         try self.store_service.removePath(
             .{ .request = ctx, .write_id = payloads.write_id },
             payloads.path,
+            payloads.if_predicate,
         );
 
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);

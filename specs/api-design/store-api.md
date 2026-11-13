@@ -52,7 +52,7 @@ const element = client.store.get('elements.rect-1')
 - **Scalar value**: If the path points to a specific field (e.g., `client.store.get('users.u1.name')` -> `string`)
 - `undefined`: If the path is not found
 
-### `store.set(path, value)`
+### `store.set(path, value, options?)`
 Write a value or upsert a document.
 
 **Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
@@ -83,33 +83,66 @@ await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
 
 **Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the field level.
 
+**Conditional Writes**: Pass `if` to make the write a compare-and-set on the existing row. `if` uses the query `where` grammar and is evaluated against the pre-update value. A conditional `set` is **update-only**: on a missing row it rejects with `PRECONDITION_FAILED` and does not create. It requires `confirm: "committed"`, and the session must be able to read the row.
+
+```typescript
+await client.store.set('accounts.a1.balance', 900, {
+  confirm: 'committed',
+  if: { balance: { eq: 1000 } },
+})
+```
+
 **Confirmation**:
 - `confirm: "accepted"` (default): resolves when the server accepts the mutation into the write pipeline.
 - `confirm: "committed"`: resolves when the writer commits the mutation or an accepted no-op; rejects if the writer reports failure.
 
 **State Propagation**: Local subscription data changes only when the server emits subscription updates. A successful mutation promise is not a substitute for subscription state.
 
-**Error Handling**: Immediate request errors reject the promise. Confirmed write failures reject the promise with `ZyncBaseError`. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance. See [Error Handling](./error-handling.md#error-propagation).
+**Error Handling**: Immediate request errors reject the promise. Confirmed write failures reject the promise with `ZyncBaseError`. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance. See [Error Handling](./error-handling.md#error-propagation). A failed `if` rejects with `PRECONDITION_FAILED` (`state`, non-retryable); the application may retry after re-reading.
 
 **Uniqueness**: Writes that collide with a schema-declared unique constraint (see [Configuration](./configuration.md#unique-constraints)) are rejected by storage with `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Because default accepted writes give no writer-failure guarantee, duplicate detection requires `confirm: "committed"`.
 
 **Returns**: `Promise<void>`
 
-### `store.remove(path)`
+### `store.remove(path, options?)`
 Deletes an entire document.
 
 **Path Constraints**: Must target a **Document** (exactly depth 2). Targeting a collection (depth 1) or a field (depth 3+) throws an error. To remove a field, use `store.set(path, null)`.
 
 ```typescript
 await client.store.remove('elements.rect-1')
+
+// Delete only if the stored row still matches.
+await client.store.remove('locks.l1', {
+  confirm: 'committed',
+  if: { owner_id: { eq: 'u1' } },
+})
 ```
 
-**Confirmation**: Same as `store.set`. Deleting a missing document is success/no-op.
+**Confirmation**: Same as `store.set`. Deleting a missing document without `if` is success/no-op; with `if`, a missing document rejects with `PRECONDITION_FAILED`.
 
 **Error Handling**: Same as `store.set`.
 
 **Returns**: `Promise<void>`
 
+### `store.increment(path, by, options?)`
+Atomically add `by` to an integer field. Always waits for commit.
+
+**Path Constraints**: Must target a **Field** (depth 3+). The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint.
+
+**Semantics**: The server executes `SET field = field + by` as one SQLite statement inside the writer transaction. The result is rejected with `PRECONDITION_FAILED` if the row is missing, the stored value is NULL, the arithmetic overflows, or the result violates the field's `minimum` / `maximum`. Use `if` to make the increment conditional on the current row.
+
+```typescript
+// Atomic decrement; fails if the balance would go below 100.
+await client.store.increment('accounts.a1.coins', -100, {
+  if: { coins: { gte: 100 } },
+})
+```
+
+**Returns**: `Promise<void>`. The new value is delivered by the subscription; perform a `get` if the caller needs to report the value now.
+
+> [!WARNING]
+> Increments are not idempotent. A manual retry after an ambiguous connection failure may apply twice. The SDK does not auto-retry increments; callers must decide whether a retry is safe.
 
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
@@ -211,9 +244,9 @@ Initial and subsequent results are delivered through the callback.
 
 ## Batch Operations
 
-Perform multiple write operations (`set` and `remove`) atomically.
+Perform multiple write operations (`set`, `remove`, and `increment`) atomically.
 
-### `store.batch(operations)`
+### `store.batch(operations, options?)`
 Performs all operations atomically.
 ```typescript
 await client.store.batch([
@@ -224,16 +257,25 @@ await client.store.batch([
 
 With default confirmation, the promise resolves when the batch is accepted into the write pipeline. With `confirm: "committed"`, the promise resolves only if the full batch commits or produces accepted no-op outcomes. If any operation fails, the entire confirmed batch rejects and no partial writes are committed.
 
+A batch containing `if` or an increment requires `confirm: "committed"`. Operations execute in declaration order; a later operation sees the uncommitted effects of earlier operations. This makes a batch a multi-document compare-and-set:
+
 ```typescript
 await client.store.batch([
-  { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
-  { op: 'remove', path: 'temporary_locks.123' }
+  {
+    op: 'increment',
+    path: 'accounts.a1.balance',
+    by: -100,
+    if: { balance: { gte: 100 } },
+  },
+  { op: 'increment', path: 'accounts.a2.balance', by: 100 },
 ], { confirm: 'committed' })
 ```
 
-**Limits**: 
+If the first operation's precondition fails, the whole batch rolls back and rejects with `PRECONDITION_FAILED`; the destination is not credited.
+
+**Limits**:
 - Max 500 operations per batch.
-- Only `set` and `remove` allowed.
+- Only `set`, `remove`, and `increment` are allowed.
 
 **Error Details**: Confirmed batch failures include `details.batchIndex` when the failing operation can be identified.
 

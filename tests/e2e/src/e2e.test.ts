@@ -17,6 +17,7 @@ import { run as runActions } from "./test-actions";
 import { run as runBackup } from "./test-backup";
 import { run as runBatch } from "./test-batch";
 import { run as runComboStress } from "./test-combo-stress";
+import { run as runConditional } from "./test-conditional";
 import { run as runCrash } from "./test-crash";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
@@ -60,6 +61,26 @@ describe("ZyncBase E2E", () => {
 						await runSync(port);
 						await runBatch(port);
 						await runErrors(port);
+					},
+				);
+			},
+		);
+	});
+
+	test("conditional writes and atomic increments", async () => {
+		await runE2ETest(
+			"Conditional writes and atomic increments",
+			async (ctx) => {
+				await withServer(
+					ctx,
+					{
+						schemaPath: ctx.schemaPath("schema-conditional.json"),
+						dataDir: ctx.dataPath("conditional"),
+						configName: "zyncbase-config-conditional.json",
+						authPath: ctx.schemaPath("auth-allow-all.json"),
+					},
+					async ({ port }) => {
+						await runConditional(port);
 					},
 				);
 			},

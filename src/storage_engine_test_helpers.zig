@@ -128,6 +128,74 @@ pub fn enqueueUpdate(
     } });
 }
 
+pub fn enqueueUpdateConditional(
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    columns: []const ColumnValue,
+    guard: ?query_ast.FilterPredicate,
+    precondition: ?query_ast.FilterPredicate,
+    conn_id: ?u64,
+    write_id: ?[16]u8,
+) !void {
+    const allocator = engine.allocator;
+    const owned_columns = try cloneColumns(allocator, columns);
+    errdefer {
+        for (owned_columns) |col| col.value.deinit(allocator);
+        allocator.free(owned_columns);
+    }
+    const owned_guard = try cloneGuardPredicate(allocator, guard);
+    errdefer if (owned_guard) |*p| @constCast(p).deinit(allocator);
+    const owned_precondition = try cloneGuardPredicate(allocator, precondition);
+    errdefer if (owned_precondition) |*p| @constCast(p).deinit(allocator);
+
+    try engine.enqueueWriteOp(.{ .update = .{
+        .table_index = table_index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .columns = owned_columns,
+        .guard_predicate = owned_guard,
+        .precondition_predicate = owned_precondition,
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
+        .conn_id = conn_id,
+        .write_id = write_id,
+    } });
+}
+
+pub fn enqueueIncrement(
+    engine: *StorageEngine,
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    namespace_id: i64,
+    field_index: usize,
+    delta: i64,
+    precondition: ?query_ast.FilterPredicate,
+    conn_id: ?u64,
+    write_id: ?[16]u8,
+) !void {
+    const allocator = engine.allocator;
+    const owned_columns = try allocator.alloc(ColumnValue, 0);
+    errdefer allocator.free(owned_columns);
+    const increments = try allocator.alloc(sql.IncrementValue, 1);
+    errdefer allocator.free(increments);
+    increments[0] = .{ .field_index = field_index, .delta = delta };
+    const owned_precondition = try cloneGuardPredicate(allocator, precondition);
+    errdefer if (owned_precondition) |*p| @constCast(p).deinit(allocator);
+
+    try engine.enqueueWriteOp(.{ .update = .{
+        .table_index = table_index,
+        .id = id,
+        .namespace_id = namespace_id,
+        .columns = owned_columns,
+        .increments = increments,
+        .precondition_predicate = owned_precondition,
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
+        .conn_id = conn_id,
+        .write_id = write_id,
+    } });
+}
+
 pub fn enqueueDelete(
     engine: *StorageEngine,
     table_index: usize,

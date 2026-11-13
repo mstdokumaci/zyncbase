@@ -14,6 +14,7 @@ const Cursor = typed.Cursor;
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 const Condition = query_ast.Condition;
+const FilterPredicate = query_ast.FilterPredicate;
 const Operator = query_ast.Operator;
 const QueryFilter = query_ast.QueryFilter;
 const SortDescriptor = query_ast.SortDescriptor;
@@ -37,11 +38,17 @@ pub const ParserError = error{
     UnsupportedOperatorForFieldType,
     UnsupportedSortFieldType,
     InvalidCursorSortValue,
+    EmptyPrecondition,
+    PreconditionTooLarge,
+    InvalidPrecondition,
     OutOfMemory,
 };
 
 /// Maximum number of client-supplied sort clauses.
 pub const max_sort_clauses: usize = 8;
+
+/// Maximum number of conditions in a write precondition (AND + OR combined).
+pub const max_write_predicate_conditions: usize = 32;
 
 /// Decodes a Base64-encoded MessagePack cursor token into a Cursor.
 /// Decoded shape: [table_index, [[field_index, desc], ...], [value_0, ..., unique_value]]
@@ -235,6 +242,63 @@ pub fn parseQueryFilter(
         .limit = limit,
         .after = after,
     };
+}
+
+/// Parse a write precondition payload into a FilterPredicate AST.
+///
+/// Accepts only `conditions` and `orConditions` (the same tuple grammar used by
+/// read filters). Rejects orderBy/limit/after, duplicate keys, empty
+/// preconditions, and preconditions that simplify to "always true". The single
+/// flat OR group matches the read query grammar.
+pub fn parseWritePrecondition(
+    allocator: std.mem.Allocator,
+    schema: *const Schema,
+    table_index: usize,
+    payload: msgpack.Payload,
+) ParserError!FilterPredicate {
+    if (payload != .map) return error.InvalidMessageFormat;
+    const table_metadata = schema.tableByIndex(table_index) orelse return error.UnknownTable;
+
+    var predicate = query_ast.FilterPredicate{};
+    errdefer predicate.deinit(allocator);
+
+    var seen_conditions = false;
+    var seen_or = false;
+    var total: usize = 0;
+
+    var it = payload.map.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.* != .str) return error.InvalidMessageFormat;
+        const key = entry.key_ptr.*.str.value();
+        if (std.mem.eql(u8, key, "conditions")) {
+            if (seen_conditions) return error.InvalidConditionFormat;
+            seen_conditions = true;
+            const conds = try parseConditions(allocator, table_metadata, entry.value_ptr.*);
+            predicate.conditions = conds;
+            total += conds.len;
+        } else if (std.mem.eql(u8, key, "orConditions")) {
+            if (seen_or) return error.InvalidConditionFormat;
+            seen_or = true;
+            const conds = try parseConditions(allocator, table_metadata, entry.value_ptr.*);
+            const clause_slice = allocator.alloc(query_ast.OrClause, 1) catch |err| {
+                for (conds) |*c| c.deinit(allocator);
+                allocator.free(conds);
+                return err;
+            };
+            clause_slice[0] = conds;
+            predicate.or_clauses = clause_slice;
+            total += conds.len;
+        } else {
+            return error.InvalidConditionFormat;
+        }
+        if (total > max_write_predicate_conditions) return error.PreconditionTooLarge;
+    }
+
+    if (total == 0) return error.EmptyPrecondition;
+
+    const state = try predicate.normalize(allocator);
+    if (state == .match_all) return error.InvalidPrecondition;
+    return predicate;
 }
 
 fn defaultOrderBy(allocator: std.mem.Allocator, created_at_index: usize) ParserError![]SortDescriptor {

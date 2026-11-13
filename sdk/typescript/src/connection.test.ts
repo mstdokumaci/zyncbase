@@ -343,7 +343,7 @@ describe("ConnectionManager", () => {
 		});
 	});
 
-	describe("SchemaSync race condition (ADR-025)", () => {
+	describe("SchemaSync race condition", () => {
 		test("processes StoreDelta only after SchemaSync is fully ready", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);

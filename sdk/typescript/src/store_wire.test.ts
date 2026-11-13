@@ -82,6 +82,117 @@ describe("store_wire", () => {
 		).toThrow(ZyncBaseError);
 	});
 
+	test("buildSet encodes if and requires committed confirmation", () => {
+		expect(() =>
+			buildSet(
+				"users.u1",
+				{ name: "Ada" },
+				{
+					if: { name: { eq: "Ada" } },
+				},
+			),
+		).toThrow(ZyncBaseError);
+
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { name: { eq: "Ada" } },
+			},
+		);
+		expect(command.message.if).toEqual({
+			conditions: [["name", 0, "Ada"]],
+		});
+		expect(command.message.writeId).toBeTruthy();
+	});
+
+	test("buildSet conditional if normalizes dotted field paths", () => {
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { "address.city": "NYC" },
+			},
+		);
+		expect(command.message.if).toEqual({
+			conditions: [["address__city", 0, "NYC"]],
+		});
+	});
+
+	test("buildRemove encodes if and requires committed confirmation", () => {
+		expect(() =>
+			buildRemove("users.u1", { if: { name: { eq: "Ada" } } }),
+		).toThrow(ZyncBaseError);
+
+		const command = buildRemove("users.u1", {
+			confirm: "committed",
+			if: { name: { eq: "Ada" } },
+		});
+		expect(command.message.if).toEqual({
+			conditions: [["name", 0, "Ada"]],
+		});
+		expect(command.message.writeId).toBeTruthy();
+	});
+
+	test("buildBatch encodes conditional and increment ops", () => {
+		const message = buildBatch(
+			[
+				{
+					op: "set",
+					path: "users.u1",
+					value: { name: "Ada" },
+					if: { name: { eq: "old" } },
+				},
+				{ op: "remove", path: "users.u2", if: { name: { eq: "x" } } },
+				{
+					op: "increment",
+					path: "users.u1.coins",
+					by: -5,
+					if: { coins: { gte: 5 } },
+				},
+			],
+			{ confirm: "committed" },
+		);
+
+		expect(message.ops).toEqual([
+			[
+				"s",
+				["users", "u1"],
+				{ name: "Ada" },
+				{ conditions: [["name", 0, "old"]] },
+			],
+			["r", ["users", "u2"], { conditions: [["name", 0, "x"]] }],
+			["i", ["users", "u1"], "coins", -5, { conditions: [["coins", 4, 5]] }],
+		]);
+		expect(message.writeId).toBeTruthy();
+	});
+
+	test("buildBatch rejects conditional ops without committed confirmation", () => {
+		expect(() =>
+			buildBatch([{ op: "increment", path: "users.u1.coins", by: 1 }]),
+		).toThrow(ZyncBaseError);
+		expect(() =>
+			buildBatch([
+				{
+					op: "set",
+					path: "users.u1",
+					value: { name: "Ada" },
+					if: { name: { eq: "x" } },
+				},
+			]),
+		).toThrow(ZyncBaseError);
+	});
+
+	test("buildBatch rejects zero increment deltas", () => {
+		expect(() =>
+			buildBatch([{ op: "increment", path: "users.u1.coins", by: 0 }], {
+				confirm: "committed",
+			}),
+		).toThrow(ZyncBaseError);
+	});
+
 	test("buildLoadMore contains only server-required fields", () => {
 		expect(buildLoadMore(9, "next")).toEqual({
 			type: "StoreLoadMore",
@@ -408,6 +519,33 @@ describe("store_wire", () => {
 			]);
 		});
 
+		test("or branch with a dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { or: [{ "address.city": "NYC" }] },
+			});
+			expect(result.orConditions).toEqual([["address__city", 0, "NYC"]]);
+		});
+
+		test("or rejects branches with more than one comparison", () => {
+			expect(() =>
+				encodeQueryOptions({
+					where: { or: [{ status: "active", role: "admin" }] },
+				}),
+			).toThrow(ZyncBaseError);
+			expect(() =>
+				encodeQueryOptions({
+					where: { or: [{ age: { gte: 18, lte: 65 } }] },
+				}),
+			).toThrow("Each `or` branch must contain exactly one comparison.");
+		});
+
+		test("or accepts a branch with exactly one comparison", () => {
+			const result = encodeQueryOptions({
+				where: { or: [{ status: { eq: "active" } }] },
+			});
+			expect(result.orConditions).toEqual([["status", 0, "active"]]);
+		});
+
 		test("full options: where + orderBy + limit + after", () => {
 			const result = encodeQueryOptions({
 				where: { status: "active" },
@@ -435,6 +573,24 @@ describe("store_wire", () => {
 		test("where with deeply nested field", () => {
 			const result = encodeQueryOptions({
 				where: { profile: { settings: { theme: "dark" } } },
+			});
+			expect(result).toEqual({
+				conditions: [["profile__settings__theme", 0, "dark"]],
+			});
+		});
+
+		test("where with dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { "address.city": "NYC" },
+			});
+			expect(result).toEqual({
+				conditions: [["address__city", 0, "NYC"]],
+			});
+		});
+
+		test("where with deeply dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { "profile.settings.theme": "dark" },
 			});
 			expect(result).toEqual({
 				conditions: [["profile__settings__theme", 0, "dark"]],

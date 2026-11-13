@@ -35,6 +35,11 @@ const StatementCache = sql.StatementCache;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
 
+const Rejection = struct {
+    index: usize,
+    err: anyerror,
+};
+
 /// Classify a database error, log it, and optionally deinit an old record.
 /// Used as the catch handler in executeBatch* / handle*Entry functions.
 fn mapAndLogError(
@@ -181,16 +186,16 @@ pub const WriteWorker = struct {
     fn pushBatchOutcomes(
         self: *WriteWorker,
         batch: []const WriteOp,
-        guard_rejected: ?[]const usize,
+        rejected: ?[]const Rejection,
         batch_err: ?anyerror,
     ) void {
         var pushed = false;
         for (batch, 0..) |op, op_idx| {
             if (op.getWriteAckInfo()) |info| {
                 const err: ?anyerror = if (batch_err) |e| e else blk: {
-                    if (guard_rejected) |rejected| {
-                        for (rejected) |idx| {
-                            if (idx == op_idx) break :blk error.PermissionDenied;
+                    if (rejected) |items| {
+                        for (items) |rejection| {
+                            if (rejection.index == op_idx) break :blk rejection.err;
                         }
                     }
                     break :blk null;
@@ -285,26 +290,74 @@ pub const WriteWorker = struct {
         return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null, &self.json_buf);
     }
 
-    /// Post-check for a write that affected no row while a guard was present.
-    /// Distinguishes "row exists but guard didn't match" (conflict) from "row
-    /// genuinely doesn't exist" (idempotent success).
-    /// Returns true when a guard conflict is detected, false otherwise.
-    fn checkGuardConflict(
+    /// Probe whether a row matches a predicate, inside the open write
+    /// transaction. Used only on the rejection path; the happy path never
+    /// executes this.
+    fn matchesPredicate(
+        self: *WriteWorker,
+        table_metadata: *const schema_types.Table,
+        namespace_id: i64,
+        id: DocId,
+        predicate: *const query_ast.FilterPredicate,
+    ) !bool {
+        const arena_alloc = self.batch_arena.allocator();
+        const rendered = (try filter_sql.renderAndClause(arena_alloc, table_metadata, predicate)) orelse return true;
+        const sql_str = try std.mem.concat(arena_alloc, u8, &.{
+            "SELECT 1 FROM ",
+            table_metadata.name_quoted,
+            " WHERE ",
+            schema_system.quoted_id,
+            "=? AND ",
+            schema_system.quoted_namespace_id,
+            "=?",
+            rendered.sql,
+            " LIMIT 1",
+        });
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+
+        try sql.bindDocIdNamespace(stmt, &self.conn, 1, id, namespace_id);
+        var bind_idx: c_int = 3;
+        try self.bindValueSlice(stmt, &bind_idx, rendered.values);
+        return try sql.stepHasMore(&self.conn, stmt);
+    }
+
+    /// Classify a zero-row write. Returns null for an idempotent no-op (an
+    /// auth-only guard on a missing row), otherwise the rejection error.
+    ///
+    /// Auth is classified before the client precondition so a false
+    /// precondition cannot reveal anything about an unreadable row.
+    fn classifyRejectedWrite(
         self: *WriteWorker,
         table_index: usize,
         namespace_id: i64,
         id: DocId,
-    ) !bool {
-        const exists = getDocumentHelper(self, table_index, namespace_id, id) catch |err| {
+        guard_predicate: ?*const query_ast.FilterPredicate,
+        precondition_predicate: ?*const query_ast.FilterPredicate,
+        has_increments: bool,
+    ) !?anyerror {
+        const table_metadata = self.schema.tableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const existing = getDocumentHelper(self, table_index, namespace_id, id) catch |err| {
             const classified_err = errors.classifyError(err);
-            std.log.err("Guard post-check failed: {}", .{classified_err});
+            std.log.err("Write rejection probe failed: {}", .{classified_err});
             return classified_err;
         };
-        if (exists) |r| {
-            r.deinit(self.allocator);
-            return true; // row exists but guard didn't match — conflict
+
+        if (existing == null) {
+            if (precondition_predicate != null or has_increments) return @as(?anyerror, error.PreconditionFailed);
+            return null; // auth-only guard on a missing row is an idempotent no-op
         }
-        return false; // row genuinely doesn't exist — idempotent success
+        existing.?.deinit(self.allocator);
+
+        if (guard_predicate) |pred| {
+            if (!try self.matchesPredicate(table_metadata, namespace_id, id, pred)) return @as(?anyerror, error.PermissionDenied);
+        }
+        if (precondition_predicate) |pred| {
+            if (!try self.matchesPredicate(table_metadata, namespace_id, id, pred)) return @as(?anyerror, error.PreconditionFailed);
+        }
+        if (has_increments) return @as(?anyerror, error.PreconditionFailed);
+        return @as(?anyerror, error.PermissionDenied);
     }
 
     /// Pre-write snapshot used only for insert-vs-update classification in the
@@ -400,11 +453,11 @@ pub const WriteWorker = struct {
         entry: anytype,
         op_idx: usize,
         fail_fast: bool,
-        guard_rejected: *std.ArrayListUnmanaged(usize),
+        rejected: *std.ArrayListUnmanaged(Rejection),
     ) !EntryTarget {
         const table = self.schema.tableByIndex(entry.table_index) orelse {
             std.log.debug("Unknown table index {d} in op #{d}", .{ entry.table_index, op_idx });
-            if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+            if (fail_fast) try rejected.append(self.allocator, .{ .index = op_idx, .err = StorageError.UnknownTable });
             return StorageError.UnknownTable;
         };
         return .{
@@ -417,7 +470,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         ops: []const WriteOp,
         tx_started: *bool,
-        guard_rejected: *std.ArrayListUnmanaged(usize),
+        rejected: *std.ArrayListUnmanaged(Rejection),
         fail_fast: bool,
     ) !void {
         var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
@@ -461,7 +514,7 @@ pub const WriteWorker = struct {
             .pending_cache_ops = &pending_cache_ops,
         };
 
-        try self.runOps(&ctx, ops, fail_fast, guard_rejected);
+        try self.runOps(&ctx, ops, fail_fast, rejected);
 
         try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops);
     }
@@ -471,16 +524,16 @@ pub const WriteWorker = struct {
         ctx: *BatchCtx,
         ops: []const WriteOp,
         fail_fast: bool,
-        guard_rejected: *std.ArrayListUnmanaged(usize),
+        rejected: *std.ArrayListUnmanaged(Rejection),
     ) !void {
         for (ops, 0..) |op, op_idx| {
-            const succeeded = try executeOp(ctx, op, op_idx, fail_fast, guard_rejected);
-            if (!succeeded) {
-                try guard_rejected.append(self.allocator, op_idx);
-                // (fail_fast=true) aborts on first guard rejection; flush
-                // path continues so a single rejected guard doesn't stall
-                // a flush of N writes.
-                if (fail_fast) return error.PermissionDenied;
+            const rejection = try executeOp(ctx, op, op_idx, fail_fast, rejected);
+            if (rejection) |err| {
+                try rejected.append(self.allocator, .{ .index = op_idx, .err = err });
+                // (fail_fast=true) aborts on the first rejection; the flush
+                // path continues so one rejected op doesn't stall a flush of N
+                // writes.
+                if (fail_fast) return err;
             }
         }
     }
@@ -490,29 +543,29 @@ pub const WriteWorker = struct {
         op: WriteOp,
         op_idx: usize,
         fail_fast: bool,
-        guard_rejected: *std.ArrayListUnmanaged(usize),
-    ) !bool {
+        rejected: *std.ArrayListUnmanaged(Rejection),
+    ) !?anyerror {
         const self = ctx.self;
         return switch (op) {
             .upsert => |iop| blk: {
-                const target = try self.resolveEntryTarget(iop, op_idx, fail_fast, guard_rejected);
+                const target = try self.resolveEntryTarget(iop, op_idx, fail_fast, rejected);
                 break :blk executeUpsertEntry(ctx, iop, target.namespace_id, target.table);
             },
             .update => |uop| blk: {
-                const target = try self.resolveEntryTarget(uop, op_idx, fail_fast, guard_rejected);
+                const target = try self.resolveEntryTarget(uop, op_idx, fail_fast, rejected);
                 break :blk executeUpdateEntry(ctx, uop, target.namespace_id, target.table);
             },
             .delete => |dop| blk: {
-                const target = try self.resolveEntryTarget(dop, op_idx, fail_fast, guard_rejected);
+                const target = try self.resolveEntryTarget(dop, op_idx, fail_fast, rejected);
                 break :blk executeDeleteEntry(ctx, dop, target.namespace_id, target.table);
             },
             else => {
                 std.log.debug("Unsupported WriteOp variant at op #{d}", .{op_idx});
-                if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+                if (fail_fast) try rejected.append(self.allocator, .{ .index = op_idx, .err = StorageError.InvalidOperation });
                 return StorageError.InvalidOperation;
             },
         } catch |err| {
-            if (fail_fast) try guard_rejected.append(self.allocator, op_idx);
+            if (fail_fast) try rejected.append(self.allocator, .{ .index = op_idx, .err = err });
             return err;
         };
     }
@@ -640,7 +693,7 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-    ) !bool {
+    ) !?anyerror {
         const self = ctx.self;
         const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
@@ -651,12 +704,16 @@ pub const WriteWorker = struct {
         };
 
         // An upsert returning no row under a guard means the row exists and the
-        // guard failed — unconditionally a conflict.
-        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null) {
-            return false;
+        // guard failed — unconditionally a conflict. The insert branch always
+        // returns a row.
+        if (maybe_new_record == null and entry.guard_predicate != null) {
+            if (old_record) |r| r.deinit(self.allocator);
+            return @as(?anyerror, error.PermissionDenied);
         }
 
-        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
+        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
+        if (!applied) return @as(?anyerror, error.PermissionDenied);
+        return null;
     }
 
     /// Unified update handler shared by both write paths. See executeUpsertEntry.
@@ -665,7 +722,7 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-    ) !bool {
+    ) !?anyerror {
         const self = ctx.self;
 
         const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
@@ -674,14 +731,18 @@ pub const WriteWorker = struct {
             return mapAndLogError("updateEntry", err, table_metadata.name, self.allocator, old_record);
         };
 
-        // Row unaffected + guard present: probe existence to
-        // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_new_record == null and old_record == null and entry.guard_predicate != null) {
-            if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
-            return true;
+        if (maybe_new_record == null and
+            (entry.guard_predicate != null or entry.precondition_predicate != null or entry.increments.len > 0))
+        {
+            if (old_record) |r| r.deinit(self.allocator);
+            const guard_ptr: ?*const query_ast.FilterPredicate = if (entry.guard_predicate) |*p| p else null;
+            const precondition_ptr: ?*const query_ast.FilterPredicate = if (entry.precondition_predicate) |*p| p else null;
+            return try self.classifyRejectedWrite(entry.table_index, namespace_id, entry.id, guard_ptr, precondition_ptr, entry.increments.len > 0);
         }
 
-        return applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
+        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
+        if (!applied) return @as(?anyerror, error.PermissionDenied);
+        return null;
     }
 
     fn recordIdentity(record: Record) !struct { id: DocId, namespace_id: i64 } {
@@ -904,7 +965,7 @@ pub const WriteWorker = struct {
         entry: anytype,
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
-    ) !bool {
+    ) !?anyerror {
         const self = ctx.self;
 
         const traverse_references = table_metadata.has_incoming_cascade_or_set_null and
@@ -921,17 +982,19 @@ pub const WriteWorker = struct {
             return mapAndLogError("deleteEntry", err, table_metadata.name, self.allocator, null);
         };
 
-        // Row unaffected + guard present: probe existence to
-        // classify guard conflict vs. idempotent no-op (see checkGuardConflict).
-        if (maybe_old_record == null and entry.guard_predicate != null) {
-            if (try self.checkGuardConflict(entry.table_index, namespace_id, entry.id)) return false;
-            return true;
+        if (maybe_old_record == null and
+            (entry.guard_predicate != null or entry.precondition_predicate != null))
+        {
+            const guard_ptr: ?*const query_ast.FilterPredicate = if (entry.guard_predicate) |*p| p else null;
+            const precondition_ptr: ?*const query_ast.FilterPredicate = if (entry.precondition_predicate) |*p| p else null;
+            return try self.classifyRejectedWrite(entry.table_index, namespace_id, entry.id, guard_ptr, precondition_ptr, false);
         }
 
         const deleted = maybe_old_record != null;
         const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
         if (deleted and traverse_references) try applyReferentialChanges(self, ctx, &referential_changes);
-        return applied;
+        if (!applied) return @as(?anyerror, error.PermissionDenied);
+        return null;
     }
 
     pub fn flushBatch(
@@ -943,13 +1006,13 @@ pub const WriteWorker = struct {
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
-        defer guard_rejected.deinit(self.allocator);
+        var rejected = std.ArrayListUnmanaged(Rejection).empty;
+        defer rejected.deinit(self.allocator);
 
         var tx_started = false;
-        const result = runTransaction(self, batch.items, &tx_started, &guard_rejected, false);
+        const result = runTransaction(self, batch.items, &tx_started, &rejected, false);
         if (result) |_| {
-            self.pushBatchOutcomes(batch.items, guard_rejected.items, null);
+            self.pushBatchOutcomes(batch.items, rejected.items, null);
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
@@ -1148,8 +1211,8 @@ pub const WriteWorker = struct {
         const entries = bop.entries;
         var tx_started = false;
         var final_err: ?anyerror = null;
-        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
-        defer guard_rejected.deinit(self.allocator);
+        var rejected = std.ArrayListUnmanaged(Rejection).empty;
+        defer rejected.deinit(self.allocator);
         defer {
             if (tx_started) {
                 execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
@@ -1165,7 +1228,7 @@ pub const WriteWorker = struct {
             if (@hasField(@TypeOf(bop), "conn_id")) {
                 if (bop.conn_id) |cid| {
                     if (bop.write_id) |wid| {
-                        const failed_batch_index: ?usize = if (guard_rejected.items.len > 0) guard_rejected.items[0] else null;
+                        const failed_batch_index: ?usize = if (rejected.items.len > 0) rejected.items[0].index else null;
                         self.pushWriteOutcome(cid, wid, final_err, if (final_err != null) failed_batch_index else null);
                         self.notifyChanges();
                     }
@@ -1177,7 +1240,7 @@ pub const WriteWorker = struct {
         }
 
         // Execute all entries in a single transaction
-        self.runTransaction(entries, &tx_started, &guard_rejected, true) catch |err| {
+        self.runTransaction(entries, &tx_started, &rejected, true) catch |err| {
             final_err = err;
         };
     }
@@ -1431,7 +1494,12 @@ pub const WriteWorker = struct {
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
         const guard_sql = if (rendered_guard) |*rg| rg.sql else null;
-        const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, guard_sql);
+
+        const precondition_ptr: ?*const query_ast.FilterPredicate = if (op.precondition_predicate) |*p| p else null;
+        const rendered_precondition = try filter_sql.renderAndClause(arena_alloc, table_metadata, precondition_ptr);
+        const precondition_sql = if (rendered_precondition) |*rp| rp.sql else null;
+
+        const sql_str = try sql.buildUpdateDocumentSql(arena_alloc, table_metadata, op.columns, op.increments, guard_sql, precondition_sql);
 
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
@@ -1440,6 +1508,10 @@ pub const WriteWorker = struct {
         var bind_idx: c_int = 1;
         for (op.columns) |col| {
             try sql.bindValue(col.value, &self.conn, stmt, bind_idx, &self.json_buf);
+            bind_idx += 1;
+        }
+        for (op.increments) |inc| {
+            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
             bind_idx += 1;
         }
 
@@ -1453,8 +1525,41 @@ pub const WriteWorker = struct {
         if (rendered_guard) |rg| {
             try self.bindValueSlice(stmt, &bind_idx, rg.values);
         }
+        if (rendered_precondition) |rp| {
+            try self.bindValueSlice(stmt, &bind_idx, rp.values);
+        }
+
+        // Increment guards: typeof operand, then the range operand, min, max.
+        for (op.increments) |inc| {
+            if (inc.field_index >= table_metadata.fields.len) return StorageError.UnknownField;
+            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+            bind_idx += 1;
+
+            const constraints = table_metadata.fields[inc.field_index].constraints orelse continue;
+            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+            bind_idx += 1;
+            if (constraints.minimum) |bound| try self.bindBound(stmt, &bind_idx, bound);
+            if (constraints.maximum) |bound| try self.bindBound(stmt, &bind_idx, bound);
+        }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
+    }
+
+    fn bindBound(
+        self: *WriteWorker,
+        stmt: *sqlite.c.sqlite3_stmt,
+        bind_idx: *c_int,
+        bound: schema_types.Constraints.Bound,
+    ) !void {
+        switch (bound) {
+            .integer => |value| {
+                if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx.*, value) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+            },
+            .real => |value| {
+                if (sqlite.c.sqlite3_bind_double(stmt, bind_idx.*, value) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+            },
+        }
+        bind_idx.* += 1;
     }
 
     fn executeDelete(
@@ -1468,18 +1573,17 @@ pub const WriteWorker = struct {
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
 
-        const guard_fragment = if (rendered_guard) |*rg| rg.sql else null;
-        const sql_str: []const u8 = if (guard_fragment) |fragment|
-            try std.mem.concat(arena_alloc, u8, &.{
-                table_metadata.delete_document_sql_prefix,
-                fragment,
-                table_metadata.delete_document_sql_suffix,
-            })
-        else
-            try std.mem.concat(arena_alloc, u8, &.{
-                table_metadata.delete_document_sql_prefix,
-                table_metadata.delete_document_sql_suffix,
-            });
+        const precondition_ptr: ?*const query_ast.FilterPredicate = if (op.precondition_predicate) |*p| p else null;
+        const rendered_precondition = try filter_sql.renderAndClause(arena_alloc, table_metadata, precondition_ptr);
+
+        const guard_fragment = if (rendered_guard) |*rg| rg.sql else "";
+        const precondition_fragment = if (rendered_precondition) |*rp| rp.sql else "";
+        const sql_str = try std.mem.concat(arena_alloc, u8, &.{
+            table_metadata.delete_document_sql_prefix,
+            guard_fragment,
+            precondition_fragment,
+            table_metadata.delete_document_sql_suffix,
+        });
 
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
         defer mstmt.release();
@@ -1490,6 +1594,9 @@ pub const WriteWorker = struct {
         var bind_idx: c_int = 3;
         if (rendered_guard) |rg| {
             try self.bindValueSlice(stmt, &bind_idx, rg.values);
+        }
+        if (rendered_precondition) |rp| {
+            try self.bindValueSlice(stmt, &bind_idx, rp.values);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);

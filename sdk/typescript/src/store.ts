@@ -27,7 +27,9 @@ import {
 } from "./subscriptions.js";
 import type {
 	BatchOperation,
+	ConditionalWriteOptions,
 	InboundMessage,
+	IncrementOptions,
 	JsonValue,
 	LifecycleEvent,
 	ListenHandle,
@@ -63,6 +65,7 @@ export interface StoreConnection {
 		msg: OutboundRequest,
 		responseTableIndex?: number,
 	): Promise<OkResponse>;
+	dispatchNoRetry?(msg: OutboundRequest): Promise<OkResponse>;
 	onMessage(handler: (msg: InboundMessage) => void): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	readonly schemaDictionary: SchemaDictionary;
@@ -153,7 +156,7 @@ export class StoreImpl {
 	async set(
 		path: Path,
 		value: JsonValue,
-		options?: WriteOptions,
+		options?: ConditionalWriteOptions,
 	): Promise<void> {
 		const command = buildSet(path, value, options);
 		await this.dispatchWrite(
@@ -164,7 +167,7 @@ export class StoreImpl {
 		);
 	}
 
-	async remove(path: Path, options?: WriteOptions): Promise<void> {
+	async remove(path: Path, options?: ConditionalWriteOptions): Promise<void> {
 		const command = buildRemove(path, options);
 		await this.dispatchWrite(
 			command.message,
@@ -174,12 +177,44 @@ export class StoreImpl {
 		);
 	}
 
+	async increment(
+		path: Path,
+		by: number,
+		options?: IncrementOptions,
+	): Promise<void> {
+		const message = buildBatch(
+			[
+				{
+					op: "increment",
+					path,
+					by,
+					...(options?.if ? { if: options.if } : {}),
+				},
+			],
+			{ confirm: "committed" },
+		);
+		await this.dispatchWrite(
+			message,
+			message.writeId,
+			{ confirm: "committed" },
+			"Increment failed",
+			true,
+		);
+	}
+
 	async create(
 		collection: string,
 		value: JsonValue,
 		options?: WriteOptions,
 	): Promise<string> {
 		this.validateRequiredFields(collection, value);
+		if (options && "if" in options) {
+			throw new ZyncBaseError("store.create does not support 'if'", {
+				code: ErrorCodes.INVALID_MESSAGE,
+				category: "client",
+				retryable: false,
+			});
+		}
 		const id = generateUUIDv7();
 		const command = buildCreate(collection, value, id, options);
 		await this.dispatchWrite(
@@ -725,6 +760,7 @@ export class StoreImpl {
 		writeId: string | undefined,
 		options: WriteOptions | undefined,
 		fallbackMessage: string,
+		noRetry = false,
 	): Promise<void> {
 		if (options?.confirm === "committed") {
 			if (!writeId) {
@@ -748,7 +784,12 @@ export class StoreImpl {
 				reject: commitReject,
 			});
 			try {
-				await this.conn.dispatch(message);
+				const noRetryDispatch = this.conn.dispatchNoRetry?.bind(this.conn);
+				if (noRetry && noRetryDispatch) {
+					await noRetryDispatch(message);
+				} else {
+					await this.conn.dispatch(message);
+				}
 			} catch (err) {
 				this.inFlightWrites.delete(writeId);
 				this.emitAndThrow(err, fallbackMessage);

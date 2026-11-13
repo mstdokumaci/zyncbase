@@ -153,7 +153,7 @@ pub fn makeFilterWithOrClauses(
 }
 
 /// Generates a MsgPack Payload representing a QueryFilter.
-/// This matches the protocol format defined in ADR-025.
+/// This matches the protocol format defined in specs/implementation/wire-protocol.md.
 /// tbl_md is used to resolve field names to indices if strings are provided in params.
 pub fn createQueryFilterPayload(
     allocator: std.mem.Allocator,
