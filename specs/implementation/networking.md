@@ -62,7 +62,7 @@ TLS is provided by OpenSSL through usockets when configured. Config shape is own
 
 | Route | Response |
 |-------|----------|
-| `/health` | `200` with `{"status":"ok"}` while the event loop is responsive. Liveness only; storage is not probed. |
+| `/health` | `200` with `{"status":"ok"}` while the event loop is responsive and the storage writer is alive; `503` with `{"status":"unhealthy"}` once the write engine has degraded (terminal, restart the process). |
 | `/stats` | `200` with JSON counters and `Cache-Control: no-store`: `uptime_seconds`, `connections`, `messages`, `errors`, `storage`. |
 
 Both routes are public by design: they carry no ticket check and expose only aggregate server diagnostics (counters and storage gauges) — never user data or schema. `messages_sent_total` counts each message inside a concatenated frame, not frames. A deployment that must keep load metadata private has to block `/stats` at its proxy.

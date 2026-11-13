@@ -227,7 +227,7 @@ Start a server against `/tmp/zyncbase-drill` on a non-public port and verify a f
 ## Monitoring
 
 - Alert on a non-zero exit from the backup script or systemd unit.
-- `/health` is the liveness probe; `/stats` exposes WAL size, checkpoint count, checkpoint failures, connections, and message counters.
+- `/health` is the liveness probe; it returns `503` once the write engine has degraded (every mutation is rejected in that state, so restart the process). `/stats` exposes WAL size, checkpoint count, checkpoint failures, connections, and message counters.
 - Watch `failed_checkpoint_count` and a growing WAL file.
 
 ## Upgrades
