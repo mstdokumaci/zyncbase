@@ -264,6 +264,7 @@ pub const ZyncBaseServer = struct {
             .metrics = &self.server_metrics,
             .active_connection_count = &self.connection_manager.active_connection_count,
             .checkpoint_worker = &self.checkpoint_manager,
+            .storage_engine = &self.storage_engine,
         };
 
         std.log.debug("Setting up ZyncBaseServer state", .{});

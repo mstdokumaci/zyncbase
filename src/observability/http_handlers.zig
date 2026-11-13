@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const CheckpointWorker = @import("../checkpoint_worker.zig").CheckpointWorker;
+const StorageEngine = @import("../storage_engine.zig").StorageEngine;
 const c = @import("../uwebsockets_wrapper.zig").c;
 const ServerMetrics = @import("metrics.zig").ServerMetrics;
 
@@ -10,17 +11,21 @@ pub const HttpContext = struct {
     metrics: *ServerMetrics,
     active_connection_count: *std.atomic.Value(usize),
     checkpoint_worker: *CheckpointWorker,
+    storage_engine: *const StorageEngine,
 };
 
-/// GET /health — lightweight liveness probe, unauthenticated.
-/// Returns 200 with {"status":"ok"} if the event loop is responsive.
+/// GET /health — liveness probe, unauthenticated.
+/// Returns 200 with {"status":"ok"} if the event loop and storage writer are alive,
+/// 503 with {"status":"unhealthy"} once the write engine has degraded (no recovery).
 pub fn handleHealth(res: ?*c.uws_res_t, _: ?*c.uws_req_t, user_data: ?*anyopaque) callconv(.c) void {
     const res_nn = res orelse return;
     const ctx: *HttpContext = @ptrCast(@alignCast(user_data orelse return));
     const ssl: c_int = if (ctx.ssl) 1 else 0;
 
-    const body = "{\"status\":\"ok\"}";
-    c.uws_res_write_status(ssl, res_nn, "200 OK", "200 OK".len);
+    const healthy = ctx.storage_engine.isHealthy();
+    const status = if (healthy) "200 OK" else "503 Service Unavailable";
+    const body = if (healthy) "{\"status\":\"ok\"}" else "{\"status\":\"unhealthy\"}";
+    c.uws_res_write_status(ssl, res_nn, status.ptr, status.len);
     c.uws_res_write_header(ssl, res_nn, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
     c.uws_res_end(ssl, res_nn, body.ptr, body.len, 0);
 }
