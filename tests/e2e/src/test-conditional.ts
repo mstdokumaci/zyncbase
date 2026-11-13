@@ -155,16 +155,18 @@ async function testBatchTransfer(client: ZyncBaseClient): Promise<void> {
 		throw new Error("Expected destination balance 40 after transfer");
 	}
 
+	// The destination credit executes first, then the source decrement fails
+	// its condition. The balance assertions prove the executed credit rolled back.
 	await expectCode("failed transfer", "PRECONDITION_FAILED", () =>
 		client.store.batch(
 			[
+				{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 1 },
 				{
 					op: "increment",
 					path: ["accounts", "acct-4", "balance"],
 					by: -1000,
 					if: { balance: { gte: 1000 } },
 				},
-				{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 1 },
 			],
 			committed,
 		),

@@ -1037,7 +1037,7 @@ Both require `confirm: "committed"` and a `writeId`. Both are reported as write-
 
 ### Authorization and `$value`
 
-`$value` for a conditional `set`/`remove` remains the incoming value payload. For an increment, `$value.<field>` is the **delta**, supplied as a synthetic sparse array to the pre-enqueue authorization evaluator. Rules that need the resulting value cannot be expressed because it depends on concurrent state.
+`$value` for a conditional `set`/`remove` remains the incoming value payload. For an increment, `$value` cannot have a consistent meaning: the delta is known before the write, while the resulting field value is known only after the write. Increment operations are therefore rejected when the collection's write rule references `$value` (`SCHEMA_VALIDATION_FAILED`). Use the schema's `minimum`/`maximum` and the `if` predicate for result invariants. A `$doc`-only write rule remains valid for increments.
 
 ### Wire and SDK Surface
 

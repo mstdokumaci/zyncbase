@@ -35,6 +35,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "RangeViolation", wireError("SCHEMA_VALIDATION_FAILED", "Numeric value outside allowed range") },
     .{ "PreconditionFailed", wireError("PRECONDITION_FAILED", "Write precondition did not hold; the write was not applied") },
     .{ "IncrementNotSupported", wireError("SCHEMA_VALIDATION_FAILED", "Atomic increments require an unconstrained, non-unique integer field") },
+    .{ "IncrementValueAuthUnsupported", wireError("SCHEMA_VALIDATION_FAILED", "Atomic increments are not supported when the collection's write rule references $value; use schema bounds and 'if' for result invariants") },
     .{ "InvalidIncrement", wireError("SCHEMA_VALIDATION_FAILED", "Increment delta must be a non-zero integer") },
     .{ "PreconditionTooLarge", wireError("MESSAGE_TOO_LARGE", "Write precondition exceeds the condition limit") },
     .{ "EmptyPrecondition", wireError("INVALID_MESSAGE", "Write precondition requires at least one condition") },

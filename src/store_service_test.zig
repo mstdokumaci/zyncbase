@@ -1672,3 +1672,91 @@ test "StoreService: conditional write on an unreadable row returns PermissionDen
     defer if (rec) |r| r.deinit(allocator);
     try testing.expectEqualStrings("original", rec.?.values[val_idx].scalar.text);
 }
+
+fn replaceAuthConfig(app: *helpers.AppTestContext, allocator: std.mem.Allocator, auth_json: []const u8) !void {
+    const new_auth = try authorization_parse.initFromJson(allocator, auth_json, &app.schema);
+    app.auth_config.deinit();
+    app.auth_config = new_auth;
+}
+
+test "StoreService: increment is rejected when the write rule references $value" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-increment-value-auth", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const auth_json =
+        \\{
+        \\  "namespaces": [
+        \\    { "pattern": "public", "storeFilter": true, "presenceRead": true, "presenceWrite": true }
+        \\  ],
+        \\  "store": [
+        \\    { "collection": "accounts", "read": true, "write": { "$value.balance": { "gte": 0 } } }
+        \\  ]
+        \\}
+    ;
+    try replaceAuthConfig(&app, allocator, auth_json);
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const inc_op = try makeIncrementOp(allocator, path, balance_idx, -1);
+    defer freeIncrementOp(allocator, inc_op);
+    const ops = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops);
+    ops[0] = inc_op;
+
+    try testing.expectError(
+        StorageError.IncrementValueAuthUnsupported,
+        service.batchWrite(writeCtxCommitted(1, .{7} ** 16), .{ .arr = ops }),
+    );
+}
+
+test "StoreService: increment remains allowed with a $doc-only write rule" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-increment-doc-auth", &.{
+        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    const auth_json =
+        \\{
+        \\  "namespaces": [
+        \\    { "pattern": "public", "storeFilter": true, "presenceRead": true, "presenceWrite": true }
+        \\  ],
+        \\  "store": [
+        \\    { "collection": "accounts", "read": true, "write": { "$doc.owner_id": { "eq": "$session.userId" } } }
+        \\  ]
+        \\}
+    ;
+    try replaceAuthConfig(&app, allocator, auth_json);
+
+    const service = &app.store_service;
+    const accounts = try app.table("accounts");
+    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
+    const path = try documentPath(allocator, accounts.metadata.index, 1);
+    defer path.free(allocator);
+
+    const seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = 10 } } }};
+    try sth.enqueueUpsert(&app.storage_engine, accounts.metadata.index, 1, 1, 0, &seed, null, null, null);
+    try app.storage_engine.flushPendingWrites();
+
+    const inc_op = try makeIncrementOp(allocator, path, balance_idx, -3);
+    defer freeIncrementOp(allocator, inc_op);
+    const ops = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops);
+    ops[0] = inc_op;
+
+    try service.batchWrite(writeCtxCommitted(1, .{8} ** 16), .{ .arr = ops });
+    try app.storage_engine.flushPendingWrites();
+
+    const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
+    defer if (rec) |r| r.deinit(allocator);
+    try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
+}

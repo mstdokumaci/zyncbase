@@ -62,6 +62,8 @@ pub const StorageError = error{
     PreconditionFailed,
     /// Atomic increments require an unconstrained, non-unique integer field
     IncrementNotSupported,
+    /// The collection's write rule references $value, which cannot be evaluated for an increment
+    IncrementValueAuthUnsupported,
     /// Increment delta is zero or otherwise invalid
     InvalidIncrement,
     /// Write precondition exceeds the condition cap

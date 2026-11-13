@@ -1317,7 +1317,7 @@ The top-level `actions` array controls action invocation (`invoke`) and worker r
 - `$session.*` - Resolved session context projected from a validated JWT or anonymous identity (e.g., `$session.userId`, `$session.tenant_id`, `$session.role`)
 - `$namespace.*` - Parsed namespace parts (e.g., `$namespace.tenant_id`, `$namespace.room_id`)
 - `$path` - Target table/collection name
-- `$value.*` - Incoming mutation payload for writes, or the params payload for action `invoke` rules
+- `$value.*` - Incoming mutation payload for set/remove writes, or the params payload for action `invoke` rules. Increment operations are rejected when the write rule references `$value`; the delta is known before the write, but the resulting value is not.
 - `$doc.*` - Same-row SQLite columns, injected into SQL for reads and existing-row updates/removes
 
 **Operators:**

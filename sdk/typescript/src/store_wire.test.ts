@@ -107,6 +107,20 @@ describe("store_wire", () => {
 		expect(command.message.writeId).toBeTruthy();
 	});
 
+	test("buildSet conditional if normalizes dotted field paths", () => {
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { "address.city": "NYC" },
+			},
+		);
+		expect(command.message.if).toEqual({
+			conditions: [["address__city", 0, "NYC"]],
+		});
+	});
+
 	test("buildRemove encodes if and requires committed confirmation", () => {
 		expect(() =>
 			buildRemove("users.u1", { if: { name: { eq: "Ada" } } }),
@@ -505,6 +519,33 @@ describe("store_wire", () => {
 			]);
 		});
 
+		test("or branch with a dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { or: [{ "address.city": "NYC" }] },
+			});
+			expect(result.orConditions).toEqual([["address__city", 0, "NYC"]]);
+		});
+
+		test("or rejects branches with more than one comparison", () => {
+			expect(() =>
+				encodeQueryOptions({
+					where: { or: [{ status: "active", role: "admin" }] },
+				}),
+			).toThrow(ZyncBaseError);
+			expect(() =>
+				encodeQueryOptions({
+					where: { or: [{ age: { gte: 18, lte: 65 } }] },
+				}),
+			).toThrow("Each `or` branch must contain exactly one comparison.");
+		});
+
+		test("or accepts a branch with exactly one comparison", () => {
+			const result = encodeQueryOptions({
+				where: { or: [{ status: { eq: "active" } }] },
+			});
+			expect(result.orConditions).toEqual([["status", 0, "active"]]);
+		});
+
 		test("full options: where + orderBy + limit + after", () => {
 			const result = encodeQueryOptions({
 				where: { status: "active" },
@@ -532,6 +573,24 @@ describe("store_wire", () => {
 		test("where with deeply nested field", () => {
 			const result = encodeQueryOptions({
 				where: { profile: { settings: { theme: "dark" } } },
+			});
+			expect(result).toEqual({
+				conditions: [["profile__settings__theme", 0, "dark"]],
+			});
+		});
+
+		test("where with dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { "address.city": "NYC" },
+			});
+			expect(result).toEqual({
+				conditions: [["address__city", 0, "NYC"]],
+			});
+		});
+
+		test("where with deeply dotted field path normalizes to __", () => {
+			const result = encodeQueryOptions({
+				where: { "profile.settings.theme": "dark" },
 			});
 			expect(result).toEqual({
 				conditions: [["profile__settings__theme", 0, "dark"]],

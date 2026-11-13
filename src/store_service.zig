@@ -632,6 +632,12 @@ pub const StoreService = struct {
         try validateIncrementField(path.table, field_index, delta);
         try requireCommittedForConditional(true, ctx.write_id);
 
+        // $value would mean the delta here, while for a set it means the
+        // value being written. The resulting value is unknown pre-enqueue, so
+        // refuse the ambiguity instead of silently evaluating the delta.
+        const rule = self.auth_config.storeRuleFor(path.table.name) orelse return error.AccessDenied;
+        if (conditionUsesValueScope(rule.write)) return StorageError.IncrementValueAuthUnsupported;
+
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
 
@@ -762,6 +768,34 @@ pub const StoreService = struct {
 
 fn requireCommittedForConditional(is_conditional: bool, write_id: ?[16]u8) !void {
     if (is_conditional and write_id == null) return error.InvalidWriteAck;
+}
+
+fn conditionUsesValueScope(condition: authorization_types.Condition) bool {
+    switch (condition) {
+        .boolean => return false,
+        .logical_and => |conditions| {
+            for (conditions) |c| {
+                if (conditionUsesValueScope(c)) return true;
+            }
+            return false;
+        },
+        .logical_or => |conditions| {
+            for (conditions) |c| {
+                if (conditionUsesValueScope(c)) return true;
+            }
+            return false;
+        },
+        .comparison => |comp| {
+            if (comp.lhs.scope == .value) return true;
+            if (comp.rhs) |rhs| {
+                return switch (rhs) {
+                    .context_var => |cv| cv.scope == .value,
+                    .literal => false,
+                };
+            }
+            return false;
+        },
+    }
 }
 
 fn validateIncrementField(table: *const schema_types.Table, field_index: usize, delta: i64) !void {

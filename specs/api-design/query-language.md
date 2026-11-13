@@ -291,7 +291,7 @@ You can have multiple conditions with OR groups:
 }
 ```
 
-**Note:** Currently, only one `or` key is supported at the root level. For more complex boolean logic, consider restructuring your query or using multiple queries.
+**Note:** Currently, only one `or` key is supported at the root level. Each `or` branch must contain exactly one comparison; a branch with multiple fields or multiple operators cannot be represented by the wire's single flat OR group and is rejected by the SDK. For more complex boolean logic, consider restructuring your query or using multiple queries.
 
 ---
 

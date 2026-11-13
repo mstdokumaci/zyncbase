@@ -470,7 +470,7 @@ function encodeSortClause(
 			`orderBy clause ${index} direction must be "asc" or "desc"`,
 		);
 	}
-	const encodedField = field.split(".").join("__");
+	const encodedField = normalizeFieldKey(field);
 	if (seen.has(encodedField)) {
 		throw invalidSortError(
 			`orderBy clause ${index} duplicates field "${field}"`,
@@ -478,6 +478,11 @@ function encodeSortClause(
 	}
 	seen.add(encodedField);
 	return [encodedField, dir === "desc" ? 1 : 0];
+}
+
+/** Flatten a public dotted field path to the schema's `__` form. */
+function normalizeFieldKey(key: string): string {
+	return key.split(".").join("__");
 }
 
 function invalidSortError(message: string): ZyncBaseError {
@@ -538,7 +543,8 @@ function encodeConditionObject(
 ): WireCondition[] {
 	const conditions: WireCondition[] = [];
 	for (const [key, val] of Object.entries(obj)) {
-		const fieldKey = prefix ? joinFieldPath(prefix, key) : key;
+		const segment = normalizeFieldKey(key);
+		const fieldKey = prefix ? joinFieldPath(prefix, segment) : segment;
 
 		if (
 			val === null ||
@@ -574,7 +580,18 @@ function extractOrConditions(
 ): WireCondition[] {
 	const orConditions: WireCondition[] = [];
 	for (const clause of or) {
-		orConditions.push(...encodeConditionObject(clause));
+		const branch = encodeConditionObject(clause);
+		if (branch.length !== 1) {
+			throw new ZyncBaseError(
+				"Each `or` branch must contain exactly one comparison.",
+				{
+					code: ErrorCodes.INVALID_MESSAGE,
+					category: "client",
+					retryable: false,
+				},
+			);
+		}
+		orConditions.push(branch[0]);
 	}
 	return orConditions;
 }

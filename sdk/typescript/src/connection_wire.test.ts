@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { packDocId } from "./doc_id.js";
+import { buildSet } from "./store_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { InboundMessage, StoreDelta } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
@@ -646,5 +647,20 @@ describe("ConnectionWireCodec conditional writes", () => {
 			-5,
 			{ conditions: [[1, 4, 5]] },
 		]);
+	});
+
+	test("encodes a dotted conditional if to the flattened field index", async () => {
+		const codec = await makeCodec();
+		const command = buildSet(
+			"users.u1",
+			{ name: "Ada" },
+			{
+				confirm: "committed",
+				if: { "address.city": "London" },
+			},
+		);
+		const encoded = codec.encode(command.message, 1);
+		const wire = decode(encoded.bytes) as Record<string, unknown>;
+		expect(wire.if).toEqual({ conditions: [[2, 0, "London"]] });
 	});
 });
