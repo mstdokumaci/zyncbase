@@ -363,7 +363,7 @@ The `namespace_id = 0` routing is transparent to the developer and invisible in 
 
 ### Authorization Scope Limits
 
-`authorization.json` rules are evaluated in RAM against five variables: `$session`, `$namespace`, `$path`, `$doc` (same-row columns only via AST injection into the query predicate), and `$value` (incoming mutation value).
+`authorization.json` rules are evaluated in RAM against five variables: `$session`, `$namespace`, `$path`, `$doc` (same-row columns only via AST injection into the query predicate), and `$value` (incoming value for set writes).
 
 Cross-table joins, relationship traversal, and lookups of other collections are explicitly forbidden in authorization rules. Any permission requiring this information must be encoded either:
 - In the validated JWT as a trusted claim, or
@@ -587,7 +587,7 @@ This is a product boundary decision. ZyncBase deliberately declines to compute p
 
 ### `authorization.json` — Declarative RAM Rules
 
-Authorization rules evaluate in RAM against `$session`, `$namespace`, `$path`, `$doc` (same-row columns via AST injection), and `$value` (incoming mutation value). No database reads are performed during authorization evaluation. Rules are JSON — version-controlled, diffable, and auditable.
+Authorization rules evaluate in RAM against `$session`, `$namespace`, `$path`, `$doc` (same-row columns via AST injection), and `$value` (incoming value for set writes). No database reads are performed during authorization evaluation. Rules are JSON — version-controlled, diffable, and auditable.
 
 ### Token Lifecycle and Revocation
 
@@ -1037,7 +1037,7 @@ Both require `confirm: "committed"` and a `writeId`. Both are reported as write-
 
 ### Authorization and `$value`
 
-`$value` for a conditional `set`/`remove` remains the incoming value payload. For an increment, `$value` cannot have a consistent meaning: the delta is known before the write, while the resulting field value is known only after the write. Increment operations are therefore rejected when the collection's write rule references `$value` (`SCHEMA_VALIDATION_FAILED`). Use the schema's `minimum`/`maximum` and the `if` predicate for result invariants. A `$doc`-only write rule remains valid for increments.
+`$value` for a conditional `set` remains the incoming value payload. For an increment, `$value` cannot have a consistent meaning: the delta is known before the write, while the resulting field value is known only after the write. Increment operations are therefore rejected when the collection's write rule references `$value` (`SCHEMA_VALIDATION_FAILED`). Use the schema's `minimum`/`maximum` and the `if` predicate for result invariants. A `$doc`-only write rule remains valid for increments.
 
 ### Wire and SDK Surface
 
