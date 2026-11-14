@@ -1,0 +1,574 @@
+{
+	"version": "0.8.0",
+	"store": {
+		"rooms": {
+			"required": [
+				"room_code",
+				"title",
+				"template",
+				"phase",
+				"round",
+				"host_user_id",
+				"vote_budget",
+				"max_per_card",
+				"max_cards",
+				"max_members",
+				"members_count",
+				"cards_count",
+				"votes_cast",
+				"votes_version",
+				"results_count",
+				"decisions_count"
+			],
+			"unique": [["room_code"]],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"title": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 80
+				},
+				"template": {
+					"type": "string",
+					"enum": ["retro", "list"]
+				},
+				"phase": {
+					"type": "string",
+					"enum": ["collect", "vote", "results", "discuss", "closed"]
+				},
+				"round": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"host_user_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"vote_budget": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20
+				},
+				"max_per_card": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20
+				},
+				"max_cards": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 100
+				},
+				"max_members": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 50
+				},
+				"members_count": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"cards_count": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"votes_cast": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"votes_version": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"results_count": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"decisions_count": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"vote_started_at": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"vote_ends_at": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"vote_closed_at": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"focus_card_id": {
+					"type": "string",
+					"maxLength": 36
+				},
+				"demo": {
+					"type": "boolean"
+				}
+			}
+		},
+		"members": {
+			"required": [
+				"room_code",
+				"user_id",
+				"presence_id",
+				"name",
+				"color",
+				"role"
+			],
+			"unique": [["room_code", "user_id"]],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"user_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"presence_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 24
+				},
+				"color": {
+					"type": "string",
+					"pattern": "^#[0-9a-fA-F]{6}$"
+				},
+				"role": {
+					"type": "string",
+					"enum": ["host", "member"]
+				}
+			}
+		},
+		"budgets": {
+			"required": ["room_code", "user_id", "votes_left"],
+			"unique": [["room_code", "user_id"]],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"user_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"votes_left": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 20
+				}
+			}
+		},
+		"cards": {
+			"required": ["room_code", "round", "lane", "text"],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"round": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"lane": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 20
+				},
+				"text": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 280
+				}
+			}
+		},
+		"ballots": {
+			"required": ["room_code", "round", "user_id", "card_id", "count"],
+			"unique": [["room_code", "round", "user_id", "card_id"]],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"round": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"user_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"count": {
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 20
+				}
+			}
+		},
+		"results": {
+			"required": [
+				"room_code",
+				"round",
+				"card_id",
+				"lane",
+				"text",
+				"votes",
+				"rank"
+			],
+			"unique": [["room_code", "round", "card_id"]],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"round": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				},
+				"lane": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 20
+				},
+				"text": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 280
+				},
+				"votes": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"rank": {
+					"type": "integer",
+					"minimum": 1
+				}
+			}
+		},
+		"decisions": {
+			"required": ["room_code", "round", "card_id", "text", "author_name"],
+			"fields": {
+				"room_code": {
+					"type": "string",
+					"minLength": 6,
+					"maxLength": 12
+				},
+				"round": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"card_id": {
+					"type": "string",
+					"maxLength": 40
+				},
+				"text": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 280
+				},
+				"author_name": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 24
+				}
+			}
+		}
+	},
+	"actions": {
+		"create_room": {
+			"params": {
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 24
+				},
+				"title": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 80
+				},
+				"template": {
+					"type": "string",
+					"enum": ["retro", "list"]
+				},
+				"vote_budget": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20
+				},
+				"max_per_card": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20
+				},
+				"demo": {
+					"type": "boolean"
+				}
+			},
+			"required": ["name", "title", "template"],
+			"returns": {
+				"room_id": {
+					"type": "string"
+				},
+				"member_id": {
+					"type": "string"
+				},
+				"user_id": {
+					"type": "string"
+				},
+				"presence_id": {
+					"type": "string"
+				}
+			},
+			"claims": ["external"]
+		},
+		"join_room": {
+			"params": {
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 24
+				}
+			},
+			"required": ["name"],
+			"returns": {
+				"room_id": {
+					"type": "string"
+				},
+				"member_id": {
+					"type": "string"
+				},
+				"user_id": {
+					"type": "string"
+				},
+				"read_only": {
+					"type": "boolean"
+				},
+				"presence_id": {
+					"type": "string"
+				}
+			},
+			"claims": ["external"]
+		},
+		"add_card": {
+			"params": {
+				"lane": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 20
+				},
+				"text": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 280
+				}
+			},
+			"required": ["lane", "text"],
+			"returns": {
+				"card_id": {
+					"type": "string"
+				}
+			},
+			"claims": ["external"]
+		},
+		"remove_card": {
+			"params": {
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				}
+			},
+			"required": ["card_id"],
+			"returns": {
+				"ok": {
+					"type": "boolean"
+				}
+			},
+			"claims": ["external"]
+		},
+		"start_vote": {
+			"params": {
+				"duration_ms": {
+					"type": "integer",
+					"minimum": 60000,
+					"maximum": 3600000
+				}
+			},
+			"required": ["duration_ms"],
+			"returns": {
+				"vote_ends_at": {
+					"type": "integer"
+				}
+			},
+			"claims": ["external"]
+		},
+		"extend_vote": {
+			"params": {
+				"duration_ms": {
+					"type": "integer",
+					"minimum": 60000,
+					"maximum": 3600000
+				}
+			},
+			"required": ["duration_ms"],
+			"returns": {
+				"vote_ends_at": {
+					"type": "integer"
+				}
+			},
+			"claims": ["external"]
+		},
+		"cast_vote": {
+			"params": {
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				}
+			},
+			"required": ["card_id"],
+			"returns": {
+				"votes_left": {
+					"type": "integer"
+				},
+				"card_votes": {
+					"type": "integer"
+				}
+			},
+			"claims": ["external"]
+		},
+		"retract_vote": {
+			"params": {
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				}
+			},
+			"required": ["card_id"],
+			"returns": {
+				"votes_left": {
+					"type": "integer"
+				},
+				"card_votes": {
+					"type": "integer"
+				}
+			},
+			"claims": ["external"]
+		},
+		"close_vote": {
+			"returns": {
+				"closed": {
+					"type": "boolean"
+				},
+				"results_count": {
+					"type": "integer"
+				}
+			},
+			"claims": ["external"]
+		},
+		"start_discussion": {
+			"returns": {
+				"focus_card_id": {
+					"type": "string"
+				}
+			},
+			"claims": ["external"]
+		},
+		"focus_topic": {
+			"params": {
+				"card_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 40
+				}
+			},
+			"required": ["card_id"],
+			"returns": {
+				"ok": {
+					"type": "boolean"
+				}
+			},
+			"claims": ["external"]
+		},
+		"add_decision": {
+			"params": {
+				"text": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 280
+				}
+			},
+			"required": ["text"],
+			"returns": {
+				"decision_id": {
+					"type": "string"
+				}
+			},
+			"claims": ["external"]
+		},
+		"close_room": {
+			"returns": {
+				"ok": {
+					"type": "boolean"
+				}
+			},
+			"claims": ["external"]
+		}
+	},
+	"presence": {
+		"user": {
+			"name": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 24
+			},
+			"color": {
+				"type": "string",
+				"pattern": "^#[0-9a-fA-F]{6}$"
+			},
+			"role": {
+				"type": "string",
+				"enum": ["host", "member"]
+			},
+			"typing": {
+				"type": "boolean"
+			},
+			"done": {
+				"type": "boolean"
+			}
+		}
+	}
+}

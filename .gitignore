@@ -11,4 +11,5 @@ node_modules/
 data/
 sdk/typescript/dist
 examples/cordon-off/dist/
+examples/quorum/dist/
 examples/cordon-off/.wrangler/

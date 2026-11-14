@@ -1,0 +1,65 @@
+{
+	"namespaces": [
+		{
+			"pattern": "room:{room_code}",
+			"storeFilter": { "$session.room": { "eq": "$namespace.room_code" } },
+			"presenceRead": true,
+			"presenceWrite": { "$session.role": { "eq": "member" } },
+			"presenceSharedWrite": false
+		}
+	],
+	"store": [
+		{
+			"collection": "rooms",
+			"read": true,
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "members",
+			"read": true,
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "budgets",
+			"read": {
+				"or": [
+					{ "$session.role": { "eq": "service" } },
+					{ "$doc.user_id": { "eq": "$session.externalId" } }
+				]
+			},
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "cards",
+			"read": true,
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "ballots",
+			"read": {
+				"or": [
+					{ "$session.role": { "eq": "service" } },
+					{ "$doc.user_id": { "eq": "$session.externalId" } }
+				]
+			},
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "results",
+			"read": true,
+			"write": { "$session.role": { "eq": "service" } }
+		},
+		{
+			"collection": "decisions",
+			"read": true,
+			"write": { "$session.role": { "eq": "service" } }
+		}
+	],
+	"actions": [
+		{
+			"action": "*",
+			"invoke": { "$session.role": { "eq": "member" } },
+			"register": { "$session.role": { "eq": "service" } }
+		}
+	]
+}

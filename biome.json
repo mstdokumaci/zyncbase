@@ -10,7 +10,9 @@
 			"sdk/typescript/**",
 			"tests/e2e/**",
 			"examples/cordon-off/**",
+			"examples/quorum/**",
 			"!!examples/cordon-off/land.json",
+			"!!examples/quorum/dist/**",
 			"!!vendor"
 		],
 		"ignoreUnknown": true
