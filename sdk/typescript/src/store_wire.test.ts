@@ -32,7 +32,7 @@ describe("store_wire", () => {
 	test("buildSet converts field-level paths to depth-2 sparse maps", () => {
 		const command = buildSet("users.u1.name", "Ada");
 
-		expect(command.segments).toEqual(["users", "u1"]);
+		expect(command.segments).toEqual(["users", "u1", "name"]);
 		expect(command.message).toEqual({
 			type: "StoreSet",
 			path: ["users", "u1"],
@@ -43,12 +43,29 @@ describe("store_wire", () => {
 	test("buildSet converts nested field paths to depth-2 sparse maps", () => {
 		const command = buildSet("users.u1.address.city", "London");
 
-		expect(command.segments).toEqual(["users", "u1"]);
+		expect(command.segments).toEqual(["users", "u1", "address.city"]);
 		expect(command.message).toEqual({
 			type: "StoreSet",
 			path: ["users", "u1"],
 			value: { address__city: "London" },
 		});
+	});
+
+	test("buildSet accepts canonical 3-segment arrays", () => {
+		const command = buildSet(["users", "u1", "address.city"], "London");
+
+		expect(command.segments).toEqual(["users", "u1", "address.city"]);
+		expect(command.message).toEqual({
+			type: "StoreSet",
+			path: ["users", "u1"],
+			value: { address__city: "London" },
+		});
+	});
+
+	test("buildSet rejects legacy 4-segment arrays", () => {
+		expect(() =>
+			buildSet(["users", "u1", "address", "city"], "London"),
+		).toThrow(ZyncBaseError);
 	});
 
 	test("buildRemove rejects non-document paths", () => {
@@ -193,6 +210,20 @@ describe("store_wire", () => {
 		).toThrow(ZyncBaseError);
 	});
 
+	test("buildBatch converts nested increment paths to flat field names", () => {
+		expect(
+			buildBatch([{ op: "increment", path: "users.u1.stats.coins", by: 1 }], {
+				confirm: "committed",
+			}).ops,
+		).toEqual([["i", ["users", "u1"], "stats__coins", 1]]);
+	});
+
+	test("buildBatch rejects legacy 4-segment arrays", () => {
+		expect(() =>
+			buildBatch([{ op: "set", path: ["users", "u1", "a", "b"], value: 1 }]),
+		).toThrow(ZyncBaseError);
+	});
+
 	test("buildLoadMore contains only server-required fields", () => {
 		expect(buildLoadMore(9, "next")).toEqual({
 			type: "StoreLoadMore",
@@ -207,7 +238,7 @@ describe("store_wire", () => {
 
 		expect(shapeGetResult(["users"], rows)).toBe(rows);
 		expect(shapeGetResult(["users", "u1"], rows)).toBe(record);
-		expect(shapeGetResult(["users", "u1", "address", "city"], rows)).toBe(
+		expect(shapeGetResult(["users", "u1", "address.city"], rows)).toBe(
 			"London",
 		);
 	});

@@ -20,27 +20,78 @@ export function splitFieldPath(flat: string): string[] {
 	return flat.split("__");
 }
 
-export function normalizePath(path: Path): string[] {
-	const segments = typeof path === "string" ? path.split(".") : path;
+/**
+ * Convert a logical dotted field path ("profile.address.city") to the
+ * schema's flat "__" form ("profile__address__city").
+ *
+ * This is the single authority for translating the third segment of a store
+ * path. Do not use it for flattened value maps; those already use "__".
+ */
+export function fieldPathToFlat(fieldPath: string): string {
+	return fieldPath.replaceAll(".", "__");
+}
 
-	if (segments.length === 0) {
-		throw new ZyncBaseError("Path must not be empty", {
-			code: ErrorCodes.INVALID_PATH,
-			category: "client",
-			retryable: false,
-		});
+function invalidPathError(message: string): ZyncBaseError {
+	return new ZyncBaseError(message, {
+		code: ErrorCodes.INVALID_PATH,
+		category: "client",
+		retryable: false,
+	});
+}
+
+function collapsePath(path: Path): string[] {
+	const segments = typeof path === "string" ? path.split(".") : [...path];
+
+	if (segments.length > 3) {
+		if (typeof path !== "string") {
+			throw invalidPathError(
+				`Path arrays support at most 3 segments ([collection, id, field.path]); got ${segments.length}`,
+			);
+		}
+		segments.splice(2, segments.length - 2, segments.slice(2).join("."));
 	}
+
+	return segments;
+}
+
+function assertPathSegments(path: Path, segments: string[]): void {
+	if (segments.length === 0) throw invalidPathError("Path must not be empty");
 
 	for (const segment of segments) {
-		if (segment.length === 0) {
+		if (typeof segment !== "string" || segment.length === 0) {
 			const detail = typeof path === "string" ? `: "${path}"` : "";
-			throw new ZyncBaseError(`Path contains empty segment${detail}`, {
-				code: ErrorCodes.INVALID_PATH,
-				category: "client",
-				retryable: false,
-			});
+			throw invalidPathError(`Path contains empty segment${detail}`);
 		}
 	}
+}
+
+function assertFieldPath(fieldPath: string): void {
+	for (const part of fieldPath.split(".")) {
+		if (part.length === 0) {
+			throw invalidPathError(
+				`Field path contains empty segment: "${fieldPath}"`,
+			);
+		}
+		if (part.includes("__")) {
+			throw invalidPathError(
+				`Field paths use dots; "__" is reserved: "${fieldPath}"`,
+			);
+		}
+	}
+}
+
+/**
+ * Normalize a logical store path to one of three shapes:
+ *   [collection], [collection, id], [collection, id, "field.path"]
+ *
+ * String inputs may contain any nesting depth and are collapsed into the
+ * third segment. Array inputs carry the canonical shape already, so more
+ * than three elements is an error rather than an implicit join.
+ */
+export function normalizePath(path: Path): string[] {
+	const segments = collapsePath(path);
+	assertPathSegments(path, segments);
+	if (segments.length === 3) assertFieldPath(segments[2]);
 	return segments;
 }
 

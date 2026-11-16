@@ -285,6 +285,36 @@ describe("SubscriptionTracker - field projection delivery", () => {
 		expect(values).toEqual(["Alice", "Bob"]);
 	});
 
+	test("nested field projection extracts a dotted field", () => {
+		const tracker = new SubscriptionTracker();
+		const values: JsonValue[] = [];
+
+		tracker.register(304, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			callbacks: [(value) => values.push(value)],
+			projection: createListenProjection(["users", "u1", "address.city"]),
+		});
+
+		const push = (city: string, zip: string) =>
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 304,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", address: { city, zip }, updated_at: 1 },
+					},
+				],
+			});
+
+		push("London", "SW1");
+		push("London", "SW2"); // sibling change only
+		push("Paris", "SW2");
+
+		expect(values).toEqual(["London", "Paris"]);
+	});
+
 	test("document-level listen delivers every pushed record", () => {
 		const tracker = new SubscriptionTracker();
 		const values: JsonValue[] = [];

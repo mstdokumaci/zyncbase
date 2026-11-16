@@ -1,5 +1,10 @@
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
-import { flatten, joinFieldPath, normalizePath } from "./path.js";
+import {
+	fieldPathToFlat,
+	flatten,
+	joinFieldPath,
+	normalizePath,
+} from "./path.js";
 import type {
 	BatchOperation,
 	ConditionalWriteOptions,
@@ -51,7 +56,7 @@ export function buildSet(
 ): StoreCommand<WithoutId<StoreSet>> {
 	const segments = normalizePath(path);
 	if (segments.length === 1) {
-		throw new ZyncBaseError("store.set requires a path of depth 2 or more", {
+		throw new ZyncBaseError("store.set requires a document or field path", {
 			code: ErrorCodes.INVALID_PATH,
 			category: "client",
 			retryable: false,
@@ -61,16 +66,14 @@ export function buildSet(
 
 	const wirePath = segments.slice(0, 2);
 	const wireValue =
-		segments.length >= 3
-			? { [joinFieldPath(...segments.slice(2))]: value }
-			: value;
+		segments.length === 3 ? { [fieldPathToFlat(segments[2])]: value } : value;
 
 	return {
-		segments: wirePath,
+		segments,
 		message: {
 			type: "StoreSet",
 			path: wirePath,
-			value: encodeWriteValue(wirePath, wireValue),
+			value: encodeWriteValue(wireValue),
 			...(options?.if ? { if: encodeWhereClause(options.if) } : {}),
 			...(options?.confirm ? { confirm: options.confirm } : {}),
 			...(options?.confirm === "committed"
@@ -123,7 +126,7 @@ export function buildCreate(
 		message: {
 			type: "StoreSet",
 			path: segments,
-			value: encodeWriteValue(segments, value),
+			value: encodeWriteValue(value),
 			...(options?.confirm ? { confirm: options.confirm } : {}),
 			...(options?.confirm === "committed"
 				? { writeId: generateUUIDv7().replace(/-/g, "") }
@@ -194,11 +197,14 @@ export function buildBatch(
 function buildBatchOp(op: BatchOperation): StoreBatch["ops"][number] {
 	const segments = normalizePath(op.path);
 	if (segments.length < 2) {
-		throw new ZyncBaseError("Batch operation path requires depth 2 or more", {
-			code: ErrorCodes.INVALID_PATH,
-			category: "client",
-			retryable: false,
-		});
+		throw new ZyncBaseError(
+			"Batch operation path requires a document or field path",
+			{
+				code: ErrorCodes.INVALID_PATH,
+				category: "client",
+				retryable: false,
+			},
+		);
 	}
 
 	switch (op.op) {
@@ -241,9 +247,9 @@ function buildBatchIncrement(
 	op: Extract<BatchOperation, { op: "increment" }>,
 	segments: string[],
 ): StoreBatch["ops"][number] {
-	if (segments.length < 3) {
+	if (segments.length !== 3) {
 		throw new ZyncBaseError(
-			"store.increment requires a field path of depth 3 or more",
+			"store.increment requires [collection, id, field.path]",
 			{
 				code: ErrorCodes.INVALID_PATH,
 				category: "client",
@@ -262,7 +268,7 @@ function buildBatchIncrement(
 		);
 	}
 	const wirePath = segments.slice(0, 2);
-	const fieldPath = joinFieldPath(...segments.slice(2));
+	const fieldPath = fieldPathToFlat(segments[2]);
 	return op.if
 		? ["i", wirePath, fieldPath, op.by, encodeWhereClause(op.if)]
 		: ["i", wirePath, fieldPath, op.by];
@@ -274,10 +280,10 @@ function buildBatchSet(
 ): StoreBatch["ops"][number] {
 	const wirePath = segments.slice(0, 2);
 	const wireValue =
-		segments.length >= 3
-			? { [joinFieldPath(...segments.slice(2))]: op.value ?? null }
+		segments.length === 3
+			? { [fieldPathToFlat(segments[2])]: op.value ?? null }
 			: (op.value ?? null);
-	const encoded = encodeWriteValue(wirePath, wireValue);
+	const encoded = encodeWriteValue(wireValue);
 	return op.if
 		? ["s", wirePath, encoded, encodeWhereClause(op.if)]
 		: ["s", wirePath, encoded];
@@ -365,7 +371,7 @@ export function shapeGetResult(
 	if (segments.length === 2) return row;
 
 	let value: JsonValue | undefined = row;
-	for (const part of segments.slice(2)) {
+	for (const part of segments[2].split(".")) {
 		if (
 			value === null ||
 			typeof value !== "object" ||
@@ -482,7 +488,7 @@ function encodeSortClause(
 
 /** Flatten a public dotted field path to the schema's `__` form. */
 function normalizeFieldKey(key: string): string {
-	return key.split(".").join("__");
+	return fieldPathToFlat(key);
 }
 
 function invalidSortError(message: string): ZyncBaseError {
@@ -504,7 +510,7 @@ function buildIdQuery(segments: string[]): Omit<StoreQuery, "id"> {
 	};
 }
 
-function encodeWriteValue(_segments: string[], value: JsonValue): JsonValue {
+function encodeWriteValue(value: JsonValue): JsonValue {
 	if (isObjectRecord(value)) {
 		return flatten(value);
 	}

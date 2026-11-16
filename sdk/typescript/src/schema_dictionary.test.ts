@@ -21,6 +21,59 @@ describe("SchemaDictionary doc IDs", () => {
 		expect(schema.decodePath(encoded)).toEqual(["users", "abc123", "name"]);
 	});
 
+	test("encodes and decodes 3-segment nested field paths", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["users"],
+			fields: [["id", "profile__address__city", "name"]],
+			fieldFlags: [[0b11, 0b00, 0b00]],
+		});
+
+		const encoded = schema.encodePath([
+			"users",
+			"abc123",
+			"profile.address.city",
+		]);
+		expect(encoded[2]).toBe(1);
+		expect(schema.decodePath(encoded)).toEqual([
+			"users",
+			"abc123",
+			"profile.address.city",
+		]);
+		expect(() =>
+			schema.encodePath(["users", "abc123", "profile", "address"]),
+		).toThrow("at most 3 segments");
+	});
+
+	test("encodeValue clears namespaces and lets explicit leaves win", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["users"],
+			fields: [["id", "address__city", "address__zip", "name"]],
+			fieldFlags: [[0b11, 0b00, 0b00, 0b00]],
+		});
+
+		expect(schema.encodeValue(0, { address: null })).toEqual([
+			1,
+			null,
+			2,
+			null,
+		]);
+		expect(
+			schema.encodeValue(0, {
+				address: null,
+				address__city: "London",
+			}),
+		).toEqual([1, "London", 2, null]);
+		expect(schema.encodeValue(0, { address__city: null })).toEqual([1, null]);
+		expect(() => schema.encodeValue(0, { address: "London" })).toThrow(
+			"unknown field",
+		);
+		expect(() => schema.encodeValue(0, { nope: null })).toThrow(
+			"unknown field",
+		);
+	});
+
 	test("encodes and decodes row id/reference fields using field flags", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({

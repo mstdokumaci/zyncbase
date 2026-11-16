@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import {
 	ErrorCodes,
+	SchemaError,
 	toConnectionError,
 	toZyncError,
 	ZyncBaseError,
@@ -76,6 +77,41 @@ describe("toZyncError", () => {
 		expect(toZyncError(null, "fallback", false)).toMatchObject({
 			code: ErrorCodes.INTERNAL_ERROR,
 			retryable: false,
+		});
+	});
+
+	test("maps schema path errors to their public codes", () => {
+		expect(
+			toZyncError(new SchemaError("unknown field", "FIELD_NOT_FOUND"), "x"),
+		).toMatchObject({
+			code: ErrorCodes.FIELD_NOT_FOUND,
+			category: "validation",
+			retryable: false,
+			message: "unknown field",
+		});
+		expect(
+			toZyncError(new SchemaError("bad path", "INVALID_PATH"), "x"),
+		).toMatchObject({
+			code: ErrorCodes.INVALID_PATH,
+			category: "client",
+			retryable: false,
+		});
+		expect(
+			toZyncError(new SchemaError("unknown table", "TABLE_NOT_FOUND"), "x"),
+		).toMatchObject({
+			code: ErrorCodes.COLLECTION_NOT_FOUND,
+			category: "validation",
+			retryable: false,
+		});
+	});
+
+	test("leaves non-path SchemaError codes on the internal path", () => {
+		expect(
+			toZyncError(new SchemaError("unknown action", "ACTION_NOT_FOUND"), "x"),
+		).toMatchObject({
+			code: ErrorCodes.INTERNAL_ERROR,
+			category: "server",
+			retryable: true,
 		});
 	});
 });

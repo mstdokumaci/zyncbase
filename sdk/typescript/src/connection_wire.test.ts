@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
 import { ConnectionWireCodec, WireMessageType } from "./connection_wire.js";
 import { packDocId } from "./doc_id.js";
-import { buildSet } from "./store_wire.js";
+import { buildBatch, buildSet } from "./store_wire.js";
 import { encodeToBuffer } from "./test-helpers.js";
 import type { InboundMessage, StoreDelta } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
@@ -14,6 +14,23 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 		tables: ["users"],
 		fields: [["id", "name", "address__city"]],
 		fieldFlags: [[0b10, 0, 0]],
+		presenceUserFields: ["cursor__x", "cursor__y", "status"],
+		presenceSharedFields: ["slide", "playing"],
+		actions: ["checkout", "player_move"],
+		actionParams: [["cart_id", "qty"], ["direction"]],
+		actionReturns: [["order_id"], []],
+		actionFlags: [0b01, 0b10],
+	});
+	return codec;
+}
+
+async function makeAddressCodec(): Promise<ConnectionWireCodec> {
+	const codec = new ConnectionWireCodec();
+	await codec.applySchemaSync({
+		type: "SchemaSync",
+		tables: ["users"],
+		fields: [["id", "name", "address__city", "address__zip"]],
+		fieldFlags: [[0b10, 0, 0, 0]],
 		presenceUserFields: ["cursor__x", "cursor__y", "status"],
 		presenceSharedFields: ["slide", "playing"],
 		actions: ["checkout", "player_move"],
@@ -647,6 +664,48 @@ describe("ConnectionWireCodec conditional writes", () => {
 			-5,
 			{ conditions: [[1, 4, 5]] },
 		]);
+	});
+
+	test("encodes nested field sets and namespace clears to sparse indices", async () => {
+		const codec = await makeAddressCodec();
+
+		const nested = codec.encode(
+			buildSet(["users", "u1", "address.city"], "London").message,
+			1,
+		);
+		const nestedWire = decode(nested.bytes) as {
+			path: unknown[];
+			value: unknown[];
+		};
+		expect(nestedWire.path).toEqual([0, expect.any(Uint8Array)]);
+		expect(nestedWire.value).toEqual([2, "London"]);
+
+		const cleared = codec.encode(
+			buildSet(["users", "u1", "address"], null).message,
+			2,
+		);
+		const clearedWire = decode(cleared.bytes) as { value: unknown[] };
+		expect(clearedWire.value).toEqual([2, null, 3, null]);
+
+		const batch = codec.encode(
+			buildBatch([
+				{ op: "set", path: ["users", "u1", "address"], value: null },
+			]),
+			3,
+		);
+		const batchWire = decode(batch.bytes) as { ops: unknown[] };
+		expect(batchWire.ops[0]).toEqual([
+			"s",
+			[0, expect.any(Uint8Array)],
+			[2, null, 3, null],
+		]);
+	});
+
+	test("rejects an unknown nested field before sending", async () => {
+		const codec = await makeAddressCodec();
+		expect(() =>
+			codec.encode(buildSet("users.u1.address.state", null).message, 1),
+		).toThrow("unknown field");
 	});
 
 	test("encodes a dotted conditional if to the flattened field index", async () => {

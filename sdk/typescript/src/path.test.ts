@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import { ErrorCodes, ZyncBaseError } from "./errors";
-import { flatten, normalizePath, unflatten } from "./path";
+import { fieldPathToFlat, flatten, normalizePath, unflatten } from "./path";
 
 function hasNoEmptyObjects(val: unknown): boolean {
 	if (val === null || typeof val !== "object" || Array.isArray(val))
@@ -15,13 +15,25 @@ function hasNoEmptyObjects(val: unknown): boolean {
  * Property 1: Path round-trip identity
  * Validates: Requirements 4.1, 4.2, 4.5
  */
+function expectInvalidPath(run: () => void): void {
+	expect(run).toThrow(ZyncBaseError);
+	try {
+		run();
+	} catch (e) {
+		expect(e).toBeInstanceOf(ZyncBaseError);
+		expect((e as ZyncBaseError).code).toBe(ErrorCodes.INVALID_PATH);
+	}
+}
+
 describe("normalizePath", () => {
-	test("Property 1: round-trip identity — normalizePath(segments.join('.')).join('.') === segments.join('.')", () => {
+	test("Property 1: round-trip identity for 1-3 dot-free segments", () => {
 		fc.assert(
 			fc.property(
 				fc.array(
-					fc.string({ minLength: 1 }).filter((s) => !s.includes(".")),
-					{ minLength: 1 },
+					fc
+						.string({ minLength: 1 })
+						.filter((s) => !s.includes(".") && !s.includes("__")),
+					{ minLength: 1, maxLength: 3 },
 				),
 				(segments) => {
 					const joined = segments.join(".");
@@ -33,14 +45,10 @@ describe("normalizePath", () => {
 		);
 	});
 
-	/**
-	 * Property 2: Path normalization rejects invalid inputs
-	 * Validates: Requirements 4.3, 4.4
-	 */
 	test("Property 2: rejects arrays with at least one empty string segment", () => {
 		fc.assert(
 			fc.property(
-				fc.array(fc.string()).chain((arr) =>
+				fc.array(fc.string(), { minLength: 1, maxLength: 2 }).chain((arr) =>
 					fc.integer({ min: 0, max: arr.length }).map((insertAt) => {
 						const withEmpty = [...arr];
 						withEmpty.splice(insertAt, 0, "");
@@ -66,24 +74,57 @@ describe("normalizePath", () => {
 		);
 	});
 
-	test("Property 2: rejects empty array", () => {
-		expect(() => normalizePath([])).toThrow(ZyncBaseError);
-		try {
-			normalizePath([]);
-		} catch (e) {
-			expect(e).toBeInstanceOf(ZyncBaseError);
-			expect((e as ZyncBaseError).code).toBe(ErrorCodes.INVALID_PATH);
-		}
+	test("collapses deep string paths into the third segment", () => {
+		expect(normalizePath("users.u1.profile.address.city")).toEqual([
+			"users",
+			"u1",
+			"profile.address.city",
+		]);
 	});
 
-	test("Property 2: rejects empty string", () => {
-		expect(() => normalizePath("")).toThrow(ZyncBaseError);
-		try {
-			normalizePath("");
-		} catch (e) {
-			expect(e).toBeInstanceOf(ZyncBaseError);
-			expect((e as ZyncBaseError).code).toBe(ErrorCodes.INVALID_PATH);
-		}
+	test("accepts canonical 3-element arrays", () => {
+		expect(normalizePath(["users", "u1", "profile.address.city"])).toEqual([
+			"users",
+			"u1",
+			"profile.address.city",
+		]);
+	});
+
+	test("rejects 4+ element arrays instead of joining them", () => {
+		expectInvalidPath(() =>
+			normalizePath(["users", "u1", "profile", "address"]),
+		);
+	});
+
+	test("rejects empty field-path parts", () => {
+		expectInvalidPath(() => normalizePath(["users", "u1", "profile..city"]));
+		expectInvalidPath(() => normalizePath(["users", "u1", ""]));
+		expectInvalidPath(() => normalizePath("users.u1.profile."));
+	});
+
+	test("rejects reserved double underscore in the field path", () => {
+		expectInvalidPath(() => normalizePath(["users", "u1", "profile__address"]));
+	});
+
+	test("is idempotent", () => {
+		const once = normalizePath("users.u1.profile.address.city");
+		expect(normalizePath(once)).toEqual(once);
+		expect(normalizePath(once.join("."))).toEqual(once);
+	});
+
+	test("rejects empty array and empty string", () => {
+		expectInvalidPath(() => normalizePath([]));
+		expectInvalidPath(() => normalizePath(""));
+	});
+});
+
+describe("fieldPathToFlat", () => {
+	test("converts a logical dotted field path to the flat schema form", () => {
+		expect(fieldPathToFlat("address.city")).toBe("address__city");
+		expect(fieldPathToFlat("profile.address.city")).toBe(
+			"profile__address__city",
+		);
+		expect(fieldPathToFlat("name")).toBe("name");
 	});
 });
 

@@ -1,4 +1,4 @@
-import { getDeepProperty, joinFieldPath, unflatten } from "./path.js";
+import { fieldPathToFlat, getDeepProperty, unflatten } from "./path.js";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -371,13 +371,13 @@ export class SubscriptionTracker {
 		flat: Record<string, JsonValue>,
 		op: StoreDelta["ops"][number],
 	): { returned: boolean; value?: JsonValue } {
-		const relativePath = op.path.slice(2);
-		if (relativePath.length === 0) {
+		const relativeField = op.path.length === 3 ? op.path[2] : undefined;
+		if (relativeField === undefined) {
 			if (op.op === "remove") return { returned: true, value: null };
 			if (op.op === "set") return { returned: true, value: op.value };
 			return { returned: false };
 		}
-		flat[joinFieldPath(...relativePath)] = op.op === "set" ? op.value : null;
+		flat[fieldPathToFlat(relativeField)] = op.op === "set" ? op.value : null;
 		return { returned: false };
 	}
 
@@ -506,7 +506,7 @@ export function createCreatedAtComparator(): (
 
 export function createListenProjection(segments: string[]): ListenProjection {
 	return {
-		field: segments.length === 2 ? null : segments.slice(2).join("."),
+		field: segments.length === 3 ? segments[2] : null,
 	};
 }
 

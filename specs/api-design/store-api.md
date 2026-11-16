@@ -26,7 +26,7 @@ There are strict rules on what you can write based on the depth of the path:
 | :--- | :--- | :--- | :--- |
 | **Collection** (`'users'`) | `1` | `create`, `query`, `listen`, `subscribe` | **Append-only for writes**. You cannot `set` or `remove` an entire collection. |
 | **Document** (`'users.u1'`) | `2` | `get`, `set`, `remove`, `listen` | **Full CRUD**. `set` upserts the document, `remove` deletes it. |
-| **Field** (`'users.u1.name'`) | `3+` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
+| **Field** (`'users.u1.name'`) | `3` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
 
 ### `store.create(collection, value)`
 Creates a new document within a collection. The SDK generates a canonical lowercase UUIDv7 string and calls `set` under the hood.
@@ -55,8 +55,8 @@ const element = client.store.get('elements.rect-1')
 ### `store.set(path, value, options?)`
 Write a value or upsert a document.
 
-**Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
-**Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required.
+**Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3). Targeting a collection (depth 1) throws an error.
+**Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required. `set` at an object namespace (for example `'users.u1.address'`) clears every leaf beneath it in one row update; `set` at a leaf clears only that field. A required leaf anywhere under the namespace rejects the whole write with `SCHEMA_VALIDATION_FAILED`.
 **Typed Arrays**: For schema fields with `type: "array"`, values are normalized to canonical sorted unique form before persistence and returned in canonical form on reads.
 **Binary Data**: For schema fields with `type: "bytes"`, values are provided and returned as `Uint8Array` in TypeScript, serialized as MessagePack `bin` on the wire, and stored as `BLOB` in SQLite.
 
@@ -107,7 +107,7 @@ await client.store.set('accounts.a1.balance', 900, {
 ### `store.remove(path, options?)`
 Deletes an entire document.
 
-**Path Constraints**: Must target a **Document** (exactly depth 2). Targeting a collection (depth 1) or a field (depth 3+) throws an error. To remove a field, use `store.set(path, null)`.
+**Path Constraints**: Must target a **Document** (exactly depth 2). Targeting a collection (depth 1) or a field (depth 3) throws an error. To remove a field, use `store.set(path, null)`.
 
 ```typescript
 await client.store.remove('elements.rect-1')
@@ -128,7 +128,7 @@ await client.store.remove('locks.l1', {
 ### `store.increment(path, by, options?)`
 Atomically add `by` to an integer field. Always waits for commit.
 
-**Path Constraints**: Must target a **Field** (depth 3+). The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint.
+**Path Constraints**: Must target a **Field** (depth 3). The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint.
 
 **Semantics**: The server executes `SET field = field + by` as one SQLite statement inside the writer transaction. The result is rejected with `PRECONDITION_FAILED` if the row is missing, the stored value is NULL, the arithmetic overflows, or the result violates the field's `minimum` / `maximum`. Use `if` to make the increment conditional on the current row.
 
@@ -346,30 +346,18 @@ client.store.batch([
 
 ## Path Syntax (Strings vs Arrays)
 
-All methods accept both dot-notation strings and Arrays of strings. **The Array is the canonical format.**
+All methods accept both dot-notation strings and Arrays of strings. **The Array is the canonical format.** A path array has at most three elements: `['users']`, `['users', 'u1']`, or `['users', 'u1', 'profile.address.city']`. Nested field segments belong in the third element, joined with dots; a four-or-more element array is rejected with `INVALID_PATH`. String paths may contain any nesting depth and are normalized to the three-element form.
 
 ### Logical vs. Wire-Format Paths
 
-Paths follow a logical progression from collections to documents to specific fields. While the SDK supports variadic segments for developer convenience, the **wire protocol** (socket) enforces a compact structure using schema index dictionaries. The SDK automatically resolves nested strings and translates them into mapped `table_index` and `field_index` integers internally.
+Paths follow a logical progression from collections to documents to specific fields. The **wire protocol** (socket) enforces a compact structure using schema index dictionaries. The SDK resolves the dot-joined field path and translates it into mapped `table_index` and `field_index` integers internally.
 
 | Target | Logical Path (SDK) | Flattened (SDK Internal) | Wire-Format Path (Socket) | Pattern |
 | :--- | :--- | :--- | :--- | :--- |
 | **Collection** | `['users']` | `['users']` | `[0]` | `[table_index]` |
 | **Document** | `['users', 'u1']` | `['users', 'u1']` | `[0, <bin16('u1')>]` | `[table_index, id_bin16]` |
 | **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[0, <bin16('u1')>, 2]` | `[table_index, id_bin16, field_index]` |
-| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[0, <bin16('u1')>, 5]` | `[table_index, id_bin16, field_index]` |
-
-### Why use Arrays?
-Arrays are preferred when dealing with variables or IDs that might contain dots:
-```typescript
-const userId = 'alice.smith' // Dot in ID!
-
-// ❌ Dot-notation breaks (ambiguous)
-client.store.get(`users.${userId}.name`) 
-
-// ✅ Array handles it safely
-client.store.get(['users', userId, 'name'])
-```
+| **Nested Field** | `['users', 'u1', 'address.city']` | `['users', 'u1', 'address__city']` | `[0, <bin16('u1')>, 5]` | `[table_index, id_bin16, field_index]` |
 
 ---
 
@@ -377,7 +365,7 @@ client.store.get(['users', userId, 'name'])
 
 `createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>(options)` binds the API to types generated from `schema.json` (`bunx @zyncbase/client generate --schema schema.json --out zyncbase-schema.ts`). The action and presence arguments are optional. With types bound:
 
-- `get`, `set`, `remove`, `listen` accept only declared paths — dot strings and segment tuples alike — with the field's declared value type.
+- `get`, `set`, `remove`, `listen` accept only declared paths — dot strings and three-segment tuples alike — with the field's declared value type.
 - `create` and `set` at document depth take the schema document shape; fields listed in `required` are mandatory.
 - `get` on a collection and `query`/`subscribe` rows return the generated document shape plus the server-issued `id: string`; subscription handles expose the same row type from `getSnapshot()`.
 - `query`/`subscribe` `where` predicates are keyed by leaf field paths (nested objects use dot paths) and restrict operators by value type; `orderBy` clauses name exactly one leaf field and one direction. The implicit system columns `id`, `created_at`, and `updated_at` are filterable and sortable; doc ids accept equality/membership operators only.
