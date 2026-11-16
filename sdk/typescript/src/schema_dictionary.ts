@@ -8,8 +8,8 @@ import hash from "string-hash-64";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
 import {
+	fieldPathToFlat,
 	flatten,
-	joinFieldPath,
 	setDeepProperty,
 	splitFieldPath,
 } from "./path.js";
@@ -348,16 +348,22 @@ export class SchemaDictionary {
 	 * Encode a logical SDK path into a wire-format path with integer indices.
 	 *
 	 * Examples:
-	 *   ["users", "u1"]             → [0, "u1"]
-	 *   ["users", "u1", "name"]     → [0, "u1", 2]
-	 *   ["users", "u1", "address", "city"] → [0, "u1", 5]
+	 *   ["users", "u1"]                    → [0, "u1"]
+	 *   ["users", "u1", "name"]            → [0, "u1", 2]
+	 *   ["users", "u1", "address.city"]    → [0, "u1", 5]
 	 *
-	 * Segments at index 2+ are joined with "__" (matching the server's
-	 * flattened column naming) and then resolved to a field index.
+	 * The third segment is a logical dotted field path. It is flattened with
+	 * "__" (matching the server's column naming) and resolved to a field index.
 	 */
 	encodePath(segments: string[]): (number | Uint8Array)[] {
 		if (segments.length === 0) {
 			throw new SchemaError("SchemaDictionary: empty path", "INVALID_PATH");
+		}
+		if (segments.length > 3) {
+			throw new SchemaError(
+				"SchemaDictionary: path arrays support at most 3 segments",
+				"INVALID_PATH",
+			);
 		}
 
 		const tableIndex = this.getTableIndex(segments[0]);
@@ -373,8 +379,7 @@ export class SchemaDictionary {
 			return [tableIndex, docId];
 		}
 
-		// Join segments[2:] with "__" to match flattened field name
-		const flatField = joinFieldPath(...segments.slice(2));
+		const flatField = fieldPathToFlat(segments[2]);
 		const fieldIndex = this.getFieldIndex(tableIndex, flatField);
 
 		return [tableIndex, docId, fieldIndex];
@@ -386,12 +391,18 @@ export class SchemaDictionary {
 	 * Examples:
 	 *   [0, "u1"]     → ["users", "u1"]
 	 *   [0, "u1", 2]  → ["users", "u1", "name"]
-	 *   [0, "u1", 5]  → ["users", "u1", "address", "city"]  (if field 5 = "address__city")
+	 *   [0, "u1", 5]  → ["users", "u1", "address.city"]  (if field 5 = "address__city")
 	 */
 	decodePath(wirePath: (number | string | Uint8Array)[]): string[] {
 		if (wirePath.length === 0) {
 			throw new SchemaError(
 				"SchemaDictionary: empty wire path",
+				"INVALID_PATH",
+			);
+		}
+		if (wirePath.length > 3) {
+			throw new SchemaError(
+				"SchemaDictionary: wire path has more than 3 segments",
 				"INVALID_PATH",
 			);
 		}
@@ -414,34 +425,117 @@ export class SchemaDictionary {
 		const fieldIndex = wirePath[2] as number;
 		const flatField = this.getFieldName(tableIndex, fieldIndex);
 
-		// Split flattened field name on "__" to restore nested segments
-		const fieldSegments = splitFieldPath(flatField);
-
-		return [tableName, docId, ...fieldSegments];
+		// Restore the logical dotted field path from the flat "__" form.
+		return [tableName, docId, splitFieldPath(flatField).join(".")];
 	}
 
 	// ─── Value Encoding / Decoding ─────────────────────────────────────────
 
 	/**
-	 * Encode a string-keyed value map into an integer-keyed wire map.
+	 * Encode a flat string-keyed value map into an integer-keyed sparse array.
 	 *
 	 * Example:
-	 *   { "x": 100, "y": 200 } → { 1: 100, 2: 200 }
+	 *   { "x": 100, "y": 200 } → [1, 100, 2, 200]
 	 *
-	 * Only top-level keys are translated. Nested objects are not expected
-	 * at this stage (they should be flattened before calling this method).
+	 * Keys are already flattened to the schema's "__" form. A null key that
+	 * names an object namespace (for example "address" when the schema has
+	 * "address__city" and "address__zip") clears every leaf beneath it. An
+	 * explicit leaf always wins over a namespace clear, regardless of key
+	 * order.
 	 */
 	encodeValue(
 		tableIndex: number,
 		value: Record<string, unknown>,
 	): SparseFieldArray {
-		const result: SparseFieldArray = [];
+		const fieldMap = this.fieldToIndex.get(tableIndex);
+		if (fieldMap === undefined) {
+			throw new SchemaError(
+				`SchemaDictionary: unknown table index ${tableIndex}`,
+				"TABLE_NOT_FOUND",
+			);
+		}
+
+		const entries = Object.entries(value);
+
+		// Fast path: no namespace clear, so preserve insertion order and avoid
+		// the Map/sort allocation on ordinary writes.
+		const needsExpansion = entries.some(
+			([key, val]) => val === null && !fieldMap.has(key),
+		);
+		if (!needsExpansion) {
+			const result: SparseFieldArray = [];
+			for (const [key, val] of entries) {
+				const fieldIndex = fieldMap.get(key);
+				if (fieldIndex === undefined) {
+					throw this.unknownFieldError(tableIndex, key);
+				}
+				result.push(
+					fieldIndex,
+					this.encodeFieldValue(tableIndex, fieldIndex, val),
+				);
+			}
+			return result;
+		}
+
+		const encoded = new Map<number, unknown>();
+		this.expandNullNamespaces(tableIndex, value, fieldMap, encoded);
+		this.applyDirectFields(tableIndex, value, fieldMap, encoded);
+		return this.toSparseArray(encoded);
+	}
+
+	/** Expands a null namespace key to every leaf beneath it. */
+	private expandNullNamespaces(
+		tableIndex: number,
+		value: Record<string, unknown>,
+		fieldMap: Map<string, number>,
+		encoded: Map<number, unknown>,
+	): void {
 		for (const [key, val] of Object.entries(value)) {
-			const fieldIndex = this.getFieldIndex(tableIndex, key);
-			result.push(
+			if (fieldMap.has(key) || val !== null) continue;
+			const prefix = `${key}__`;
+			let matched = false;
+			for (const [name, index] of fieldMap) {
+				if (!name.startsWith(prefix)) continue;
+				encoded.set(index, null);
+				matched = true;
+			}
+			if (!matched) throw this.unknownFieldError(tableIndex, key);
+		}
+	}
+
+	/** Applies direct leaf keys after namespace clears so they always win. */
+	private applyDirectFields(
+		tableIndex: number,
+		value: Record<string, unknown>,
+		fieldMap: Map<string, number>,
+		encoded: Map<number, unknown>,
+	): void {
+		for (const [key, val] of Object.entries(value)) {
+			const fieldIndex = fieldMap.get(key);
+			if (fieldIndex === undefined) {
+				if (val === null) continue;
+				throw this.unknownFieldError(tableIndex, key);
+			}
+			encoded.set(
 				fieldIndex,
 				this.encodeFieldValue(tableIndex, fieldIndex, val),
 			);
+		}
+	}
+
+	private unknownFieldError(tableIndex: number, key: string): SchemaError {
+		return new SchemaError(
+			`SchemaDictionary: unknown field "${key}" in table index ${tableIndex}`,
+			"FIELD_NOT_FOUND",
+		);
+	}
+
+	private toSparseArray(encoded: Map<number, unknown>): SparseFieldArray {
+		const result: SparseFieldArray = [];
+		for (const [index, val] of [...encoded.entries()].sort(
+			([a], [b]) => a - b,
+		)) {
+			result.push(index, val);
 		}
 		return result;
 	}

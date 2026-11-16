@@ -77,12 +77,13 @@ export interface StoreConnection {
  */
 interface RegistrationKey {
 	/**
-	 * Canonical key — kind prefix + serialized wire message.
+	 * Canonical key — kind prefix + registration identity.
 	 *
-	 * This is wire-byte identity: safe because buildListen/buildSubscribe
-	 * construct the message in fixed literal order from normalized inputs —
-	 * never user input, so key insertion order can't vary. Do not spread
-	 * caller objects into the message: it would silently break dedup.
+	 * Listen keys use the full normalized path because the wire message omits
+	 * the projected field. Subscribe keys use the serialized wire message,
+	 * which is safe because buildSubscribe builds it in fixed literal order
+	 * from normalized inputs. Do not spread caller objects into the message:
+	 * it would silently break dedup.
 	 */
 	key: string;
 	kind: "listen" | "subscribe";
@@ -262,7 +263,7 @@ export class StoreImpl {
 		callback: (value: JsonValue) => void,
 	): Promise<ListenHandle> {
 		const command = buildListen(path);
-		const state = this.acquireKey(`l:${JSON.stringify(command.message)}`, {
+		const state = this.acquireKey(`l:${JSON.stringify(command.segments)}`, {
 			kind: "listen",
 			message: command.message,
 			segments: command.segments,

@@ -27,6 +27,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "ConstraintViolation", wireError("SCHEMA_VALIDATION_FAILED", "Schema constraint violation") },
     .{ "UniqueConstraintViolation", wireError("UNIQUE_CONSTRAINT_VIOLATED", "Unique constraint violated") },
     .{ "MissingRequiredField", wireError("SCHEMA_VALIDATION_FAILED", "Required field missing during document creation") },
+    .{ "NullNotAllowed", wireError("SCHEMA_VALIDATION_FAILED", "Required field cannot be null") },
     .{ "SchemaValidationFailed", wireError("SCHEMA_VALIDATION_FAILED", "Schema validation failed") },
     .{ "EnumViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value not in allowed enum values") },
     .{ "PatternViolation", wireError("SCHEMA_VALIDATION_FAILED", "Value does not match required pattern") },

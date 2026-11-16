@@ -272,13 +272,15 @@ const bytes: Uint8Array | undefined = await store.get([
 const city: string | undefined = await store.get([
 	"users",
 	"u1",
-	"profile",
-	"address",
-	"city",
+	"profile.address.city",
 ]);
 const id: string = (await store.query("chunks"))[0].id;
 await store.set("users.u1.name", null);
 await store.set(["users", "u1", "score"], 4);
+await store.set(["users", "u1", "profile.address.city"], "Paris");
+await store.set(["users", "u1", "profile"], null);
+// @ts-expect-error path arrays are at most 3 segments
+await store.get(["users", "u1", "profile", "address"]);
 // @ts-expect-error wrong value type
 await store.set("users.u1.name", 42);
 // @ts-expect-error unknown collection

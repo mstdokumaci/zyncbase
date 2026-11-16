@@ -58,23 +58,14 @@ type DotFieldPaths<T> = {
 				: never);
 }[keyof T & string];
 
-/** Segment-tuple field paths beneath a document shape (["address", "city"]). */
-type TupleFieldPaths<T> = {
-	[K in keyof T & string]:
-		| [K]
-		| (IsNested<T[K]> extends true
-				? [K, ...TupleFieldPaths<NonNullable<T[K]>>]
-				: never);
-}[keyof T & string];
-
-/** Every addressable path in a typed schema: dot strings and segment tuples. */
+/** Every addressable path in a typed schema: dot strings and 3-segment tuples. */
 type SchemaPath<S> = {
 	[C in CollectionsOf<S>]:
 		| C
 		| `${C}.${string}`
 		| [C, string]
 		| `${C}.${string}.${DotFieldPaths<S[C]>}`
-		| [C, string, ...TupleFieldPaths<S[C]>];
+		| [C, string, DotFieldPaths<S[C]>];
 }[CollectionsOf<S>];
 
 type GetPath<S> = IsLooseSchema<S> extends true ? Path : SchemaPath<S>;
@@ -104,45 +95,35 @@ type DotValue<T, P extends string> = P extends `${infer H}.${infer R}`
 		? T[P]
 		: never;
 
-/** Value type at a segment-tuple field path. */
-type TupleValue<T, Segs extends readonly string[]> = Segs extends readonly [
-	infer H extends string,
-	...infer R extends string[],
-]
-	? H extends keyof T
-		? R extends []
-			? T[H]
-			: IsNested<T[H]> extends true
-				? TupleValue<NonNullable<T[H]>, R>
-				: never
-		: never
-	: never;
-
 /** Value returned by `get` at a path. */
 type GetValue<S, P> =
 	IsLooseSchema<S> extends true
 		? JsonValue | null | undefined
-		: P extends readonly [infer C extends string, ...infer R]
+		: P extends readonly [
+					infer C extends string,
+					string,
+					infer F extends string,
+				]
 			? C extends keyof S
-				? R extends [string]
-					? DocumentRowOf<S, C> | null
-					: R extends [string, ...infer F extends string[]]
-						? TupleValue<S[C], F> | undefined
-						: never
+				? DotValue<S[C], F> | undefined
 				: never
-			: P extends string
-				? P extends `${infer C}.${infer R}`
-					? C extends keyof S
-						? R extends `${string}.${infer F}`
-							? [DotValue<S[C], F>] extends [never]
-								? PathError
-								: DotValue<S[C], F> | undefined
-							: DocumentRowOf<S, C> | null
-						: never
-					: P extends keyof S
-						? DocumentRowOf<S, P>[]
-						: never
-				: never;
+			: P extends readonly [infer C extends string, string]
+				? C extends keyof S
+					? DocumentRowOf<S, C> | null
+					: never
+				: P extends string
+					? P extends `${infer C}.${infer R}`
+						? C extends keyof S
+							? R extends `${string}.${infer F}`
+								? [DotValue<S[C], F>] extends [never]
+									? PathError
+									: DotValue<S[C], F> | undefined
+								: DocumentRowOf<S, C> | null
+							: never
+						: P extends keyof S
+							? DocumentRowOf<S, P>[]
+							: never
+					: never;
 
 /**
  * Marker for a dot-string path whose field segment does not resolve. The call
@@ -155,23 +136,27 @@ type PathError = { readonly __zyncbaseUnknownFieldPath: true };
 type SetValue<S, P> =
 	IsLooseSchema<S> extends true
 		? JsonValue
-		: P extends readonly [infer C extends string, ...infer R]
+		: P extends readonly [
+					infer C extends string,
+					string,
+					infer F extends string,
+				]
 			? C extends keyof S
-				? R extends [string]
-					? DocumentOf<S, C>
-					: R extends [string, ...infer F extends string[]]
-						? TupleValue<S[C], F> | null
-						: never
+				? DotValue<S[C], F> | null
 				: never
-			: P extends string
-				? P extends `${infer C}.${infer R}`
-					? C extends keyof S
-						? R extends `${string}.${infer F}`
-							? DotValue<S[C], F> | null
-							: DocumentOf<S, C>
-						: never
+			: P extends readonly [infer C extends string, string]
+				? C extends keyof S
+					? DocumentOf<S, C>
 					: never
-				: never;
+				: P extends string
+					? P extends `${infer C}.${infer R}`
+						? C extends keyof S
+							? R extends `${string}.${infer F}`
+								? DotValue<S[C], F> | null
+								: DocumentOf<S, C>
+							: never
+						: never
+					: never;
 
 /** Value accepted by `create` for a collection. */
 type CreateValue<S, C extends keyof S & string> =

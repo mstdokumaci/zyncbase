@@ -177,6 +177,24 @@ export function toZyncError(
 	retryable = true,
 ): ZyncBaseError {
 	if (err instanceof ZyncBaseError) return err;
+	if (err instanceof SchemaError) {
+		const code =
+			err.code === "TABLE_NOT_FOUND"
+				? ErrorCodes.COLLECTION_NOT_FOUND
+				: err.code;
+		if (
+			code === ErrorCodes.FIELD_NOT_FOUND ||
+			code === ErrorCodes.COLLECTION_NOT_FOUND ||
+			code === ErrorCodes.INVALID_PATH ||
+			code === ErrorCodes.INVALID_MESSAGE_FORMAT
+		) {
+			return new ZyncBaseError(err.message, {
+				code,
+				category: code === ErrorCodes.INVALID_PATH ? "client" : "validation",
+				retryable: false,
+			});
+		}
+	}
 	return new ZyncBaseError(err instanceof Error ? err.message : fallback, {
 		code: ErrorCodes.INTERNAL_ERROR,
 		category: "server",

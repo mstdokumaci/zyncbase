@@ -149,7 +149,7 @@ describe("Store Synchronization Integration", () => {
 		);
 
 		const store = new StoreImpl(mockConn, tracker);
-		const val = await store.get(["tasks", "3", "must_be_complete", "before"]);
+		const val = await store.get(["tasks", "3", "must_be_complete.before"]);
 		expect(val).toBe(100);
 	});
 

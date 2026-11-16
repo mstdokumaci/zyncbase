@@ -61,4 +61,5 @@ test "getWireError: unique constraint violation maps to its public code" {
     try check(error.UniqueConstraintViolation, "UNIQUE_CONSTRAINT_VIOLATED", "Unique constraint violated");
     // Generic constraint violations keep the existing public code.
     try check(error.ConstraintViolation, "SCHEMA_VALIDATION_FAILED", "Schema constraint violation");
+    try check(error.NullNotAllowed, "SCHEMA_VALIDATION_FAILED", "Required field cannot be null");
 }

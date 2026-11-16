@@ -156,7 +156,7 @@ export async function run(port: number = 3000) {
 		const newAfterTs = afterTs + 60;
 		await clientB.set(
 			namespace,
-			["tasks", "3", "must_be_complete", "after"],
+			["tasks", "3", "must_be_complete.after"],
 			newAfterTs,
 		);
 
@@ -224,14 +224,32 @@ export async function run(port: number = 3000) {
 		const deepValue = await clientA.get(namespace, [
 			"tasks",
 			"3",
-			"must_be_complete",
-			"after",
+			"must_be_complete.after",
 		]);
 		if (deepValue !== newAfterTs)
 			throw new Error(
 				`Deep path fetch failed. Expected ${newAfterTs}, got ${deepValue}`,
 			);
 		console.log("Deep path fetch passed.");
+
+		// 9. Clear an object namespace in one committed write.
+		console.log("Testing namespace clear...");
+		await clientA.store.set(["tasks", "3", "must_be_complete"], null, {
+			confirm: "committed",
+		});
+		const clearedTask3 = (await clientA.get(namespace, [
+			"tasks",
+			"3",
+		])) as unknown as MockTask;
+		if (
+			clearedTask3.must_be_complete?.before !== null ||
+			clearedTask3.must_be_complete?.after !== null
+		) {
+			throw new Error(
+				`Namespace clear failed: ${JSON.stringify(clearedTask3.must_be_complete)}`,
+			);
+		}
+		console.log("Namespace clear passed.");
 
 		console.log("E2E Sync test passed successfully!");
 	} catch (err) {

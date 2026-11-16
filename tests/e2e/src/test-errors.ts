@@ -192,6 +192,25 @@ async function testUniqueConstraints(client: ZyncBaseClient) {
 		committed,
 	);
 
+	let requiredNullError: { code?: string } | undefined;
+	try {
+		await client.store.set(
+			["unique_projects", "upd-a", "slug"],
+			null,
+			committed,
+		);
+	} catch (err: unknown) {
+		requiredNullError = err as { code?: string };
+	}
+	if (requiredNullError === undefined) {
+		throw new Error("Expected required-field null write to fail");
+	}
+	if (requiredNullError.code !== "SCHEMA_VALIDATION_FAILED") {
+		throw new Error(
+			`Expected SCHEMA_VALIDATION_FAILED but got ${requiredNullError.code}`,
+		);
+	}
+
 	let updateCollisionError: { code?: string } | undefined;
 	try {
 		await client.store.set(

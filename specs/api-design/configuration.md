@@ -749,7 +749,7 @@ await zyncbase.set('users.user-1', {
 })
 
 // Field-level updates also support recursion
-await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
+await zyncbase.set(['users', 'user-1', 'address.location.lat'], 37.8)
 
 // Query nested fields using dot notation
 const users = await zyncbase.query('users', {

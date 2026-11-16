@@ -376,6 +376,35 @@ describe("StoreImpl", () => {
 		expect(messages.at(-1)).toEqual({ type: "StoreUnsubscribe", subId: 7 });
 	});
 
+	test("different fields of one document get separate projections", async () => {
+		const record = { id: "u1", name: "Ada", email: "ada@example.com" };
+		const { store, messages } = makeStore([
+			{ type: "ok", id: 1, subId: 7, value: [record] },
+			{ type: "ok", id: 2, subId: 8, value: [record] },
+		]);
+		const names: JsonValue[] = [];
+		const emails: JsonValue[] = [];
+
+		const nameHandle = await store.listen("users.u1.name", (value) =>
+			names.push(value),
+		);
+		const emailHandle = await store.listen("users.u1.email", (value) =>
+			emails.push(value),
+		);
+		await flushPromises();
+
+		expect(
+			messages.filter((message) => message.type === "StoreSubscribe"),
+		).toHaveLength(2);
+		expect(names).toEqual(["Ada"]);
+		expect(emails).toEqual(["ada@example.com"]);
+		expect(nameHandle.getSnapshot()).toBe("Ada");
+		expect(emailHandle.getSnapshot()).toBe("ada@example.com");
+
+		await nameHandle.unlisten();
+		await emailHandle.unlisten();
+	});
+
 	test("reattaching within the grace window cancels the unsubscribe", async () => {
 		const { store, messages } = makeStore([
 			{
