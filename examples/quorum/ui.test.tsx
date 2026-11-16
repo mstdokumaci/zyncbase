@@ -90,6 +90,11 @@ afterAll(async () => {
 });
 
 test("the landing can run a demo room through reveal", async () => {
+	const originalSetItem = Storage.prototype.setItem;
+	// The credential must survive even when localStorage is unavailable.
+	Storage.prototype.setItem = () => {
+		throw new Error("storage blocked");
+	};
 	render(createElement(App));
 	fireEvent.change(screen.getByLabelText("Your name"), {
 		target: { value: "UI Host" },
@@ -100,6 +105,7 @@ test("the landing can run a demo room through reveal", async () => {
 		() => expect(screen.getByText("Demo: Sprint 42")).toBeTruthy(),
 		{ timeout: 20_000 },
 	);
+	expect(document.cookie).toContain("quorum_credential=");
 
 	await waitFor(
 		() =>
@@ -141,4 +147,5 @@ test("the landing can run a demo room through reveal", async () => {
 	window.confirm = originalConfirm;
 
 	cleanup();
+	Storage.prototype.setItem = originalSetItem;
 });

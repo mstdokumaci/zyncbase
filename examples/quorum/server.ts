@@ -207,6 +207,9 @@ export async function startQuorumServer(
 				.catch(() => null);
 			if (!rooms) continue;
 			if (rooms.length > 0 && rooms[0]?.phase !== "closed") continue;
+			if ((lastSeen.get(code) ?? 0) > cutoff || workers.get(code) !== pending) {
+				continue;
+			}
 			workers.delete(code);
 			lastSeen.delete(code);
 			await handle.stop().catch(() => {});

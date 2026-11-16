@@ -9,9 +9,12 @@ import type { AppClient } from "./shared";
 import { roomNamespace } from "./shared";
 
 const CREDENTIAL_KEY = "quorum:credential";
+const CREDENTIAL_COOKIE = "quorum_credential";
+const CREDENTIAL_COOKIE_MAX_AGE = 31_536_000;
 const NAME_KEY = "quorum:name";
 
 let memoryCredential: string | null = null;
+let connectAttempts = 0;
 
 function storageGet(key: string): string | null {
 	try {
@@ -33,21 +36,49 @@ function storageRemove(key: string): void {
 	} catch {}
 }
 
+function readCredentialCookie(): string | null {
+	if (typeof document === "undefined") return null;
+	try {
+		const prefix = `${CREDENTIAL_COOKIE}=`;
+		for (const part of document.cookie.split("; ")) {
+			if (part.startsWith(prefix)) {
+				return decodeURIComponent(part.slice(prefix.length));
+			}
+		}
+	} catch {}
+	return null;
+}
+
+function writeCredentialCookie(value: string | null): void {
+	if (typeof document === "undefined") return;
+	try {
+		// biome-ignore lint/suspicious/noDocumentCookie: Cookie Store is async and not available in every browser; this is the synchronous fallback.
+		document.cookie = `${CREDENTIAL_COOKIE}=${value ? encodeURIComponent(value) : ""}; Path=/; SameSite=Lax; Max-Age=${value ? CREDENTIAL_COOKIE_MAX_AGE : 0}`;
+	} catch {}
+}
+
 function storedCredential(): string | null {
 	if (memoryCredential) return memoryCredential;
 	const stored = storageGet(CREDENTIAL_KEY);
-	if (stored) memoryCredential = stored;
+	if (stored) {
+		memoryCredential = stored;
+		return memoryCredential;
+	}
+	const cookie = readCredentialCookie();
+	if (cookie) memoryCredential = cookie;
 	return memoryCredential;
 }
 
 function rememberCredential(credential: string): void {
 	memoryCredential = credential;
 	storageSet(CREDENTIAL_KEY, credential);
+	writeCredentialCookie(credential);
 }
 
 function forgetCredential(): void {
 	memoryCredential = null;
 	storageRemove(CREDENTIAL_KEY);
+	writeCredentialCookie(null);
 }
 
 export function savedName(): string {
@@ -75,8 +106,9 @@ function websocketUrl(): string {
 }
 
 export async function connectRoom(code: string): Promise<AppClient> {
+	const connectionAttempt = ++connectAttempts;
 	const tokenProvider = async (): Promise<string> => {
-		for (let attempt = 0; attempt < 2; attempt++) {
+		for (let retry = 0; retry < 2; retry++) {
 			const credential = storedCredential();
 			const response = await fetch("/session", {
 				method: "POST",
@@ -87,7 +119,7 @@ export async function connectRoom(code: string): Promise<AppClient> {
 				}),
 			});
 			if (response.status === 401 && credential) {
-				forgetCredential();
+				if (connectionAttempt === connectAttempts) forgetCredential();
 				continue;
 			}
 			if (!response.ok) {
@@ -102,7 +134,9 @@ export async function connectRoom(code: string): Promise<AppClient> {
 				token?: string;
 				credential?: string;
 			};
-			if (body.credential) rememberCredential(body.credential);
+			if (body.credential && connectionAttempt === connectAttempts) {
+				rememberCredential(body.credential);
+			}
 			if (!body.token) throw new Error("The room returned no session");
 			return body.token;
 		}
