@@ -17,7 +17,7 @@ const sampleSchema: SchemaFile = {
 	version: "1.0.0",
 	store: {
 		users: {
-			unique: [["profile", "handle"]],
+			unique: [["profile.handle"]],
 			fields: {
 				name: { type: "string" },
 				score: { type: "integer" },
@@ -151,7 +151,7 @@ describe("validateSchema", () => {
 			version: "1.0.0",
 			store: {
 				users: {
-					unique: [["profile", "missing"]],
+					unique: [["profile.missing"]],
 					fields: {
 						profile: {
 							type: "object",
@@ -162,6 +162,26 @@ describe("validateSchema", () => {
 			},
 		};
 		expect(validateSchema(schema)).toContain("unique constraint on unknown");
+	});
+
+	test("accepts compound and nested unique constraints", () => {
+		const schema: SchemaFile = {
+			version: "1.0.0",
+			store: {
+				users: {
+					unique: [["tenant", "handle"], ["profile.email"]],
+					fields: {
+						tenant: { type: "string" },
+						handle: { type: "string" },
+						profile: {
+							type: "object",
+							fields: { email: { type: "string" } },
+						},
+					},
+				},
+			},
+		};
+		expect(validateSchema(schema)).toBeNull();
 	});
 
 	test("rejects unsupported field types", () => {

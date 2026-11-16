@@ -133,12 +133,38 @@ function validateCollection(
 		}
 	}
 
-	for (const uniquePath of collection.unique ?? []) {
-		if (!resolveFieldPath(collection.fields, uniquePath)) {
-			return `Collection "${collectionName}" has a unique constraint on unknown field path "${uniquePath.join(".")}".`;
-		}
-	}
+	return validateUniqueConstraints(collectionName, collection);
+}
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mirrors the schema grammar's compound unique rules.
+function validateUniqueConstraints(
+	collectionName: string,
+	collection: SchemaCollection,
+): string | null {
+	const seenConstraints = new Set<string>();
+	for (const constraint of collection.unique ?? []) {
+		if (!Array.isArray(constraint) || constraint.length === 0) {
+			return `Collection "${collectionName}" has an empty unique constraint.`;
+		}
+		const fields: string[] = [];
+		for (const fieldPath of constraint) {
+			if (typeof fieldPath !== "string" || fieldPath.length === 0) {
+				return `Collection "${collectionName}" has an invalid unique field path.`;
+			}
+			if (!resolveFieldPath(collection.fields, fieldPath.split("."))) {
+				return `Collection "${collectionName}" has a unique constraint on unknown field path "${fieldPath}".`;
+			}
+			if (fields.includes(fieldPath)) {
+				return `Collection "${collectionName}" repeats "${fieldPath}" in a unique constraint.`;
+			}
+			fields.push(fieldPath);
+		}
+		const key = [...fields].sort().join("|");
+		if (seenConstraints.has(key)) {
+			return `Collection "${collectionName}" declares the same unique constraint twice.`;
+		}
+		seenConstraints.add(key);
+	}
 	return null;
 }
 

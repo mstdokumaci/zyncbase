@@ -6,13 +6,19 @@
 		"moduleResolution": "bundler",
 		"lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable", "WebWorker"],
 		"types": ["bun"],
+		"jsx": "react-jsx",
 		"noEmit": true,
 		"strict": true,
 		"skipLibCheck": true,
 		"baseUrl": "..",
 		"paths": {
-			"@zyncbase/client": ["sdk/typescript/src/index.ts"]
+			"@zyncbase/client": ["sdk/typescript/src/index.ts"],
+			"@zyncbase/client/react": ["sdk/typescript/src/react/index.ts"]
 		}
 	},
-	"include": ["cordon-off/**/*.ts"]
+	"include": [
+		"cordon-off/**/*.ts",
+		"quorum/**/*.ts",
+		"quorum/**/*.tsx"
+	]
 }
