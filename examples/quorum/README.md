@@ -30,9 +30,10 @@ Stop with Ctrl+C.
 ### The 60-second demo
 
 1. Enter a name and press **Try the demo**. A room is seeded with four sample members, eight ideas, and twenty pre-cast votes.
-2. Press **Start voting**, spend a vote or two, then **Close and reveal**.
-3. Open the room link in an incognito window to join as a second member and vote from both.
-4. After the reveal, **Discuss top topics**, add a decision, and close the meeting to get the summary and exports.
+2. Press **Start voting** and spend a vote or two. Keep voting open.
+3. Open the room link in an incognito window, join as a second member, and vote from both windows.
+4. Back in the host window, press **Close and reveal**.
+5. After the reveal, **Discuss top topics**, add a decision, and close the meeting to get the summary and exports.
 
 ## The product loop
 
@@ -70,6 +71,8 @@ Each member has a public row in `members` and a private row in `budgets`. Ballot
 ```
 
 `user_id` is the JWT subject (`sub`), so the rule matches the stable external identity. `presence_id` is the internal `$session.userId` used to join presence entries to the roster. The service role can read all ballots for the close; members only ever see their own.
+
+The subject is issued by the app server and bound to a signed credential stored in the browser. Public `user_id`/`host_user_id` values are identifiers, not bearer tokens; a member who reads the host's id cannot mint a host session.
 
 ### Casting a vote
 
@@ -110,7 +113,7 @@ This is the part a whiteboard sticker vote cannot guarantee: the reveal is a tra
 | `dev.ts` | Local edge: SPA assets, `/session`/`/health`, `/auth/ticket`, `/ws` |
 | `app.tsx` | Landing, create/join, session gate |
 | `room.tsx` | Phase UI: collect, vote, results, discuss, summary |
-| `session.ts` | Stable anonymous subject, token exchange, client creation |
+| `session.ts` | Server-issued identity credential, token exchange, client creation |
 | `shared.ts` | Templates, room codes, limits, row types |
 | `smoke.ts` | Two-client end-to-end flow |
 | `room.test.ts` | Concurrency, privacy, close-race, isolation, demo seed |

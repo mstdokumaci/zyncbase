@@ -43,11 +43,34 @@ async function freePort(): Promise<number> {
 	return address.port;
 }
 
-async function sessionToken(room: string, subject: string): Promise<string> {
+interface Identity {
+	credential: string;
+}
+
+async function newIdentity(room: string): Promise<Identity> {
 	const response = await fetch(`http://127.0.0.1:${appPort}/session`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ room, subject }),
+		body: JSON.stringify({ room }),
+	});
+	if (!response.ok) {
+		throw new Error(
+			`session failed: ${response.status} ${await response.text()}`,
+		);
+	}
+	const body = (await response.json()) as { credential?: string };
+	if (!body.credential) throw new Error("session returned no credential");
+	return { credential: body.credential };
+}
+
+async function identityToken(
+	room: string,
+	identity: Identity,
+): Promise<string> {
+	const response = await fetch(`http://127.0.0.1:${appPort}/session`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ room, credential: identity.credential }),
 	});
 	if (!response.ok) {
 		throw new Error(
@@ -58,16 +81,14 @@ async function sessionToken(room: string, subject: string): Promise<string> {
 	return body.token;
 }
 
-async function openClient(
-	room: string,
-	subject: string,
-	namespaceRoom = room,
+async function openWithToken(
+	namespaceRoom: string,
+	token: string,
 ): Promise<
 	ReturnType<
 		typeof createClient<ZyncBaseSchema, ZyncBaseActions, ZyncBasePresence>
 	>
 > {
-	const token = await sessionToken(room, subject);
 	const client = createClient<
 		ZyncBaseSchema,
 		ZyncBaseActions,
@@ -82,6 +103,16 @@ async function openClient(
 	await client.connect();
 	clients.push(client);
 	return client;
+}
+
+async function openClient(
+	room: string,
+	identity?: Identity,
+	namespaceRoom = room,
+) {
+	const actual = identity ?? (await newIdentity(room));
+	const token = await identityToken(room, actual);
+	return openWithToken(namespaceRoom, token);
 }
 
 beforeAll(async () => {
@@ -107,7 +138,7 @@ afterAll(async () => {
 describe("quorum voting", () => {
 	test("enforces the budget and the per-card cap under concurrent votes", async () => {
 		const room = generateRoomCode();
-		const host = await openClient(room, "budget-host");
+		const host = await openClient(room);
 		const created = await host.actions.call("create_room", {
 			name: "Host",
 			title: "Budget",
@@ -159,7 +190,8 @@ describe("quorum voting", () => {
 
 	test("two clients with the same identity cannot overspend", async () => {
 		const room = generateRoomCode();
-		const first = await openClient(room, "same-person");
+		const identity = await newIdentity(room);
+		const first = await openClient(room, identity);
 		await first.actions.call("create_room", {
 			name: "Same",
 			title: "Two tabs",
@@ -173,7 +205,7 @@ describe("quorum voting", () => {
 		});
 		await first.actions.call("start_vote", { duration_ms: 60_000 });
 
-		const second = await openClient(room, "same-person");
+		const second = await openClient(room, identity);
 		const votes = await Promise.allSettled(
 			Array.from({ length: 6 }, (_, index) =>
 				(index % 2 === 0 ? first : second).actions.call("cast_vote", {
@@ -192,7 +224,7 @@ describe("quorum voting", () => {
 
 	test("close is transactional, idempotent, and rejects late votes", async () => {
 		const room = generateRoomCode();
-		const host = await openClient(room, "close-host");
+		const host = await openClient(room);
 		const created = await host.actions.call("create_room", {
 			name: "Host",
 			title: "Close",
@@ -233,6 +265,14 @@ describe("quorum voting", () => {
 			.catch(() => ({ ok: false }));
 		expect(late.ok).toBe(false);
 
+		const lateIdentity = await newIdentity(room);
+		const lateClient = await openClient(room, lateIdentity);
+		const lateJoined = await lateClient.actions.call("join_room", {
+			name: "Late",
+		});
+		expect(lateJoined.read_only).toBe(true);
+		expect(lateJoined.member_id).toBe("");
+
 		await host.actions.call("start_discussion", {});
 		await host.actions.call("focus_topic", { card_id: b.card_id });
 		await host.actions.call("add_decision", { text: "Keep the second topic" });
@@ -247,17 +287,127 @@ describe("quorum voting", () => {
 		expect(decisions[0]?.author_name).toBe("Host");
 	});
 
-	test("a token for one room cannot enter another room's namespace", async () => {
+	test("concurrent extensions add to the same deadline", async () => {
+		const room = generateRoomCode();
+		const host = await openClient(room);
+		const created = await host.actions.call("create_room", {
+			name: "Host",
+			title: "Extend",
+			template: "list",
+		});
+		await host.actions.call("add_card", {
+			lane: "Ideas",
+			text: "One idea",
+		});
+		const started = await host.actions.call("start_vote", {
+			duration_ms: 60_000,
+		});
+		const [first, second] = await Promise.all([
+			host.actions.call("extend_vote", { duration_ms: 60_000 }),
+			host.actions.call("extend_vote", { duration_ms: 60_000 }),
+		]);
+		const roomRow = await host.store.get(["rooms", created.room_id]);
+		expect(roomRow?.vote_ends_at).toBeGreaterThanOrEqual(
+			started.vote_ends_at + 120_000,
+		);
+		expect(roomRow?.vote_ends_at).toBeLessThan(started.vote_ends_at + 125_000);
+		expect(roomRow?.vote_ends_at).toBe(
+			Math.max(first.vote_ends_at, second.vote_ends_at),
+		);
+	});
+
+	test("a public member id cannot mint another identity", async () => {
+		const room = generateRoomCode();
+		const host = await openClient(room);
+		const created = await host.actions.call("create_room", {
+			name: "Host",
+			title: "Identity",
+			template: "list",
+		});
+		expect(created.user_id.length).toBeLessThanOrEqual(40);
+		const legacy = await fetch(`http://127.0.0.1:${appPort}/session`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				room,
+				subject: created.user_id.replace(/^u:/, ""),
+			}),
+		});
+		expect(legacy.status).toBe(200);
+		const body = (await legacy.json()) as {
+			token: string;
+			credential?: string;
+		};
+		expect(body.credential).toBeTruthy();
+		const invalid = await fetch(`http://127.0.0.1:${appPort}/session`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				room,
+				credential: `${created.user_id}.bad`,
+			}),
+		});
+		expect(invalid.status).toBe(401);
+		const impostor = await openWithToken(room, body.token);
+		const joined = await impostor.actions.call("join_room", {
+			name: "Impostor",
+		});
+		expect(joined.user_id).not.toBe(created.user_id);
+		await expect(
+			impostor.actions.call("start_vote", { duration_ms: 60_000 }),
+		).rejects.toThrow();
+	});
+
+	test("presence namespaces are room-scoped", async () => {
 		const roomA = generateRoomCode();
 		const roomB = generateRoomCode();
-		const foreign = await sessionToken(roomB, "isolation-subject");
+		const identity = await newIdentity(roomA);
+		const token = await identityToken(roomA, identity);
 		const client = createClient<
 			ZyncBaseSchema,
 			ZyncBaseActions,
 			ZyncBasePresence
 		>({
 			url: `ws://127.0.0.1:${databasePort}/ws`,
-			auth: { token: foreign },
+			auth: { token },
+			storeNamespace: roomNamespace(roomA),
+			presenceNamespace: roomNamespace(roomB),
+			reconnect: false,
+		});
+		await expect(client.connect()).rejects.toThrow();
+		client.disconnect();
+	});
+
+	test("a failed HTTP listen cleans up the database and runtime", async () => {
+		const conflictData = await mkdtemp(join(tmpdir(), "quorum-conflict-"));
+		const [dbPort] = await Promise.all([freePort()]);
+		try {
+			await expect(
+				startQuorumServer({
+					port: appPort,
+					databasePort: dbPort,
+					dataDir: conflictData,
+					origin: `http://127.0.0.1:${appPort}`,
+					quiet: true,
+				}),
+			).rejects.toThrow();
+		} finally {
+			await rm(conflictData, { recursive: true, force: true });
+		}
+	});
+
+	test("a token for one room cannot enter another room's namespace", async () => {
+		const roomA = generateRoomCode();
+		const roomB = generateRoomCode();
+		const foreign = await newIdentity(roomB);
+		const foreignToken = await identityToken(roomB, foreign);
+		const client = createClient<
+			ZyncBaseSchema,
+			ZyncBaseActions,
+			ZyncBasePresence
+		>({
+			url: `ws://127.0.0.1:${databasePort}/ws`,
+			auth: { token: foreignToken },
 			storeNamespace: roomNamespace(roomA),
 			presenceNamespace: roomNamespace(roomA),
 			reconnect: false,
@@ -267,7 +417,7 @@ describe("quorum voting", () => {
 
 	test("the demo seed is private but included in the reveal", async () => {
 		const room = generateRoomCode();
-		const host = await openClient(room, "demo-host");
+		const host = await openClient(room);
 		await host.actions.call("create_room", {
 			name: "Host",
 			title: "Demo",
@@ -287,6 +437,9 @@ describe("quorum voting", () => {
 		const cards = await host.store.query("cards", {
 			where: { room_code: room, round: 1 },
 		});
+		await expect(
+			host.actions.call("remove_card", { card_id: cards[0].id }),
+		).rejects.toThrow();
 		await host.actions.call("start_vote", { duration_ms: 60_000 });
 		await host.actions.call("cast_vote", { card_id: cards[0].id });
 		await host.actions.call("close_vote", {});

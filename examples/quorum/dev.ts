@@ -186,23 +186,28 @@ if (import.meta.main) {
 
 	let stopping = false;
 	let edge: Awaited<ReturnType<typeof startEdge>> | undefined;
-	const stop = async () => {
+	const stop = async (exitCode = 0) => {
 		if (stopping) return;
 		stopping = true;
 		await edge?.stop().catch(() => {});
 		app.kill("SIGINT");
 		await app.exited.catch(() => {});
-		process.exit(0);
+		process.exit(exitCode);
 	};
-	process.on("SIGINT", () => void stop());
-	process.on("SIGTERM", () => void stop());
+	process.on("SIGINT", () => void stop(0));
+	process.on("SIGTERM", () => void stop(0));
 
-	await waitForHealth(appPort);
-	edge = await startEdge({
-		port: devPort,
-		appPort,
-		databasePort,
-		assets,
-	});
-	console.log(`Quorum on ${origin}`);
+	try {
+		await waitForHealth(appPort);
+		edge = await startEdge({
+			port: devPort,
+			appPort,
+			databasePort,
+			assets,
+		});
+		console.log(`Quorum on ${origin}`);
+	} catch (error) {
+		console.error("Quorum failed to start:", error);
+		await stop(1);
+	}
 }

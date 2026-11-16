@@ -1,3 +1,4 @@
+// biome-ignore-all lint/complexity/noExcessiveCognitiveComplexity: token exchange and credential retry form one linear session flow.
 import { createClient } from "@zyncbase/client";
 import type {
 	ZyncBaseActions,
@@ -7,10 +8,10 @@ import type {
 import type { AppClient } from "./shared";
 import { roomNamespace } from "./shared";
 
-const SUBJECT_KEY = "quorum:subject";
+const CREDENTIAL_KEY = "quorum:credential";
 const NAME_KEY = "quorum:name";
 
-let memorySubject: string | null = null;
+let memoryCredential: string | null = null;
 
 function storageGet(key: string): string | null {
 	try {
@@ -26,17 +27,27 @@ function storageSet(key: string, value: string): void {
 	} catch {}
 }
 
-export function subject(): string {
-	if (memorySubject) return memorySubject;
-	const stored = storageGet(SUBJECT_KEY);
-	if (stored) {
-		memorySubject = stored;
-		return stored;
-	}
-	const created = crypto.randomUUID();
-	memorySubject = created;
-	storageSet(SUBJECT_KEY, created);
-	return created;
+function storageRemove(key: string): void {
+	try {
+		localStorage.removeItem(key);
+	} catch {}
+}
+
+function storedCredential(): string | null {
+	if (memoryCredential) return memoryCredential;
+	const stored = storageGet(CREDENTIAL_KEY);
+	if (stored) memoryCredential = stored;
+	return memoryCredential;
+}
+
+function rememberCredential(credential: string): void {
+	memoryCredential = credential;
+	storageSet(CREDENTIAL_KEY, credential);
+}
+
+function forgetCredential(): void {
+	memoryCredential = null;
+	storageRemove(CREDENTIAL_KEY);
 }
 
 export function savedName(): string {
@@ -65,22 +76,37 @@ function websocketUrl(): string {
 
 export async function connectRoom(code: string): Promise<AppClient> {
 	const tokenProvider = async (): Promise<string> => {
-		const response = await fetch("/session", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ room: code, subject: subject() }),
-		});
-		if (!response.ok) {
-			let message = "Could not start the room";
-			try {
-				const body = (await response.json()) as { error?: string };
-				if (body.error) message = body.error;
-			} catch {}
-			throw new Error(message);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const credential = storedCredential();
+			const response = await fetch("/session", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					room: code,
+					...(credential ? { credential } : {}),
+				}),
+			});
+			if (response.status === 401 && credential) {
+				forgetCredential();
+				continue;
+			}
+			if (!response.ok) {
+				let message = "Could not start the room";
+				try {
+					const body = (await response.json()) as { error?: string };
+					if (body.error) message = body.error;
+				} catch {}
+				throw new Error(message);
+			}
+			const body = (await response.json()) as {
+				token?: string;
+				credential?: string;
+			};
+			if (body.credential) rememberCredential(body.credential);
+			if (!body.token) throw new Error("The room returned no session");
+			return body.token;
 		}
-		const body = (await response.json()) as { token?: string };
-		if (!body.token) throw new Error("The room returned no session");
-		return body.token;
+		throw new Error("Could not start the room");
 	};
 
 	const client = createClient<
@@ -93,6 +119,22 @@ export async function connectRoom(code: string): Promise<AppClient> {
 		storeNamespace: roomNamespace(code),
 		presenceNamespace: roomNamespace(code),
 	});
-	await client.connect();
-	return client;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			client.connect(),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error("The room took too long to connect")),
+					15_000,
+				);
+			}),
+		]);
+		return client;
+	} catch (error) {
+		client.disconnect();
+		throw error;
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
 }

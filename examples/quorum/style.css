@@ -937,8 +937,15 @@ textarea {
 	transition: opacity 140ms ease;
 }
 
-.idea-card:hover .remove-card {
+.idea-card:hover .remove-card,
+.remove-card:focus-visible {
 	opacity: 1;
+}
+
+@media (hover: none) {
+	.remove-card {
+		opacity: 1;
+	}
 }
 
 .remove-card:hover {

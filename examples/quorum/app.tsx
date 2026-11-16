@@ -362,6 +362,7 @@ function JoinGate({
 	const [error, setError] = useState<string | null>(null);
 
 	async function join() {
+		if (busy) return;
 		const person = clampName(name);
 		if (!person) return setError("Enter your name first.");
 		setBusy(true);

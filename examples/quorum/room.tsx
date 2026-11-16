@@ -1117,7 +1117,10 @@ function SummaryPhase({
 	}
 
 	function csv() {
-		const csvEscape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+		const csvEscape = (value: string) => {
+			const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+			return `"${safe.replaceAll('"', '""')}"`;
+		};
 		return [
 			"rank,votes,lane,text",
 			...results.map((result) =>

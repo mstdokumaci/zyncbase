@@ -172,8 +172,10 @@ export async function startWorker(options: {
 			await sleep(100);
 		}
 	}
-	if (!connected)
+	if (!connected) {
+		client.disconnect();
 		throw new Error("Quorum worker could not connect to ZyncBase");
+	}
 
 	async function roomByCode(code: string): Promise<RoomRow | null> {
 		const rows = await client.store.query(ROOM_COLLECTION, {
@@ -588,7 +590,10 @@ export async function startWorker(options: {
 						op: "increment",
 						path: [ROOM_COLLECTION, room.id, "members_count"],
 						by: 1,
-						if: { members_count: { lt: room.max_members } },
+						if: {
+							members_count: { lt: room.max_members },
+							phase: { in: ["collect", "vote"] },
+						},
 					},
 				],
 				{ confirm: "committed" },
@@ -607,6 +612,19 @@ export async function startWorker(options: {
 				}
 			}
 			if (isPrecondition(error)) {
+				const fresh = await roomByCode(code);
+				if (fresh && isReadOnlyPhase(fresh.phase)) {
+					return {
+						room_id: fresh.id,
+						member_id: "",
+						user_id: actor,
+						presence_id: presence,
+						read_only: true,
+					};
+				}
+				if (!fresh) {
+					throw new ActionError("ROOM_NOT_FOUND", "That room does not exist");
+				}
 				throw new ActionError("ROOM_FULL", "This room is full");
 			}
 			throw error;
@@ -684,6 +702,16 @@ export async function startWorker(options: {
 		requirePhase(room, "collect");
 		const card = await cardFor(code, String(params.card_id));
 		if (!card) throw new ActionError("CARD_NOT_FOUND", "That idea is gone");
+		const existingBallots = await client.store.query(BALLOT_COLLECTION, {
+			where: { room_code: code, round: room.round, card_id: card.id },
+			limit: 1,
+		});
+		if ((existingBallots[0]?.count ?? 0) > 0) {
+			throw new ActionError(
+				"CARD_HAS_VOTES",
+				"This idea already has votes and cannot be removed",
+			);
+		}
 		try {
 			await client.store.batch(
 				[
@@ -769,29 +797,34 @@ export async function startWorker(options: {
 	});
 
 	await client.actions.handle("extend_vote", async (ctx, params) => {
-		const room = await roomByCode(code);
-		if (!room)
-			throw new ActionError("ROOM_NOT_FOUND", "That room does not exist");
-		requireHost(room, ctx);
-		requirePhase(room, "vote");
-		const now = Date.now();
-		const endsAt =
-			Math.max(room.vote_ends_at ?? now, now) +
-			clampDuration(params.duration_ms);
-		try {
-			await client.store.set(
-				[ROOM_COLLECTION, room.id, "vote_ends_at"],
-				endsAt,
-				{ confirm: "committed", if: { phase: { eq: "vote" } } },
-			);
-		} catch (error) {
-			if (isPrecondition(error)) {
-				const fresh = await roomByCode(code);
-				if (fresh) throw phaseError(fresh);
+		for (let attempt = 0; attempt < 4; attempt++) {
+			const room = await roomByCode(code);
+			if (!room)
+				throw new ActionError("ROOM_NOT_FOUND", "That room does not exist");
+			requireHost(room, ctx);
+			if (room.phase !== "vote") throw phaseError(room);
+			const observed = room.vote_ends_at ?? 0;
+			const now = Date.now();
+			const endsAt =
+				Math.max(observed, now) + clampDuration(params.duration_ms);
+			try {
+				await client.store.set(
+					[ROOM_COLLECTION, room.id, "vote_ends_at"],
+					endsAt,
+					{
+						confirm: "committed",
+						if: { phase: { eq: "vote" }, vote_ends_at: { eq: observed } },
+					},
+				);
+				return { vote_ends_at: endsAt };
+			} catch (error) {
+				if (!isPrecondition(error)) throw error;
 			}
-			throw error;
 		}
-		return { vote_ends_at: endsAt };
+		throw new ActionError(
+			"EXTEND_CONFLICT",
+			"The vote deadline changed; try again",
+		);
 	});
 
 	await client.actions.handle("cast_vote", async (ctx, params) => {

@@ -26,14 +26,19 @@ async function freePort(): Promise<number> {
 	return address.port;
 }
 
-async function session(port: number, room: string, subject: string) {
+async function session(port: number, room: string) {
 	const response = await fetch(`http://127.0.0.1:${port}/session`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ room, subject }),
+		body: JSON.stringify({ room }),
 	});
 	assert.equal(response.status, 200);
-	return ((await response.json()) as { token: string }).token;
+	const body = (await response.json()) as {
+		token: string;
+		credential?: string;
+	};
+	assert.ok(body.credential);
+	return body.token;
 }
 
 function clientFor(port: number, room: string, token: string) {
@@ -55,13 +60,16 @@ const server = await startQuorumServer({
 	quiet: true,
 });
 
-const room = generateRoomCode();
-const hostToken = await session(appPort, room, "smoke-host-subject-1");
-const guestToken = await session(appPort, room, "smoke-guest-subject-2");
-const host = clientFor(databasePort, room, hostToken);
-const guest = clientFor(databasePort, room, guestToken);
+let host: ReturnType<typeof clientFor> | undefined;
+let guest: ReturnType<typeof clientFor> | undefined;
 
 try {
+	const room = generateRoomCode();
+	const hostToken = await session(appPort, room);
+	const guestToken = await session(appPort, room);
+	host = clientFor(databasePort, room, hostToken);
+	guest = clientFor(databasePort, room, guestToken);
+
 	await Promise.all([host.connect(), guest.connect()]);
 
 	const created = await host.actions.call("create_room", {
@@ -135,7 +143,10 @@ try {
 		results: results.map((row) => ({ votes: row.votes, text: row.text })),
 	});
 } finally {
-	await Promise.allSettled([host.disconnect(), guest.disconnect()]);
-	await server.stop();
-	await rm(dataDir, { recursive: true, force: true });
+	await Promise.allSettled([host?.disconnect(), guest?.disconnect()]);
+	try {
+		await server.stop();
+	} finally {
+		await rm(dataDir, { recursive: true, force: true });
+	}
 }

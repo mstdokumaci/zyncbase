@@ -1,5 +1,10 @@
-import { createHmac, randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import {
+	createHmac,
+	randomBytes,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
@@ -56,15 +61,6 @@ async function readJson(
 	return value as Record<string, unknown>;
 }
 
-function validSubject(value: unknown): value is string {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 64 &&
-		/^[a-zA-Z0-9:_-]+$/.test(value)
-	);
-}
-
 function validRoom(value: unknown): value is string {
 	return (
 		typeof value === "string" &&
@@ -107,6 +103,36 @@ export async function startQuorumServer(
 	}
 
 	await mkdir(dataDir, { recursive: true });
+	const sessionKeyPath = join(dataDir, "session.key");
+	let sessionKey: Buffer;
+	try {
+		sessionKey = await readFile(sessionKeyPath);
+		if (sessionKey.length !== 32) throw new Error("invalid session key");
+	} catch {
+		sessionKey = randomBytes(32);
+		await writeFile(sessionKeyPath, sessionKey, { mode: 0o600 });
+	}
+
+	function signCredential(subject: string): string {
+		const signature = createHmac("sha256", sessionKey)
+			.update(subject)
+			.digest("base64url");
+		return `${subject}.${signature}`;
+	}
+
+	function verifyCredential(value: unknown): string | null {
+		if (typeof value !== "string" || value.length > 200) return null;
+		const separator = value.lastIndexOf(".");
+		if (separator <= 0) return null;
+		const subject = value.slice(0, separator);
+		const signature = value.slice(separator + 1);
+		if (!/^u:[0-9a-f-]{36}$/.test(subject)) return null;
+		const expected = createHmac("sha256", sessionKey).update(subject).digest();
+		const received = Buffer.from(signature, "base64url");
+		if (received.length !== expected.length) return null;
+		return timingSafeEqual(received, expected) ? subject : null;
+	}
+
 	const runtime = await mkdtemp(join(tmpdir(), "quorum-"));
 	const configPath = join(runtime, "config.json");
 	await writeFile(
@@ -142,7 +168,9 @@ export async function startQuorumServer(
 
 	const databaseUrl = `ws://127.0.0.1:${databasePort}/ws`;
 	const workers = new Map<string, Promise<WorkerHandle>>();
+	const lastSeen = new Map<string, number>();
 	async function ensureRoomWorker(code: string): Promise<WorkerHandle> {
+		lastSeen.set(code, Date.now());
 		const existing = workers.get(code);
 		if (existing) return existing;
 		if (workers.size >= 100) {
@@ -158,9 +186,37 @@ export async function startQuorumServer(
 			return await started;
 		} catch (error) {
 			workers.delete(code);
+			lastSeen.delete(code);
 			throw error;
 		}
 	}
+
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one lifecycle sweep with explicit empty/closed checks.
+	async function sweepIdleWorkers(): Promise<void> {
+		const cutoff = Date.now() - 10 * 60_000;
+		for (const [code, pending] of workers) {
+			if ((lastSeen.get(code) ?? 0) > cutoff) continue;
+			const handle = await pending.catch(() => null);
+			if (!handle) {
+				workers.delete(code);
+				lastSeen.delete(code);
+				continue;
+			}
+			const rooms = await handle.client.store
+				.query("rooms", { where: { room_code: code }, limit: 1 })
+				.catch(() => null);
+			if (!rooms) continue;
+			if (rooms.length > 0 && rooms[0]?.phase !== "closed") continue;
+			workers.delete(code);
+			lastSeen.delete(code);
+			await handle.stop().catch(() => {});
+		}
+	}
+
+	const idleSweep = setInterval(() => {
+		void sweepIdleWorkers();
+	}, 60_000);
+	(idleSweep as { unref?: () => void }).unref?.();
 
 	let ready = true;
 	let logins = 0;
@@ -194,8 +250,17 @@ export async function startQuorumServer(
 				if (!validRoom(input.room)) {
 					return reply(res, 400, { error: "Invalid room code" });
 				}
-				if (!validSubject(input.subject)) {
-					return reply(res, 400, { error: "Invalid subject" });
+				let subject: string;
+				let credential: string | undefined;
+				if (input.credential !== undefined) {
+					const verified = verifyCredential(input.credential);
+					if (!verified) {
+						return reply(res, 401, { error: "Session expired" });
+					}
+					subject = verified;
+				} else {
+					subject = `u:${randomUUID()}`;
+					credential = signCredential(subject);
 				}
 				try {
 					await ensureRoomWorker(input.room);
@@ -203,8 +268,9 @@ export async function startQuorumServer(
 					return reply(res, 503, { error: "That room could not be started" });
 				}
 				return reply(res, 200, {
-					token: token("member", input.room, `u:${input.subject}`),
+					token: token("member", input.room, subject),
 					room: input.room,
+					...(credential ? { credential } : {}),
 				});
 			}
 			return reply(res, 404, { error: "Not found" });
@@ -219,20 +285,18 @@ export async function startQuorumServer(
 		}
 	});
 
-	await new Promise<void>((resolveListen, reject) => {
-		server.once("error", reject);
-		server.listen(port, host, resolveListen);
-	});
-
 	let stopped = false;
 	const stop = async () => {
 		if (stopped) return;
 		stopped = true;
 		ready = false;
+		clearInterval(idleSweep);
 		server.closeAllConnections();
-		await new Promise<void>((resolveClose) =>
-			server.close(() => resolveClose()),
-		);
+		if (server.listening) {
+			await new Promise<void>((resolveClose) =>
+				server.close(() => resolveClose()),
+			);
+		}
 		const handles = await Promise.allSettled([...workers.values()]);
 		await Promise.allSettled(
 			handles.map((entry) =>
@@ -241,7 +305,18 @@ export async function startQuorumServer(
 		);
 		database.kill("SIGINT");
 		await database.exited.catch(() => {});
+		await rm(runtime, { recursive: true, force: true }).catch(() => {});
 	};
+
+	try {
+		await new Promise<void>((resolveListen, reject) => {
+			server.once("error", reject);
+			server.listen(port, host, resolveListen);
+		});
+	} catch (error) {
+		await stop();
+		throw error;
+	}
 
 	return { port, databasePort, stop };
 }

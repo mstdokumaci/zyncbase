@@ -3,8 +3,13 @@
 		{
 			"pattern": "room:{room_code}",
 			"storeFilter": { "$session.room": { "eq": "$namespace.room_code" } },
-			"presenceRead": true,
-			"presenceWrite": { "$session.role": { "eq": "member" } },
+			"presenceRead": { "$session.room": { "eq": "$namespace.room_code" } },
+			"presenceWrite": {
+				"and": [
+					{ "$session.room": { "eq": "$namespace.room_code" } },
+					{ "$session.role": { "eq": "member" } }
+				]
+			},
 			"presenceSharedWrite": false
 		}
 	],
