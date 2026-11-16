@@ -709,6 +709,7 @@ textarea {
 .avatar {
 	position: relative;
 	display: inline-grid;
+	flex: none;
 	place-items: center;
 	width: 34px;
 	height: 34px;
@@ -749,6 +750,8 @@ textarea {
 .avatar.small {
 	width: 28px;
 	height: 28px;
+	min-height: 28px;
+	padding: 0;
 	margin: 0;
 	border: 0;
 	font-size: 0.58rem;
