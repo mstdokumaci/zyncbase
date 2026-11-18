@@ -288,7 +288,11 @@ import { schemaVersion } from "./zyncbase-schema"; // generated
 const reloadKey = "zyncbase-schema-major";
 
 function handleMajorMismatch(major: string | undefined) {
-  if (!major || major === schemaVersion.split(".")[0]) return;
+  if (!major) return;
+  if (major === schemaVersion.split(".")[0]) {
+    sessionStorage.removeItem(reloadKey);
+    return;
+  }
   if (sessionStorage.getItem(reloadKey) !== major) {
     sessionStorage.setItem(reloadKey, major);
     location.reload();
