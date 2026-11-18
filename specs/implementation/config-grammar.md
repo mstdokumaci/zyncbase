@@ -43,6 +43,7 @@ This document defines the schema, properties, and constraints for the server run
 | `dataDir` | `string` | `"./data"` | Directory path for persistence (SQLite, WAL). Supports env expansion. |
 | `schema` | `string \| object` | `"./schema.json"` | Path to schema JSON or inline schema object. If missing, runs with users-only schema. |
 | `authorization` | `string` | `null` | Path to `authorization.json` file. If missing, runs with playground default. |
+| `migrations` | `object` | `{}` | Schema migration settings. See below. |
 
 ### `server` Settings
 
@@ -130,6 +131,13 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `synchronous` | `string` | `"full"` | SQLite durability mode. `full` fsyncs each write batch; `normal` may roll back recent commits on power loss. Invalid values fail startup with `error.InvalidSynchronousMode`. |
+
+### `migrations` Settings
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `dir` | `string` | `<directory of the schema file>/migrations`, or `"./migrations"` for an inline schema | Directory of migration folders → `MigrationsConfig.dir`. Relative paths resolve against the working directory. A missing directory means no migrations. Supports env expansion. |
+| `snapshot` | `boolean` | `true` | Write a verified pre-migration snapshot before applying a pending developer migration → `MigrationsConfig.snapshot`. See [Schema Migrations](./schema-migrations.md#snapshot-and-rollback). |
 
 ---
 

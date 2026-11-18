@@ -220,7 +220,7 @@ client.on('tokenExpired', async () => {
 | `synced` | `() => void` | Subscriptions and action registrations fully replayed; the client is safe to use |
 | `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
 | `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
-| `schemaChange` | `() => void` | The server pushed a schema whose hash differs from the active dictionary; the SDK re-applied `SchemaSync` in place. Subscriptions and requests continue against the new dictionary without interruption |
+| `schemaChange` | `(detail: SchemaChangeDetail) => void` | The server pushed a schema whose dictionaries or version differ from the active ones; the SDK re-applied `SchemaSync` in place. Subscriptions and requests continue against the new dictionary without interruption. `detail` is `{ previousVersion, version }`; a higher major version means the data shape broke, so an app built against the old schema should reload |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
 | `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place. Rejects no pending request |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
@@ -277,6 +277,23 @@ client.status // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 `status` is the value; `statusChange` is the transition. Reading `client.status` on first render produces an accurate connection indicator before any event has fired — no invented initial state — and `statusChange` keeps it current from there.
 
 **Type:** `ConnectionStatus` (exported), also used by `StatusDetail.previousStatus`.
+
+### `client.schemaVersion`
+
+The server's `schema.json` version from the latest `SchemaSync`, or `null` before the first connection:
+
+```typescript
+import { schemaVersion } from "./zyncbase-schema"; // generated
+
+client.on("schemaChange", ({ version }) => {
+  // A new major version means the data shape broke: load the new app build.
+  if (version.split(".")[0] !== schemaVersion.split(".")[0]) location.reload();
+});
+```
+
+Generated type files export the `schemaVersion` they were built from, so an app can compare it with `client.schemaVersion` to detect a server that has moved to a new major version.
+
+**Type:** `string | null`. The event detail type `SchemaChangeDetail` is exported.
 
 ---
 

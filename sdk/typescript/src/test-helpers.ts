@@ -220,6 +220,7 @@ export function makeManager(options?: Partial<ClientOptions>): {
 	const opts: ClientOptions = { ...defaultOptions, ...options };
 	const manager = new ConnectionManager(opts);
 	manager.schemaDictionary.processSchemaSync({
+		version: "1.0.0",
 		tables: ["a", "users", "tasks"],
 		fields: [
 			["b", "c"],
@@ -264,6 +265,7 @@ export function triggerSchemaSync(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(
 		encodeToBuffer({
 			type: "SchemaSync",
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id", "namespace_id", "name", "created_at", "updated_at"]],
 			fieldFlags: [[0b11, 0b01, 0b00, 0b01, 0b01]],

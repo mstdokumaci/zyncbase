@@ -13,7 +13,15 @@ import {
 	setDeepProperty,
 	splitFieldPath,
 } from "./path.js";
-import type { JsonValue, SparseFieldArray } from "./types.js";
+import type {
+	JsonValue,
+	SchemaChangeDetail,
+	SchemaSync,
+	SparseFieldArray,
+} from "./types.js";
+
+/** SchemaSync fields the dictionary is built from. */
+export type SchemaSyncPayload = Omit<SchemaSync, "type">;
 
 /** Guards flat sparse field arrays: the wire format requires an even element count. */
 function assertSparseLength(wireData: SparseFieldArray, label: string): void {
@@ -85,8 +93,9 @@ function buildFieldPaths(fields: string[]): Array<string[] | undefined> {
  *     `encodePath` / `encodeValue` before transmission.
  *  4. All inbound responses/deltas decode through `decodePath` /
  *     `decodeRecord` before exposing to user code.
- *  5. On reconnect, the hash of the new SchemaSync is compared to
- *     the previous one; a mismatch triggers a `schemaChange` event.
+ *  5. On reconnect, the hash and version of the new SchemaSync are
+ *     compared to the previous ones; a difference triggers a
+ *     `schemaChange` event.
  */
 export class SchemaDictionary {
 	// ─── Raw positional arrays (from SchemaSync) ──────────────────────────
@@ -119,9 +128,9 @@ export class SchemaDictionary {
 	private actionToIndex = new Map<string, number>();
 	private actionsByIndex: ActionSchemaEntry[] = [];
 
-	// ─── Offline safety hash ───────────────────────────────────────────────
+	// ─── Offline safety hash and schema version ────────────────────────────
 	private hash: number | null = null;
-	private previousHash: number | null = null;
+	private version: string | null = null;
 
 	// ─── State ─────────────────────────────────────────────────────────────
 	private ready = false;
@@ -133,31 +142,35 @@ export class SchemaDictionary {
 		return this.ready;
 	}
 
+	/** The server's schema version from the latest SchemaSync, or null before the first one. */
+	getVersion(): string | null {
+		return this.version;
+	}
+
 	/**
 	 * Process a SchemaSync payload from the server.
 	 * Builds all internal mappings and computes the offline safety hash.
-	 * Returns true if the schema has changed since the previous SchemaSync.
+	 * Returns the change when the dictionaries or the version differ from the
+	 * previous SchemaSync; null for the first SchemaSync or an identical one.
 	 */
-	async processSchemaSync(payload: {
-		tables: string[];
-		fields: string[][];
-		fieldFlags: number[][];
-		presenceUserFields?: string[];
-		presenceSharedFields?: string[];
-		actions?: string[];
-		actionParams?: string[][];
-		actionReturns?: string[][];
-		actionFlags?: number[];
-	}): Promise<boolean> {
-		this.previousHash = this.hash;
+	async processSchemaSync(
+		payload: SchemaSyncPayload,
+	): Promise<SchemaChangeDetail | null> {
 		this.validateSchemaSyncPayload(payload);
 		this.validateActionArrays(payload);
+		const previousHash = this.hash;
+		const previousVersion = this.version;
 		this.buildStoreMaps(payload);
 		this.buildPresenceMaps(payload);
 		this.buildActionMaps(payload);
 		this.hash = this.computeHash(payload);
+		this.version = payload.version;
 		this.ready = true;
-		return this.previousHash !== null && this.previousHash !== this.hash;
+		if (previousHash === null || previousVersion === null) return null;
+		if (previousHash === this.hash && previousVersion === this.version) {
+			return null;
+		}
+		return { previousVersion, version: this.version };
 	}
 
 	private validateActionArrays(payload: {
@@ -182,9 +195,13 @@ export class SchemaDictionary {
 	}
 
 	private validateSchemaSyncPayload(payload: {
+		version: string;
 		fields: string[][];
 		fieldFlags: number[][];
 	}): void {
+		if (typeof payload.version !== "string" || payload.version === "") {
+			throw new Error("SchemaDictionary: SchemaSync missing version");
+		}
 		if (!Array.isArray(payload.fieldFlags)) {
 			throw new Error("SchemaDictionary: SchemaSync missing fieldFlags");
 		}

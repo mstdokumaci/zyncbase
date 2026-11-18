@@ -41,6 +41,7 @@ export type {
 	PresenceGetAllOptions,
 	QueryOptions,
 	QueryOptionsFor,
+	SchemaChangeDetail,
 	SchemaLike,
 	SortClause,
 	StatusDetail,

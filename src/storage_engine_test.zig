@@ -419,25 +419,6 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         try testing.expect(record != null);
     }
 }
-test "StorageEngine: client writes blocked during migration" {
-    const allocator = std.heap.smp_allocator;
-    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
-    const table = schema_helpers.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-migration-block", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Simulate migration in progress
-    engine.migration_active.store(true, .release);
-    defer engine.migration_active.store(false, .release);
-    // enqueueWriteOp should be blocked
-    const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
-    try testing.expectError(sth.StorageError.MigrationInProgress, err1);
-    // delete should be blocked
-    const err3 = (try ctx.table("items")).deleteDocument(1, 1);
-    try testing.expectError(sth.StorageError.MigrationInProgress, err3);
-}
 test "StorageEngine: engine healthy after start" {
     const allocator = std.heap.smp_allocator;
     var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
@@ -1962,13 +1943,12 @@ test "storage: schema update integrity" {
     defer context.deinit();
     const test_dir = context.test_dir;
 
-    var fields_v1 = [_]sth.Field{schema_helpers.makeField("val1", .text)};
-    const table_v1 = schema_helpers.makeTable("test", &fields_v1);
-
     // Run 1: Version 1 schema - insert data
     {
         var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v1, .{ .in_memory = false });
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir,
+            \\{"version":"1.0.0","store":{"test":{"fields":{"val1":{"type":"string"}}}}}
+        , .{ .in_memory = false });
         defer ctx.deinitNoCleanup();
 
         try ctx.insertText("test", 1, 1, "val1", "value1");
@@ -1977,14 +1957,10 @@ test "storage: schema update integrity" {
 
     // Run 2: Version 2 schema (added field) - verify existing data is still readable
     {
-        var fields_v2 = [_]sth.Field{
-            schema_helpers.makeField("val1", .text),
-            schema_helpers.makeField("val2", .integer),
-        };
-        const table_v2 = schema_helpers.makeTable("test", &fields_v2);
-
         var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v2, .{ .in_memory = false });
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir,
+            \\{"version":"1.1.0","store":{"test":{"fields":{"val1":{"type":"string"},"val2":{"type":"integer"}}}}}
+        , .{ .in_memory = false });
         defer ctx.deinitNoCleanup();
 
         const test_table = try ctx.table("test");

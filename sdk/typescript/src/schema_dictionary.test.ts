@@ -11,6 +11,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("encodes and decodes path doc IDs as bin(16)", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id", "namespace_id", "created_at", "updated_at", "name"]],
 			fieldFlags: [[0b11, 0b01, 0b01, 0b01, 0b00]],
@@ -24,6 +25,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("encodes and decodes 3-segment nested field paths", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id", "profile__address__city", "name"]],
 			fieldFlags: [[0b11, 0b00, 0b00]],
@@ -48,6 +50,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("encodeValue clears namespaces and lets explicit leaves win", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id", "address__city", "address__zip", "name"]],
 			fieldFlags: [[0b11, 0b00, 0b00, 0b00]],
@@ -77,6 +80,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("encodes and decodes row id/reference fields using field flags", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["tasks"],
 			fields: [
 				["id", "namespace_id", "created_at", "updated_at", "title", "owner_id"],
@@ -116,6 +120,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("decodes complete records with nested, nullable, and document ID fields", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["tasks"],
 			fields: [["id", "metrics__rank", "owner_id", "member_ids", "note"]],
 			fieldFlags: [[0b11, 0b00, 0b10, 0b10, 0b00]],
@@ -158,9 +163,11 @@ describe("SchemaDictionary doc IDs", () => {
 		const schema = new SchemaDictionary();
 		await expect(
 			schema.processSchemaSync({
+				version: "1.0.0",
 				tables: ["users"],
 				fields: [["id", "name"]],
 			} as unknown as {
+				version: string;
 				tables: string[];
 				fields: string[][];
 				fieldFlags: number[][];
@@ -171,6 +178,7 @@ describe("SchemaDictionary doc IDs", () => {
 	test("identifies bytes fields and preserves Uint8Array values without docId decoding", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["files"],
 			fields: [["id", "data"]],
 			fieldFlags: [[0b11, 0b1000]],
@@ -189,32 +197,53 @@ describe("SchemaDictionary doc IDs", () => {
 });
 
 describe("SchemaDictionary schema changes", () => {
+	const store = {
+		version: "1.0.0",
+		tables: ["users"],
+		fields: [["id", "name"]],
+		fieldFlags: [[3, 0]],
+	};
+
 	test("detects action-only changes", async () => {
 		const schema = new SchemaDictionary();
-		const store = {
-			tables: ["users"],
-			fields: [["id", "name"]],
-			fieldFlags: [[3, 0]],
-		};
+		expect(await schema.processSchemaSync(store)).toBeNull();
+		expect(
+			await schema.processSchemaSync({
+				...store,
+				actions: ["greet"],
+				actionParams: [["message"]],
+				actionReturns: [["reply"]],
+				actionFlags: [1],
+			}),
+		).toEqual({ previousVersion: "1.0.0", version: "1.0.0" });
+		expect(
+			await schema.processSchemaSync({
+				...store,
+				actions: ["greet"],
+				actionParams: [["message"]],
+				actionReturns: [["reply"]],
+				actionFlags: [1],
+			}),
+		).toBeNull();
+	});
 
-		expect(await schema.processSchemaSync(store)).toBe(false);
+	test("tracks the schema version and reports version-only changes", async () => {
+		const schema = new SchemaDictionary();
+		expect(schema.getVersion()).toBeNull();
+		expect(await schema.processSchemaSync(store)).toBeNull();
+		expect(schema.getVersion()).toBe("1.0.0");
 		expect(
-			await schema.processSchemaSync({
-				...store,
-				actions: ["greet"],
-				actionParams: [["message"]],
-				actionReturns: [["reply"]],
-				actionFlags: [1],
-			}),
-		).toBe(true);
-		expect(
-			await schema.processSchemaSync({
-				...store,
-				actions: ["greet"],
-				actionParams: [["message"]],
-				actionReturns: [["reply"]],
-				actionFlags: [1],
-			}),
-		).toBe(false);
+			await schema.processSchemaSync({ ...store, version: "2.0.0" }),
+		).toEqual({ previousVersion: "1.0.0", version: "2.0.0" });
+		expect(schema.getVersion()).toBe("2.0.0");
+	});
+
+	test("rejects a SchemaSync without a version", async () => {
+		const schema = new SchemaDictionary();
+		const { version: _version, ...withoutVersion } = store;
+		await expect(
+			schema.processSchemaSync(withoutVersion as unknown as typeof store),
+		).rejects.toThrow("missing version");
+		expect(schema.isReady()).toBe(false);
 	});
 });

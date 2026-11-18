@@ -16,6 +16,7 @@ import type { ActionContext, ActionForward, OkResponse } from "./types.js";
 
 async function setupSchema(schema: SchemaDictionary): Promise<void> {
 	await schema.processSchemaSync({
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name"]],
 		fieldFlags: [[3, 0]],

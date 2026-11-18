@@ -25,6 +25,8 @@ Add `--reset` to discard the local data directory before starting:
 bun run demo:quorum:dev --reset
 ```
 
+A data directory written by a ZyncBase build from before schema migrations is refused at startup with `UnrecognizedDatabase`. Start once with `--reset`.
+
 Stop with Ctrl+C.
 
 ### The 60-second demo

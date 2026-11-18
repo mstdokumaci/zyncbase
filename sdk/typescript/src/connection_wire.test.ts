@@ -11,6 +11,7 @@ async function makeCodec(): Promise<ConnectionWireCodec> {
 	const codec = new ConnectionWireCodec();
 	await codec.applySchemaSync({
 		type: "SchemaSync",
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name", "address__city"]],
 		fieldFlags: [[0b10, 0, 0]],
@@ -28,6 +29,7 @@ async function makeAddressCodec(): Promise<ConnectionWireCodec> {
 	const codec = new ConnectionWireCodec();
 	await codec.applySchemaSync({
 		type: "SchemaSync",
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name", "address__city", "address__zip"]],
 		fieldFlags: [[0b10, 0, 0, 0]],

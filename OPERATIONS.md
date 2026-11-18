@@ -1,4 +1,4 @@
-# Operations: Backup, Restore & Durability
+# Operations: Backup, Restore, Migrations & Durability
 
 This guide is for a single-node ZyncBase deployment. The database is one SQLite file (`zyncbase.db`) plus its WAL, so a backup is a consistent snapshot of that file, and a restore is an offline file replacement.
 
@@ -230,12 +230,72 @@ Start a server against `/tmp/zyncbase-drill` on a non-public port and verify a f
 - `/health` is the liveness probe; it returns `503` once the write engine has degraded (every mutation is rejected in that state, so restart the process). `/stats` exposes WAL size, checkpoint count, checkpoint failures, connections, and message counters.
 - Watch `failed_checkpoint_count` and a growing WAL file.
 
-## Upgrades
+## Upgrades and schema migrations
 
-1. Take a snapshot before changing the binary or `schema.json`.
-2. Additive schema changes (new table, new field, new index) migrate automatically at startup.
-3. Destructive schema changes are refused in production. Plan a manual migration and test it against a restored copy first.
-4. Keep the previous binary. If the new binary cannot start, restore the snapshot and roll the binary back.
+The server migrates the database at startup, before it listens. A release ships the binary, `schema.json`, and the migrations directory together. Additive changes apply automatically. Destructive changes run the release's `migration.sql` files. The whole run is one transaction: either the database reaches the new schema, or it stays as it was and the server exits with the reason. See [Schema Migrations](specs/api-design/configuration.md#schema-migrations) for how migrations are written.
+
+### Before the release
+
+1. Check the migrations in CI. This needs no database:
+   ```bash
+   zyncbase migrate check --config zyncbase-config.json
+   ```
+2. Rehearse against a copy of production data:
+   ```bash
+   zyncbase backup /tmp/prod-copy.db --config /etc/zyncbase/zyncbase-config.json
+   zyncbase migrate apply --dry-run --db /tmp/prod-copy.db --config zyncbase-config.json
+   ```
+   The dry run executes every step and rolls back. The log shows rows before, after, and dropped per table, and how long it took. That duration is roughly the startup delay to expect.
+3. On the production host, confirm what the next start will do:
+   ```bash
+   zyncbase migrate status --config /etc/zyncbase/zyncbase-config.json
+   ```
+   It exits non-zero if the next start would fail.
+
+### During the release
+
+1. Stop the server and install the new binary, `schema.json`, and migrations.
+2. Start the server. If a migration is pending, the server first writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>`, then migrates.
+3. The port opens only after the migration commits. Give the start enough time: raise systemd's `TimeoutStartSec` and the liveness probe's initial delay to cover the rehearsed duration.
+
+To migrate without starting the server (for example, in a release job), run `zyncbase migrate apply --config …` while the server is stopped.
+
+### Disk space for migrations
+
+Plan for roughly twice the database size in free space on the data volume:
+- the pre-migration snapshot, about the size of the database
+- rebuilt tables, which exist twice until the run commits, plus the WAL that holds them
+
+The WAL is truncated after a run that rebuilt tables.
+
+### Rolling back
+
+There are no down migrations. To undo a release:
+
+1. Stop the server.
+2. Restore the pre-migration snapshot:
+   ```bash
+   zyncbase restore /var/lib/zyncbase/zyncbase.db.pre-migration-<id>-<timestamp> \
+     --config /etc/zyncbase/zyncbase-config.json
+   ```
+3. Roll back the binary, `schema.json`, and the migrations directory together, then start the server.
+
+Writes made after the migration are lost by the restore. Decide quickly, or export them first.
+
+Pre-migration snapshots are never deleted automatically. Delete them once the release is validated, or move them into your backup retention. Set `migrations.snapshot` to `false` only if another restore point (a fresh `zyncbase backup` or Litestream) is guaranteed before every release.
+
+### Failed starts
+
+When a start fails, nothing was changed and the previous release can still start against the database. The log names the reason, for example:
+- a missing migration
+- a missing major version bump
+- an unresolved `zync_todo`
+- rows left behind in `_zync_prev_<table>`
+- data that violates the new constraints
+
+Fix the release, or roll the binary back.
+
+A database created by a build from before schema migrations has no schema record. It is refused with `UnrecognizedDatabase`. Such a database can't be upgraded in place. Export what you need, then start over with `zyncbase reset --yes`.
 
 ## Security notes
 

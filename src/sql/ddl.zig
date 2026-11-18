@@ -162,6 +162,18 @@ pub const DDLGenerator = struct {
         return buf.toOwnedSlice(self.allocator);
     }
 
+    /// Generate only the `CREATE TABLE ... STRICT;` statement, without managed
+    /// indexes. Migration steps create indexes after loading data. Caller owns the result.
+    pub fn generateCreateTable(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
+        var buf = SqlBuf.init();
+        defer buf.deinit(self.allocator);
+
+        try emitCreateTable(self.allocator, &buf, table);
+        try buf.append(self.allocator, ';');
+
+        return buf.toOwnedSlice(self.allocator);
+    }
+
     /// Generate the single statement for one managed index. Caller owns the result.
     pub fn generateIndexDDL(self: *DDLGenerator, table: schema_types.Table, managed_index: ManagedIndex) ![]const u8 {
         var buf = SqlBuf.init();
@@ -172,7 +184,78 @@ pub const DDLGenerator = struct {
 
         return buf.toOwnedSlice(self.allocator);
     }
+
+    /// Generate `ALTER TABLE ... ADD COLUMN ...;` for an optional user field.
+    /// Reference fields carry a column-level `REFERENCES` clause, which SQLite
+    /// reports through `PRAGMA foreign_key_list` exactly like the table-level
+    /// constraint emitted by `generateDDL`. SQLite cannot add a `NOT NULL`
+    /// column without a default, so required fields need a table rebuild.
+    /// Caller owns the result.
+    pub fn generateAddColumn(self: *DDLGenerator, table: schema_types.Table, field: schema_types.Field) ![]const u8 {
+        if (field.required) return error.RequiredColumnNeedsRebuild;
+
+        var buf = SqlBuf.init();
+        defer buf.deinit(self.allocator);
+
+        try buf.appendSlice(self.allocator, "ALTER TABLE ");
+        try buf.appendSlice(self.allocator, table.name_quoted);
+        try buf.appendSlice(self.allocator, " ADD COLUMN ");
+        try emitUserColumn(self.allocator, &buf, field);
+        if (field.references) |ref| {
+            try buf.appendSlice(self.allocator, " REFERENCES ");
+            try buf.appendQuoted(self.allocator, ref);
+            try buf.append(self.allocator, '(');
+            try buf.appendSlice(self.allocator, schema_system.quoted_id);
+            try buf.append(self.allocator, ')');
+            try emitOnDelete(self.allocator, &buf, field.on_delete orelse .restrict);
+        }
+        try buf.append(self.allocator, ';');
+
+        return buf.toOwnedSlice(self.allocator);
+    }
 };
+
+/// True when both tables produce exactly the same set of managed index
+/// statements (names, uniqueness, and ordered columns).
+pub fn managedIndexesEqual(allocator: std.mem.Allocator, a: *const schema_types.Table, b: *const schema_types.Table) !bool {
+    var gen = DDLGenerator.init(allocator);
+    var a_statements = try collectManagedIndexStatements(allocator, &gen, a);
+    defer freeStatements(allocator, &a_statements);
+    var b_statements = try collectManagedIndexStatements(allocator, &gen, b);
+    defer freeStatements(allocator, &b_statements);
+
+    if (a_statements.items.len != b_statements.items.len) return false;
+    outer: for (a_statements.items) |statement| {
+        for (b_statements.items) |candidate| {
+            if (std.mem.eql(u8, statement, candidate)) continue :outer;
+        }
+        return false;
+    }
+    return true;
+}
+
+fn collectManagedIndexStatements(
+    allocator: std.mem.Allocator,
+    gen: *DDLGenerator,
+    table: *const schema_types.Table,
+) !std.ArrayListUnmanaged([]const u8) {
+    var statements = std.ArrayListUnmanaged([]const u8).empty;
+    errdefer freeStatements(allocator, &statements);
+    var iter = ManagedIndexIterator.init(table);
+    while (iter.next()) |managed_index| {
+        const statement = try gen.generateIndexDDL(table.*, managed_index);
+        statements.append(allocator, statement) catch |err| {
+            allocator.free(statement);
+            return err;
+        };
+    }
+    return statements;
+}
+
+fn freeStatements(allocator: std.mem.Allocator, statements: *std.ArrayListUnmanaged([]const u8)) void {
+    for (statements.items) |statement| allocator.free(statement);
+    statements.deinit(allocator);
+}
 
 fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     try buf.appendSlice(allocator, "CREATE TABLE ");
@@ -184,7 +267,7 @@ fn emitCreateTable(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_typ
     try emitFixedTrailingColumns(allocator, buf);
     try emitForeignKeys(allocator, buf, table);
 
-    try buf.appendSlice(allocator, "\n)");
+    try buf.appendSlice(allocator, "\n) STRICT");
 }
 
 fn emitFixedLeadingColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
@@ -210,17 +293,22 @@ fn emitFixedLeadingColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: sc
 fn emitUserColumns(allocator: std.mem.Allocator, buf: *SqlBuf, table: schema_types.Table) !void {
     for (table.userFields()) |field| {
         try buf.appendSlice(allocator, ",\n  ");
+        try emitUserColumn(allocator, buf, field);
+    }
+}
+
+/// `"name" TYPE [NOT NULL] [CHECK(length("name") = 16)]`
+fn emitUserColumn(allocator: std.mem.Allocator, buf: *SqlBuf, field: schema_types.Field) !void {
+    try buf.appendSlice(allocator, field.name_quoted);
+    try buf.append(allocator, ' ');
+    try buf.appendSlice(allocator, field.storage_type.toSqlType());
+    if (field.required) {
+        try buf.appendSlice(allocator, " NOT NULL");
+    }
+    if (field.needsLengthCheck()) {
+        try buf.appendSlice(allocator, " CHECK(length(");
         try buf.appendSlice(allocator, field.name_quoted);
-        try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, field.storage_type.toSqlType());
-        if (field.required) {
-            try buf.appendSlice(allocator, " NOT NULL");
-        }
-        if (field.needsLengthCheck()) {
-            try buf.appendSlice(allocator, " CHECK(length(");
-            try buf.appendSlice(allocator, field.name_quoted);
-            try buf.appendSlice(allocator, ") = 16)");
-        }
+        try buf.appendSlice(allocator, ") = 16)");
     }
 }
 

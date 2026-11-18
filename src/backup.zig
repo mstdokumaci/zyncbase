@@ -60,7 +60,6 @@ pub fn create(
         .{ out_path, std.Io.Clock.real.now(io).toNanoseconds() },
     );
     defer allocator.free(partial_path);
-    errdefer deleteQuietly(io, partial_path);
 
     // zwanzig-disable-next-line: sentinel-alloc
     const db_path_z = try allocator.dupeZ(u8, db_path);
@@ -75,6 +74,19 @@ pub fn create(
 
     _ = try db.pragma(void, .{}, "busy_timeout", "5000");
 
+    return publishSnapshot(io, allocator, &db, partial_path, out_path);
+}
+
+/// `VACUUM INTO` a partial file, verify, fsync, then publish with a
+/// non-replacing rename. A failed snapshot never appears at `out_path`.
+fn publishSnapshot(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db: *sqlite.Db,
+    partial_path: []const u8,
+    out_path: []const u8,
+) !CreateInfo {
+    errdefer deleteQuietly(io, partial_path);
     const started_at = std.Io.Clock.real.now(io).toMilliseconds();
     try db.execDynamic("VACUUM INTO ?", .{}, .{partial_path});
 
@@ -94,6 +106,131 @@ pub fn create(
         .bytes = stat.size,
         .duration_ms = std.Io.Clock.real.now(io).toMilliseconds() - started_at,
     };
+}
+
+/// Writes the pre-migration snapshot of `db` (the database file at `db_path`)
+/// to `<db_path>.pre-migration-<label>-<utc timestamp>`.
+/// The caller already holds the exclusive data lock, so none is taken here
+/// (a second lock on the same file would conflict within this process).
+/// Must run outside a transaction. Returns the owned snapshot path.
+pub fn snapshotHeld(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db: *sqlite.Db,
+    db_path: []const u8,
+    label: []const u8,
+) ![]u8 {
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const stamp = utcTimestamp(io, &stamp_buf);
+    var out_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var out_path = try std.fmt.bufPrint(&out_buf, "{s}{s}{s}-{s}", .{ db_path, pre_migration_infix, label, stamp });
+    // The same migration snapshotted twice within a second (e.g. after a
+    // restore) gets a `-<n>` suffix instead of failing.
+    var attempt: usize = 1;
+    while (try fileExists(io, out_path)) : (attempt += 1) {
+        if (attempt > 99) return error.OutputExists;
+        out_path = try std.fmt.bufPrint(&out_buf, "{s}{s}{s}-{s}-{d}", .{ db_path, pre_migration_infix, label, stamp, attempt });
+    }
+    var partial_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const partial_path = try std.fmt.bufPrint(&partial_buf, "{s}.partial-{d}", .{ out_path, std.Io.Clock.real.now(io).toNanoseconds() });
+
+    _ = try publishSnapshot(io, allocator, db, partial_path, out_path);
+    return allocator.dupe(u8, out_path);
+}
+
+/// Pre-migration snapshots are named `<db file><infix><migration id>-<utc timestamp>`.
+pub const pre_migration_infix = ".pre-migration-";
+
+pub const utc_timestamp_len = "20261117T140500Z".len;
+
+/// UTC `YYYYMMDDTHHMMSSZ`, used for migration ids and snapshot names.
+pub fn utcTimestamp(io: std.Io, buf: *[utc_timestamp_len]u8) []const u8 {
+    const seconds: u64 = @intCast(@max(std.Io.Clock.real.now(io).toSeconds(), 0));
+    return formatUtcTimestamp(seconds, buf);
+}
+
+pub fn formatUtcTimestamp(seconds: u64, buf: *[utc_timestamp_len]u8) []const u8 {
+    const epoch: std.time.epoch.EpochSeconds = .{ .secs = seconds };
+    const year_day = epoch.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day = epoch.getDaySeconds();
+    const parts = [_]struct { value: u32, width: usize }{
+        .{ .value = year_day.year, .width = 4 },
+        .{ .value = month_day.month.numeric(), .width = 2 },
+        .{ .value = @as(u32, month_day.day_index) + 1, .width = 2 },
+        .{ .value = day.getHoursIntoDay(), .width = 2 },
+        .{ .value = day.getMinutesIntoHour(), .width = 2 },
+        .{ .value = day.getSecondsIntoMinute(), .width = 2 },
+    };
+    // Fixed-width digits; years past 9999 wrap, which the 4-digit format cannot express anyway.
+    var pos: usize = 0;
+    for (parts, 0..) |part, i| {
+        if (i == 3) {
+            buf[pos] = 'T';
+            pos += 1;
+        }
+        var value = part.value;
+        var digit = part.width;
+        while (digit > 0) {
+            digit -= 1;
+            buf[pos + digit] = '0' + @as(u8, @intCast(value % 10));
+            value /= 10;
+        }
+        pos += part.width;
+    }
+    buf[pos] = 'Z';
+    return buf[0 .. pos + 1];
+}
+
+pub const ResetInfo = struct {
+    /// Where the previous database was moved, when one existed and a safety
+    /// copy was kept. Owned by the caller.
+    moved_to: ?[]u8,
+
+    pub fn deinit(self: *ResetInfo, allocator: std.mem.Allocator) void {
+        if (self.moved_to) |path| allocator.free(path);
+        self.moved_to = null;
+    }
+};
+
+/// Moves `zyncbase.db` and its sidecars aside so the next start creates a
+/// fresh database. Requires the exclusive data lock (server stopped).
+pub fn reset(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+    keep_safety_copy: bool,
+) !ResetInfo {
+    var lock = try DataLock.acquire(io, allocator, data_dir);
+    defer lock.release(io);
+    try recoverInterruptedRestore(io, allocator, data_dir);
+
+    const db_path = try dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    if (!try fileExists(io, db_path)) return .{ .moved_to = null };
+
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, utcTimestamp(io, &stamp_buf) });
+    if (try fileExists(io, aside)) return error.OutputExists;
+
+    const sidecars = [_][]const u8{ "", "-wal", "-shm" };
+    var from_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var to_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    for (sidecars) |suffix| {
+        const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ db_path, suffix });
+        const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix });
+        try moveIfExists(io, from, to);
+    }
+    try syncParentDir(io, db_path);
+
+    if (!keep_safety_copy) {
+        for (sidecars) |suffix| {
+            deleteQuietly(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+        }
+        return .{ .moved_to = null };
+    }
+    return .{ .moved_to = try allocator.dupe(u8, aside) };
 }
 
 /// Validate a snapshot. `full` runs `PRAGMA integrity_check`; otherwise

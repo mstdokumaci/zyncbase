@@ -58,6 +58,7 @@ Technical specs for the server core and internal systems.
 - [/] Documentation alignment (This task)
 - [ ] Connection management optimizations
 - [ ] TypeScript types generation refinement
+- [/] Developer-owned schema migrations and STRICT tables ([ADR-024](./architecture/adrs.md#adr-024-developer-owned-schema-migrations), [Schema Migrations](./implementation/schema-migrations.md))
 - [ ] Security audit
 
 ---

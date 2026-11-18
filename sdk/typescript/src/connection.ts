@@ -18,6 +18,7 @@ import type {
 	InboundMessage,
 	LifecycleEvent,
 	OkResponse,
+	SchemaChangeDetail,
 	SchemaSync,
 	StatusDetail,
 	StoreDelta,
@@ -154,6 +155,11 @@ export class ConnectionManager {
 	/** Current connection status. */
 	get status(): ConnectionStatus {
 		return this.currentStatus;
+	}
+
+	/** The server's schema version, or null before the first SchemaSync. */
+	get schemaVersion(): string | null {
+		return this.schemaDictionary.getVersion();
 	}
 
 	async setStoreNamespace(ns: string): Promise<void> {
@@ -789,9 +795,9 @@ export class ConnectionManager {
 	}
 
 	private async handleSchemaSync(msg: SchemaSync): Promise<void> {
-		let schemaChanged: boolean;
+		let schemaChange: SchemaChangeDetail | null;
 		try {
-			schemaChanged = await this.wire.applySchemaSync(msg);
+			schemaChange = await this.wire.applySchemaSync(msg);
 		} catch (err) {
 			const error =
 				err instanceof ZyncBaseError
@@ -809,8 +815,8 @@ export class ConnectionManager {
 			throw error;
 		}
 
-		if (schemaChanged) {
-			this.emit("schemaChange");
+		if (schemaChange) {
+			this.emit("schemaChange", schemaChange);
 		}
 		this.resolveSchemaSync();
 	}

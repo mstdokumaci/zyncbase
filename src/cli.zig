@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const backup = @import("backup.zig");
+const migration_cli = @import("migration/cli.zig");
 const ConfigLoader = @import("config/loader.zig").ConfigLoader;
 const Config = @import("config/state.zig").Config;
 
@@ -17,6 +18,8 @@ pub fn isCommand(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "backup") or
         std.mem.eql(u8, arg, "restore") or
         std.mem.eql(u8, arg, "verify") or
+        std.mem.eql(u8, arg, "migrate") or
+        std.mem.eql(u8, arg, "reset") or
         std.mem.eql(u8, arg, "help") or
         std.mem.eql(u8, arg, "--help");
 }
@@ -51,8 +54,45 @@ pub fn run(
         std.log.info("verify: {s}: ok", .{parsed.path});
         return;
     }
+    if (std.mem.eql(u8, command, "migrate")) {
+        const cmd = migration_cli.parseMigrate(rest) catch |err| {
+            printUsage();
+            return err;
+        };
+        return runMigrationCommand(io, environ, allocator, cmd);
+    }
+    if (std.mem.eql(u8, command, "reset")) {
+        const cmd = migration_cli.parseReset(rest) catch |err| {
+            printUsage();
+            return err;
+        };
+        return runMigrationCommand(io, environ, allocator, cmd);
+    }
 
     return error.UnknownCommand;
+}
+
+fn runMigrationCommand(
+    io: std.Io,
+    environ: std.process.Environ,
+    allocator: Allocator,
+    cmd: migration_cli.Command,
+) !void {
+    var env_map = try environ.createMap(allocator);
+    defer env_map.deinit();
+    var config = try ConfigLoader.load(io, &env_map, allocator, cmd.config_path orelse "zyncbase-config.json");
+    defer config.deinit();
+
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writerStreaming(io, &buffer);
+    const result = migration_cli.execute(.{
+        .io = io,
+        .allocator = allocator,
+        .config = &config,
+        .out = &stdout.interface,
+    }, cmd);
+    try stdout.interface.flush();
+    return result;
 }
 
 fn runBackup(
@@ -162,6 +202,11 @@ fn printUsage() void {
         \\  zyncbase backup <out.db> [--config <path>] [--data-dir <dir>]
         \\  zyncbase restore <in.db> [--config <path>] [--data-dir <dir>] [--no-safety-copy]
         \\  zyncbase verify <in.db>
+        \\  zyncbase migrate status [--config <path>] [--data-dir <dir>] [--db <file>]
+        \\  zyncbase migrate new <name> [--from <file.db|schema.json>] [--amend] [--config <path>] [--data-dir <dir>]
+        \\  zyncbase migrate check [--config <path>]
+        \\  zyncbase migrate apply [--dry-run] [--config <path>] [--data-dir <dir>] [--db <file>]
+        \\  zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]
         \\
     });
 }

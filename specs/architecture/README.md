@@ -15,6 +15,7 @@ A chronological log of significant architectural decisions. Each ADR documents t
 - **Engine Design**: Multi-threading, lock-free caching, and storage optimization.
 - **API & Protocol**: MessagePack wire format, Prisma-inspired queries, accepted/committed writes, and realtime subscriptions.
 - **Security**: Declarative authorization and server-side validation.
+- **Schema Evolution**: Snapshot-based change classification and developer-owned data migrations (ADR-024).
 
 ## Architectural Component Specs
 Detailed technical specifications and implementation strategies for core system components:

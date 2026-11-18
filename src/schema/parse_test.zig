@@ -19,6 +19,19 @@ test "schema_parse: validates root version and store" {
     try std.testing.expectError(error.InvalidVersion, schema_parse.initFromJson(allocator,
         \\{"version":1,"store":{}}
     ));
+    for ([_][]const u8{
+        \\{"version":"1.0","store":{}}
+        ,
+        \\{"version":"v1.0.0","store":{}}
+        ,
+        \\{"version":"1.0.0-beta","store":{}}
+        ,
+        \\{"version":"01.0.0","store":{}}
+        ,
+        \\{"version":"","store":{}}
+    }) |json| {
+        try std.testing.expectError(error.InvalidVersion, schema_parse.initFromJson(allocator, json));
+    }
     try std.testing.expectError(error.MissingStore, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0"}
     ));

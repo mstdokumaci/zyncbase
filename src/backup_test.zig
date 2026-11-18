@@ -175,3 +175,75 @@ test "backup: corrupt journal is cleared when the database still exists" {
     );
     try std.testing.expectEqual(@as(?i64, 1), marker);
 }
+
+test "backup: UTC timestamps are fixed-width YYYYMMDDTHHMMSSZ" {
+    var buf: [backup.utc_timestamp_len]u8 = undefined;
+    try std.testing.expectEqualStrings("19700101T000000Z", backup.formatUtcTimestamp(0, &buf));
+    // 2026-11-17T14:05:09Z
+    try std.testing.expectEqualStrings("20261117T140509Z", backup.formatUtcTimestamp(1794924309, &buf));
+    // Leap day.
+    try std.testing.expectEqualStrings("20240229T235959Z", backup.formatUtcTimestamp(1709251199, &buf));
+}
+
+fn tmpDataDir(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
+    const data_dir = try std.fs.path.join(allocator, &.{ ".zig-cache/tmp", tmp.sub_path[0..], "data" });
+    std.Io.Dir.cwd().createDirPath(std.testing.io, data_dir) catch |err| {
+        allocator.free(data_dir);
+        return err;
+    };
+    return data_dir;
+}
+
+test "backup: reset moves the database aside and the next open is fresh" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    const db_path = try backup.dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    {
+        var db = try openDb(allocator, db_path);
+        defer db.deinit();
+        try db.exec("CREATE TABLE t (k INTEGER)", .{}, .{});
+    }
+
+    var info = try backup.reset(std.testing.io, allocator, data_dir, true);
+    defer info.deinit(allocator);
+    const moved = info.moved_to orelse return error.TestExpectedValue;
+    try std.testing.expect(std.mem.indexOf(u8, moved, ".pre-reset-") != null);
+    try std.Io.Dir.cwd().access(std.testing.io, moved, .{});
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, db_path, .{}));
+
+    // Nothing to reset the second time.
+    var again = try backup.reset(std.testing.io, allocator, data_dir, true);
+    defer again.deinit(allocator);
+    try std.testing.expect(again.moved_to == null);
+}
+
+test "backup: snapshotHeld writes a verified pre-migration snapshot" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    const db_path = try backup.dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    var db = try openDb(allocator, db_path);
+    defer db.deinit();
+    try db.exec("CREATE TABLE _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)", .{}, .{});
+    try db.exec("INSERT INTO _zync_namespaces VALUES (0, '$global')", .{}, .{});
+
+    const path = try backup.snapshotHeld(std.testing.io, allocator, &db, db_path, "20261117T140500Z_demo");
+    defer allocator.free(path);
+    try std.testing.expect(std.mem.indexOf(u8, path, "zyncbase.db.pre-migration-20261117T140500Z_demo-") != null);
+    try backup.verify(std.testing.io, allocator, path, true);
+
+    // A second snapshot in the same second gets a suffix instead of failing.
+    const again = try backup.snapshotHeld(std.testing.io, allocator, &db, db_path, "20261117T140500Z_demo");
+    defer allocator.free(again);
+    try std.testing.expect(!std.mem.eql(u8, path, again));
+    try backup.verify(std.testing.io, allocator, again, true);
+}

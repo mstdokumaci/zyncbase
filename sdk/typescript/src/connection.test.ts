@@ -23,6 +23,7 @@ async function useCanonicalDeltaSchema(
 	manager: ConnectionManager,
 ): Promise<void> {
 	await manager.schemaDictionary.processSchemaSync({
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name"]],
 		fieldFlags: [[0b10, 0]],
@@ -354,6 +355,7 @@ describe("ConnectionManager", () => {
 
 			const schema = {
 				type: "SchemaSync",
+				version: "1.0.0",
 				tables: ["users"],
 				fields: [["id", "name", "age"]],
 				fieldFlags: [[0b10, 0b00, 0b00]],
@@ -375,6 +377,47 @@ describe("ConnectionManager", () => {
 			expect(
 				(received[0] as { ops: { path: string[] }[] }).ops[0].path,
 			).toEqual(["users", "u1"]);
+		});
+	});
+
+	describe("schema version", () => {
+		test("exposes the server's version and reports changes with schemaChange", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			expect(manager.schemaVersion).toBe("1.0.0");
+
+			const changes: unknown[] = [];
+			manager.on("schemaChange", (detail) => changes.push(detail));
+			const sync = (version: string) =>
+				mockWs.triggerMessage(
+					encodeToBuffer({
+						type: "SchemaSync",
+						version,
+						tables: ["a", "users", "tasks"],
+						fields: [
+							["b", "c"],
+							["name", "age"],
+							["title", "meta"],
+						],
+						fieldFlags: [
+							[0, 0],
+							[0, 0],
+							[0, 0],
+						],
+					}),
+				);
+			const processed = () =>
+				(manager as unknown as { processingPromise: Promise<void> })
+					.processingPromise;
+
+			sync("1.0.0");
+			await processed();
+			expect(changes).toEqual([]);
+
+			sync("2.0.0");
+			await processed();
+			expect(manager.schemaVersion).toBe("2.0.0");
+			expect(changes).toEqual([{ previousVersion: "1.0.0", version: "2.0.0" }]);
 		});
 	});
 

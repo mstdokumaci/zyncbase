@@ -18,6 +18,7 @@ import type {
 async function makeReadySchema(): Promise<SchemaDictionary> {
 	const schema = new SchemaDictionary();
 	await schema.processSchemaSync({
+		version: "1.0.0",
 		tables: ["items"],
 		fields: [
 			["id", "name", "score", "ref", "opt", "profile__rank", "created_at"],

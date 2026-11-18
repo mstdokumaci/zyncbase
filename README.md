@@ -11,11 +11,12 @@ High-performance, multi-threaded real-time database built with Zig.
 
 ## Production
 
-See [OPERATIONS.md](OPERATIONS.md) for backup, restore, durability, and upgrade guidance.
+See [OPERATIONS.md](OPERATIONS.md) for backup, restore, durability, upgrade, and schema migration guidance.
 
 - `storage.synchronous` defaults to `full`; committed writes survive process crashes and power loss (assuming the disk honors flush).
 - Backups are not automatic. Schedule `zyncbase backup` with cron or a systemd timer.
 - `zyncbase restore` requires the server to be stopped and keeps a safety copy by default.
+- Schema changes migrate at startup in one transaction. Destructive changes need a developer-written migration (`zyncbase migrate new`), and the server snapshots the database before running it.
 
 ## Getting Started
 

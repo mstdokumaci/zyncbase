@@ -345,7 +345,7 @@ pub fn stepHasMore(db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt) !bool {
 
 pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     db.exec(
-        "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
+        "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE) STRICT",
         .{},
         .{},
     ) catch |err| return errors.classifyError(err);

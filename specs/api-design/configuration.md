@@ -58,13 +58,17 @@ Main server configuration file.
 
 ```json
 {
-  "environment": "development",
   "server": {
     "port": 3000,
     "host": "0.0.0.0"
   },
   
   "schema": "./schema.json",
+  
+  "migrations": {
+    "dir": "./migrations",
+    "snapshot": true
+  },
   
   "authentication": {
     "ticket": {
@@ -164,41 +168,29 @@ Server network configuration.
 
 #### `schema`
 
-Path to JSON Schema file and migration settings. If omitted or the configured file is missing, the server boots with the implicit users-only schema; if a provided schema exists but is invalid, startup fails.
+Path to the schema JSON file, or an inline schema object. If omitted or the configured file is missing, the server boots with the implicit users-only schema; if a provided schema exists but is invalid, startup fails.
 
-```json
-{
-  "schema": {
-    "file": "./schema.json",
-    "version": "1.0.0",
-    "autoMigrate": true,
-    "allowDestructive": false
-  }
-}
-```
-
-Or simple string format:
 ```json
 {
   "schema": "./schema.json"
 }
 ```
 
-**Migration Settings:**
+#### `migrations`
 
-- `autoMigrate` (boolean or string)
-  - `true` - Auto-migrate all changes (development default)
-  - `"additive-only"` - Only auto-migrate additive changes (production default)
-  - `false` - Require explicit migrations for all changes
+Where migration folders live, and whether a snapshot is written before a developer migration runs. See [Schema Migrations](#schema-migrations).
 
-- `allowDestructive` (boolean)
-  - `true` - Allow destructive changes with confirmation (development)
-  - `false` - Block destructive changes (production)
+```json
+{
+  "migrations": {
+    "dir": "./migrations",
+    "snapshot": true
+  }
+}
+```
 
-- `version` (string)
-  - Semantic version of your schema
-  - Major version changes require migrations
-  - Minor/patch versions can auto-migrate
+- `dir` (string): defaults to a `migrations` directory next to the schema file (`./migrations` for an inline schema). A missing directory means there are no migrations.
+- `snapshot` (boolean, default `true`): write `zyncbase.db.pre-migration-<id>-<timestamp>` in the data directory before applying a pending migration. Turn it off only if you have another restore point, such as Litestream.
 
 #### `authorization`
 
@@ -623,7 +615,7 @@ Rules and behavior:
 - **Required plus unique**: Constrained components may be `NULL`, and SQLite permits multiple such rows. A field that must be present-and-unique must also be listed in `required`.
 - **Case sensitivity**: Text equality follows the default SQLite collation — case-sensitive.
 - **Writes**: A duplicate create or update aborts the write; it never updates the other row. Confirmed failures use public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Because default writes only confirm queue admission, duplicate detection requires `confirm: "committed"` (see [Store API](./store-api.md)).
-- **Migrations**: Adding, removing, reordering, or changing constraints is an automatic non-destructive index migration inside one transaction. If a new or changed constraint encounters existing duplicate rows, startup fails before any change is applied — remove or merge duplicates first; ZyncBase does not delete rows automatically.
+- **Migrations**: ZyncBase applies constraint changes automatically at startup, inside the startup transaction. Adding or changing a constraint is a checked change. If the new or changed constraint meets existing duplicate rows, startup fails before anything is applied and shows sample duplicates. Remove or merge the duplicates in a [migration](#schema-migrations); ZyncBase never deletes rows automatically.
 - **Grammar**: `unique` entries must be non-empty arrays of existing stored user-field paths; system fields cannot be named, fields cannot repeat within one entry, and the same field set cannot be declared twice. There is no per-field `"unique": true` alias.
 
 ### Example: The Reserved `users` Collection
@@ -975,28 +967,22 @@ await zyncbase.remove(projects.proj-1')
 
 ## Schema Migrations
 
-ZyncBase automatically generates SQLite tables from your schema.json and handles migrations intelligently based on your environment.
+ZyncBase creates and evolves its SQLite tables from `schema.json`. You never write DDL. When a schema change can lose or reinterpret stored data, you write a migration: a SQL file that decides what happens to the data. ZyncBase prepares the tables, runs your SQL, checks the result, and commits it all in one transaction when the server starts.
 
-### How It Works
+The full contract lives in [Schema Migrations](../implementation/schema-migrations.md). This section is the developer guide.
 
-**Path-to-Table Mapping:**
-
-```
-Path: 'tasks' → Table: tasks
-Path: 'tasks.task-1' → Table: tasks, row with id='task-1'
-Path: 'users' → Table: users
-```
-
-**Generated DDL:**
+### Generated tables
 
 From this schema:
+
 ```json
 {
+  "version": "1.0.0",
   "store": {
     "tasks": {
       "fields": {
         "title": { "type": "string" },
-        "status": { "type": "string" },
+        "status": { "type": "string", "indexed": true },
         "priority": { "type": "integer" }
       }
     }
@@ -1005,263 +991,159 @@ From this schema:
 ```
 
 ZyncBase generates:
+
 ```sql
-CREATE TABLE tasks (
-    id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id INTEGER NOT NULL,
-    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
-    title TEXT,
-    status TEXT,
-    priority INTEGER,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (id)
-);
-
-CREATE INDEX idx__tasks__field__status ON tasks(status);
-CREATE INDEX idx__tasks__namespace ON tasks(namespace_id);
-CREATE UNIQUE INDEX uidx__tasks__created_at ON tasks(created_at);
+CREATE TABLE "tasks" (
+  "id" BLOB NOT NULL CHECK(length("id") = 16),
+  "namespace_id" INTEGER NOT NULL,
+  "owner_id" BLOB NOT NULL CHECK(length("owner_id") = 16),
+  "title" TEXT,
+  "status" TEXT,
+  "priority" INTEGER,
+  "created_at" INTEGER NOT NULL,
+  "updated_at" INTEGER NOT NULL,
+  PRIMARY KEY ("id")
+) STRICT;
+CREATE INDEX "idx__tasks__namespace" ON "tasks"("namespace_id");
+CREATE INDEX "idx__tasks__owner" ON "tasks"("owner_id");
+CREATE UNIQUE INDEX "uidx__tasks__created_at" ON "tasks"("created_at");
+CREATE INDEX "idx__tasks__field__status" ON "tasks"("status");
 ```
 
-The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables still require collection-wide unique document IDs; this keeps references, cursors, caches, and SDK addressing single-key.
+The primary key is `id`, not `(namespace_id, id)`. Namespace-aware tables still require document IDs that are unique across the whole collection. That keeps references, cursors, caches, and SDK addressing single-key. Tables are `STRICT`: a value that can't be stored in a column's type fails the statement that wrote it.
 
-### Auto-Migration (Happy Path)
+### What happens at startup
 
-**Additive changes auto-migrate with zero friction:**
+The database remembers the schema it was last migrated to. At startup, ZyncBase compares it with `schema.json` field by field and puts every difference into one of three buckets:
 
-```json
-// Initial schema.json
-{
-  "store": {
-    "tasks": {
-      "fields": {
-        "title": { "type": "string" },
-        "status": { "type": "string" }
-      }
-    }
-  }
-}
+| Bucket | Examples | What happens |
+|---|---|---|
+| Auto | Add a table, add an optional field, change `indexed`, remove a unique constraint, make a field optional, change `onDelete`, relax a constraint | Applied automatically. |
+| Checked | Add a unique constraint, add a required field, make a field required, point a reference at another table, tighten `enum`/`pattern`/`format`/lengths/ranges | Applied automatically if the existing data complies. Otherwise startup stops and shows counts and sample IDs. Fix the data with a migration. |
+| Migration required | Remove a field or table, change a field's type (including adding or removing `references` and changing array `items`), change `namespaced` | Startup refuses until a migration exists. The schema's major version must go up. |
 
-// Updated schema.json - add a field
-{
-  "store": {
-    "tasks": {
-      "fields": {
-        "title": { "type": "string" },
-        "status": { "type": "string" },
-        "assignee": { "type": "string" }  // ← New field
-      }
-    }
-  }
-}
+Renaming is a removal plus an addition, so it needs a migration.
+
+```
+Cannot start: schema.json needs a migration.
+  applied 1.4.0 (sha256:3f9a…), target 2.0.0 (sha256:b71c…)
+  tasks.priority   integer -> string   migration required
+  tasks.assignee   removed             migration required
+Create one with: zyncbase migrate new <name>
+Nothing was changed.
 ```
 
-**What happens:**
-```bash
-$ zyncbase-server start
-✓ Schema change detected
-✓ Adding column 'tasks.assignee'
-✓ Creating index on 'tasks.assignee'
-✓ Server started (2ms)
+Startup is all or nothing. Either the database reaches the new schema, or it stays exactly as it was and the previous release can start against it.
+
+### Versions
+
+`version` must be `X.Y.Z` and must never go down. If a deployment contains a migration-required change, its major version must be higher than the version the database was on. Clients see this version, so a major bump tells them the data shape broke. Other changes have no version requirement. A minor or patch bump is a good habit.
+
+### Writing a migration
+
+1. Edit `schema.json`. Bump the major version if the change is migration-required.
+2. Run `zyncbase migrate new priority_to_string`. This writes a folder next to your schema:
+
+   ```
+   migrations/20261117T140500Z_priority_to_string/
+     before.json     generated; do not edit
+     after.json      generated; do not edit
+     migration.sql   yours
+   ```
+
+3. Edit `migration.sql`. The scaffold already copies every unchanged column. Each decision you need to make is a `zync_todo('…')` with a suggestion, and the migration won't run until you replace every one of them.
+4. Check it with `zyncbase migrate check`, and run it against a copy of real data with `zyncbase migrate apply --dry-run --db copy.db`.
+5. Commit `schema.json` and the migration folder together. The next server start applies it.
+
+When `migration.sql` runs:
+
+- Tables that changed shape are empty and already have the new shape. Their old rows are in `"_zync_prev_<table>"`.
+- Removed tables exist only as `"_zync_prev_<table>"`.
+- Every other table is already up to date, and you can read or update it.
+- Foreign keys are off and cascades don't run. Integrity is checked once at the end.
+- You can't run DDL, `PRAGMA`, transactions, or `ATTACH`. Use `WITH` (common table expressions) for lookup data.
+
+After your SQL runs, every row left in `"_zync_prev_<table>"` must exist, matched by `id`, in `"<table>"`. To drop rows on purpose, delete them from `"_zync_prev_<table>"`. An `INSERT` that accidentally loses rows fails:
+
+```
+Cannot start: migration 20261117T140500Z_priority_to_string left 42 rows of "tasks" behind
+  (e.g. id 0196c1f2-7a3e-7c4d-9a51-2f6b8e0d1c33).
+  To drop rows on purpose, DELETE them from "_zync_prev_tasks".
+Nothing was changed.
 ```
 
-**No migration file needed. No friction.**
+ZyncBase then checks unique constraints, foreign keys, types, booleans, canonical arrays, and every `enum`/`pattern`/`format`/length/range constraint on the rows you wrote, before committing.
 
-### Development vs Production
+Helper functions available in `migration.sql`:
 
-**Development Mode (Fast Iteration):**
+| Function | Use |
+|---|---|
+| `zync_new_id()` | A new document ID for rows you create. |
+| `zync_now()` | A unique, increasing microsecond timestamp for `created_at`/`updated_at` of rows you create. |
+| `jsonb(zync_array(json, items))` | A canonical array value (`items` is `'string'`, `'integer'`, `'number'`, or `'boolean'`). |
+| `zync_todo(message)` | Placeholder that blocks the migration until you replace it. |
 
-```json
-// zyncbase-config.json
-{
-  "environment": "development",
-  "schema": {
-    "file": "./schema.json",
-    "autoMigrate": true,
-    "allowDestructive": true
-  }
-}
+### Examples
+
+Change a type:
+
+```sql
+INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "priority", "created_at", "updated_at")
+SELECT "id", "namespace_id", "owner_id", "title",
+       CASE "priority" WHEN 1 THEN 'low' WHEN 2 THEN 'medium' ELSE 'high' END,
+       "created_at", "updated_at"
+FROM "_zync_prev_tasks";
 ```
 
-Behavior:
-```bash
-# Change field type
-$ vim schema.json  # priority: integer → string
+Drop rows on purpose while rebuilding:
 
-$ zyncbase-server start
-⚠ Destructive schema change detected
-⚠ Field 'tasks.priority' type changed: integer → string
-⚠ This will DROP and recreate the table (data loss!)
-
-Continue? [y/N]: y
-
-✓ Dropping table 'tasks'
-✓ Creating table 'tasks' with new schema
-✓ Server started
-
-⚠ All data in 'tasks' was lost
+```sql
+DELETE FROM "_zync_prev_tasks" WHERE "status" = 'archived';
+INSERT INTO "tasks" (...) SELECT ... FROM "_zync_prev_tasks";
 ```
 
-**Production Mode (Safety First):**
+Remove a table, keeping recent rows elsewhere:
 
-```json
-// zyncbase-config.json
-{
-  "environment": "production",
-  "schema": {
-    "file": "./schema.json",
-    "autoMigrate": "additive-only",
-    "allowDestructive": false
-  }
-}
+```sql
+INSERT INTO "archive" (...) SELECT ... FROM "_zync_prev_comments" WHERE "created_at" > 1767225600000000;
+DELETE FROM "_zync_prev_comments";
 ```
 
-Behavior:
-```bash
-# Same change in production
-$ zyncbase-server start
-✗ Cannot start: destructive schema change detected
-✗ Field 'tasks.priority' type changed: integer → string
+Remove duplicates before adding a unique constraint (a data-only migration; the table isn't rebuilt):
 
-This requires a manual migration.
-
-Options:
-1. Revert schema.json to previous version
-2. Create migration: zyncbase migrate create change_priority_type
-3. Force (data loss): zyncbase-server start --force-schema
-
-See: https://zyncbase.dev/docs/MIGRATIONS.md
+```sql
+DELETE FROM "projects"
+WHERE rowid NOT IN (SELECT min(rowid) FROM "projects" GROUP BY "namespace_id", "slug");
 ```
 
-### Schema Versioning
+Backfill a new optional field:
 
-**Use semantic versioning to track breaking changes:**
-
-```json
-{
-  "version": "1.2.0",
-  "properties": {
-    "tasks": { ... }
-  }
-}
+```sql
+UPDATE "posts" SET "slug" = lower(replace("title", ' ', '-')) WHERE "slug" IS NULL;
 ```
 
-**Version Rules:**
-- **Patch (1.2.0 → 1.2.1)**: Additive only, auto-migrate
-- **Minor (1.2.0 → 1.3.0)**: Additive only, auto-migrate
-- **Major (1.2.0 → 2.0.0)**: Breaking changes, requires migration
+Turn a string field that holds document IDs into a reference: SQL can't convert the SDK's ID strings to stored IDs, so expand and contract instead.
+1. Add a new optional `references` field next to the old one. This is an auto change.
+2. Backfill it from your app through the SDK.
+3. Remove the old field in a later migration.
 
-```bash
-# Patch/Minor - auto-migrates
-$ zyncbase-server start
-✓ Schema version: 1.2.0 → 1.3.0 (minor)
-✓ Auto-migrating additive changes
-✓ Server started
+### Rolling back
 
-# Major - requires explicit migration
-$ zyncbase-server start
-✗ Schema version: 1.3.0 → 2.0.0 (major)
-✗ Breaking changes require migration
+There are no down migrations. Before a migration runs, the server writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>`. To undo a migration, stop the server and restore that snapshot with `zyncbase restore`. Then roll back the binary, `schema.json`, and the migrations folder together.
 
-Create migration:
-  zyncbase migrate create v2_breaking_changes
+To rework your newest migration before sharing it, edit `schema.json` and run `zyncbase migrate new <name> --amend`. This restores your local database from that migration's snapshot and regenerates the migration.
 
-Or force in development:
-  zyncbase-server start --force-schema
-```
+To throw away local development data instead of migrating it, run `zyncbase reset --yes`. The old database is kept as `zyncbase.db.pre-reset-<timestamp>`.
 
-### What Auto-Migrates
+### Commands
 
-**Always safe (auto-migrates in all environments):**
-- ✅ Add new field
-- ✅ Add new table (path)
-- ✅ Add index
-- ✅ Make field optional (required → optional)
-
-**Requires migration (production):**
-- ❌ Change field type (integer → string)
-- ❌ Remove field
-- ❌ Rename field
-- ❌ Make field required (optional → required)
-
-### Migration Commands
-
-```bash
-# Check migration status
-zyncbase migrate status
-
-# Create new migration
-zyncbase migrate create add_assignee_field
-
-# Apply migrations
-zyncbase migrate up
-
-# Rollback last migration
-zyncbase migrate down
-
-# Dry run (see what would happen)
-zyncbase migrate up --dry-run
-```
-
-### Environment-Specific Behavior
-
-| Change Type | Development | Production |
-|-------------|-------------|------------|
-| Add field | ✓ Auto-migrate | ✓ Auto-migrate |
-| Add table | ✓ Auto-migrate | ✓ Auto-migrate |
-| Change type | ⚠ Allow with confirm | ✗ Require migration |
-| Remove field | ⚠ Allow with confirm | ✗ Require migration |
-| Major version | ⚠ Allow with confirm | ✗ Require migration |
-
-### Quick Start Guide
-
-**Adding a field (zero friction):**
-```bash
-# 1. Edit schema
-$ vim schema.json  # Add 'assignee' field
-
-# 2. Start server
-$ zyncbase-server start
-✓ Auto-migrated: added column 'tasks.assignee'
-```
-
-**Changing a type (development):**
-```bash
-# 1. Edit schema
-$ vim schema.json  # priority: integer → string
-
-# 2. Start server
-$ zyncbase-server start --dev
-⚠ Destructive change: field type changed
-⚠ Data in 'tasks' will be lost
-Continue? [y/N]: y
-✓ Table recreated
-
-# 3. Rebuild test data
-$ node scripts/seed-dev-data.js
-```
-
-**Changing a type (production):**
-```bash
-# 1. Edit schema and bump version
-$ vim schema.json  # version: "1.3.0" → "2.0.0"
-
-# 2. Create migration
-$ zyncbase migrate create v2_change_priority_type
-
-# 3. Write migration
-$ vim migrations/003_v2_change_priority_type.sql
-
-# 4. Apply migration
-$ zyncbase migrate up
-
-# 5. Deploy
-$ zyncbase-server start
-✓ Migrations applied
-✓ Server started
-```
-
-For detailed migration guides, see the ZyncBase documentation (MIGRATIONS.md was removed as aspirational content).
+| Command | Purpose |
+|---|---|
+| `zyncbase migrate status` | Applied vs target schema, pending migrations, and what the next start would do. Exits non-zero if the next start would fail. |
+| `zyncbase migrate new <name> [--from <db \| schema.json>] [--amend]` | Scaffold a migration. |
+| `zyncbase migrate check` | Validate every migration without a database. Suitable for CI. |
+| `zyncbase migrate apply [--dry-run] [--db <file>]` | Run pending work without starting the server. With `--dry-run`, everything is rolled back and a report is printed. |
+| `zyncbase reset --yes` | Start over with an empty database, keeping the old one aside. |
 
 ---
 

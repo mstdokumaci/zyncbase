@@ -55,6 +55,7 @@ function createMockConnection() {
 
 async function setupSchema(schema: SchemaDictionary) {
 	await schema.processSchemaSync({
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name"]],
 		fieldFlags: [[3, 0]],
@@ -1040,6 +1041,7 @@ describe("SchemaDictionary presence encode/decode", () => {
 	test("hasPresenceUserFields returns false when no fields defined", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id"]],
 			fieldFlags: [[3]],
@@ -1050,6 +1052,7 @@ describe("SchemaDictionary presence encode/decode", () => {
 	test("decodePresenceUserValue handles null-with-nested-key conflict without crashing", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["users"],
 			fields: [["id", "name"]],
 			fieldFlags: [[3, 0]],

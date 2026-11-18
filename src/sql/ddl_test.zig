@@ -37,7 +37,7 @@ test "ddl_generator: generate DDL for a known table" {
         \\  "created_at" INTEGER NOT NULL,
         \\  "updated_at" INTEGER NOT NULL,
         \\  PRIMARY KEY ("id")
-        \\);
+        \\) STRICT;
         \\CREATE INDEX "idx__tasks__namespace" ON "tasks"("namespace_id");
         \\CREATE INDEX "idx__tasks__owner" ON "tasks"("owner_id");
         \\CREATE UNIQUE INDEX "uidx__tasks__created_at" ON "tasks"("created_at");
@@ -582,4 +582,94 @@ test "ddl_generator: generateDDL contains exactly the managed-index definitions"
         if (managed_index == .users_identity) return error.TestUnexpectedResult; // posts is not the users table
     }
     try std.testing.expectEqual(@as(usize, 6), count); // ns, owner, created_at, slug(ref), status(indexed), unique
+}
+
+test "ddl_generator: generateCreateTable emits only the STRICT table statement" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    const fields = [_]Field{schema_helpers.makeIndexedField("status", .text)};
+    const table = schema_helpers.makeTable("tasks", &fields);
+
+    const ddl = try gen.generateCreateTable(table);
+    defer allocator.free(ddl);
+
+    try std.testing.expect(std.mem.startsWith(u8, ddl, "CREATE TABLE \"tasks\" ("));
+    try std.testing.expect(std.mem.endsWith(u8, ddl, "\n) STRICT;"));
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE INDEX") == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ddl, ";"));
+}
+
+test "ddl_generator: generateAddColumn emits type, length check, and column-level reference" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var author_id = schema_helpers.makeField("author_id", .doc_id);
+    author_id.references = "users";
+    author_id.on_delete = .set_null;
+    const title = schema_helpers.makeField("title", .text);
+    const table = schema_helpers.makeTable("posts", &.{ title, author_id });
+
+    const text_ddl = try gen.generateAddColumn(table, title);
+    defer allocator.free(text_ddl);
+    try std.testing.expectEqualStrings("ALTER TABLE \"posts\" ADD COLUMN \"title\" TEXT;", text_ddl);
+
+    const ref_ddl = try gen.generateAddColumn(table, author_id);
+    defer allocator.free(ref_ddl);
+    try std.testing.expectEqualStrings(
+        "ALTER TABLE \"posts\" ADD COLUMN \"author_id\" BLOB CHECK(length(\"author_id\") = 16) REFERENCES \"users\"(\"id\") ON DELETE SET NULL;",
+        ref_ddl,
+    );
+
+    try std.testing.expectError(
+        error.RequiredColumnNeedsRebuild,
+        gen.generateAddColumn(table, schema_helpers.makeRequiredField("slug", .text)),
+    );
+}
+
+test "ddl_generator: added reference column matches the fresh table foreign key" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var author_id = schema_helpers.makeField("author_id", .doc_id);
+    author_id.references = "users";
+    author_id.on_delete = .cascade;
+    const users = schema_helpers.makeTable("users", &.{});
+    const before = schema_helpers.makeTable("posts", &.{});
+    const after = schema_helpers.makeTable("posts", &.{author_id});
+
+    var migrated = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer migrated.deinit();
+    var fresh = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer fresh.deinit();
+    _ = try migrated.pragma(void, .{}, "foreign_keys", "on");
+
+    const statements = [_]struct { db: *sqlite.Db, sql: []const u8 }{
+        .{ .db = &migrated, .sql = try gen.generateCreateTable(users) },
+        .{ .db = &migrated, .sql = try gen.generateCreateTable(before) },
+        .{ .db = &migrated, .sql = try gen.generateAddColumn(after, author_id) },
+        .{ .db = &fresh, .sql = try gen.generateCreateTable(users) },
+        .{ .db = &fresh, .sql = try gen.generateCreateTable(after) },
+    };
+    defer for (statements) |s| allocator.free(s.sql);
+    for (statements) |s| try s.db.execDynamic(s.sql, .{}, .{});
+
+    const Row = struct { table: []const u8, from: []const u8, to: []const u8, on_delete: []const u8 };
+    var rows: [2]Row = undefined;
+    for ([_]*sqlite.Db{ &migrated, &fresh }, 0..) |db, i| {
+        var stmt = try db.prepare("SELECT \"table\", \"from\", \"to\", on_delete FROM pragma_foreign_key_list('posts')");
+        defer stmt.deinit();
+        rows[i] = (try stmt.oneAlloc(Row, allocator, .{}, .{})) orelse return error.TestExpectedValue;
+    }
+    defer for (rows) |r| {
+        allocator.free(r.table);
+        allocator.free(r.from);
+        allocator.free(r.to);
+        allocator.free(r.on_delete);
+    };
+    try std.testing.expectEqualStrings(rows[1].table, rows[0].table);
+    try std.testing.expectEqualStrings(rows[1].from, rows[0].from);
+    try std.testing.expectEqualStrings(rows[1].to, rows[0].to);
+    try std.testing.expectEqualStrings("CASCADE", rows[0].on_delete);
+    try std.testing.expectEqualStrings(rows[1].on_delete, rows[0].on_delete);
 }

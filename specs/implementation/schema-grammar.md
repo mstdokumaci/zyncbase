@@ -12,7 +12,9 @@ This document defines the schema configuration format (`schema.json`), system ta
 |------|----------------|
 | `src/schema/types.zig` | Defines table, field, array, index, and validation structure models. |
 | `src/schema/parse.zig` | Deserializes `schema.json`, validates naming rules, and performs dependency validation. |
-| `src/schema/format.zig` | Serializes schema definitions for JSON export or remote sync payloads. |
+| `src/schema/canonical.zig` | Whitespace-free schema JSON with source key order and its SHA-256 identity hash, stored as the applied schema snapshot. |
+| `src/schema/version.zig` | Strict `X.Y.Z` schema version parsing and ordering. |
+| `src/schema/diff.zig` | Logical diff and change classification between two schemas. See [Schema Migrations](./schema-migrations.md). |
 | `src/schema/system.zig` | Injects implicit system tables (e.g. `users`) and implicit presence models. |
 | `src/schema/index.zig` | Builds dense table/field lookup maps used by storage and wire dictionaries. |
 | `src/schema/field_path.zig` | Normalizes dotted paths and nested field names to flat column names. |
@@ -38,7 +40,7 @@ Schema configuration is rooted, not a bare table map:
 
 | Key | Type | Required | Description |
 |:---|:---:|:---:|:---|
-| `version` | `string` | yes | Schema version string. |
+| `version` | `string` | yes | Strict semantic version `X.Y.Z` (non-negative integers, no prefix or suffix). Anything else is `error.InvalidVersion`. Versions never decrease across deployments. A deployment with a migration-required change must raise the major version ([Schema Migrations](./schema-migrations.md#version-rules)). |
 | `store` | `object` | yes | Map of table names to table definitions. |
 | `presence` | `object` | no | User/shared presence field definitions. If omitted, a minimal implicit presence schema is synthesized. |
 | `actions` | `object` | no | Map of action names to action definitions. If omitted, no actions exist. |
@@ -96,6 +98,8 @@ Equality is SQLite equality over the stored column representation: text stays ca
 Atomic increments (ADR-023) are a store operation, not a schema key. A field is increment-eligible when it is `integer`, is not a system field, has no `enum` constraint, and does not participate in any table-level unique constraint. `minimum` and `maximum` are enforced by the writer's SQL guard. `number`, `bytes`, `array`, `text`, and `boolean` fields are rejected with `SCHEMA_VALIDATION_FAILED`.
 
 ## Supported Field Types
+
+Every table is created as a SQLite `STRICT` table, so each column accepts only values of its declared storage type.
 
 | JSON Type | SQLite Storage Type | Flattening Behavior | Description |
 |:---|:---:|:---|:---|

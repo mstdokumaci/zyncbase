@@ -9,10 +9,12 @@ const authorization_types = @import("authorization/types.zig");
 const backup = @import("backup.zig");
 const connection_manager = @import("connection/manager.zig");
 const connection_violations = @import("connection/violations.zig");
+const migration_source = @import("migration/source.zig");
+const migration_startup = @import("migration/startup.zig");
+const migration_target = @import("migration/target.zig");
 const http_handlers = @import("observability/http_handlers.zig");
 const observability_log = @import("observability/log.zig");
-const schema_parse = @import("schema/parse.zig");
-const schema_system = @import("schema/system.zig");
+const canonical = @import("schema/canonical.zig");
 const schema_types = @import("schema/types.zig");
 const uws_timer = @import("uws_timer.zig");
 const ActionsService = @import("actions/service.zig").ActionsService;
@@ -26,13 +28,11 @@ const send_queue_type = @import("connection/send_queue.zig").send_queue;
 const DataLock = @import("data_lock.zig").DataLock;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
-const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
+const Diagnostics = @import("migration/diagnostics.zig").Diagnostics;
 const ServerMetrics = @import("observability/metrics.zig").ServerMetrics;
 const PresenceManager = @import("presence/manager.zig").PresenceManager;
 const PresenceService = @import("presence/service.zig").PresenceService;
 const PresenceWorker = @import("presence/worker.zig").PresenceWorker;
-const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StoreService = @import("store_service.zig").StoreService;
 const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
@@ -94,6 +94,7 @@ pub const ZyncBaseServer = struct {
     shutdown_requested: std.atomic.Value(bool),
     wakeup_pending: std.atomic.Value(bool),
     schema: Schema,
+    schema_identity: canonical.Identity,
     auth_config: authorization_types.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
     jwks: ?*Jwks = null,
@@ -160,6 +161,7 @@ pub const ZyncBaseServer = struct {
 
         try self.loadSchema(config);
         errdefer self.schema.deinit();
+        errdefer self.schema_identity.deinit(self.memory_strategy.generalAllocator());
 
         try self.loadAuthConfig(config);
         errdefer self.auth_config.deinit();
@@ -536,35 +538,10 @@ pub const ZyncBaseServer = struct {
     }
 
     fn loadSchema(self: *ZyncBaseServer, config: *const Config) !void {
-        const SchemaSource = enum { borrowed_config, borrowed_builtin, owned_file_read };
-        const json_text: []const u8 = blk: {
-            if (config.schema_content) |content| break :blk content;
-            const schema_path = config.schema_file;
-            std.log.info("Loading schema from: {s}", .{schema_path});
-            const loaded = std.Io.Dir.cwd().readFileAlloc(
-                self.io,
-                schema_path,
-                self.memory_strategy.generalAllocator(),
-                .limited(10 * 1024 * 1024),
-            ) catch |err| {
-                if (err == error.FileNotFound) {
-                    std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
-                    break :blk schema_system.implicit_users_schema_json;
-                }
-                std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
-                return err;
-            };
-            break :blk loaded;
-        };
-        const schema_source: SchemaSource = if (config.schema_content != null)
-            .borrowed_config
-        else if (json_text.ptr == schema_system.implicit_users_schema_json.ptr)
-            .borrowed_builtin
-        else
-            .owned_file_read;
-        defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
-
-        self.schema = try schema_parse.initFromJson(self.memory_strategy.generalAllocator(), json_text);
+        // The source text, minified, becomes the applied-schema snapshot.
+        const loaded = try migration_target.load(self.io, self.memory_strategy.generalAllocator(), config);
+        self.schema = loaded.schema;
+        self.schema_identity = loaded.identity;
     }
 
     fn loadAuthConfig(self: *ZyncBaseServer, config: *const Config) !void {
@@ -590,31 +567,42 @@ pub const ZyncBaseServer = struct {
     }
 
     fn runMigrationsAndStartEngine(self: *ZyncBaseServer) !void {
-        const schema_ptr = &self.schema;
-        var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
+        const gpa = self.memory_strategy.generalAllocator();
 
-        // Migration execution is the sole owner of schema DDL: fresh databases
-        // are created through detection/execution so index lifecycle stays
-        // transactional and version persistence always runs.
+        // The migration run is the sole owner of schema DDL: fresh databases
+        // are created through it too, inside one transaction.
         const setup_conn = try self.storage_engine.getSetupConn();
-        var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn, schema_ptr);
-        const plan = try detector.detectChanges(schema_ptr);
-        defer detector.deinit(plan);
+        var diag = Diagnostics.init(gpa);
+        defer diag.deinit();
 
-        if (plan.changes.len > 0) {
-            std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
-        }
-        var executor = MigrationExecutor.init(
-            self.io,
-            self.memory_strategy.generalAllocator(),
-            setup_conn,
-            &gen,
-            .{},
-        );
-        executor.execute(plan, schema_ptr.version) catch |err| {
-            std.log.err("Schema migration failed: {}", .{err});
+        const migrations_dir = try self.config.migrationsDir(gpa);
+        defer gpa.free(migrations_dir);
+        var migrations = migration_source.load(self.io, gpa, migrations_dir, &diag) catch |err| {
+            std.log.err("Cannot start: {s}", .{@errorName(err)});
+            diag.logErrors();
             return err;
         };
+        defer migrations.deinit();
+
+        const db_path = try backup.dbPath(gpa, self.config.data_dir);
+        defer gpa.free(db_path);
+        var report = migration_startup.run(self.io, gpa, setup_conn, .{
+            .schema = &self.schema,
+            .json = self.schema_identity.json,
+            .hash = self.schema_identity.hash,
+        }, .{
+            .migrations = migrations.items,
+            .snapshot_of = if (self.config.migrations.snapshot) db_path else null,
+        }, &diag) catch |err| {
+            std.log.err("Cannot start: {s}", .{@errorName(err)});
+            diag.logErrors();
+            std.log.err("Nothing was changed.", .{});
+            return err;
+        };
+        defer report.deinit(gpa);
+        if (report.migrations_applied > 0) {
+            std.log.info("Applied {d} migration(s) from {s}", .{ report.migrations_applied, migrations_dir });
+        }
 
         // Lock the engine and start the runtime thread
         try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);
@@ -892,6 +880,7 @@ pub const ZyncBaseServer = struct {
 
         // Free schema manager
         self.schema.deinit();
+        self.schema_identity.deinit(self.memory_strategy.generalAllocator());
 
         std.log.debug("Deinitializing memory_strategy", .{});
         self.memory_strategy.deinit();

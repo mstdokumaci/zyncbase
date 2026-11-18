@@ -110,6 +110,16 @@ pub fn validateUri(str: []const u8) bool {
     return rest.len > 0;
 }
 
+/// A constrainable scalar, independent of its wire or storage encoding.
+pub const Scalar = union(enum) {
+    text: []const u8,
+    integer: i64,
+    real: f64,
+    bytes: []const u8,
+};
+
+/// Validates a wire value. The write path, actions, and presence share this
+/// entry point; stored values use `validateScalar` with the same rules.
 pub fn validate(
     constraints: types.Constraints,
     ft: types.FieldType,
@@ -118,7 +128,35 @@ pub fn validate(
 ) !void {
     if (value == .nil) return;
 
-    // 1. Enum check
+    const has_numeric_checks = constraints.enum_values != null or
+        constraints.minimum != null or constraints.maximum != null;
+    const scalar: Scalar = switch (ft) {
+        .text => if (value == .str) .{ .text = value.str.value() } else return error.TypeMismatch,
+        // Numeric conversion only happens when a check needs the value.
+        .integer => if (has_numeric_checks)
+            .{ .integer = msgpack.payloadToInt(value) catch return error.TypeMismatch }
+        else
+            return,
+        .real => if (has_numeric_checks)
+            .{ .real = msgpack.payloadToFloat(value) catch return error.TypeMismatch }
+        else
+            return,
+        .bytes => if (value == .bin) .{ .bytes = value.bin.value() } else return error.TypeMismatch,
+        else => {
+            if (constraints.enum_values != null) return error.EnumViolation;
+            return;
+        },
+    };
+    return validateScalar(constraints, ft, scalar, allocator);
+}
+
+/// Validates a decoded scalar against field constraints.
+pub fn validateScalar(
+    constraints: types.Constraints,
+    ft: types.FieldType,
+    value: Scalar,
+    allocator: Allocator,
+) !void {
     if (constraints.enum_values) |enums| {
         try validateEnum(enums, ft, value);
     }
@@ -132,9 +170,9 @@ pub fn validate(
     }
 }
 
-inline fn validateBinaryConstraints(constraints: types.Constraints, value: msgpack.Payload) !void {
-    if (value != .bin) return error.TypeMismatch;
-    const bytes = value.bin.value();
+inline fn validateBinaryConstraints(constraints: types.Constraints, value: Scalar) !void {
+    if (value != .bytes) return error.TypeMismatch;
+    const bytes = value.bytes;
     if (constraints.min_length) |min_l| {
         if (bytes.len < min_l) return error.LengthViolation;
     }
@@ -143,9 +181,9 @@ inline fn validateBinaryConstraints(constraints: types.Constraints, value: msgpa
     }
 }
 
-inline fn validateTextConstraints(constraints: types.Constraints, value: msgpack.Payload, allocator: Allocator) !void {
-    if (value != .str) return error.TypeMismatch;
-    const str = value.str.value();
+inline fn validateTextConstraints(constraints: types.Constraints, value: Scalar, allocator: Allocator) !void {
+    if (value != .text) return error.TypeMismatch;
+    const str = value.text;
 
     try validateTextLength(constraints, str);
 
@@ -179,9 +217,10 @@ inline fn validateTextFormat(format: types.Constraints.Format, str: []const u8) 
     if (!valid) return error.FormatViolation;
 }
 
-inline fn validateIntegerRange(constraints: types.Constraints, value: msgpack.Payload) !void {
+inline fn validateIntegerRange(constraints: types.Constraints, value: Scalar) !void {
     if (constraints.minimum == null and constraints.maximum == null) return;
-    const int_val = msgpack.payloadToInt(value) catch return error.TypeMismatch;
+    if (value != .integer) return error.TypeMismatch;
+    const int_val = value.integer;
 
     if (constraints.minimum) |min_val| {
         switch (min_val) {
@@ -197,9 +236,10 @@ inline fn validateIntegerRange(constraints: types.Constraints, value: msgpack.Pa
     }
 }
 
-inline fn validateRealRange(constraints: types.Constraints, value: msgpack.Payload) !void {
+inline fn validateRealRange(constraints: types.Constraints, value: Scalar) !void {
     if (constraints.minimum == null and constraints.maximum == null) return;
-    const float_val = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
+    if (value != .real) return error.TypeMismatch;
+    const float_val = value.real;
     if (std.math.isNan(float_val)) return error.RangeViolation;
 
     if (constraints.minimum) |min_val| {
@@ -218,19 +258,19 @@ inline fn validateRealRange(constraints: types.Constraints, value: msgpack.Paylo
     }
 }
 
-fn validateEnum(enums: []const types.Constraints.EnumValue, ft: types.FieldType, value: msgpack.Payload) !void {
+fn validateEnum(enums: []const types.Constraints.EnumValue, ft: types.FieldType, value: Scalar) !void {
     switch (ft) {
         .text => {
-            if (value != .str) return error.TypeMismatch;
-            if (!matchTextEnum(enums, value.str.value())) return error.EnumViolation;
+            if (value != .text) return error.TypeMismatch;
+            if (!matchTextEnum(enums, value.text)) return error.EnumViolation;
         },
         .integer => {
-            const iv = msgpack.payloadToInt(value) catch return error.TypeMismatch;
-            if (!matchIntEnum(enums, iv)) return error.EnumViolation;
+            if (value != .integer) return error.TypeMismatch;
+            if (!matchIntEnum(enums, value.integer)) return error.EnumViolation;
         },
         .real => {
-            const fv = msgpack.payloadToFloat(value) catch return error.TypeMismatch;
-            if (!matchRealEnum(enums, fv)) return error.EnumViolation;
+            if (value != .real) return error.TypeMismatch;
+            if (!matchRealEnum(enums, value.real)) return error.EnumViolation;
         },
         else => return error.EnumViolation,
     }

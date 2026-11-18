@@ -22,6 +22,7 @@ import type {
 	PresenceSubscribeShared,
 	PresenceUnsubscribe,
 	PresenceUnsubscribeShared,
+	SchemaChangeDetail,
 	SchemaSync,
 	SharedStateBroadcast,
 	SparseFieldArray,
@@ -387,8 +388,9 @@ export class ConnectionWireCodec {
 		};
 	}
 
-	async applySchemaSync(msg: SchemaSync): Promise<boolean> {
+	async applySchemaSync(msg: SchemaSync): Promise<SchemaChangeDetail | null> {
 		return this.schema.processSchemaSync({
+			version: msg.version,
 			tables: msg.tables,
 			fields: msg.fields,
 			fieldFlags: msg.fieldFlags,
