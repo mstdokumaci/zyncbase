@@ -1113,7 +1113,8 @@ Remove duplicates before adding a unique constraint (a data-only migration; the 
 
 ```sql
 DELETE FROM "projects"
-WHERE rowid NOT IN (SELECT min(rowid) FROM "projects" GROUP BY "namespace_id", "slug");
+WHERE "slug" IS NOT NULL
+  AND rowid NOT IN (SELECT min(rowid) FROM "projects" WHERE "slug" IS NOT NULL GROUP BY "namespace_id", "slug");
 ```
 
 Backfill a new optional field:
@@ -1129,7 +1130,7 @@ Turn a string field that holds document IDs into a reference: SQL can't convert 
 
 ### Rolling back
 
-There are no down migrations. Before a migration runs, the server writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>`. To undo a migration, stop the server and restore that snapshot with `zyncbase restore`. Then roll back the binary, `schema.json`, and the migrations folder together.
+There are no down migrations. When `migrations.snapshot` is enabled (the default), the server writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>` before a migration runs. To undo a migration, stop the server and restore that snapshot with `zyncbase restore`. Then roll back the binary, `schema.json`, and the migrations folder together. When snapshots are disabled, restore from the external restore point taken before the release.
 
 To rework your newest migration before sharing it, edit `schema.json` and run `zyncbase migrate new <name> --amend`. This restores your local database from that migration's snapshot and regenerates the migration.
 

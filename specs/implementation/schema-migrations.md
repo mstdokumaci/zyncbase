@@ -311,7 +311,7 @@ Every startup error carries diagnostic lines. The server logs them one record pe
 
 | Command | Behavior | Lock |
 |---|---|---|
-| `zyncbase migrate status [--config <path>] [--data-dir <dir>] [--db <file>]` | Shows the applied and target schemas, the ledger, pending migrations, planned steps, the bucket of each change, and blockers. Exits 0 when the next startup would succeed. | shared |
+| `zyncbase migrate status [--config <path>] [--data-dir <dir>] [--db <file>]` | Shows the applied and target schemas, the ledger, pending migrations, planned steps, the bucket of each change, and blockers. Exits 0 when planning succeeds; it does not execute steps or validate rows (use `migrate apply --dry-run` for that). | shared |
 | `zyncbase migrate new <name> [--from <file.db\|schema.json>] [--amend] [--config <path>] [--data-dir <dir>]` | Writes a migration folder with a scaffold. | shared (exclusive with `--amend`) |
 | `zyncbase migrate check [--config <path>]` | Validates every migration without a database: folders, versions, the chain to `schema.json`, and a pre-pass against an in-memory database built at each `before`. | none |
 | `zyncbase migrate apply [--dry-run] [--config <path>] [--data-dir <dir>] [--db <file>]` | Runs the startup procedure without serving. `--dry-run` rolls back, skips the snapshot, and prints the report. | exclusive |
@@ -323,7 +323,7 @@ All commands read the configuration from `--config` (default `zyncbase-config.js
 
 `migrate apply` recovers an interrupted restore first (data directory only), then configures the connection like `StorageEngine.init`. `--db` requires the file to exist. Step details are logged.
 
-`migrate check` runs, for each migration, `startup.run` on an empty in-memory database built at its `before`, then the migration with `dry_run`. These per-migration runs skip the major-version rule, because it applies to a deployment. If they all pass, it runs the whole chain from the first migration's `before` to `schema.json`, with every rule.
+`migrate check` runs, for each migration, `startup.run` on an empty in-memory database built at its `before`, then the migration with `dry_run`. These per-migration runs skip the major-version rule and the foreign-key check, because both apply to a deployment, not a file. If they all pass, it runs the whole chain from the first migration's `before` to `schema.json`, with every rule.
 
 `migrate new` picks its base like this:
 - If the newest migration is not applied to the data directory's database (or there is no database), the base is that migration's `after.json`.

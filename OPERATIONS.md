@@ -250,7 +250,7 @@ The server migrates the database at startup, before it listens. A release ships 
    ```bash
    zyncbase migrate status --config /etc/zyncbase/zyncbase-config.json
    ```
-   It exits non-zero if the next start would fail.
+   It exits non-zero when planning finds a failure, such as schema drift or a missing migration. It does not check whether existing rows satisfy a migration. Run `zyncbase migrate apply --dry-run` against a copy of the database to check that.
 
 ### During the release
 
@@ -286,7 +286,7 @@ Pre-migration snapshots are never deleted automatically. Delete them once the re
 
 ### Failed starts
 
-When a start fails, nothing was changed and the previous release can still start against the database. The log names the reason, for example:
+When a migration fails, nothing was changed and the previous release can still start against the database. If the server fails after a migration commits, for example when it cannot open its listening port, the migrated schema remains. Restore with the rollback procedure above. The log names the reason, for example:
 - a missing migration
 - a missing major version bump
 - an unresolved `zync_todo`

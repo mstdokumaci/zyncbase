@@ -4,6 +4,14 @@ const msgpack = @import("../msgpack_utils.zig");
 const constraints = @import("constraints.zig");
 const types = @import("types.zig");
 
+test "constraints: non-finite reals are rejected even without a range bound" {
+    const empty = types.Constraints{};
+    try std.testing.expectError(error.RangeViolation, constraints.validateScalar(empty, .real, .{ .real = std.math.inf(f64) }, std.testing.allocator));
+    try std.testing.expectError(error.RangeViolation, constraints.validateScalar(empty, .real, .{ .real = std.math.nan(f64) }, std.testing.allocator));
+    try constraints.validateScalar(empty, .real, .{ .real = 1.0 }, std.testing.allocator);
+    try constraints.validateScalar(empty, .real, .{ .real = -1.5 }, std.testing.allocator);
+}
+
 test "constraints: validateEmail" {
     // Valid emails
     try std.testing.expect(constraints.validateEmail("user@example.com"));

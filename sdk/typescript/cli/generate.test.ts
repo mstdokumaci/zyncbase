@@ -252,6 +252,25 @@ describe("validateSchema", () => {
 		}
 		expect(validateSchema({ version: "10.0.3", store: {} })).toBeNull();
 	});
+
+	test("accepts version components up to the server's u32 maximum", () => {
+		expect(
+			validateSchema({
+				version: "4294967295.4294967295.4294967295",
+				store: {},
+			}),
+		).toBeNull();
+	});
+
+	test("rejects version components above the server's u32 maximum", () => {
+		for (const version of [
+			"4294967296.0.0",
+			"0.4294967296.0",
+			"0.0.4294967296",
+		]) {
+			expect(validateSchema({ version, store: {} })).toContain("must be <=");
+		}
+	});
 });
 
 describe("generated schema compiles against the typed API", () => {

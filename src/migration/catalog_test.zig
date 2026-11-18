@@ -128,6 +128,16 @@ test "catalog: column type, nullability, and extra columns are drift" {
     );
     drift = try f.check("children");
     try std.testing.expect(drift.columns);
+
+    try f.replaceChildren(
+        \\CREATE TABLE children ("id" BLOB NOT NULL CHECK(length("id") = 16), "namespace_id" INTEGER NOT NULL,
+        \\  "owner_id" BLOB NOT NULL CHECK(length("owner_id") = 16), "slug" TEXT NOT NULL,
+        \\  "parent_id" BLOB CHECK(length("parent_id") = 16), "created_at" INTEGER NOT NULL, "updated_at" INTEGER NOT NULL,
+        \\  PRIMARY KEY ("id"), FOREIGN KEY ("parent_id") REFERENCES "parents"("id") ON DELETE CASCADE) STRICT
+    );
+    try f.exec("ALTER TABLE children ADD COLUMN generated_slug TEXT GENERATED ALWAYS AS (\"slug\" || 'x') VIRTUAL");
+    drift = try f.check("children");
+    try std.testing.expect(drift.columns);
 }
 
 test "catalog: missing or different foreign keys are drift" {
@@ -159,6 +169,7 @@ test "catalog: missing, wrong, partial, and obsolete managed indexes are index d
         "DROP INDEX \"uidx__children__constraint__0\"; CREATE INDEX \"uidx__children__constraint__0\" ON children(namespace_id, slug)",
         "DROP INDEX \"idx__children__field__parent_id\"; CREATE INDEX \"idx__children__field__parent_id\" ON children(parent_id) WHERE parent_id IS NOT NULL",
         "DROP INDEX \"uidx__children__constraint__0\"; CREATE UNIQUE INDEX \"uidx__children__constraint__0\" ON children(slug, namespace_id)",
+        "DROP INDEX \"idx__children__field__parent_id\"; CREATE INDEX \"idx__children__field__parent_id\" ON children(parent_id COLLATE NOCASE)",
         "CREATE INDEX \"idx__children__field__gone\" ON children(slug)",
     };
     for (mutations) |sql| {
@@ -182,6 +193,8 @@ test "catalog: missing, wrong, partial, and obsolete managed indexes are index d
 test "catalog: reserved managed index names are scoped per table" {
     try std.testing.expect(catalog.isReservedManagedIndexName("idx__tasks__namespace", "tasks"));
     try std.testing.expect(catalog.isReservedManagedIndexName("uidx__tasks__constraint__0", "tasks"));
+    try std.testing.expect(catalog.isReservedManagedIndexName("IDX__TASKS__NAMESPACE", "tasks"));
+    try std.testing.expect(catalog.isReservedManagedIndexName("idx__TASKS__namespace", "tasks"));
     try std.testing.expect(!catalog.isReservedManagedIndexName("idx__tasks_archive__namespace", "tasks"));
     try std.testing.expect(!catalog.isReservedManagedIndexName("idx__tasks", "tasks"));
     try std.testing.expect(!catalog.isReservedManagedIndexName("manual_index", "tasks"));

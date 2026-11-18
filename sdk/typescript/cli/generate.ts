@@ -104,6 +104,10 @@ export function validateSchema(schemaData: SchemaFile): string | null {
 	if (!SCHEMA_VERSION.test(schemaData.version)) {
 		return `Schema "version" must be X.Y.Z (got "${schemaData.version}").`;
 	}
+	const components = schemaData.version.split(".").map((part) => Number(part));
+	if (components.some((component) => component > 0xffff_ffff)) {
+		return `Schema "version" components must be <= ${0xffff_ffff} (got "${schemaData.version}").`;
+	}
 	if (!schemaData.store || typeof schemaData.store !== "object") {
 		return 'Schema file is missing the "store" collection map.';
 	}

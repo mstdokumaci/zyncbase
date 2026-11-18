@@ -20,6 +20,8 @@ pub const Context = struct {
     allocator: Allocator,
     /// Next value `zync_now()` returns; strictly increasing per call.
     next_now: i64,
+    /// A stored timestamp left no representable value above it.
+    exhausted: bool = false,
 };
 
 const Definition = struct {
@@ -63,7 +65,8 @@ pub fn nowFloor(io: std.Io, db: *sqlite.Db, arena: Allocator, tables: []const []
         // NULL (empty table) reads as -1 so it never raises the floor.
         const sql = try std.fmt.allocPrint(arena, "SELECT coalesce(max(\"created_at\"), -1) FROM \"{s}\"", .{table});
         const max = (try db.oneDynamic(i64, sql, .{}, .{})) orelse -1;
-        floor = @max(floor, max + 1);
+        const next = std.math.add(i64, max, 1) catch return error.TimestampRangeExhausted;
+        floor = @max(floor, next);
     }
     return floor;
 }
@@ -111,6 +114,13 @@ fn zyncNow(ctx: ?*c.sqlite3_context, argc: c_int, argv: [*c]?*c.sqlite3_value) c
     _ = argc;
     _ = argv;
     const context = contextOf(ctx);
+    if (context.exhausted) {
+        resultError(ctx, "zync_now: no timestamp above the stored values is available");
+        return;
+    }
+    // A long-running migration can outlive the floor taken at registration.
+    const wall = std.Io.Clock.real.now(context.io).toMicroseconds();
+    if (wall > context.next_now) context.next_now = wall;
     if (context.next_now > schema_system.max_safe_timestamp_us) {
         resultError(ctx, "zync_now: timestamp exceeds the JavaScript-safe range");
         return;
@@ -160,6 +170,10 @@ fn zyncArray(ctx: ?*c.sqlite3_context, argc: c_int, argv: [*c]?*c.sqlite3_value)
         resultError(ctx, "zync_array: argument is not valid JSON");
         return;
     };
+    if (parsed != .array) {
+        resultError(ctx, "zync_array: expected a JSON array");
+        return;
+    }
     const value = typed_codec.fromJson(arena, .array, items_type, parsed) catch |err| {
         const message = switch (err) {
             error.NullNotAllowed => "zync_array: arrays cannot contain null",
@@ -172,9 +186,9 @@ fn zyncArray(ctx: ?*c.sqlite3_context, argc: c_int, argv: [*c]?*c.sqlite3_value)
     };
 
     var out = std.ArrayListUnmanaged(u8).empty;
-    typed_codec.writeJsonToBuf(&out, arena, value) catch {
-        c.sqlite3_result_error_nomem(ctx);
-        return;
+    typed_codec.writeJsonToBuf(&out, arena, value) catch |err| switch (err) {
+        error.OutOfMemory => c.sqlite3_result_error_nomem(ctx),
+        else => resultError(ctx, @errorName(err)),
     };
     c.sqlite3_result_text(ctx, out.items.ptr, @intCast(out.items.len), c.sqliteTransientAsDestructor());
 }

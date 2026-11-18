@@ -97,7 +97,15 @@ fn parseFlags(sub: Subcommand, args: []const []const u8) !Command {
 fn flagValue(args: []const []const u8, index: *usize) ![]const u8 {
     index.* += 1;
     if (index.* >= args.len) return error.MissingOptionValue;
-    return args[index.*];
+    const value = args[index.*];
+    // A value that looks like an option is a missing value, except for explicit
+    // relative paths such as ./--dry-run.
+    if (value.len > 0 and value[0] == '-' and
+        !std.mem.startsWith(u8, value, "./") and !std.mem.startsWith(u8, value, "../"))
+    {
+        return error.MissingOptionValue;
+    }
+    return value;
 }
 
 pub const Context = struct {
@@ -177,11 +185,11 @@ fn fileExists(io: std.Io, path: []const u8) !bool {
     return true;
 }
 
-fn openFile(allocator: Allocator, path: []const u8, write: bool) !sqlite.Db {
+fn openFile(allocator: Allocator, path: []const u8, write: bool, create: bool) !sqlite.Db {
     // zwanzig-disable-next-line: sentinel-alloc
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
-    var db = try sqlite.Db.init(.{ .mode = .{ .File = path_z }, .open_flags = .{ .write = write, .create = write } });
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = path_z }, .open_flags = .{ .write = write, .create = create } });
     errdefer db.deinit();
     // Match the runtime connections so a read-only status waits out a checkpoint.
     _ = try db.pragma(void, .{}, "busy_timeout", "5000");
@@ -237,7 +245,7 @@ fn readDbState(ctx: Context, arena: Allocator, db_path: []const u8) !DbState {
     if (!try fileExists(ctx.io, db_path)) return .{};
     var lock = try DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path));
     defer lock.release(ctx.io);
-    var db = try openFile(ctx.allocator, db_path, false);
+    var db = try openFile(ctx.allocator, db_path, false, false);
     defer db.deinit();
     if (!try state.hasSchemaTable(&db)) return .{ .exists = true };
     const applied = try state.readApplied(arena, &db);
@@ -279,7 +287,7 @@ fn status(ctx: Context, cmd: Command) !void {
     const exists = try fileExists(ctx.io, db_path);
     var lock: ?DataLock = if (exists) try DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) else null;
     defer if (lock) |*held| held.release(ctx.io);
-    var db = if (exists) try openFile(ctx.allocator, db_path, false) else try openMemory();
+    var db = if (exists) try openFile(ctx.allocator, db_path, false, false) else try openMemory();
     defer db.deinit();
 
     try out.print("Database:   {s}{s}\n", .{ db_path, if (exists) "" else " (not created yet)" });
@@ -334,10 +342,6 @@ fn apply(ctx: Context, cmd: Command) !void {
     const arena = arena_state.allocator();
 
     const db_path = cmd.db orelse try backup.dbPath(arena, dataDir(ctx, cmd));
-    if (cmd.db != null and !try fileExists(ctx.io, db_path)) {
-        try out.print("No database at {s}.\n", .{db_path});
-        return error.DatabaseNotFound;
-    }
     var lock = DataLock.acquire(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| {
         if (err == error.DataDirLocked) {
             try out.print("{s} is in use by another zyncbase process. Stop the server first.\n", .{dirOf(db_path)});
@@ -345,9 +349,13 @@ fn apply(ctx: Context, cmd: Command) !void {
         return err;
     };
     defer lock.release(ctx.io);
+    if (cmd.db != null and !try fileExists(ctx.io, db_path)) {
+        try out.print("No database at {s}.\n", .{db_path});
+        return error.DatabaseNotFound;
+    }
     if (cmd.db == null) try backup.recoverInterruptedRestore(ctx.io, ctx.allocator, dataDir(ctx, cmd));
 
-    var db = try openFile(ctx.allocator, db_path, true);
+    var db = try openFile(ctx.allocator, db_path, true, cmd.db == null);
     defer db.deinit();
     try connection.configureDatabase(&db, true, ctx.config.storage.synchronous);
     try storage_sql.ensureNamespaceTable(&db);
@@ -431,6 +439,7 @@ fn checkOne(ctx: Context, m: *const source.Migration, diag: *Diagnostics) !void 
         .migrations = m[0..1],
         .dry_run = true,
         .enforce_major_bump = false,
+        .verify_foreign_keys = false,
     }, diag);
     report.deinit(ctx.allocator);
 }
@@ -484,7 +493,7 @@ fn new(ctx: Context, cmd: Command) !void {
     var d = try schema_diff.diff(ctx.allocator, &base_schema, &project.target.schema);
     defer d.deinit();
     try checkVersions(ctx, &project, base_schema.version, base.db, &d, .{
-        .count_pending = base.kind == .pending_migration,
+        .count_pending = base.kind != .file,
         .offer_amend = true,
     });
 
@@ -593,7 +602,11 @@ fn checkVersions(
     if (target.major > from.major) return;
 
     try ctx.out.print("This deployment drops or reinterprets data, so the schema's major version must go up.\n", .{});
-    try ctx.out.print("  The database is on {s} and schema.json is {s}: set \"version\" to {d}.0.0 or later.\n", .{ applied.version, target_text, from.major + 1 });
+    if (from.major == std.math.maxInt(u32)) {
+        try ctx.out.print("  The database is on {s} and schema.json is {s}: the major version cannot be raised further.\n", .{ applied.version, target_text });
+    } else {
+        try ctx.out.print("  The database is on {s} and schema.json is {s}: set \"version\" to {d}.0.0 or later.\n", .{ applied.version, target_text, from.major + 1 });
+    }
     if (options.offer_amend) {
         if (project.newest()) |last| {
             if (db.newestApplied(last.id)) {
@@ -716,14 +729,14 @@ fn amend(ctx: Context, cmd: Command) !void {
     const arena = arena_state.allocator();
 
     const items = project.migrations.items;
-    const last = project.newest() orelse {
-        try out.print("There is no migration to amend in {s}.\n", .{project.migrations_dir});
-        return error.NothingToAmend;
-    };
     if (try findInterruptedAmend(ctx, arena, project.migrations_dir)) |path| {
         try out.print("A previous interrupted amend left {s}. Restore or remove it before retrying.\n", .{path});
         return error.InterruptedAmend;
     }
+    const last = project.newest() orelse {
+        try out.print("There is no migration to amend in {s}.\n", .{project.migrations_dir});
+        return error.NothingToAmend;
+    };
     const data_dir = dataDir(ctx, cmd);
     const db_path = try backup.dbPath(arena, data_dir);
     const db = try readDbState(ctx, arena, db_path);
@@ -850,18 +863,15 @@ fn reset(ctx: Context, cmd: Command) !void {
     }
     const db_path = try backup.dbPath(ctx.allocator, data_dir);
     defer ctx.allocator.free(db_path);
-    const existed = try fileExists(ctx.io, db_path);
 
     var info = backup.reset(ctx.io, ctx.allocator, data_dir, !cmd.no_safety_copy) catch |err| {
         if (err == error.DataDirLocked) try out.print("{s} is in use by another zyncbase process. Stop the server first.\n", .{data_dir});
         return err;
     };
     defer info.deinit(ctx.allocator);
-    if (!existed) {
-        try out.print("There is no database in {s}; nothing to reset.\n", .{data_dir});
-    } else if (info.moved_to) |path| {
-        try out.print("Moved {s} to {s}. The next start creates an empty database.\n", .{ db_path, path });
-    } else {
-        try out.print("Deleted {s}. The next start creates an empty database.\n", .{db_path});
+    switch (info.outcome) {
+        .absent => try out.print("There is no database in {s}; nothing to reset.\n", .{data_dir}),
+        .moved => try out.print("Moved {s} to {s}. The next start creates an empty database.\n", .{ db_path, info.moved_to orelse return error.InvalidState }),
+        .deleted => try out.print("Deleted {s}. The next start creates an empty database.\n", .{db_path}),
     }
 }

@@ -137,10 +137,8 @@ pub fn validate(
             .{ .integer = msgpack.payloadToInt(value) catch return error.TypeMismatch }
         else
             return,
-        .real => if (has_numeric_checks)
-            .{ .real = msgpack.payloadToFloat(value) catch return error.TypeMismatch }
-        else
-            return,
+        // Always decode reals so non-finite values are rejected below.
+        .real => .{ .real = msgpack.payloadToFloat(value) catch return error.TypeMismatch },
         .bytes => if (value == .bin) .{ .bytes = value.bin.value() } else return error.TypeMismatch,
         else => {
             if (constraints.enum_values != null) return error.EnumViolation;
@@ -157,6 +155,10 @@ pub fn validateScalar(
     value: Scalar,
     allocator: Allocator,
 ) !void {
+    if (ft == .real) {
+        if (value != .real) return error.TypeMismatch;
+        if (!std.math.isFinite(value.real)) return error.RangeViolation;
+    }
     if (constraints.enum_values) |enums| {
         try validateEnum(enums, ft, value);
     }

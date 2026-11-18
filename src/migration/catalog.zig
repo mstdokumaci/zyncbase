@@ -22,9 +22,9 @@ pub fn isReservedManagedIndexName(index_name: []const u8, table_name: []const u8
 }
 
 fn hasManagedPrefix(index_name: []const u8, table_name: []const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, index_name, prefix)) return false;
+    if (!std.ascii.startsWithIgnoreCase(index_name, prefix)) return false;
     const rest = index_name[prefix.len..];
-    if (!std.mem.startsWith(u8, rest, table_name)) return false;
+    if (!std.ascii.startsWithIgnoreCase(rest, table_name)) return false;
     return rest.len > table_name.len + 2 and std.mem.eql(u8, rest[table_name.len .. table_name.len + 2], "__");
 }
 
@@ -175,10 +175,11 @@ const ColumnRow = struct {
     type: []const u8,
     notnull: i64,
     pk: i64,
+    hidden: i64,
 };
 
 fn columnsMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, diag: ?*Diagnostics) !bool {
-    var stmt = try db.prepareDynamic("SELECT name, type, \"notnull\", pk FROM pragma_table_info(?)");
+    var stmt = try db.prepareDynamic("SELECT name, type, \"notnull\", pk, hidden FROM pragma_table_xinfo(?)");
     defer stmt.deinit();
     const actual = try collectRows(ColumnRow, arena, &stmt, .{table.name});
     const expected = try expectedColumns(arena, table);
@@ -190,6 +191,10 @@ fn columnsMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, diag: ?*D
             ok = false;
             continue;
         };
+        if (row.hidden != 0) {
+            if (diag) |d| d.add("  {s}: column \"{s}\" is generated or hidden", .{ table.name, column.name });
+            ok = false;
+        }
         if (!std.mem.eql(u8, row.type, column.sql_type)) {
             if (diag) |d| d.add("  {s}: column \"{s}\" is {s}, expected {s}", .{ table.name, column.name, row.type, column.sql_type });
             ok = false;
@@ -293,6 +298,8 @@ const IndexListRow = struct {
 const IndexInfoRow = struct {
     seqno: i64,
     name: ?[]const u8,
+    coll: ?[]const u8,
+    key: i64,
 };
 
 fn managedIndexesMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, diag: ?*Diagnostics) !bool {
@@ -340,14 +347,20 @@ fn managedIndexesMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, di
 }
 
 fn indexColumnsMatch(arena: Allocator, db: *sqlite.Db, index_name: []const u8, expected: []const []const u8) !bool {
-    var stmt = try db.prepareDynamic("SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno");
+    var stmt = try db.prepareDynamic("SELECT seqno, name, coll, key FROM pragma_index_xinfo(?) ORDER BY seqno");
     defer stmt.deinit();
     const rows = try collectRows(IndexInfoRow, arena, &stmt, .{index_name});
-    if (rows.len != expected.len) return false;
-    for (rows, expected, 0..) |row, name, i| {
-        if (row.seqno != @as(i64, @intCast(i))) return false;
+
+    var expected_index: usize = 0;
+    for (rows) |row| {
+        if (row.key == 0) continue; // Auxiliary columns (rowid) are not part of the key.
+        if (expected_index >= expected.len) return false;
+        if (row.seqno != @as(i64, @intCast(expected_index))) return false;
         const actual_name = row.name orelse return false;
-        if (!std.mem.eql(u8, actual_name, name)) return false;
+        if (!std.mem.eql(u8, actual_name, expected[expected_index])) return false;
+        const collation = row.coll orelse return false;
+        if (!std.mem.eql(u8, collation, "BINARY")) return false;
+        expected_index += 1;
     }
-    return true;
+    return expected_index == expected.len;
 }

@@ -623,6 +623,7 @@ pub fn setupEngineFromJsonWithDir(ctx: *EngineTestContext, allocator: Allocator,
     ctx.test_context = .{
         .allocator = allocator,
         .test_dir = try allocator.dupe(u8, test_dir),
+        .owns_dir = false,
     };
     errdefer ctx.test_context.deinit();
 

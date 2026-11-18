@@ -170,6 +170,10 @@ const Statement = struct {
 /// Prepares every statement without running it. Returns the written tables,
 /// or `error.MigrationSqlRejected` with every problem in `diag`.
 pub fn check(arena: Allocator, db: *sqlite.Db, source: Source, access: Access, diag: *Diagnostics) ![]const []const u8 {
+    if (std.mem.indexOfScalar(u8, source.sql, 0)) |offset| {
+        diag.add("{s}, {s} line {d}: embedded NUL byte; migration SQL must be text", .{ source.label, source.file, lineOf(source.sql, offset) });
+        return error.MigrationSqlRejected;
+    }
     var guard = Guard{ .arena = arena, .access = access, .mode = .check };
     _ = c.sqlite3_set_authorizer(db.db, authorize, &guard);
     defer _ = c.sqlite3_set_authorizer(db.db, null, null);

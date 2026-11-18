@@ -145,6 +145,9 @@ test "scaffold: checked changes on tables that are not rebuilt get hints" {
     try expectContains(text, "-- projects.title: the constraint is stricter;");
     try expectContains(text, "-- UPDATE \"projects\" SET \"title\" = ... WHERE ...;\n");
     try expectContains(text, "-- projects: a unique constraint was added or changed;");
+    try expectContains(text, "-- SELECT \"namespace_id\", \"slug\", count(*) FROM \"projects\"\n");
+    try expectContains(text, "--   WHERE \"namespace_id\" IS NOT NULL AND \"slug\" IS NOT NULL\n");
+    try expectNotContains(text, "DELETE FROM");
     try expectNotContains(text, "zync_todo('");
     try expectNotContains(text, "INSERT INTO");
 }
@@ -165,7 +168,7 @@ test "scaffold: an array items change suggests a per-element conversion" {
     ,
         \\{"version":"2.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"string"}}}}}
     );
-    try expectContains(text, "zync_todo('posts.tags: array of integer -> array of string. Example: jsonb(zync_array((SELECT json_group_array(CAST(value AS TEXT)) FROM json_each(\"tags\")), ''string''))')");
+    try expectContains(text, "zync_todo('posts.tags: array of integer -> array of string. Example: CASE WHEN \"tags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CAST(value AS TEXT)) FROM json_each(\"tags\")), ''string'')) END')");
 }
 
 test "scaffold: a string to reference change points to expand and contract" {
@@ -178,6 +181,39 @@ test "scaffold: a string to reference change points to expand and contract" {
     );
     try expectContains(text, "tasks.project: string -> reference to projects. SQL cannot convert");
     try expectContains(text, "Expand and contract instead");
+}
+
+test "scaffold: an array of booleans maps integer items to JSON booleans" {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const text = try generate(arena.allocator(),
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"flags":{"type":"array","items":"integer"}}}}}
+    ,
+        \\{"version":"2.0.0","store":{"posts":{"fields":{"flags":{"type":"array","items":"boolean"}}}}}
+    );
+    try expectContains(text, "CASE WHEN \"flags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CASE WHEN value THEN json(''true'') ELSE json(''false'') END) FROM json_each(\"flags\")), ''boolean'')) END");
+}
+
+test "scaffold: bytes to string keeps NULL as NULL" {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const text = try generate(arena.allocator(),
+        \\{"version":"1.0.0","store":{"files":{"fields":{"data":{"type":"bytes"}}}}}
+    ,
+        \\{"version":"2.0.0","store":{"files":{"fields":{"data":{"type":"string"}}}}}
+    );
+    try expectContains(text, "CASE WHEN \"data\" IS NULL THEN NULL ELSE hex(\"data\") END");
+}
+
+test "scaffold: a type change that also became required mentions NULL replacements" {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const text = try generate(arena.allocator(),
+        \\{"version":"1.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"count":{"type":"string"}}}}}
+    ,
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"count":{"type":"integer"}},"required":["count"]}}}
+    );
+    try expectContains(text, "tasks.count: string -> integer. Example: CAST(\"count\" AS INTEGER) (non-numeric text becomes 0) Rows where it is NULL also need a replacement value.");
 }
 
 // ─── Scaffolds through startup ───────────────────────────────────────────────

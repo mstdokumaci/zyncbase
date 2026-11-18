@@ -10,6 +10,7 @@ const canonical = @import("../schema/canonical.zig");
 const schema_diff = @import("../schema/diff.zig");
 const field_path = @import("../schema/field_path.zig");
 const schema_types = @import("../schema/types.zig");
+const sql_buf = @import("../sql/buf.zig");
 const ddl = @import("../sql/ddl.zig");
 const storage_errors = @import("../storage_engine/errors.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -89,23 +90,12 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
     // ─── Staging ────────────────────────────────────────────────────────
     for (diff.tables, 0..) |*t, i| {
         reports[i] = .{ .name = t.name, .action = t.action, .rows_before = 0, .rows_after = 0, .rows_dropped = 0 };
+    }
+
+    // Move rebuilt and removed tables aside first. A case-only rename needs the
+    // old name freed before SQLite creates the new one.
+    for (diff.tables, 0..) |*t, i| {
         switch (t.action) {
-            .unchanged => {},
-            .create => {
-                if (try catalog.tableExists(db, t.name)) {
-                    diag.add("Table \"{s}\" already exists in the database but is not managed by ZyncBase.", .{t.name});
-                    return error.UnmanagedTableConflict;
-                }
-                try execSql(db, try gen.generateCreateTable((try targetOf(t)).*), diag);
-            },
-            .alter => {
-                const to = try targetOf(t);
-                for (t.field_changes) |change| {
-                    if (change.kind != .added_optional) continue;
-                    const field = change.to orelse return error.InvalidState;
-                    try execSql(db, try gen.generateAddColumn(to.*, field.*), diag);
-                }
-            },
             .rebuild, .remove => {
                 const prev = try prevName(arena, t.name);
                 if (try catalog.tableExists(db, prev)) {
@@ -121,7 +111,32 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
                     rebuilt = true;
                 }
             },
+            else => {},
         }
+    }
+
+    // Create and alter only after the old names are free.
+    for (diff.tables) |*t| {
+        switch (t.action) {
+            .create => {
+                if (try catalog.tableExists(db, t.name)) {
+                    diag.add("Table \"{s}\" already exists in the database but is not managed by ZyncBase.", .{t.name});
+                    return error.UnmanagedTableConflict;
+                }
+                try execSql(db, try gen.generateCreateTable((try targetOf(t)).*), diag);
+            },
+            .alter => {
+                const to = try targetOf(t);
+                for (t.field_changes) |change| {
+                    if (change.kind != .added_optional) continue;
+                    const field = change.to orelse return error.InvalidState;
+                    try execSql(db, try gen.generateAddColumn(to.*, field.*), diag);
+                }
+            },
+            else => {},
+        }
+    }
+    for (diff.tables) |*t| {
         if (t.to != null) try writable.append(arena, t.name);
     }
     const staged = Staged{
@@ -315,7 +330,11 @@ fn reportMissingRows(
 fn dropManagedIndexes(arena: Allocator, db: *sqlite.Db, table_name: []const u8, diag: *Diagnostics) !void {
     const names = try catalog.listManagedIndexNames(arena, db, table_name);
     for (names) |name| {
-        try execSql(db, try std.fmt.allocPrint(arena, "DROP INDEX \"{s}\"", .{name}), diag);
+        var buf = sql_buf.SqlBuf.init();
+        defer buf.deinit(arena);
+        try buf.appendSlice(arena, "DROP INDEX ");
+        try buf.appendQuoted(arena, name);
+        try execSql(db, buf.items(), diag);
     }
 }
 
@@ -340,14 +359,17 @@ fn reportDuplicates(arena: Allocator, db: *sqlite.Db, table: *const Table, manag
 
     var group = std.ArrayListUnmanaged(u8).empty;
     var rendered = std.ArrayListUnmanaged(u8).empty;
+    var where = std.ArrayListUnmanaged(u8).empty;
     var dotted = std.ArrayListUnmanaged(u8).empty;
     for (columns, 0..) |column, i| {
         if (i > 0) {
             try group.appendSlice(arena, ", ");
             try rendered.appendSlice(arena, " || ', ' || ");
+            try where.appendSlice(arena, " AND ");
         }
         try group.print(arena, "\"{s}\"", .{column});
         try rendered.print(arena, "quote(\"{s}\")", .{column});
+        try where.print(arena, "\"{s}\" IS NOT NULL", .{column});
         if (std.mem.eql(u8, column, "namespace_id")) continue;
         if (dotted.items.len > 0) try dotted.appendSlice(arena, ", ");
         try dotted.appendSlice(arena, try field_path.toDotted(arena, column));
@@ -356,8 +378,8 @@ fn reportDuplicates(arena: Allocator, db: *sqlite.Db, table: *const Table, manag
     diag.add("Cannot create the unique index on \"{s}\" ({s}): existing rows contain duplicates.", .{ table.name, dotted.items });
     const sql = try std.fmt.allocPrint(
         arena,
-        "SELECT {s}, count(*) FROM {s} GROUP BY {s} HAVING count(*) > 1 LIMIT 5",
-        .{ rendered.items, table.name_quoted, group.items },
+        "SELECT {s}, count(*) FROM {s} WHERE {s} GROUP BY {s} HAVING count(*) > 1 LIMIT 5",
+        .{ rendered.items, table.name_quoted, where.items, group.items },
     );
     var stmt = try db.prepareDynamic(sql);
     defer stmt.deinit();

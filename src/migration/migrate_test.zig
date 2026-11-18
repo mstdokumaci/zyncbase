@@ -310,6 +310,17 @@ test "migrate: a removed table must be emptied explicitly" {
     try h.expectText("keep me", "SELECT body FROM archive");
 }
 
+test "migrate: embedded NUL bytes are rejected before anything runs" {
+    var h = try Harness.init();
+    defer h.deinit();
+    try seedV1(&h);
+    try h.writeMigration(m1, v1, v2, "SELECT 1;\x00SELECT 2;");
+
+    try std.testing.expectError(error.MigrationSqlRejected, h.migrate(v2, .{}));
+    try h.expectDiag("NUL");
+    try h.expectApplied("1.0.0");
+}
+
 test "migrate: unresolved zync_todo markers are reported with lines before anything runs" {
     var h = try Harness.init();
     defer h.deinit();
@@ -413,6 +424,32 @@ test "migrate: data-only migrations backfill without schema changes" {
     _ = try h.migrateOk(with_slug_v1);
     try h.expectText("hello-world", "SELECT slug FROM posts");
     try h.expectApplied("1.1.0");
+}
+
+test "migrate: an exhausted timestamp range only fails when zync_now is called" {
+    {
+        var h = try Harness.init();
+        defer h.deinit();
+        try seedV1(&h);
+        try h.exec("INSERT INTO tasks (id, namespace_id, owner_id, title, priority, assignee, created_at, updated_at) " ++
+            "VALUES (randomblob(16), 1, zeroblob(16), 'max', NULL, NULL, 9223372036854775807, 9223372036854775807)");
+        try h.writeMigration(m1, v1, v1, "SELECT zync_now();");
+        try std.testing.expectError(error.MigrationSqlFailed, h.migrate(v1, .{}));
+        try h.expectDiag("no timestamp above the stored values");
+        try h.expectApplied("1.0.0");
+    }
+    {
+        // A migration that does not use zync_now can still repair the stored value.
+        var h = try Harness.init();
+        defer h.deinit();
+        try seedV1(&h);
+        try h.exec("INSERT INTO tasks (id, namespace_id, owner_id, title, priority, assignee, created_at, updated_at) " ++
+            "VALUES (randomblob(16), 1, zeroblob(16), 'max', NULL, NULL, 9223372036854775807, 9223372036854775807)");
+        try h.writeMigration(m1, v1, v1, "UPDATE \"tasks\" SET \"title\" = \"title\";");
+        var report = try h.migrateOk(v1);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 1), report.migrations_applied);
+    }
 }
 
 test "migrate: helpers produce ids, timestamps, and canonical arrays, then disappear" {
@@ -665,6 +702,57 @@ test "migrate: renaming a table moves rows and empties the prev table" {
     try h.expectLayout(renamed);
     try h.expectText("x", "SELECT title FROM tasks");
     try std.testing.expect(!try catalog.tableExists(&h.db, "todos"));
+}
+
+test "migrate: a case-only table rename moves the old table aside first" {
+    const before =
+        \\{"version":"1.0.0","store":{"Tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    const after =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    var h = try Harness.init();
+    defer h.deinit();
+    _ = try h.migrateOk(before);
+    try h.insert("Tasks", "\"title\"", "'a'");
+    try h.writeMigration(m1, before, after,
+        \\INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "created_at", "updated_at")
+        \\SELECT "id", "namespace_id", "owner_id", "title", "created_at", "updated_at" FROM "_zync_prev_Tasks";
+        \\DELETE FROM "_zync_prev_Tasks";
+    );
+    var report = try h.migrateOk(after);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), report.migrations_applied);
+    try h.expectApplied("2.0.0");
+    try h.expectLayout(after);
+    try std.testing.expectEqual(@as(i64, 1), try h.int("SELECT count(*) FROM tasks"));
+}
+
+test "migrate: the scaffold array conversion keeps NULL, empty, and values" {
+    const before =
+        \\{"version":"1.0.0","store":{"items":{"fields":{"name":{"type":"string"},"nums":{"type":"array","items":"integer"}}}}}
+    ;
+    const after =
+        \\{"version":"2.0.0","store":{"items":{"fields":{"name":{"type":"string"},"nums":{"type":"array","items":"string"}}}}}
+    ;
+    var h = try Harness.init();
+    defer h.deinit();
+    _ = try h.migrateOk(before);
+    try h.exec("INSERT INTO items (id, namespace_id, owner_id, name, nums, created_at, updated_at) VALUES " ++
+        "(randomblob(16), 1, zeroblob(16), 'null', NULL, 1, 1), " ++
+        "(randomblob(16), 1, zeroblob(16), 'empty', jsonb('[]'), 2, 2), " ++
+        "(randomblob(16), 1, zeroblob(16), 'nums', jsonb('[1,2]'), 3, 3)");
+    try h.writeMigration(m1, before, after,
+        \\INSERT INTO "items" ("id", "namespace_id", "owner_id", "name", "nums", "created_at", "updated_at")
+        \\SELECT "id", "namespace_id", "owner_id", "name",
+        \\  CASE WHEN "nums" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CAST(value AS TEXT)) FROM json_each("nums")), 'string')) END,
+        \\  "created_at", "updated_at"
+        \\FROM "_zync_prev_items";
+    );
+    _ = try h.migrateOk(after);
+    try std.testing.expectEqual(@as(i64, 1), try h.int("SELECT count(*) FROM items WHERE nums IS NULL"));
+    try h.expectText("[]", "SELECT json(nums) FROM items WHERE name = 'empty'");
+    try h.expectText("[\"1\",\"2\"]", "SELECT json(nums) FROM items WHERE name = 'nums'");
 }
 
 test "migrate: namespaced changes reassign namespace_id in SQL" {

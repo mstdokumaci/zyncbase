@@ -38,6 +38,9 @@ test "migrate cli: arguments are parsed per subcommand" {
     try std.testing.expectError(error.UnknownOption, cli.parseMigrate(&.{ "status", "--dry-run" }));
     try std.testing.expectError(error.UnexpectedArgument, cli.parseMigrate(&.{ "status", "extra" }));
     try std.testing.expectError(error.MissingOptionValue, cli.parseMigrate(&.{ "apply", "--db" }));
+    try std.testing.expectError(error.MissingOptionValue, cli.parseMigrate(&.{ "status", "--config", "--db" }));
+    const relative = try cli.parseMigrate(&.{ "status", "--db", "./--dry-run" });
+    try std.testing.expectEqualStrings("./--dry-run", relative.db orelse return error.TestExpectedValue);
 }
 
 /// Writes `<root>/zyncbase-config.json` (data in `<root>/data`) and loads it.
@@ -336,6 +339,53 @@ test "migrate cli: a new id must sort after the newest ledger entry" {
     try h.expectOutput("20991231T235959Z_future");
 }
 
+test "migrate cli: an explicit --db must exist and is not recreated" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const missing = try std.fs.path.join(allocator, &.{ h.root, "missing.db" });
+    defer allocator.free(missing);
+
+    try std.testing.expectError(error.DatabaseNotFound, h.run(&.{ "apply", "--db", missing }));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, missing, .{}));
+}
+
+test "migrate cli: a max major version reports that it cannot be raised" {
+    const vmax =
+        \\{"version":"4294967295.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"integer"}},"required":["title"]}}}
+    ;
+    const vmax_removed =
+        \\{"version":"4294967295.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    var h = try Harness.init(vmax);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.setSchema(vmax_removed);
+
+    try std.testing.expectError(error.MajorVersionBumpRequired, h.run(&.{ "new", "drop_priority" }));
+    try h.expectOutput("cannot be raised further");
+}
+
+test "migrate cli: per-migration checks skip the deployment foreign-key check" {
+    const schema =
+        \\{"version":"1.0.0","store":{"projects":{"fields":{"name":{"type":"string"}}},"tasks":{"fields":{"title":{"type":"string"},"project_id":{"type":"string","references":"projects"}},"required":["title"]}}}
+    ;
+    var h = try Harness.init(schema);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.runOk(&.{ "new", "orphan" });
+    const folder = try h.onlyMigration();
+    defer allocator.free(folder);
+    try h.writeMigrationFile(folder, "migration.sql",
+        \\INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "project_id", "created_at", "updated_at")
+        \\VALUES (randomblob(16), 1, zeroblob(16), 'orphan', randomblob(16), 1, 1);
+    );
+
+    // The per-migration run has no FK check; the chain run catches the orphan.
+    try std.testing.expectError(error.MigrationCheckFailed, h.run(&.{"check"}));
+    try h.expectOutput("ok    ");
+    try h.expectOutput("FAIL  chain");
+}
+
 test "migrate cli: an interrupted amend is refused before the database is restored" {
     var h = try Harness.init(v1);
     defer h.deinit();
@@ -351,7 +401,8 @@ test "migrate cli: an interrupted amend is refused before the database is restor
     // Simulate a crash after the old folder was moved to the backup.
     const backup = try std.fmt.allocPrint(allocator, "{s}/.{s}.replaced", .{ h.migrations_dir, std.fs.path.basename(folder) });
     defer allocator.free(backup);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, backup);
+    const cwd = std.Io.Dir.cwd();
+    try cwd.rename(folder, cwd, backup, std.testing.io);
 
     const v2_without_priority =
         \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
@@ -360,10 +411,10 @@ test "migrate cli: an interrupted amend is refused before the database is restor
     try std.testing.expectError(error.InterruptedAmend, h.run(&.{ "new", "priority_to_string", "--amend" }));
     try h.expectOutput(".replaced");
 
-    // The failure happens before the snapshot restore.
+    // The failure happens before the snapshot restore and even when no folder remains.
     try h.setSchema(v2);
     try h.expectAppliedVersion("2.0.0");
-    try std.Io.Dir.cwd().access(std.testing.io, folder, .{});
+    try std.Io.Dir.cwd().access(std.testing.io, backup, .{});
 }
 
 test "migrate cli: reset needs --yes and moves the database aside" {

@@ -44,6 +44,9 @@ pub const Options = struct {
     /// Enforce the major-version rule. Only `migrate check` turns it off, for
     /// its per-migration runs: the rule applies to a deployment, not a file.
     enforce_major_bump: bool = true,
+    /// Run the deployment-level foreign-key check. Per-migration `migrate check`
+    /// runs skip it; the full chain still performs it.
+    verify_foreign_keys: bool = true,
     /// Run every step, then roll back (`migrate apply --dry-run`).
     dry_run: bool = false,
     /// Plan only: describe the steps into `plan_out` and execute nothing.
@@ -262,7 +265,11 @@ fn planExisting(
         const to_version = try Version.parse(target.schema.version);
         if (to_version.major <= from_version.major) {
             diag.add("Pending migrations drop or reinterpret data, so the schema's major version must go up.", .{});
-            diag.add("  applied {s}, target {s}: set \"version\" in schema.json to {d}.0.0 or later.", .{ applied.version, target.schema.version, from_version.major + 1 });
+            if (from_version.major == std.math.maxInt(u32)) {
+                diag.add("  applied {s}, target {s}: the major version cannot be raised further.", .{ applied.version, target.schema.version });
+            } else {
+                diag.add("  applied {s}, target {s}: set \"version\" in schema.json to {d}.0.0 or later.", .{ applied.version, target.schema.version, from_version.major + 1 });
+            }
             return error.MajorVersionBumpRequired;
         }
     }
@@ -374,10 +381,15 @@ const DeveloperRun = struct {
         const self: *DeveloperRun = @ptrCast(@alignCast(context));
 
         const tables = try std.mem.concat(arena, []const u8, &.{ staged.writable_tables, staged.prev_tables });
+        const floor = functions.nowFloor(self.io, db, arena, tables) catch |err| switch (err) {
+            error.TimestampRangeExhausted => null,
+            else => return err,
+        };
         var helper_context = functions.Context{
             .io = self.io,
             .allocator = self.allocator,
-            .next_now = try functions.nowFloor(self.io, db, arena, tables),
+            .next_now = floor orelse 0,
+            .exhausted = floor == null,
         };
         try functions.register(db, &helper_context);
         defer functions.unregister(db);
@@ -423,6 +435,8 @@ fn runTransaction(
     };
 
     try state.ensureSystemTables(db);
+    const StepLog = struct { label: []const u8, result: step.StepReport };
+    var logs = std.ArrayListUnmanaged(StepLog).empty;
     for (plan.steps.items, 0..) |*planned, i| {
         var developer: ?DeveloperRun = if (planned.migration) |m| .{ .io = io, .allocator = allocator, .migration = m } else null;
         const fill: step.Fill = if (developer) |*d|
@@ -453,7 +467,7 @@ fn runTransaction(
         }
         report.steps += 1;
         if (result.rebuilt) report.rebuilt = true;
-        logStep(planned.label, result, options.dry_run);
+        try logs.append(arena, .{ .label = planned.label, .result = result });
     }
     for (plan.baseline) |*m| {
         try state.insertLedger(io, db, .{
@@ -467,19 +481,23 @@ fn runTransaction(
         report.migrations_baselined += 1;
     }
 
-    connection.verifyForeignKeys(db) catch |err| {
-        if (err == error.ForeignKeyViolation) {
-            diag.add("Foreign key violations remain after the migration run (details logged above).", .{});
-        }
-        return err;
-    };
+    if (options.verify_foreign_keys) {
+        connection.verifyForeignKeys(db) catch |err| {
+            if (err == error.ForeignKeyViolation) {
+                diag.add("Foreign key violations remain after the migration run (details logged above).", .{});
+            }
+            return err;
+        };
+    }
 
     if (options.dry_run) {
+        for (logs.items) |entry| logStep(entry.label, entry.result, true);
         std.log.info("Dry run: rolling back {d} step(s).", .{report.steps});
         return;
     }
     try db.exec("COMMIT", .{}, .{});
     open = false;
+    for (logs.items) |entry| logStep(entry.label, entry.result, false);
 
     if (report.rebuilt) {
         // Rebuilds rewrite whole tables; shrink the WAL while readers are idle.

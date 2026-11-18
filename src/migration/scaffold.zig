@@ -136,8 +136,22 @@ fn writeCheckedHints(w: Writer, t: *const TableDiff) !bool {
     }
     for (t.table_changes) |change| {
         if (change != .unique_tightened) continue;
-        try w.line("-- {s}: a unique constraint was added or changed; duplicates fail startup. Remove them here, e.g.", .{t.name});
-        try w.line("-- DELETE FROM \"{s}\" WHERE rowid NOT IN (SELECT min(rowid) FROM \"{s}\" GROUP BY \"namespace_id\", ...);", .{ t.name, t.name });
+        const table = t.to orelse continue;
+        try w.line("-- {s}: a unique constraint was added or changed; duplicates fail startup. Find them with:", .{t.name});
+        for (table.unique_constraints) |constraint| {
+            var columns = std.ArrayListUnmanaged(u8).empty;
+            var where = std.ArrayListUnmanaged(u8).empty;
+            try columns.appendSlice(w.arena, "\"namespace_id\"");
+            try where.appendSlice(w.arena, "\"namespace_id\" IS NOT NULL");
+            for (constraint.field_indexes) |field_index| {
+                const name = table.userFields()[field_index].name;
+                try columns.print(w.arena, ", \"{s}\"", .{name});
+                try where.print(w.arena, " AND \"{s}\" IS NOT NULL", .{name});
+            }
+            try w.line("-- SELECT {s}, count(*) FROM \"{s}\"", .{ columns.items, t.name });
+            try w.line("--   WHERE {s}", .{where.items});
+            try w.line("--   GROUP BY {s} HAVING count(*) > 1 LIMIT 5;", .{columns.items});
+        }
         wrote = true;
     }
     return wrote;
@@ -226,7 +240,13 @@ fn columnExpression(arena: Allocator, t: *const TableDiff, column: []const u8, r
             .type_changed, .items_changed => {
                 const from = change.from orelse return quoted;
                 const to = change.to orelse return quoted;
-                return todo(arena, "{s}: {s} -> {s}. {s}", .{ qualified, try typeName(arena, from), try typeName(arena, to), try suggestion(arena, quoted, from, to) });
+                var suffix: []const u8 = "";
+                for (t.field_changes) |other| {
+                    if (other.kind == .became_required and std.mem.eql(u8, other.name, change.name)) {
+                        suffix = " Rows where it is NULL also need a replacement value.";
+                    }
+                }
+                return todo(arena, "{s}: {s} -> {s}. {s}{s}", .{ qualified, try typeName(arena, from), try typeName(arena, to), try suggestion(arena, quoted, from, to), suffix });
             },
             .added_required => {
                 if (renameOf(renames, column)) |old| {
@@ -272,10 +292,19 @@ fn suggestion(arena: Allocator, column: []const u8, from: *const Field, to: *con
     if (to.storage_type == .array) {
         const items = if (to.items_type) |it| it.schemaName() else "string";
         if (from.storage_type == .array) {
-            const sql_type = if (to.items_type) |it| it.toSqlType() else "TEXT";
-            return std.fmt.allocPrint(arena, "Example: jsonb(zync_array((SELECT json_group_array(CAST(value AS {s})) FROM json_each({s})), '{s}'))", .{ sql_type, column, items });
+            const item_expr = if (to.items_type == .boolean)
+                "CASE WHEN value THEN json('true') ELSE json('false') END"
+            else blk: {
+                const sql_type = if (to.items_type) |it| it.toSqlType() else "TEXT";
+                break :blk try std.fmt.allocPrint(arena, "CAST(value AS {s})", .{sql_type});
+            };
+            return std.fmt.allocPrint(arena, "Example: CASE WHEN {0s} IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array({1s}) FROM json_each({0s})), '{2s}')) END", .{ column, item_expr, items });
         }
-        return std.fmt.allocPrint(arena, "Example: CASE WHEN {s} IS NULL THEN NULL ELSE jsonb(zync_array(json_array({s}), '{s}')) END", .{ column, column, items });
+        const scalar_expr = if (to.items_type == .boolean)
+            try std.fmt.allocPrint(arena, "CASE WHEN {s} THEN json('true') ELSE json('false') END", .{column})
+        else
+            column;
+        return std.fmt.allocPrint(arena, "Example: CASE WHEN {0s} IS NULL THEN NULL ELSE jsonb(zync_array(json_array({1s}), '{2s}')) END", .{ column, scalar_expr, items });
     }
     if (from.storage_type == .array) {
         return std.fmt.allocPrint(arena, "Example: json_extract({s}, '$[0]')", .{column});
@@ -284,7 +313,7 @@ fn suggestion(arena: Allocator, column: []const u8, from: *const Field, to: *con
         return if (to.storage_type == .bytes)
             std.fmt.allocPrint(arena, "Example: CAST({s} AS BLOB)", .{column})
         else
-            std.fmt.allocPrint(arena, "Example: hex({s})", .{column});
+            std.fmt.allocPrint(arena, "Example: CASE WHEN {s} IS NULL THEN NULL ELSE hex({s}) END", .{ column, column });
     }
     return switch (to.declared_type) {
         .text => std.fmt.allocPrint(arena, "Example: CAST({s} AS TEXT)", .{column}),

@@ -211,15 +211,31 @@ test "backup: reset moves the database aside and the next open is fresh" {
 
     var info = try backup.reset(std.testing.io, allocator, data_dir, true);
     defer info.deinit(allocator);
+    try std.testing.expectEqual(backup.ResetOutcome.moved, info.outcome);
     const moved = info.moved_to orelse return error.TestExpectedValue;
     try std.testing.expect(std.mem.indexOf(u8, moved, ".pre-reset-") != null);
     try std.Io.Dir.cwd().access(std.testing.io, moved, .{});
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, db_path, .{}));
+    // Free the name so the same-second deleted reset can reuse the timestamp.
+    try std.Io.Dir.cwd().deleteTree(std.testing.io, moved);
 
     // Nothing to reset the second time.
     var again = try backup.reset(std.testing.io, allocator, data_dir, true);
     defer again.deinit(allocator);
+    try std.testing.expectEqual(backup.ResetOutcome.absent, again.outcome);
     try std.testing.expect(again.moved_to == null);
+
+    // A fresh database deleted without a safety copy reports `deleted`.
+    {
+        var db = try openDb(allocator, db_path);
+        defer db.deinit();
+        try db.exec("CREATE TABLE t (k INTEGER)", .{}, .{});
+    }
+    var deleted = try backup.reset(std.testing.io, allocator, data_dir, false);
+    defer deleted.deinit(allocator);
+    try std.testing.expectEqual(backup.ResetOutcome.deleted, deleted.outcome);
+    try std.testing.expect(deleted.moved_to == null);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, db_path, .{}));
 }
 
 test "backup: snapshotHeld writes a verified pre-migration snapshot" {

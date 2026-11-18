@@ -80,7 +80,14 @@ fn runMigrationCommand(
 ) !void {
     var env_map = try environ.createMap(allocator);
     defer env_map.deinit();
-    var config = try ConfigLoader.load(io, &env_map, allocator, cmd.config_path orelse "zyncbase-config.json");
+    const config_path = cmd.config_path orelse "zyncbase-config.json";
+    if (cmd.config_path != null) {
+        std.Io.Dir.cwd().access(io, config_path, .{}) catch |err| {
+            std.log.err("Cannot read config file {s}: {s}", .{ config_path, @errorName(err) });
+            return err;
+        };
+    }
+    var config = try ConfigLoader.load(io, &env_map, allocator, config_path);
     defer config.deinit();
 
     var buffer: [4096]u8 = undefined;

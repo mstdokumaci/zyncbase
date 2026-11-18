@@ -285,6 +285,12 @@ The server's `schema.json` version from the latest `SchemaSync`, or `null` befor
 ```typescript
 import { schemaVersion } from "./zyncbase-schema"; // generated
 
+await client.connect();
+if (client.schemaVersion?.split(".")[0] !== schemaVersion.split(".")[0]) {
+  // The server already runs a new major version: load the matching app build.
+  location.reload();
+}
+
 client.on("schemaChange", ({ version }) => {
   // A new major version means the data shape broke: load the new app build.
   if (version.split(".")[0] !== schemaVersion.split(".")[0]) location.reload();

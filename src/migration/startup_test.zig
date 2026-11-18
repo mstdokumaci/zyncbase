@@ -416,7 +416,8 @@ test "startup: structural drift refuses and managed index drift is repaired" {
     _ = try h.migrate(v1);
 
     try h.exec("DROP INDEX \"idx__tasks__field__project_id\"");
-    try h.exec("CREATE INDEX \"idx__tasks__obsolete\" ON tasks(title)");
+    try h.exec("CREATE INDEX \"IDX__TASKS__FIELD__PROJECT_ID\" ON tasks(project_id)");
+    try h.exec("CREATE INDEX \"IDX__TASKS__OBSOLETE\" ON tasks(title)");
     const report = try h.migrate(v1);
     try std.testing.expectEqual(@as(usize, 1), report.steps);
     try h.expectLayout(v1);

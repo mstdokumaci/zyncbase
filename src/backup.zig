@@ -182,7 +182,11 @@ pub fn formatUtcTimestamp(seconds: u64, buf: *[utc_timestamp_len]u8) []const u8 
     return buf[0 .. pos + 1];
 }
 
+pub const ResetOutcome = enum { absent, moved, deleted };
+
 pub const ResetInfo = struct {
+    /// What `reset` found under the lock.
+    outcome: ResetOutcome,
     /// Where the previous database was moved, when one existed and a safety
     /// copy was kept. Owned by the caller.
     moved_to: ?[]u8,
@@ -207,7 +211,7 @@ pub fn reset(
 
     const db_path = try dbPath(allocator, data_dir);
     defer allocator.free(db_path);
-    if (!try fileExists(io, db_path)) return .{ .moved_to = null };
+    if (!try fileExists(io, db_path)) return .{ .outcome = .absent, .moved_to = null };
 
     var stamp_buf: [utc_timestamp_len]u8 = undefined;
     var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -228,9 +232,9 @@ pub fn reset(
         for (sidecars) |suffix| {
             deleteQuietly(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
         }
-        return .{ .moved_to = null };
+        return .{ .outcome = .deleted, .moved_to = null };
     }
-    return .{ .moved_to = try allocator.dupe(u8, aside) };
+    return .{ .outcome = .moved, .moved_to = try allocator.dupe(u8, aside) };
 }
 
 /// Validate a snapshot. `full` runs `PRAGMA integrity_check`; otherwise

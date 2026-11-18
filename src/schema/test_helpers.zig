@@ -250,6 +250,8 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     test_dir: []const u8,
+    /// False for a directory borrowed from the caller; deinit then keeps it.
+    owns_dir: bool = true,
     send_queue: ?send_queue_type = null,
     change_queue: ?ChangeQueue = null,
 
@@ -291,7 +293,7 @@ pub const TestContext = struct {
             self.send_queue = null;
         }
         if (self.change_queue) |*cq| cq.deinit();
-        if (self.test_dir.len > 0) {
+        if (self.test_dir.len > 0 and self.owns_dir) {
             std.Io.Dir.cwd().deleteTree(std.testing.io, self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
                 std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
