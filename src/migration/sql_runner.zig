@@ -278,6 +278,26 @@ fn firstToken(sql: []const u8, offset: usize) usize {
     return i;
 }
 
+/// True when a double-quoted identifier (including its quotes) spells zync_todo.
+fn quotedIsTodo(arena: Allocator, quoted: []const u8) !bool {
+    if (quoted.len < 2) return false;
+    const inner = quoted[1 .. quoted.len - 1];
+    if (std.mem.indexOf(u8, inner, "\"\"") == null) {
+        return std.ascii.eqlIgnoreCase(inner, "zync_todo");
+    }
+    var out = std.ArrayListUnmanaged(u8).empty;
+    var i: usize = 0;
+    while (i < inner.len) : (i += 1) {
+        if (inner[i] == '"' and i + 1 < inner.len and inner[i + 1] == '"') {
+            try out.append(arena, '"');
+            i += 1;
+        } else {
+            try out.append(arena, inner[i]);
+        }
+    }
+    return std.ascii.eqlIgnoreCase(out.items, "zync_todo");
+}
+
 fn lineOf(sql: []const u8, offset: usize) usize {
     return std.mem.count(u8, sql[0..@min(offset, sql.len)], "\n") + 1;
 }
@@ -290,8 +310,18 @@ fn reportTodos(arena: Allocator, source: Source, start: usize, end: usize, diag:
     var i = start;
     while (i < end) {
         const ch = sql[i];
-        if (ch == '\'' or ch == '"') {
+        if (ch == '\'') {
             i = skipQuoted(sql, i, end, ch);
+        } else if (ch == '"') {
+            const close = skipQuoted(sql, i, end, ch);
+            var k = close;
+            while (k < end and std.ascii.isWhitespace(sql[k])) k += 1;
+            if (k < end and sql[k] == '(' and try quotedIsTodo(arena, sql[i..close])) {
+                const message = try todoMessage(arena, sql, k + 1, end);
+                diag.add("{s}, {s} line {d}: unresolved decision: {s}", .{ source.label, source.file, lineOf(sql, i), message });
+                found += 1;
+            }
+            i = close;
         } else if (std.mem.startsWith(u8, sql[i..end], "--") or std.mem.startsWith(u8, sql[i..end], "/*")) {
             i = firstToken(sql, i);
         } else if (isIdentifierStart(ch) and (i == 0 or !isIdentifierChar(sql[i - 1]))) {

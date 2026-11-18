@@ -285,15 +285,25 @@ The server's `schema.json` version from the latest `SchemaSync`, or `null` befor
 ```typescript
 import { schemaVersion } from "./zyncbase-schema"; // generated
 
-await client.connect();
-if (client.schemaVersion?.split(".")[0] !== schemaVersion.split(".")[0]) {
-  // The server already runs a new major version: load the matching app build.
-  location.reload();
+const reloadKey = "zyncbase-schema-major";
+
+function handleMajorMismatch(major: string | undefined) {
+  if (!major || major === schemaVersion.split(".")[0]) return;
+  if (sessionStorage.getItem(reloadKey) !== major) {
+    sessionStorage.setItem(reloadKey, major);
+    location.reload();
+    return;
+  }
+  // Reloading did not produce a matching build: stop looping and explain.
+  document.body.textContent =
+    "This app build does not match the server schema. Deploy the matching build.";
 }
 
+await client.connect();
+handleMajorMismatch(client.schemaVersion?.split(".")[0]);
+
 client.on("schemaChange", ({ version }) => {
-  // A new major version means the data shape broke: load the new app build.
-  if (version.split(".")[0] !== schemaVersion.split(".")[0]) location.reload();
+  handleMajorMismatch(version.split(".")[0]);
 });
 ```
 

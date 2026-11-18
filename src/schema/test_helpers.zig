@@ -7,6 +7,7 @@ const send_queue_mod = @import("../connection/send_queue.zig");
 const migration_startup = @import("../migration/startup.zig");
 const ddl = @import("../sql/ddl.zig");
 const canonical = @import("canonical.zig");
+const field_path = @import("field_path.zig");
 const schema_index = @import("index.zig");
 const schema_parse = @import("parse.zig");
 const schema_types = @import("types.zig");
@@ -321,6 +322,11 @@ pub fn schemaJsonForTest(allocator: std.mem.Allocator, schema: *const Schema) ![
     errdefer out.deinit();
     var w: std.json.Stringify = .{ .writer = &out.writer };
 
+    // Temporary tree for nested fields and dotted paths; the returned JSON is separate.
+    var tree_state = std.heap.ArenaAllocator.init(allocator);
+    defer tree_state.deinit();
+    const tmp = tree_state.allocator();
+
     try w.beginObject();
     try w.objectField("version");
     try w.write(schema.version);
@@ -332,23 +338,20 @@ pub fn schemaJsonForTest(allocator: std.mem.Allocator, schema: *const Schema) ![
         try w.objectField("namespaced");
         try w.write(table.namespaced);
         try w.objectField("fields");
-        try w.beginObject();
-        for (table.userFields()) |field| {
-            try w.objectField(field.name);
-            try writeTestField(&w, field);
+        try writeFieldTree(&w, try buildFieldTree(tmp, table));
+        if (!table.is_users_table) {
+            try w.objectField("required");
+            try w.beginArray();
+            for (table.userFields()) |field| {
+                if (field.required) try w.write(try field_path.toDotted(tmp, field.name));
+            }
+            try w.endArray();
         }
-        try w.endObject();
-        try w.objectField("required");
-        try w.beginArray();
-        for (table.userFields()) |field| {
-            if (field.required) try w.write(field.name);
-        }
-        try w.endArray();
         try w.objectField("unique");
         try w.beginArray();
         for (table.unique_constraints) |constraint| {
             try w.beginArray();
-            for (constraint.field_indexes) |i| try w.write(table.userFields()[i].name);
+            for (constraint.field_indexes) |i| try w.write(try field_path.toDotted(tmp, table.userFields()[i].name));
             try w.endArray();
         }
         try w.endArray();
@@ -364,6 +367,59 @@ pub fn schemaJsonForTest(allocator: std.mem.Allocator, schema: *const Schema) ![
     try w.endObject();
     try w.endObject();
     return out.toOwnedSlice();
+}
+
+const FieldNode = struct {
+    field: ?*const schema_types.Field = null,
+    children: std.StringArrayHashMapUnmanaged(*FieldNode) = .empty,
+};
+
+/// Builds the user-facing field tree: internal `__` paths become nested objects.
+fn buildFieldTree(arena: std.mem.Allocator, table: *const schema_types.Table) !*FieldNode {
+    const root = try arena.create(FieldNode);
+    root.* = .{};
+    for (table.userFields()) |*field| {
+        var node = root;
+        var rest = field.name;
+        while (true) {
+            const sep = std.mem.indexOf(u8, rest, "__");
+            const segment = if (sep) |s| rest[0..s] else rest;
+            const gop = try node.children.getOrPut(arena, segment);
+            if (!gop.found_existing) {
+                const child = try arena.create(FieldNode);
+                child.* = .{};
+                gop.value_ptr.* = child;
+            }
+            const child = gop.value_ptr.*;
+            if (sep == null) {
+                child.field = field;
+                break;
+            }
+            node = child;
+            rest = rest[sep.? + 2 ..];
+        }
+    }
+    return root;
+}
+
+fn writeFieldTree(w: *std.json.Stringify, node: *const FieldNode) !void {
+    try w.beginObject();
+    var it = node.children.iterator();
+    while (it.next()) |entry| {
+        try w.objectField(entry.key_ptr.*);
+        const child = entry.value_ptr.*;
+        if (child.field) |field| {
+            try writeTestField(w, field.*);
+        } else {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write("object");
+            try w.objectField("fields");
+            try writeFieldTree(w, child);
+            try w.endObject();
+        }
+    }
+    try w.endObject();
 }
 
 fn writeTestField(w: *std.json.Stringify, field: schema_types.Field) !void {

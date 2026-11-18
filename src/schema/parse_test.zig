@@ -592,6 +592,42 @@ test "schema_parse: resolves nested dotted unique paths" {
     try std.testing.expectEqualStrings("profile__handle", projects.userFields()[projects.unique_constraints[0].field_indexes[0]].name);
 }
 
+test "schema_parse: test serializer round-trips nested fields and omits users required" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"version":"1.0.0","store":{
+        \\  "users":{"namespaced":false,"fields":{}},
+        \\  "profiles":{
+        \\    "fields":{"profile":{"type":"object","fields":{"name":{"type":"string"},"age":{"type":"integer"},"handle":{"type":"string"}}}},
+        \\    "required":["profile.name"],
+        \\    "unique":[["profile.handle"]]
+        \\  }
+        \\}}
+    ;
+    var original = try schema_parse.initFromJson(allocator, json);
+    defer original.deinit();
+
+    const serialized = try schema_helpers.schemaJsonForTest(allocator, &original);
+    defer allocator.free(serialized);
+    try std.testing.expect(std.mem.indexOf(u8, serialized, "__") == null);
+
+    var doc = try std.json.parseFromSlice(std.json.Value, allocator, serialized, .{});
+    defer doc.deinit();
+    const store = doc.value.object.get("store") orelse return error.TestExpectedValue;
+    const users = store.object.get("users") orelse return error.TestExpectedValue;
+    try std.testing.expect(users.object.get("required") == null);
+
+    var reparsed = try schema_parse.initFromJson(allocator, serialized);
+    defer reparsed.deinit();
+    const profiles = reparsed.table("profiles") orelse return error.TestExpectedValue;
+    const name = profiles.field("profile__name") orelse return error.TestExpectedValue;
+    const age = profiles.field("profile__age") orelse return error.TestExpectedValue;
+    try std.testing.expect(name.required);
+    try std.testing.expect(!age.required);
+    try std.testing.expectEqual(@as(usize, 1), profiles.unique_constraints.len);
+    try std.testing.expectEqualStrings("profile__handle", profiles.userFields()[profiles.unique_constraints[0].field_indexes[0]].name);
+}
+
 test "schema_parse: allows optional reference and array unique fields" {
     const allocator = std.testing.allocator;
 

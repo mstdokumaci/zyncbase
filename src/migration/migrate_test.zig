@@ -321,6 +321,16 @@ test "migrate: embedded NUL bytes are rejected before anything runs" {
     try h.expectApplied("1.0.0");
 }
 
+test "migrate: a quoted zync_todo call reports its decision text" {
+    var h = try Harness.init();
+    defer h.deinit();
+    try seedV1(&h);
+    try h.writeMigration(m1, v1, v2, "SELECT \"zync_todo\"('quoted decision');");
+
+    try std.testing.expectError(error.MigrationSqlRejected, h.migrate(v2, .{}));
+    try h.expectDiag("quoted decision");
+}
+
 test "migrate: unresolved zync_todo markers are reported with lines before anything runs" {
     var h = try Harness.init();
     defer h.deinit();

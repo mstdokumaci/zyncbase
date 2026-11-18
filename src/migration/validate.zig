@@ -75,7 +75,7 @@ const Samples = struct {
 
 fn validateField(arena: Allocator, db: *sqlite.Db, table: *const Table, field: *const Field, diag: *Diagnostics) !u64 {
     const needs_scan = switch (field.storage_type) {
-        .boolean, .array => true,
+        .boolean, .array, .real => true,
         .doc_id => false,
         else => field.constraints != null,
     };
@@ -133,7 +133,7 @@ fn checkValue(
             return constraintReason(arena, constraints, field.declared_type, .{ .integer = c.sqlite3_column_int64(stmt, 1) });
         },
         .real => {
-            const constraints = field.constraints orelse return null;
+            const constraints = field.constraints orelse schema_types.Constraints{};
             return constraintReason(arena, constraints, field.declared_type, .{ .real = c.sqlite3_column_double(stmt, 1) });
         },
         .bytes => {
@@ -172,15 +172,20 @@ fn checkArray(
     field: *const Field,
     json_buf: *std.ArrayListUnmanaged(u8),
 ) !?[]const u8 {
+    // Row-scoped scratch on a real allocator: the caller's arena cannot release
+    // nested chunks, so a scratch arena over it would still accumulate.
+    var scratch_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch_state.deinit();
+    const scratch = scratch_state.allocator();
+
     const stored = columnText(stmt, 1);
     const items_type = field.items_type orelse return "array field has no items type";
 
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, stored, .{}) catch return "array is not valid JSON";
-    defer parsed.deinit();
+    const parsed = std.json.parseFromSlice(std.json.Value, scratch, stored, .{}) catch return "array is not valid JSON";
     if (parsed.value != .array) return "value is not a JSON array";
-    const value = typed_codec.fromJson(arena, .array, items_type, parsed.value) catch return "array has an element of the wrong type";
-    defer value.deinit(arena);
+    const value = typed_codec.fromJson(scratch, .array, items_type, parsed.value) catch return "array has an element of the wrong type";
 
+    // The comparison buffer lives on the caller's arena so its capacity is reused.
     json_buf.clearRetainingCapacity();
     try typed_codec.writeJsonToBuf(json_buf, arena, value);
     if (!std.mem.eql(u8, json_buf.items, stored)) {

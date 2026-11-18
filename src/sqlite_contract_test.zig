@@ -188,6 +188,9 @@ test "sqlite contract: json_valid accepts JSON text and strict JSONB with flag 9
         .{ .sql = "SELECT json_valid(CAST('[1]' AS BLOB), 9)", .expected = 1 },
         .{ .sql = "SELECT json_valid(jsonb('[1]'), 9)", .expected = 1 },
         .{ .sql = "SELECT json_valid('not json', 9)", .expected = 0 },
+        // x'1bff' has a superficially plausible JSONB header but a malformed payload.
+        .{ .sql = "SELECT json_valid(x'1bff', 4)", .expected = 1 },
+        .{ .sql = "SELECT json_valid(x'1bff', 9)", .expected = 0 },
         // CASE evaluates only the chosen branch, so invalid JSON becomes NULL.
         .{ .sql = "SELECT CASE WHEN json_valid(CAST('not json' AS BLOB), 9) THEN json(CAST('not json' AS BLOB)) END IS NULL", .expected = 1 },
     };

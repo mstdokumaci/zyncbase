@@ -519,6 +519,25 @@ test "validate: malformed array JSON is a row violation, not a statement error" 
     try std.testing.expect(saw_invalid and saw_not_array);
 }
 
+test "validate: unconstrained reals are scanned for non-finite values" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const json =
+        \\{"version":"1.0.0","store":{"items":{"fields":{"ratio":{"type":"number"}}}}}
+    ;
+    _ = try h.migrate(json);
+    try insertRow(&h, "items", "\"ratio\"", "1e999");
+
+    var schema = try schema_parse.initFromJson(allocator, json);
+    defer schema.deinit();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag = Diagnostics.init(allocator);
+    defer diag.deinit();
+    const items = schema.table("items") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(u64, 1), try validate.validateTable(arena.allocator(), &h.db, items, null, &diag));
+}
+
 test "validate: constraint violations are counted per field" {
     var h = try Harness.init();
     defer h.deinit();
